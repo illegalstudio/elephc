@@ -267,6 +267,66 @@ foreach ($a as $k => $v) { echo $k, "=", $v, ";"; }
     assert_eq!(out, "0=3;1=1;2=2;");
 }
 
+/// Nested keyed writes expose their autovivified inner arrays to a following `foreach` sort.
+#[test]
+fn test_ksort_foreach_value_after_nested_keyed_writes() {
+    let out = compile_and_run(
+        r#"<?php
+function grouped(array $values): array {
+    $groups = [];
+    foreach ($values as $name => $value) {
+        $groups['all'][$name] = $value;
+    }
+    foreach ($groups as $group => $members) {
+        ksort($members);
+        $groups[$group] = $members;
+    }
+    return $groups;
+}
+$result = grouped(['z' => 1, 'a' => 2]);
+echo implode(',', array_keys($result['all']));
+"#,
+    );
+    assert_eq!(out, "a,z");
+}
+
+/// `krsort()` promotes a non-empty indexed receiver to integer-keyed hash storage so descending
+/// iteration order is representable without mutating an aliased copy.
+#[test]
+fn test_krsort_on_indexed_array_promotes_receiver_to_hash() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ['a', 'b', 'c'];
+$copy = $a;
+krsort($a);
+foreach ($a as $key => $value) {
+    echo $key, ':', $value, ';';
+}
+echo '|', implode('', $copy);
+"#,
+    );
+    assert_eq!(out, "2:c;1:b;0:a;|abc");
+}
+
+/// A by-reference sort writes a string-keyed child back through an `array` property.
+#[test]
+fn test_krsort_property_string_key_child_writeback() {
+    let out = compile_and_run(
+        r#"<?php
+final class PropertySortBox {
+    public array $items = [];
+}
+$box = new PropertySortBox();
+$box->items["event"] = ["a", "b", "c"];
+krsort($box->items["event"]);
+foreach ($box->items["event"] as $key => $value) {
+    echo $key, ":", $value, ";";
+}
+"#,
+    );
+    assert_eq!(out, "2:c;1:b;0:a;");
+}
+
 /// `krsort()` promotes non-empty indexed storage, returns true, and preserves direct lookup
 /// while exposing descending integer keys through iteration.
 #[test]
@@ -470,45 +530,57 @@ echo implode(",", array_keys($a)), "\n";
     );
 }
 
-/// Follow-up for #1187: `usort`, `natsort` and `array_multisort` cannot reach a hash at all.
+/// `usort` on a hash discards the keys and renumbers the sorted values from 0, as php does
+/// (`0,1|1,2` under php 8.5). It used to be a backend refusal naming the `AssocArray` type.
+#[test]
+fn test_usort_renumbers_an_associative_receiver() {
+    let out = compile_and_run(
+        r#"<?php $h = ["b" => 2, "a" => 1]; usort($h, fn($x, $y) => $x <=> $y); echo implode(",", array_keys($h)), "|", implode(",", $h);"#,
+    );
+    assert_eq!(out, "0,1|1,2");
+}
+
+/// Follow-up for #1187: `natsort` and `array_multisort` cannot reach a hash at all.
 ///
 /// #1099 made `array_keys()` read a hash key's RUNTIME form, and `sort`/`rsort` are covered
-/// above. The three sorts named in the follow-up were expected to ride the same materialization
-/// path, and they do not — every one of them refuses an associative receiver before codegen,
-/// so there is no reindexed hash for `array_keys()` to read:
-///
-/// - `usort` and `natsort` are backend refusals naming the `AssocArray` type, and are the two
-///   this test pins;
-/// - `array_multisort` is a CHECKER refusal ("arguments must be indexed arrays"), so it is
-///   pinned by `test_error_array_multisort_rejects_an_associative_receiver` in
-///   `tests/error_tests/array_builtins.rs` instead. It cannot share the table below: the
-///   codegen harness type-checks with `.expect("type check failed")` on its way to the
-///   backend, so a checker error aborts the fixture rather than being returned to it.
-///
-/// Pinning the three refusals is what makes this coverage question answerable. The day any of
-/// them accepts a hash, its own test fails and the `array_keys()` rows they stand in for have
-/// to be written.
-///
-/// PHP itself only renumbers for `usort`: `natsort` and `array_multisort` KEEP string keys, so
-/// two of the three would need key-preserving expectations rather than `0..n-1` ones.
+/// above. The sorts named in the follow-up ride the same materialization path: `usort` does
+/// (`test_usort_renumbers_an_associative_receiver`), and so does `natsort`, which sorts a hash
+/// through `crate::natsort_gradual_prelude` and KEEPS its string keys, as php does.
+/// `array_multisort` still refuses an associative receiver in the checker; that refusal is pinned
+/// by `test_error_array_multisort_rejects_an_associative_receiver` in
+/// `tests/error_tests/array_builtins.rs`.
 #[test]
-fn test_the_remaining_sorts_refuse_an_associative_receiver() {
-    for (source, message) in [
-        (
-            r#"<?php $h = ["b" => 2, "a" => 1]; usort($h, fn($x, $y) => $x <=> $y); echo implode(",", array_keys($h));"#,
-            "usort for PHP type AssocArray",
-        ),
-        (
-            r#"<?php $h = ["b" => "img10", "a" => "img2"]; natsort($h); echo implode(",", array_keys($h));"#,
-            "natsort for PHP type AssocArray",
-        ),
-    ] {
-        let error = compile_source_expect_backend_error(source);
-        assert!(
-            error.contains(message),
-            "expected `{message}` for this source, got: {error}"
-        );
-    }
+fn test_natsort_keeps_the_keys_of_an_associative_receiver() {
+    let out = compile_and_run(
+        r#"<?php $h = ["b" => "img10", "a" => "img2"]; natsort($h); echo implode(",", array_keys($h)), "|", implode(",", $h), "\n";"#,
+    );
+    assert_eq!(out, "a,b|img2,img10\n");
+}
+
+/// `natsort()`/`natcasesort()` over a gradual array -- a decoded document, an `: array` method's
+/// result -- sort it like php, keys kept. The checker refused the operand, so Symfony's
+/// `debug:container`, which natsorts the service ids a private `: array` method returned, could
+/// not be compiled.
+#[test]
+fn test_natsort_and_natcasesort_over_a_gradual_array() {
+    let out = compile_and_run(
+        r#"<?php
+$m = json_decode('{"a":"img12","b":"img10","c":"IMG2","d":"img1"}', true);
+natsort($m);
+echo json_encode($m), "|";
+$m = json_decode('{"a":"img12","b":"img10","c":"IMG2","d":"img1"}', true);
+natcasesort($m);
+echo json_encode($m), "|";
+function ids(): array { return ["svc10", "svc9", "svc1"]; }
+$ids = ids();
+natsort($ids);
+echo implode(",", $ids), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"c\":\"IMG2\",\"d\":\"img1\",\"b\":\"img10\",\"a\":\"img12\"}|{\"d\":\"img1\",\"c\":\"IMG2\",\"b\":\"img10\",\"a\":\"img12\"}|svc1,svc9,svc10\n"
+    );
 }
 
 

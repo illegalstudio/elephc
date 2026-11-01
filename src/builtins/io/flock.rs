@@ -5,9 +5,9 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - `check` validates the stream resource, checks that `operation` is strictly `Int`
-//!   (not just accepts_int), and verifies that `would_block` (when present) is passed
-//!   as a variable — both checks match the legacy behaviour exactly.
+//! - `check` validates the stream resource, accepts concrete or gradual integer-like
+//!   `operation` values, and verifies that `would_block` (when present) is passed as
+//!   a variable. Gradual values are cast by the typed runtime lowering.
 //! - `would_block` is a by-reference parameter (`ref` marker in `params:`); the hook's
 //!   variable check is in addition to, not instead of, the ref-ness.
 //! - Arguments are pre-inferred by the registry before the hook runs; `operation` is
@@ -26,7 +26,7 @@ builtin! {
     ),
 }
 
-/// Validates the stream resource, enforces strict Int type for operation, and
+/// Validates the stream resource, accepts runtime-castable gradual operations, and
 /// requires that `would_block` (if provided) is passed as a plain variable.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     crate::types::checker::builtins::io::common::ensure_stream_resource(
@@ -35,8 +35,11 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         &cx.args[0],
         cx.env,
     )?;
-    let op_ty = cx.checker.infer_type(&cx.args[1], cx.env)?;  // re-infer to obtain the type
-    if op_ty != PhpType::Int {                                  // STRICT eq (not accepts_int)
+    let op_ty = cx.checker.infer_type(&cx.args[1], cx.env)?;
+    if !matches!(
+        op_ty,
+        PhpType::Int | PhpType::Bool | PhpType::Mixed | PhpType::Union(_)
+    ) {
         return Err(CompileError::new(
             cx.args[1].span,
             "flock() operation must be int",

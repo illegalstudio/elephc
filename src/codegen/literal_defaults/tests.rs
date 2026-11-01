@@ -92,7 +92,7 @@ fn nested_literal_defaults_emit_owned_containers_on_all_targets() {
         let module = Module::new(target);
         let mut emitter = Emitter::new(target);
         let mut data = DataSection::new();
-        let mut shared = SharedCodegenState::default();
+        let mut shared = SharedCodegenState::for_module(&module);
         crate::codegen::shared_helper::emit_shared_helper(
             &module, &mut emitter, &mut data, &mut shared, false,
             "nested_defaults", PhpType::Mixed, "nested default fixture",

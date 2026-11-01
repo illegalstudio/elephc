@@ -39,9 +39,53 @@ mod switch_and_float_params;
 mod return_this_ownership;
 #[path = "regressions/symbol_collisions.rs"]
 mod symbol_collisions;
+#[path = "regressions/handles_statics_and_reflectors.rs"]
+mod handles_statics_and_reflectors;
+#[path = "regressions/class_vars_and_owned_views.rs"]
+mod class_vars_and_owned_views;
+#[path = "regressions/nullable_receivers_and_spl_lists.rs"]
+mod nullable_receivers_and_spl_lists;
+#[path = "regressions/dynamic_define_and_static_hashes.rs"]
+mod dynamic_define_and_static_hashes;
+#[path = "regressions/untyped_getters_and_properties.rs"]
+mod untyped_getters_and_properties;
+#[path = "regressions/function_aliases.rs"]
+mod function_aliases;
+#[path = "regressions/mixed_receiver_call_results.rs"]
+mod mixed_receiver_call_results;
+#[path = "regressions/reference_captures.rs"]
+mod reference_captures;
+#[path = "regressions/callback_elements_and_results.rs"]
+mod callback_elements_and_results;
+#[path = "regressions/numeric_folds.rs"]
+mod numeric_folds;
+#[path = "regressions/mbstring_and_string_ownership.rs"]
+mod mbstring_and_string_ownership;
+#[path = "regressions/laravel_merge_seams.rs"]
+mod laravel_merge_seams;
 #[path = "regressions/fixed_issue_behaviour.rs"]
 mod fixed_issue_behaviour;
 #[path = "regressions/fixed_issue_leaks.rs"]
 mod fixed_issue_leaks;
 #[path = "regressions/large_runtime_outputs.rs"]
 mod large_runtime_outputs;
+#[path = "regressions/symfony_merge_deferrals.rs"]
+mod symfony_merge_deferrals;
+#[path = "regressions/agent_backend_deferrals.rs"]
+mod agent_backend_deferrals;
+#[path = "regressions/dyn_prop_tables.rs"]
+mod dyn_prop_tables;
+#[path = "regressions/frame_slot_base.rs"]
+mod frame_slot_base;
+#[path = "regressions/invoker_name_tables.rs"]
+mod invoker_name_tables;
+#[path = "regressions/agent_checker_deferrals.rs"]
+mod agent_checker_deferrals;
+#[path = "regressions/agent_probe_throwable.rs"]
+mod agent_probe_throwable;
+#[path = "regressions/demo_language_gaps.rs"]
+mod demo_language_gaps;
+#[path = "regressions/laravel_language_gaps.rs"]
+mod laravel_language_gaps;
+#[path = "regressions/symfony_backend_refusals.rs"]
+mod symfony_backend_refusals;

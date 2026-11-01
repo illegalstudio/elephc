@@ -409,6 +409,15 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
             expression(index),
             expression(value)
         ),
+        StmtKind::PropertyRefAssign {
+            object,
+            property,
+            source,
+        } => format!(
+            "{indent}{}->{property} = &{};",
+            expression(object),
+            expression(source)
+        ),
         StmtKind::PropertyAssign {
             object,
             property,
@@ -939,6 +948,21 @@ fn render(value: &Expr) -> (String, u8) {
             ),
             other => panic!("print: unmodelled instanceof target {:?}", other),
         },
+        // A magic constant prints as its own spelling, which is what reparsing yields again —
+        // `magic_constants::substitute_file_constants` is what turns it into a literal later.
+        ExprKind::MagicConstant(constant) => (
+            match constant {
+                crate::parser::ast::MagicConstant::Dir => "__DIR__",
+                crate::parser::ast::MagicConstant::File => "__FILE__",
+                crate::parser::ast::MagicConstant::Function => "__FUNCTION__",
+                crate::parser::ast::MagicConstant::Class => "__CLASS__",
+                crate::parser::ast::MagicConstant::Method => "__METHOD__",
+                crate::parser::ast::MagicConstant::Namespace => "__NAMESPACE__",
+                crate::parser::ast::MagicConstant::Trait => "__TRAIT__",
+            }
+            .to_string(),
+            ATOM,
+        ),
         other => panic!("print: unmodelled expression {:?}", truncate(other)),
     }
 }

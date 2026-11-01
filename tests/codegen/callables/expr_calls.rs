@@ -726,7 +726,10 @@ echo ([$formatter, choose_runtime_literal_method("WRAP")])(suffix: "?");
     let (user_asm, _runtime_asm, _required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
     assert!(
-        user_asm.contains("runtime callable-array literal mixed selector")
+        // The literal may reach the selector through a temporary, which reads it as an ordinary
+        // `array<mixed>`; either selector dispatches through the descriptor invoker.
+        (user_asm.contains("runtime callable-array literal mixed selector")
+            || user_asm.contains("runtime callable-array mixed selector"))
             && user_asm.contains("callable_invoker"),
         "runtime-selected literal instance callable arrays should route through descriptor invokers:\n{}",
         user_asm
@@ -751,6 +754,90 @@ echo ([choose_runtime_literal_string(RuntimeLiteralLabeler::class), choose_runti
 "#,
     );
     assert_eq!(out, "id:9");
+}
+
+/// Verifies a literal static callable array can be invoked without grouping parentheses.
+#[test]
+fn test_literal_callable_array_static_method_direct_call() {
+    let out = compile_and_run(
+        r#"<?php
+final class LiteralSubscriber {
+    public static function getSubscribedEvents(): array {
+        return ["event" => "ready"];
+    }
+}
+$subscriber = LiteralSubscriber::class;
+$events = [$subscriber, "getSubscribedEvents"]();
+echo $events["event"];
+"#,
+    );
+    assert_eq!(out, "ready");
+}
+
+/// Verifies first-class callable syntax normalizes an object-method callable array value.
+#[test]
+fn test_first_class_callable_from_runtime_array_value() {
+    let out = compile_and_run(
+        r#"<?php
+final class ArrayCallableReceiver {
+    public function render(string $value): string { return "<" . $value . ">"; }
+}
+$listener = [new ArrayCallableReceiver(), "render"];
+$copy = $listener(...);
+echo $copy("ready");
+"#,
+    );
+    assert_eq!(out, "<ready>");
+}
+
+/// Verifies callable normalization dispatches to an invokable runtime subclass.
+#[test]
+fn test_first_class_callable_from_non_invokable_base_typed_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class CallableBase {}
+final class CallableChild extends CallableBase {
+    public function __invoke(string $value): string { return "child:" . $value; }
+}
+function copyCallable(CallableBase $value): callable {
+    if (is_callable($value)) {
+        return $value(...);
+    }
+    return static fn (string $arg): string => "fallback:" . $arg;
+}
+echo copyCallable(new CallableChild())("ready");
+"#,
+    );
+    assert_eq!(out, "child:ready");
+}
+
+/// Verifies an object universe without an invokable candidate fails at runtime, not compilation.
+#[test]
+fn test_first_class_callable_from_non_invokable_object_is_runtime_fatal() {
+    let out = compile_and_run_capture(
+        r#"<?php
+final class PlainCallableCandidate {}
+$value = new PlainCallableCandidate();
+$copy = $value(...);
+echo "unreachable";
+"#,
+    );
+    assert!(!out.success, "non-invokable callable creation must fail");
+    assert_eq!(out.stdout, "");
+}
+
+/// Verifies a runtime string callback can select the standard object class-name operation.
+#[test]
+fn test_array_map_runtime_get_class_callback() {
+    let out = compile_and_run(
+        r#"<?php
+final class RuntimeClassNameA {}
+final class RuntimeClassNameB {}
+$callback = "get_class";
+echo implode("|", array_map($callback, [new RuntimeClassNameA(), new RuntimeClassNameB()]));
+"#,
+    );
+    assert_eq!(out, "RuntimeClassNameA|RuntimeClassNameB");
 }
 
 /// Verifies runtime-selected literal instance callable arrays preserve by-reference arguments.
@@ -1086,6 +1173,129 @@ fn test_fcc_variable_function_target_direct_call() {
 function triple(int $n): int { return $n * 3; }
 $cb = triple(...);
 echo $cb(14);
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+/// Verifies that first-class callable syntax can copy an existing callable descriptor.
+#[test]
+fn test_first_class_callable_from_callable_variable() {
+    let out = compile_and_run(
+        r#"<?php
+function triple_copy(int $n): int { return $n * 3; }
+$original = triple_copy(...);
+$copy = $original(...);
+echo $copy(14);
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+/// Verifies first-class callable syntax applies to a CALL RESULT, not just a name or a variable:
+/// `$obj->method()(...)` and `f()(...)` take the Closure out of whatever the call returned.
+/// Symfony's `ErrorListener::onControllerArguments()` reaches `ReflectionFunction` through
+/// `$event->getController()(...)`, which used to fail to parse with "Unexpected token: RParen".
+/// PHP outputs "8|15".
+#[test]
+fn test_first_class_callable_from_call_result() {
+    let out = compile_and_run(
+        r#"<?php
+class Holder {
+    public function get(): callable { return static fn (int $n): int => $n * 2; }
+}
+function factory(): callable { return static fn (int $n): int => $n * 3; }
+
+$holder = new Holder();
+$fromMethod = $holder->get()(...);
+$fromFunction = factory()(...);
+echo $fromMethod(4), "|", $fromFunction(5);
+"#,
+    );
+    assert_eq!(out, "8|15");
+}
+
+/// Verifies a callable-typed constructor parameter can copy an incoming closure descriptor.
+#[test]
+fn test_first_class_callable_from_callable_parameter_closure() {
+    let out = compile_and_run(
+        r#"<?php
+final class CallableParameterCopy {
+    private \Closure $copy;
+
+    public function __construct(callable $source) {
+        $this->copy = $source(...);
+    }
+
+    public function run(): string {
+        $copy = $this->copy;
+        return $copy();
+    }
+}
+
+$copy = new CallableParameterCopy(static fn (): string => "ready");
+echo $copy->run();
+"#,
+    );
+    assert_eq!(out, "ready");
+}
+
+/// Verifies a runtime builtin name accepts arguments forwarded from a mixed variadic parameter.
+#[test]
+fn test_dynamic_string_builtin_from_mixed_variadic_forwarding() {
+    let out = compile_and_run(
+        r#"<?php
+function invoke_runtime_builtin(string $name, mixed ...$args): mixed {
+    return $name(...$args);
+}
+
+$created = invoke_runtime_builtin("mkdir", "runtime-dir", 0777, true);
+invoke_runtime_builtin("file_put_contents", "runtime-dir/source.txt", "payload");
+$content = invoke_runtime_builtin("file_get_contents", "runtime-dir/source.txt");
+$perms = invoke_runtime_builtin("fileperms", "runtime-dir/source.txt");
+$touched = invoke_runtime_builtin("touch", "runtime-dir/source.txt");
+$chmod = invoke_runtime_builtin("chmod", "runtime-dir/source.txt", 0644);
+$renamed = invoke_runtime_builtin("rename", "runtime-dir/source.txt", "runtime-dir/renamed.txt");
+$handle = invoke_runtime_builtin("fopen", "runtime-dir/renamed.txt", "r");
+$closed = invoke_runtime_builtin("fclose", $handle);
+$unlinked = invoke_runtime_builtin("unlink", "runtime-dir/renamed.txt");
+$removed = invoke_runtime_builtin("rmdir", "runtime-dir");
+$temporary = invoke_runtime_builtin("tempnam", sys_get_temp_dir(), "elephc-callable-");
+$temporaryRemoved = invoke_runtime_builtin("unlink", $temporary);
+
+echo $created
+    && "payload" === $content
+    && is_int($perms)
+    && $touched
+    && $chmod
+    && $renamed
+    && is_resource($handle)
+    && $closed
+    && $unlinked
+    && $removed
+    && is_string($temporary)
+    && $temporaryRemoved
+    ? "ready"
+    : "bad";
+"#,
+    );
+    assert_eq!(out, "ready");
+}
+
+/// Verifies that `$this(...)` dispatches `__invoke` supplied by a runtime subclass.
+#[test]
+fn test_first_class_callable_this_uses_runtime_subclass_invoke() {
+    let out = compile_and_run(
+        r#"<?php
+class CallableBase {
+    public function closure(): callable { return $this(...); }
+}
+class CallableChild extends CallableBase {
+    public function __invoke(int $n): int { return $n + 2; }
+}
+$instance = new CallableChild();
+$callback = $instance->closure();
+echo $callback(40);
 "#,
     );
     assert_eq!(out, "42");
@@ -1735,6 +1945,81 @@ echo dispatch(["Handler", "greet"]);
     assert_eq!(out.stdout, "I:idS:id");
 }
 
+/// Verifies linear composite tables resolve instance, static, and invokable callbacks.
+#[test]
+fn test_open_mixed_callable_shapes_use_linear_composite_lookup() {
+    let mut source = "<?php\n".to_string();
+    for index in 0..10 {
+        source.push_str(&format!(
+            "class Lookup{index} {{\n\
+             public function run(string $id): string {{ return \"I{index}:\" . $id; }}\n\
+             public static function stat(string $id): string {{ return \"S{index}:\" . $id; }}\n\
+             public function __invoke(string $id): string {{ return \"V{index}:\" . $id; }}\n\
+             }}\n"
+        ));
+    }
+    source.push_str(
+        r#"
+function dispatch_lookup(mixed $callback): string {
+    return (string)call_user_func($callback, "id");
+}
+$receiver = new Lookup9();
+echo dispatch_lookup([$receiver, "RUN"]);
+echo "|";
+echo dispatch_lookup(["\\LOOKUP8", "STAT"]);
+echo "|";
+echo dispatch_lookup(new Lookup7());
+"#,
+    );
+    let out = compile_and_run_capture(&source);
+    assert!(
+        out.success,
+        "composite callable lookup failed: stdout={:?} stderr={:?}",
+        out.stdout,
+        out.stderr
+    );
+    assert_eq!(out.stdout, "I9:id|S8:id|V7:id");
+}
+
+/// Verifies an invokable universe above 256 entries executes through the hash resolver.
+#[test]
+fn test_open_mixed_invokable_shape_uses_hashed_composite_lookup() {
+    let mut source = r#"<?php
+class HashLookupBase {
+    public function __invoke(string $id): string { return "H:" . $id; }
+}
+"#
+    .to_string();
+    for index in 0..257 {
+        source.push_str(&format!(
+            "class HashLookup{index} extends HashLookupBase {{}}\n"
+        ));
+    }
+    source.push_str("function make_hash_lookup(int $index): mixed {\n");
+    for index in 0..256 {
+        source.push_str(&format!(
+            "if ($index === {index}) {{ return new HashLookup{index}(); }}\n"
+        ));
+    }
+    source.push_str("return new HashLookup256();\n}\n");
+    source.push_str(
+        r#"
+function dispatch_hash_lookup(mixed $callback): string {
+    return (string)call_user_func($callback, "id");
+}
+echo dispatch_hash_lookup(make_hash_lookup($argc));
+"#,
+    );
+    let out = compile_and_run_capture(&source);
+    assert!(
+        out.success,
+        "hashed invokable lookup failed: stdout={:?} stderr={:?}",
+        out.stdout,
+        out.stderr
+    );
+    assert_eq!(out.stdout, "H:id");
+}
+
 /// Regression: a boxed callable array shorter than two elements must take a
 /// deterministic fatal path before codegen reads receiver/method slots out of bounds.
 #[test]
@@ -2080,6 +2365,54 @@ echo call_user_func($f, [1, 2, 3]) + 1;
 "#,
     );
     assert_eq!(out, "int(3)\n4");
+}
+
+/// Regression: a dynamic static call whose class expression is a property read leaves the
+/// property's string intact. `$class->name::getSubscribedServices()` desugars to a callable
+/// array whose receiver sat in a hidden temporary WITHOUT its own reference, so the frame's
+/// cleanup freed the property's string -- Symfony's `ReflectionClassResource` then read freed
+/// memory as the reflected class name on every `cache:clear`.
+#[test]
+fn test_dynamic_static_call_on_a_property_keeps_the_property_string() {
+    let out = compile_and_run(
+        r#"<?php
+final class Holder { public string $name; public function __construct(string $n) { $this->name = $n; } }
+final class Greeter { public static function hello(): string { return 'hi'; } }
+function viaProperty(Holder $h): string { return $h->name::hello(); }
+$h = new Holder(str_repeat('Greeter', 1));
+echo viaProperty($h), viaProperty($h), "|";
+str_repeat('x', 64);
+echo $h->name;
+"#,
+    );
+    assert_eq!(out, "hihi|Greeter");
+}
+
+/// `Name::{expr}(args)` names a static method at run time (Carbon's
+/// `static::{'shouldOverflow'.$unit}()`), and the PHP 8.3 `Name::{expr}` reads a class constant;
+/// both used to be parse errors.
+#[test]
+fn test_braced_dynamic_static_member_names() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class BraceA {
+    const FOO = 'foo-a';
+    public static function shouldOverflowYears(): bool { return true; }
+    public static function hello(string $who): string { return static::class . " hi " . $who; }
+    public function check(string $unit): bool { $u = ucfirst($unit) . 's'; return static::{'shouldOverflow' . $u}(); }
+    public function greet(): string { return static::{'hel' . 'lo'}('x'); }
+    public function constant(): string { return static::{'F' . 'OO'}; }
+}
+class BraceB extends BraceA { const FOO = 'foo-b'; }
+var_dump((new BraceA)->check('year'));
+echo (new BraceB)->greet(), "|", (new BraceB)->constant(), "|", BraceA::{'hello'}('y'), "|";
+$c = 'FOO';
+echo BraceB::{$c}, "\n";
+"#,
+    );
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "bool(true)\nBraceB hi x|foo-b|BraceA hi y|foo-b\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
 

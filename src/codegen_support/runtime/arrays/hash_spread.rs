@@ -135,6 +135,10 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_hash_spread_value_ref");                     // refcounted children need a reference bump
     emitter.instruction("cmp x5, #7");                                          // is the source value a boxed mixed cell?
     emitter.instruction("b.eq __rt_hash_spread_value_ref");                     // refcounted children need a reference bump
+    emitter.instruction("cmp x5, #10");                                         // is the source value a callable descriptor?
+    emitter.instruction("b.eq __rt_hash_spread_value_ref");                     // callable descriptors need a reference bump
+    emitter.instruction("cmp x5, #11");                                         // is the source value a managed PHP reference cell?
+    emitter.instruction("b.eq __rt_hash_spread_value_ref");                     // reference cells remain shared through a reference bump
     emitter.instruction("ldr x3, [sp, #48]");                                   // reload the scalar value low word
     emitter.instruction("ldr x4, [sp, #56]");                                   // reload the scalar value high word
     emitter.instruction("ldr x5, [sp, #64]");                                   // reload the scalar value runtime tag
@@ -303,6 +307,10 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_hash_spread_x86_value_ref");                   // refcounted children need a reference bump
     emitter.instruction("cmp r9, 7");                                           // is the source value a boxed mixed cell?
     emitter.instruction("je __rt_hash_spread_x86_value_ref");                   // refcounted children need a reference bump
+    emitter.instruction("cmp r9, 10");                                          // is the source value a callable descriptor?
+    emitter.instruction("je __rt_hash_spread_x86_value_ref");                   // callable descriptors need a reference bump
+    emitter.instruction("cmp r9, 11");                                          // is the source value a managed PHP reference cell?
+    emitter.instruction("je __rt_hash_spread_x86_value_ref");                   // reference cells remain shared through a reference bump
     emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // reload the scalar value low word
     emitter.instruction("mov r8, QWORD PTR [rbp - 64]");                        // reload the scalar value high word
     emitter.instruction("mov r9, QWORD PTR [rbp - 72]");                        // reload the scalar value runtime tag

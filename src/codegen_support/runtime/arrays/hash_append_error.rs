@@ -14,8 +14,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     let arm = emitter.target.arch == Arch::AArch64;
     emitter.label_global("__rt_hash_append_error");
     emitter.instruction(if arm { "stp x29, x30, [sp, #-16]!" } else { "sub rsp, 8" }); // preserve linkage and align exception allocation
-    emitter.instruction(if arm { "mov x0, #56" } else { "mov eax, 56" });       // request the compact Throwable payload
-    abi::emit_call_label(emitter, "__rt_heap_alloc");
+    crate::codegen_support::throwable_layout::emit_allocate(emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
     if arm {
         emitter.instruction("mov x9, #6");                                      // stamp a runtime object owner
         emitter.instruction("str x9, [x0, #-8]");                               // publish the heap kind before acquiring an object handle
@@ -33,11 +32,11 @@ pub(super) fn emit(emitter: &mut Emitter) {
         emitter.instruction(&format!("mov x9, #{len}"));                        // preserve the exact PHP diagnostic length
         emitter.instruction("str x9, [x0, #16]");                               // publish message length beside its pointer
         emitter.instruction("str xzr, [x0, #24]");                              // default the exception code to zero
-        emitter.instruction("str xzr, [x0, #40]");                              // initialize the previous exception to null
+        emitter.instruction(&format!("str xzr, [x0, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET));                              // initialize the previous exception to null
     } else {
         emitter.instruction(&format!("mov QWORD PTR [rax + 16], {len}"));       // publish the exact PHP diagnostic length
         emitter.instruction("mov QWORD PTR [rax + 24], 0");                     // default the exception code to zero
-        emitter.instruction("mov QWORD PTR [rax + 40], 0");                     // initialize the previous exception to null
+        emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET));                     // initialize the previous exception to null
     }
     sentinels::emit_throwable_creation_line_unknown(emitter, if arm { "x0" } else { "rax" });
     abi::emit_store_reg_to_symbol(emitter, if arm { "x0" } else { "rax" }, "_exc_value", 0);

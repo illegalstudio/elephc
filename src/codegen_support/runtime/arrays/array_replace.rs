@@ -28,11 +28,21 @@ pub fn emit_array_replace(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_replace ---");
     emitter.label_global("__rt_array_replace");
-    emitter.instruction("sub sp, sp, #80");                                     // allocate the array_replace stack frame
-    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #64");                                    // set up the new frame pointer
-    emitter.instruction("str x1, [sp, #0]");                                    // save the second hash pointer
+    emitter.instruction("sub sp, sp, #96");                                     // allocate the array_replace stack frame
+    emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #80");                                    // set up the new frame pointer
+    emitter.instruction("str x1, [sp, #72]");                                   // save the second hash pointer for merge mode's second pass
+    emitter.instruction("str x2, [sp, #64]");                                   // save replace-vs-merge mode across helper calls
+    emitter.instruction("cbnz x2, __rt_array_replace_merge_init");              // merge mode rebuilds both inputs to renumber integer keys
+    emitter.instruction("str x1, [sp, #0]");                                    // replace mode iterates only the second hash
     emitter.instruction("bl __rt_hash_clone_shallow");                          // clone hash1 into an owned result hash, x0 = result
+    emitter.instruction("b __rt_array_replace_init_done");                      // skip merge-mode empty result allocation
+    emitter.label("__rt_array_replace_merge_init");
+    emitter.instruction("str x0, [sp, #0]");                                    // merge mode starts by iterating the first hash
+    emitter.instruction("mov x0, #8");                                          // initial result hash capacity
+    emitter.instruction("mov x1, #7");                                          // mixed-valued hash storage
+    emitter.instruction("bl __rt_hash_new");                                    // allocate the empty renumbering destination
+    emitter.label("__rt_array_replace_init_done");
     emitter.instruction("str x0, [sp, #8]");                                    // save the cloned result hash pointer
     emitter.instruction("str xzr, [sp, #16]");                                  // iterator cursor = 0 (start from hash2 head)
     emitter.label("__rt_array_replace_loop");
@@ -63,6 +73,19 @@ pub fn emit_array_replace(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #40]");                                   // store the persisted string pointer
     emitter.instruction("str x2, [sp, #48]");                                   // store the persisted string length
     emitter.label("__rt_array_replace_insert");
+    emitter.instruction("ldr x9, [sp, #64]");                                   // reload replace-vs-merge mode
+    emitter.instruction("cbz x9, __rt_array_replace_set");                      // replace mode preserves integer keys
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the normalized key length
+    emitter.instruction("cmn x9, #1");                                          // integer keys use the -1 sentinel
+    emitter.instruction("b.ne __rt_array_replace_set");                         // string keys overwrite in both modes
+    emitter.instruction("ldr x0, [sp, #8]");                                    // result hash pointer for automatic integer append
+    emitter.instruction("ldr x1, [sp, #40]");                                   // value low word for hash_append
+    emitter.instruction("ldr x2, [sp, #48]");                                   // value high word for hash_append
+    emitter.instruction("ldr x3, [sp, #56]");                                   // value runtime tag for hash_append
+    emitter.instruction("bl __rt_hash_append");                                 // array_merge renumbers and appends integer keys
+    emitter.instruction("str x0, [sp, #8]");                                    // update result pointer after possible growth
+    emitter.instruction("b __rt_array_replace_loop");                           // continue with the next source entry
+    emitter.label("__rt_array_replace_set");
     emitter.instruction("ldr x0, [sp, #8]");                                    // x0 = result hash pointer
     emitter.instruction("ldr x1, [sp, #24]");                                   // reload key pointer
     emitter.instruction("ldr x2, [sp, #32]");                                   // reload key length
@@ -73,9 +96,19 @@ pub fn emit_array_replace(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #8]");                                    // update the result pointer after possible reallocation
     emitter.instruction("b __rt_array_replace_loop");                           // continue with the next hash2 entry
     emitter.label("__rt_array_replace_done");
+    emitter.instruction("ldr x9, [sp, #64]");                                   // inspect merge pass state
+    emitter.instruction("cmp x9, #1");                                          // first merge pass has just exhausted hash1
+    emitter.instruction("b.ne __rt_array_replace_final");                       // replace mode or second merge pass is complete
+    emitter.instruction("mov x9, #2");                                          // mark the second merge pass active
+    emitter.instruction("str x9, [sp, #64]");                                   // preserve the updated pass state
+    emitter.instruction("ldr x9, [sp, #72]");                                   // load hash2 as the next iteration source
+    emitter.instruction("str x9, [sp, #0]");                                    // publish hash2 to the loop
+    emitter.instruction("str xzr, [sp, #16]");                                  // restart iteration from hash2's head
+    emitter.instruction("b __rt_array_replace_loop");                           // merge the second input into the same result
+    emitter.label("__rt_array_replace_final");
     emitter.instruction("ldr x0, [sp, #8]");                                    // x0 = result hash pointer
-    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #80");                                     // deallocate the stack frame
+    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #96");                                     // deallocate the stack frame
     emitter.instruction("ret");                                                 // return the result hash in x0
 }
 
@@ -88,9 +121,20 @@ fn emit_array_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_array_replace");
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
-    emitter.instruction("sub rsp, 64");                                         // reserve local spill slots for the replace loop state
-    emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the second hash pointer
+    emitter.instruction("sub rsp, 80");                                         // reserve local spill slots for the replace loop state
+    emitter.instruction("mov QWORD PTR [rbp - 80], rsi");                       // save the second hash pointer for merge mode's second pass
+    emitter.instruction("mov QWORD PTR [rbp - 72], rdx");                       // save replace-vs-merge mode across helper calls
+    emitter.instruction("test rdx, rdx");                                       // merge mode rebuilds both inputs to renumber integer keys
+    emitter.instruction("jnz __rt_array_replace_x86_merge_init");               // branch to empty result allocation for merge mode
+    emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // replace mode iterates only the second hash
     emitter.instruction("call __rt_hash_clone_shallow");                        // clone hash1 into an owned result hash, rax = result
+    emitter.instruction("jmp __rt_array_replace_x86_init_done");                // skip merge-mode empty result allocation
+    emitter.label("__rt_array_replace_x86_merge_init");
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // merge mode starts by iterating the first hash
+    emitter.instruction("mov rdi, 8");                                          // initial result hash capacity
+    emitter.instruction("mov rsi, 7");                                          // mixed-valued hash storage
+    emitter.instruction("call __rt_hash_new");                                  // allocate the empty renumbering destination
+    emitter.label("__rt_array_replace_x86_init_done");
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the cloned result hash pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // iterator cursor = 0 (start from hash2 head)
     emitter.label("__rt_array_replace_loop");
@@ -121,6 +165,18 @@ fn emit_array_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // store the persisted string pointer
     emitter.instruction("mov QWORD PTR [rbp - 56], rdx");                       // store the persisted string length
     emitter.label("__rt_array_replace_insert");
+    emitter.instruction("cmp QWORD PTR [rbp - 72], 0");                         // check replace-vs-merge mode
+    emitter.instruction("je __rt_array_replace_x86_set");                       // replace mode preserves integer keys
+    emitter.instruction("cmp QWORD PTR [rbp - 40], -1");                        // integer keys use the -1 length sentinel
+    emitter.instruction("jne __rt_array_replace_x86_set");                      // string keys overwrite in both modes
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // result hash pointer for automatic integer append
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");                       // value low word for hash_append
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 56]");                       // value high word for hash_append
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 64]");                       // value runtime tag for hash_append
+    emitter.instruction("call __rt_hash_append");                               // array_merge renumbers and appends integer keys
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // update result pointer after possible growth
+    emitter.instruction("jmp __rt_array_replace_loop");                         // continue with the next source entry
+    emitter.label("__rt_array_replace_x86_set");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // rdi = result hash pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // reload key pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // reload key length
@@ -131,9 +187,16 @@ fn emit_array_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // update the result pointer after possible reallocation
     emitter.instruction("jmp __rt_array_replace_loop");                         // continue with the next hash2 entry
     emitter.label("__rt_array_replace_done");
+    emitter.instruction("cmp QWORD PTR [rbp - 72], 1");                         // first merge pass has just exhausted hash1
+    emitter.instruction("jne __rt_array_replace_x86_final");                    // replace mode or second merge pass is complete
+    emitter.instruction("mov QWORD PTR [rbp - 72], 2");                         // mark the second merge pass active
+    emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // load hash2 as the next iteration source
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // publish hash2 to the loop
+    emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // restart iteration from hash2's head
+    emitter.instruction("jmp __rt_array_replace_loop");                         // merge the second input into the same result
+    emitter.label("__rt_array_replace_x86_final");
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // rax = result hash pointer
-    emitter.instruction("add rsp, 64");                                         // release the local spill slots
+    emitter.instruction("add rsp, 80");                                         // release the local spill slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the result hash in rax
 }
-

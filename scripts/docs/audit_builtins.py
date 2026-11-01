@@ -8,7 +8,7 @@ Checks:
 3. Every cross-link in a generated page resolves to an actual file.
 4. Per-area indexes only contain builtins that belong to that area.
 5. No stray top-level files (everything should be inside an area folder).
-6. Backend availability and all 458 non-registry contract routes remain coherent.
+6. Backend availability and all 494 non-registry contract routes remain coherent.
 7. User-facing pages contain no runs of multiple blank lines.
 8. No override table in ``registry.py`` declares the same builtin twice.
 
@@ -137,18 +137,25 @@ def _check_backend_contracts(
     expected_counts = {
         "language-construct": 5,
         "dedicated-syntax": 1,
-        # Four hash_*, the 34 PHP-visible curl_* (published only by the canonical
-        # `--features curl` documentation configuration, see elephc_builtins/extract.py),
-        # the 54 xml_* / xmlwriter_* functions the xml prelude declares, the six
-        # procedural random entries, the internal random helper, the six fileinfo functions, and the
-        # functions the mysqli, PDO, web, image, OPcache, tz, var_export, tokenizer and
-        # version preludes declare, all injected-prelude routes.
-        "prelude": 395,
+        # Five hash_* (init/update/final/copy/pbkdf2), the 34 PHP-visible curl_* (published
+        # only by the canonical `--features curl` documentation configuration, see
+        # elephc_builtins/extract.py), the 54 xml_* / xmlwriter_* functions the xml prelude
+        # declares, the six procedural random entries, the internal random helper, the six
+        # fileinfo functions, 14 string helpers (addcslashes, levenshtein, parse_str, the five
+        # password_*, four sodium_crypto_box_*, strtok, version_compare), 12 array callbacks
+        # and lookups (array_find_key, array_change_key_case and the u*-assoc/ukey diff and
+        # intersect family), and the functions the image, mysqli/PDO, web, OPcache, tz,
+        # var_export, tokenizer and version preludes declare, all injected-prelude routes.
+        # array_first/array_last and error_log are native registry builtins.
+        "prelude": 429,
         # Calls rewritten from their enclosing lexical function frame.
         "compiler-transform": 3,
         # The date/calendar procedural families the name resolver rewrites onto the
         # DateTime and calendar classes.
         "name-resolver-rewrite": 54,
+        # register_tick_function / unregister_tick_function: documented as pending (checked
+        # below).
+        "none": 2,
     }
     expected_total = sum(expected_counts.values())
     if len(non_registry) != expected_total:
@@ -162,6 +169,10 @@ def _check_backend_contracts(
         )
 
     by_name = {b["name"]: b for b in raw}
+    for name in ("register_tick_function", "unregister_tick_function"):
+        aot = (by_name.get(name) or {}).get("aot") or {}
+        if aot.get("kind") != "none" or aot.get("unsupported_reason") != "aot-implementation-pending":
+            errors.append(f"{name} must document its pending AOT implementation")
     for name in ("hash_init", "hash_update", "hash_final", "hash_copy"):
         record = by_name.get(name)
         if record is None:

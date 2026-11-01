@@ -296,9 +296,7 @@ pub(super) fn emit_type_error_at(
 pub(super) fn emit_error_value(ctx: &mut FunctionContext<'_>, message: ValueId) -> Result<()> {
     let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);
     ctx.load_string_value_to_regs(message, message_ptr_reg, message_len_reg)?;
-    abi::emit_push_reg_pair(ctx.emitter, message_ptr_reg, message_len_reg);
-    emit_uncaught_dynamic_throwable_fatal_if_no_handler(ctx, "Error");
-    emit_dynamic_throwable_object(ctx, "_spl_error_class_id");
+    emit_error_from_string_result(ctx);
     Ok(())
 }
 
@@ -378,18 +376,47 @@ fn emit_static_exception_at(
         "\nFatal error: Uncaught {}: {}{}\n",
         class_name, message, suffix
     );
+    let (fatal_label, fatal_len) = ctx.data.add_string(fatal_message.as_bytes());
+    let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
+
+    // Fifty-odd lines of this sequence are the same at every raise in the program; only the five
+    // values below differ. They become one interned record and the site becomes its address plus
+    // a call — `--counters` and `--instrument` keep the inlined form, and are what still tests it.
+    if let Some(helper) = crate::codegen::shared_static_throw::shared_throw_label(ctx) {
+        let record_line = if location.is_none()
+            && crate::codegen::shared_static_throw::raises_on_calling_site(ctx)
+        {
+            crate::codegen::shared_static_throw::LINE_OF_CALLING_SITE
+        } else {
+            creation_line
+        };
+        let record = crate::codegen::shared_static_throw::throw_descriptor(
+            ctx.data,
+            class_id_symbol,
+            &message_label,
+            message_len,
+            record_line,
+            &fatal_label,
+            fatal_len,
+            crate::codegen::shared_static_throw::REPORT_UNCAUGHT,
+        );
+        abi::emit_symbol_address(ctx.emitter, abi::int_result_reg(ctx.emitter), &record);
+        abi::emit_call_label(ctx.emitter, helper);
+        return;
+    }
+
+    // With frame readers live the standard unwinder reaches the full uncaught report (PHP's
+    // `Stack trace:`), so only the profile is published here; the short report is for modules
+    // without readers. The shared helper above follows the same rule.
     if ctx.backtrace_enabled {
         emit_uncaught_profile_publish_if_no_handler(ctx);
     } else {
-        let (fatal_label, fatal_len) = ctx.data.add_string(fatal_message.as_bytes());
         emit_uncaught_exception_fatal_if_no_handler(ctx, &fatal_label, fatal_len);
     }
 
-    let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "x0", 56); // compact Throwable: message/code/previous
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+            crate::codegen_support::throwable_layout::emit_allocate(ctx.emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
             ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 = throwable object instance
             ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the allocation as a runtime object
             ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
@@ -406,14 +433,15 @@ fn emit_static_exception_at(
                 "x9",
                 creation_line,
             );
-            ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null
+            ctx.emitter.instruction(&format!("str xzr, [x0, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous defaults to null
             abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_exc_value", 0);
             abi::emit_jump(ctx.emitter, "__rt_throw_current");
         }
         Arch::X86_64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "rax", 56); // compact Throwable: message/code/previous
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 throwable heap kind
+            crate::codegen_support::throwable_layout::emit_allocate(ctx.emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
+            ctx.emitter.instruction(
+                &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
+            );                                                                  // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation as a runtime object
             ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", class_id_symbol, 0);
@@ -428,7 +456,7 @@ fn emit_static_exception_at(
                 "rax",
                 creation_line,
             );
-            ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null
+            ctx.emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous defaults to null
             abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);
             abi::emit_jump(ctx.emitter, "__rt_throw_current");
         }
@@ -597,8 +625,7 @@ fn emit_uncaught_exit(ctx: &mut FunctionContext<'_>) {
 fn emit_dynamic_throwable_object(ctx: &mut FunctionContext<'_>, class_id_symbol: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "x0", 56); // compact Throwable: message/code/previous
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+            crate::codegen_support::throwable_layout::emit_allocate(ctx.emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
             ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 = throwable object instance
             ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the allocation as a runtime object
             ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
@@ -610,15 +637,16 @@ fn emit_dynamic_throwable_object(ctx: &mut FunctionContext<'_>, class_id_symbol:
             ctx.emitter.instruction("str x9, [x0, #16]");                       // store the runtime exception message length
             ctx.emitter.instruction("str xzr, [x0, #24]");                      // exception code defaults to zero
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "x0");
-            ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null
+            ctx.emitter.instruction(&format!("str xzr, [x0, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous defaults to null
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_exc_value", 0);
             abi::emit_jump(ctx.emitter, "__rt_throw_current");
         }
         Arch::X86_64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "rax", 56); // compact Throwable: message/code/previous
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 throwable heap kind
+            crate::codegen_support::throwable_layout::emit_allocate(ctx.emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
+            ctx.emitter.instruction(
+                &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
+            );                                                                  // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation as a runtime object
             ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", class_id_symbol, 0);
@@ -629,7 +657,7 @@ fn emit_dynamic_throwable_object(ctx: &mut FunctionContext<'_>, class_id_symbol:
             ctx.emitter.instruction("mov QWORD PTR [rax + 16], r10");           // store the runtime exception message length
             ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // exception code defaults to zero
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
-            ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null
+            ctx.emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous defaults to null
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);
             abi::emit_jump(ctx.emitter, "__rt_throw_current");

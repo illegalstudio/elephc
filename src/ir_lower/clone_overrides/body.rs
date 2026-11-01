@@ -32,12 +32,18 @@ use super::arms::OverrideArm;
 pub(super) const THIS_PARAM: &str = "this";
 /// Applicator parameter holding the runtime override array.
 pub(super) const OVERRIDES_PARAM: &str = "__elephc_clone_overrides";
+/// Driver parameter holding the clone as a boxed object.
+pub(super) const DRIVER_OBJECT_PARAM: &str = "__elephc_clone_object";
+/// Driver parameter holding the transported invocation-scope class id (`-1` is global scope).
+pub(super) const DRIVER_SCOPE_PARAM: &str = "__elephc_clone_scope";
+/// Internal builtin applying one entry through the clone class's applicator.
+const APPLY_ONE: &str = "__elephc_clone_apply_one";
 /// Loop key local.
 const KEY_LOCAL: &str = "__elephc_clone_key";
 /// Loop value local.
-const VALUE_LOCAL: &str = "__elephc_clone_value";
+pub(super) const VALUE_LOCAL: &str = "__elephc_clone_value";
 /// Stringified property name local.
-const NAME_LOCAL: &str = "__elephc_clone_name";
+pub(super) const NAME_LOCAL: &str = "__elephc_clone_name";
 /// Internal builtin refusing one override entry that is still a PHP reference.
 const REFERENCE_GUARD: &str = "__elephc_clone_override_reference_guard";
 
@@ -51,14 +57,24 @@ pub(super) struct ResolvedArm {
     pub(super) scoped_helper: Option<String>,
 }
 
-/// Builds the complete applicator body for one `(runtime class, invocation scope)` pair.
+/// Builds the body of one `(runtime class, invocation scope)` applicator: the name dispatch for
+/// ONE entry. The applicator's parameters are `$this`, the stringified name and the value; the
+/// iteration, key stringification and the two entry refusals live in the single shared driver
+/// (`build_driver`), so none of that machinery repeats per class.
 pub(super) fn build(
     class_name: &str,
     arms: &[ResolvedArm],
     unknown: &OverrideArm,
 ) -> Vec<Stmt> {
+    vec![name_dispatch_chain(class_name, arms, unknown)]
+}
+
+/// Builds the one shared driver body: iterate the runtime override array, and for each entry
+/// stringify the key once, refuse a NUL-prefixed name and a still-referenced value, then hand the
+/// entry to the clone's class applicator through `__elephc_clone_apply_one`.
+pub(super) fn build_driver() -> Vec<Stmt> {
     let span = Span::dummy();
-    let mut body = vec![
+    let body = vec![
         stmt(
             StmtKind::Assign {
                 name: NAME_LOCAL.to_string(),
@@ -71,8 +87,19 @@ pub(super) fn build(
         ),
         nul_name_guard(),
         reference_override_guard(),
+        stmt(
+            StmtKind::ExprStmt(expr(ExprKind::FunctionCall {
+                name: Name::unqualified(APPLY_ONE),
+                args: vec![
+                    variable(DRIVER_OBJECT_PARAM),
+                    variable(NAME_LOCAL),
+                    variable(VALUE_LOCAL),
+                    variable(DRIVER_SCOPE_PARAM),
+                ],
+            })),
+            span,
+        ),
     ];
-    body.push(name_dispatch_chain(class_name, arms, unknown));
     vec![stmt(
         StmtKind::Foreach {
             array: variable(OVERRIDES_PARAM),

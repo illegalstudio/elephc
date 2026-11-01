@@ -86,7 +86,77 @@ fn emit_entry(e: &mut Emitter, complete: bool) {
 }
 
 /// Joins explicit fragments and dispatches each completed diagnostic exactly once.
+/// Emits `__rt_diag_resolve_site`: copies the published `_php_site` record into
+/// `_php_diagnostic_file`, `_php_diagnostic_file_len` and `_php_diagnostic_line`.
+///
+/// A call or raise site publishes one pointer to a static `{file descriptor, line}` record (see
+/// `prepare_call_site`); the descriptor is `{ptr, len}` and zero names the entry file. The
+/// initial `_php_site_none` record keeps the old "no published location" answer (length zero).
+/// Every register it touches is restored, so callers need not spill anything.
+fn emit_diag_resolve_site(e: &mut Emitter) {
+    e.label_global("__rt_diag_resolve_site");
+    if e.target.arch == Arch::AArch64 {
+        e.instruction("stp x9, x10, [sp, #-32]!");                              // preserve the scratch registers this helper uses
+        e.instruction("stp x11, x12, [sp, #16]");                               // preserve the record and payload registers
+        abi::emit_load_symbol_to_reg(e, "x11", "_php_site", 0);
+        e.instruction("ldr x12, [x11, #8]");                                    // the site's line
+        abi::emit_store_reg_to_symbol(e, "x12", "_php_diagnostic_line", 0);
+        abi::emit_symbol_address(e, "x10", "_php_site_none");
+        e.instruction("cmp x11, x10");                                          // no site published yet?
+        e.instruction("b.eq __rt_diag_resolve_site_none");                      // keep the bare-line answer
+        e.instruction("ldr x12, [x11]");                                        // the site's file descriptor
+        e.instruction("cbz x12, __rt_diag_resolve_site_entry");                 // zero names the entry file
+        e.instruction("ldr x10, [x12]");                                        // descriptor pointer
+        e.instruction("ldr x12, [x12, #8]");                                    // descriptor length
+        e.instruction("b __rt_diag_resolve_site_store");                        // publish both words
+        e.label("__rt_diag_resolve_site_entry");
+        abi::emit_symbol_address(e, "x10", "_script_source_file");
+        abi::emit_load_symbol_to_reg(e, "x12", "_script_source_file_len", 0);
+        e.instruction("b __rt_diag_resolve_site_store");                        // publish the entry file
+        e.label("__rt_diag_resolve_site_none");
+        e.instruction("mov x10, #0");                                           // no file
+        e.instruction("mov x12, #0");                                           // and no length
+        e.label("__rt_diag_resolve_site_store");
+        abi::emit_store_reg_to_symbol(e, "x10", "_php_diagnostic_file", 0);
+        abi::emit_store_reg_to_symbol(e, "x12", "_php_diagnostic_file_len", 0);
+        e.instruction("ldp x11, x12, [sp, #16]");                               // restore the record and payload registers
+        e.instruction("ldp x9, x10, [sp], #32");                                // restore the scratch registers
+        e.instruction("ret");                                                   // location published
+    } else {
+        e.instruction("push r9");                                               // preserve the payload register
+        e.instruction("push r10");                                              // preserve the file register
+        e.instruction("push r11");                                              // preserve the record register
+        abi::emit_load_symbol_to_reg(e, "r11", "_php_site", 0);
+        e.instruction("mov r9, QWORD PTR [r11 + 8]");                           // the site's line
+        abi::emit_store_reg_to_symbol(e, "r9", "_php_diagnostic_line", 0);
+        abi::emit_symbol_address(e, "r10", "_php_site_none");
+        e.instruction("cmp r11, r10");                                          // no site published yet?
+        e.instruction("je __rt_diag_resolve_site_none");                        // keep the bare-line answer
+        e.instruction("mov r9, QWORD PTR [r11]");                               // the site's file descriptor
+        e.instruction("test r9, r9");                                           // zero names the entry file
+        e.instruction("jz __rt_diag_resolve_site_entry");                       // use the entry script
+        e.instruction("mov r10, QWORD PTR [r9]");                               // descriptor pointer
+        e.instruction("mov r9, QWORD PTR [r9 + 8]");                            // descriptor length
+        e.instruction("jmp __rt_diag_resolve_site_store");                      // publish both words
+        e.label("__rt_diag_resolve_site_entry");
+        abi::emit_symbol_address(e, "r10", "_script_source_file");
+        abi::emit_load_symbol_to_reg(e, "r9", "_script_source_file_len", 0);
+        e.instruction("jmp __rt_diag_resolve_site_store");                      // publish the entry file
+        e.label("__rt_diag_resolve_site_none");
+        e.instruction("xor r10, r10");                                          // no file
+        e.instruction("xor r9, r9");                                            // and no length
+        e.label("__rt_diag_resolve_site_store");
+        abi::emit_store_reg_to_symbol(e, "r10", "_php_diagnostic_file", 0);
+        abi::emit_store_reg_to_symbol(e, "r9", "_php_diagnostic_file_len", 0);
+        e.instruction("pop r11");                                               // restore the record register
+        e.instruction("pop r10");                                               // restore the file register
+        e.instruction("pop r9");                                                // restore the payload register
+        e.instruction("ret");                                                   // location published
+    }
+}
+
 pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
+    emit_diag_resolve_site(e);
     let arm = e.target.arch == Arch::AArch64;
     let result = abi::int_result_reg(e);
     let a0 = abi::int_arg_reg_name(e.target, 0);
@@ -100,6 +170,9 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     // the full-warning atom so ABI analysis starts at its actual prologue.
     // The fragment entry crosses atoms through an unconditional jump only.
     e.label_shared("__rt_warning_append");
+    // Materialize the raise site's location from the published `_php_site` record into the
+    // `_php_diagnostic_*` words the rest of the dispatch reads.
+    abi::emit_call_label(e, "__rt_diag_resolve_site");
     arg(e, 0, input_len);
     abi::emit_reg_move(e, result, a0);
     abi::emit_branch_if_int_result_zero(e, "__rt_warning_done");
@@ -182,18 +255,14 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     e.label("__rt_warning_default");
     abi::emit_load_temporary_stack_slot(e, result, HANDLED);
     abi::emit_branch_if_int_result_nonzero(e, "__rt_warning_release");
+    // php's internal handler records BEFORE it consults the reporting mask, so a diagnostic
+    // `@` or `error_reporting(0)` silences is still what `error_get_last()` answers.
+    emit_record_last_error(e);
     abi::emit_load_symbol_to_reg(e, result, "_php_error_reporting", 0);
     abi::emit_load_temporary_stack_slot(e, scratch, LEVEL);
     ins(e, "and x0, x0, x10", "and rax, r10");
     abi::emit_branch_if_int_result_zero(e, "__rt_warning_release");
-    if arm {
-        arg(e, 1, BUFFER);
-        arg(e, 2, LENGTH);
-    } else {
-        arg(e, 0, BUFFER);
-        arg(e, 1, LENGTH);
-    }
-    abi::emit_call_label(e, "__rt_diag_write");
+    emit_located_display(e);
     e.label("__rt_warning_release");
     abi::emit_store_zero_to_symbol(e, "_rt_diag_warning_message_len", 0);
     abi::emit_load_temporary_stack_slot(e, scratch, ACTIVATION);
@@ -283,6 +352,92 @@ fn emit_arguments(e: &mut Emitter) {
     abi::emit_store_to_address(e, scratch, result, 0);
     emit_box_current_owned_value_as_mixed(e, &PhpType::Array(Box::new(PhpType::Mixed)));
     save(e, ARGS);
+}
+
+/// Writes the completed default-displayed diagnostic the way php prints it:
+/// `Warning: message in FILE on line N` and its newline.
+///
+/// The joined buffer ends with the producer's terminating newline; the location goes before
+/// it, from the raise site's published `_php_diagnostic_file`/`_line` (a call site publishes
+/// the file its code came from, see `prepare_call_site`). A diagnostic with no published file
+/// keeps the bare line. Diagnostics rendered by the interpreter carry their own location and
+/// never come through here (`__elephc_eval_warning_raw` writes them directly).
+fn emit_located_display(e: &mut Emitter) {
+    let arm = e.target.arch == Arch::AArch64;
+    let (ptr, len) = if arm { ("x1", "x2") } else { ("rdi", "rsi") };
+    let write = |e: &mut Emitter| abi::emit_call_label(e, "__rt_diag_write");
+    abi::emit_load_temporary_stack_slot(e, len, LENGTH);
+    ins(e, "cbz x2, __rt_warning_display_plain", "test rsi, rsi");
+    if !arm {
+        e.instruction("jz __rt_warning_display_plain");                         // an empty message has no newline to place the location before
+    }
+    abi::emit_load_temporary_stack_slot(e, ptr, BUFFER);
+    ins(e, "add x10, x1, x2", "lea r10, [rdi + rsi]");
+    ins(e, "ldrb w10, [x10, #-1]", "movzx r10d, BYTE PTR [r10 - 1]");
+    ins(e, "cmp w10, #10", "cmp r10d, 10");
+    ins(e, "b.ne __rt_warning_display_plain", "jne __rt_warning_display_plain");
+    abi::emit_load_symbol_to_reg(e, if arm { "x10" } else { "r10" }, "_php_diagnostic_file_len", 0);
+    ins(e, "cbz x10, __rt_warning_display_plain", "test r10, r10");
+    if !arm {
+        e.instruction("jz __rt_warning_display_plain");                         // no published location: keep php's bare line
+    }
+    abi::emit_load_temporary_stack_slot(e, ptr, BUFFER);
+    abi::emit_load_temporary_stack_slot(e, len, LENGTH);
+    ins(e, "sub x2, x2, #1", "sub rsi, 1");
+    write(e);
+    abi::emit_symbol_address(e, ptr, "_rt_diag_in_text");
+    abi::emit_load_int_immediate(e, len, 4);
+    write(e);
+    abi::emit_load_symbol_to_reg(e, ptr, "_php_diagnostic_file", 0);
+    abi::emit_load_symbol_to_reg(e, len, "_php_diagnostic_file_len", 0);
+    write(e);
+    abi::emit_symbol_address(e, ptr, "_rt_diag_on_line_text");
+    abi::emit_load_int_immediate(e, len, 9);
+    write(e);
+    abi::emit_load_symbol_to_reg(e, abi::int_result_reg(e), "_php_diagnostic_line", 0);
+    abi::emit_call_label(e, "__rt_itoa");
+    if !arm {
+        e.instruction("mov rdi, rax");                                          // the rendered line number becomes the write buffer
+        e.instruction("mov rsi, rdx");                                          // and its length the write length
+    }
+    write(e);
+    abi::emit_symbol_address(e, ptr, "_heap_stats_nl");
+    abi::emit_load_int_immediate(e, len, 1);
+    write(e);
+    abi::emit_jump(e, "__rt_warning_display_done");
+    e.label("__rt_warning_display_plain");
+    abi::emit_load_temporary_stack_slot(e, ptr, BUFFER);
+    abi::emit_load_temporary_stack_slot(e, len, LENGTH);
+    write(e);
+    e.label("__rt_warning_display_done");
+}
+
+/// Records the dispatched diagnostic as `error_get_last()`'s answer.
+///
+/// The message is the joined line without its category prefix and terminal newline, exactly
+/// what a handler receives as `$message`; the location is the raise site's published one.
+fn emit_record_last_error(e: &mut Emitter) {
+    let arm = e.target.arch == Arch::AArch64;
+    arg(e, 1, BUFFER);
+    abi::emit_load_temporary_stack_slot(e, if arm { "x10" } else { "r10" }, PREFIX);
+    ins(e, "add x1, x1, x10", "add rsi, r10");
+    arg(e, 2, LENGTH);
+    ins(e, "sub x2, x2, x10", "sub rdx, r10");
+    ins(e, "cbz x2, __rt_warning_record_message_ready", "test rdx, rdx");
+    if !arm {
+        e.instruction("jz __rt_warning_record_message_ready");                 // an empty message has no terminal byte to strip
+    }
+    ins(e, "add x10, x1, x2", "lea r10, [rsi + rdx]");
+    ins(e, "ldrb w10, [x10, #-1]", "movzx r10d, BYTE PTR [r10 - 1]");
+    ins(e, "cmp w10, #10", "cmp r10d, 10");
+    ins(e, "b.ne __rt_warning_record_message_ready", "jne __rt_warning_record_message_ready");
+    ins(e, "sub x2, x2, #1", "sub rdx, 1");
+    e.label("__rt_warning_record_message_ready");
+    arg(e, 0, LEVEL);
+    abi::emit_load_symbol_to_reg(e, abi::int_arg_reg_name(e.target, 3), "_php_diagnostic_file", 0);
+    abi::emit_load_symbol_to_reg(e, abi::int_arg_reg_name(e.target, 4), "_php_diagnostic_file_len", 0);
+    abi::emit_load_symbol_to_reg(e, abi::int_arg_reg_name(e.target, 5), "_php_diagnostic_line", 0);
+    abi::emit_call_label(e, "__rt_last_error_record");
 }
 
 /// Publishes an owning cleanup activation before entering arbitrary user code.

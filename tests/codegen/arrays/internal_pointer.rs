@@ -12,9 +12,30 @@
 //! - Coverage spans indexed arrays (`O(1)` ordinal reads) and associative hashes
 //!   (insertion-order chain walk), the single unrecoverable invalid cursor, empty
 //!   containers, `foreach` leaving the pointer alone, reassignment rewinding it, and
-//!   case-insensitive/namespaced spellings.
+//!   local/property/element/temporary receivers plus case-insensitive/namespaced spellings.
 
 use crate::support::*;
+
+/// Verifies expression receivers follow the ordinary PHP call rules instead of requiring
+/// every array argument to be a plain local.
+///
+/// By-reference property and element receivers use the shared read/mutate/write-back place
+/// adapter. Read-only call results and literals use a temporary cursor starting at the first
+/// element. The fixture also proves each receiver expression is evaluated only once.
+#[test]
+fn test_array_internal_pointer_expression_receivers() {
+    let out = compile_and_run(
+        r#"<?php
+class BoxedItems { public array $items = [10, 20, 30]; }
+function make_items(): array { echo "m"; return ["first" => 7, "second" => 8]; }
+$box = new BoxedItems();
+$nested = [[40, 50], [60, 70]];
+echo end($box->items), "|", reset($nested[1]), "|";
+echo key(make_items()), "|", current([80, 90]), "|", key(["x" => 1]);
+"#,
+    );
+    assert_eq!(out, "30|60|mfirst|80|x");
+}
 
 /// Verifies the full read/seek cycle over an indexed array, including the one-way invalid
 /// cursor: after `end()` + `next()` runs off the back, `prev()` does NOT walk back in.
@@ -342,4 +363,20 @@ echo $t;
         "expected clean heap, got: {}",
         out.stderr
     );
+}
+
+/// Verifies gradual array unions are normalized before pointer seeks and reads.
+#[test]
+fn test_array_internal_pointer_gradual_array_union() {
+    let out = compile_and_run(
+        r#"<?php
+function maybe_list(bool $flag): array|string { return [11, 22]; }
+function maybe_map(bool $flag): array|string { return ["first" => 3, "second" => 4]; }
+$list = maybe_list($argc > 1);
+$map = maybe_map($argc > 1);
+echo reset($list), ":", key($list), "|";
+echo reset($map), ":", key($map);
+"#,
+    );
+    assert_eq!(out, "11:0|3:first");
 }

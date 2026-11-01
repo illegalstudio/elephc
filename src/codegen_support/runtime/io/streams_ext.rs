@@ -247,34 +247,73 @@ pub fn emit_streams_ext(emitter: &mut Emitter) {
     // Input:  none
     // Output: x0 = fd (or -1 on failure)
     // Frame:
-    //   sp+ 0  : 32-byte template buffer (more than enough for /tmp/elephc-XXXXXX)
-    //   sp+32  : x29 / x30
+    //   sp+  0 : 256-byte path buffer (TMPDIR up to 240 bytes + "/elephc-XXXXXX")
+    //   sp+256 : fd spill slot
+    //   sp+264 : x29 / x30
+    // The template honors TMPDIR the way PHP's tmpfile()/sys_get_temp_dir() does. PHP's
+    // php://memory uses no filesystem at all; elephc emulates it with this helper, so confining
+    // the temp file to TMPDIR keeps that emulation usable when the process may only write there
+    // (sandboxed runs, containerized deploys) instead of failing fopen() outright.
     // ================================================================
-    let tmpl_buf = 32usize;
-    let tmpl_save = tmpl_buf;
-    let tmpl_frame = tmpl_buf + 16;
+    let tmpl_buf = 256usize;
+    let tmpl_fd = tmpl_buf;
+    let tmpl_save = tmpl_buf + 8;
+    let tmpl_frame = 288usize;
     emitter.blank();
     emitter.raw("    .p2align 2");                                              // ensure 4-byte alignment for the next runtime helper
     emitter.comment("--- runtime: tmpfile ---");
     emitter.label_global("__rt_tmpfile");
-    emitter.instruction(&format!("sub sp, sp, #{}", tmpl_frame));               // allocate frame + template buffer
+    emitter.instruction(&format!("sub sp, sp, #{}", tmpl_frame));               // allocate frame + path buffer + fd slot
     emitter.instruction(&format!("stp x29, x30, [sp, #{}]", tmpl_save));        // save frame pointer and return address
     emitter.instruction(&format!("add x29, sp, #{}", tmpl_save));               // establish new frame pointer
-    abi::emit_symbol_address(emitter, "x9", "_tmpfile_template");               // load page of the template literal
+    abi::emit_symbol_address(emitter, "x0", "_tmpfile_tmpdir_name");            // "TMPDIR" for getenv
+    emitter.bl_c("getenv");                                                     // libc getenv("TMPDIR")
+    emitter.instruction("cbz x0, __rt_tmpfile_use_default");                    // unset TMPDIR → the static /tmp template
+    emitter.instruction("mov x9, x0");                                          // TMPDIR string pointer
+    emitter.instruction("mov x10, #0");                                         // TMPDIR length cursor
+    emitter.label("__rt_tmpfile_tmpdir_len");
+    emitter.instruction(&format!("cmp x10, #{}", tmpl_buf - 16));               // cap the prefix so the suffix still fits
+    emitter.instruction("b.hs __rt_tmpfile_tmpdir_len_done");                   // capped: use what fits
+    emitter.instruction("ldrb w11, [x9, x10]");                                 // next TMPDIR byte
+    emitter.instruction("cbz w11, __rt_tmpfile_tmpdir_len_done");               // end of TMPDIR
+    emitter.instruction("add x10, x10, #1");                                    // advance the cursor
+    emitter.instruction("b __rt_tmpfile_tmpdir_len");                           // keep scanning
+    emitter.label("__rt_tmpfile_tmpdir_len_done");
+    emitter.instruction("cbz x10, __rt_tmpfile_use_default");                   // empty TMPDIR → default template
+    emitter.instruction("mov x11, #0");                                         // copy cursor
+    emitter.label("__rt_tmpfile_tmpdir_copy");
+    emitter.instruction("cmp x11, x10");                                        // copied the whole prefix?
+    emitter.instruction("b.hs __rt_tmpfile_tmpdir_copy_done");                  // prefix copied
+    emitter.instruction("ldrb w12, [x9, x11]");                                 // prefix byte
+    emitter.instruction("strb w12, [sp, x11]");                                 // store it in the path buffer
+    emitter.instruction("add x11, x11, #1");                                    // advance the copy cursor
+    emitter.instruction("b __rt_tmpfile_tmpdir_copy");                          // keep copying
+    emitter.label("__rt_tmpfile_tmpdir_copy_done");
+    abi::emit_symbol_address(emitter, "x9", "_tmpfile_suffix");                 // "/elephc-XXXXXX"
+    emitter.instruction("add x13, sp, x10");                                    // suffix lands right after TMPDIR
+    emitter.instruction("mov x11, #0");                                         // suffix cursor
+    emitter.label("__rt_tmpfile_suffix_copy");
+    emitter.instruction("ldrb w12, [x9, x11]");                                 // suffix byte (including the NUL)
+    emitter.instruction("strb w12, [x13, x11]");                                // store it after the prefix
+    emitter.instruction("cbz w12, __rt_tmpfile_have_template");                 // stop after the terminator
+    emitter.instruction("add x11, x11, #1");                                    // advance the suffix cursor
+    emitter.instruction("b __rt_tmpfile_suffix_copy");                          // keep copying
+    emitter.label("__rt_tmpfile_use_default");
+    abi::emit_symbol_address(emitter, "x9", "_tmpfile_template");               // load page of the default template literal
     emitter.instruction("ldp x10, x11, [x9]");                                  // load 16 bytes of the template
     emitter.instruction("stp x10, x11, [sp]");                                  // copy first 16 bytes onto the stack template
     emitter.instruction("ldr x10, [x9, #16]");                                  // load the remaining bytes (≤ 8) of the template
     emitter.instruction("str x10, [sp, #16]");                                  // copy the trailing bytes onto the stack template
-
+    emitter.label("__rt_tmpfile_have_template");
     emitter.instruction("add x0, sp, #0");                                      // mkstemp template argument
     emitter.bl_c("mkstemp");                                                    // libc mkstemp() → fd (or -1)
     emitter.instruction("cmp w0, #0");                                          // did mkstemp return a negative C int?
     emitter.instruction("b.lt __rt_tmpfile_fail");                              // mkstemp failed
     emitter.instruction("sxtw x0, w0");                                         // normalize the C int fd into the runtime's 64-bit descriptor value
-    emitter.instruction("str x0, [sp, #24]");                                   // preserve fd on the stack across the unlink call (x9–x15 are caller-saved)
+    emitter.instruction(&format!("str x0, [sp, #{}]", tmpl_fd));                // preserve fd across the unlink call (x9–x15 are caller-saved)
     emitter.instruction("add x0, sp, #0");                                      // unlink path argument (the now-resolved template)
     emitter.bl_c("unlink");                                                     // libc unlink — file auto-deletes when fd closes
-    emitter.instruction("ldr x0, [sp, #24]");                                   // reload fd as the return value
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", tmpl_fd));                // reload fd as the return value
     abi::emit_symbol_address(emitter, "x9", "_eof_flags");
     emitter.instruction("strb wzr, [x9, x0]");                                  // clear stale EOF state for the temporary descriptor
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", tmpl_save));        // restore frame pointer and return address
@@ -431,37 +470,78 @@ fn emit_streams_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return predicate
 
     // -- tmpfile --
+    // The template honors TMPDIR like PHP's tmpfile()/sys_get_temp_dir(); see the AArch64
+    // sibling for why an emulated php://memory must follow it.
     emitter.blank();
     emitter.comment("--- runtime: tmpfile ---");
     emitter.label_global("__rt_tmpfile");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish frame
-    emitter.instruction("sub rsp, 48");                                         // reserve template buffer plus fd spill slot
+    emitter.instruction("sub rsp, 288");                                        // reserve path buffer plus fd spill slot
+    abi::emit_symbol_address(emitter, "rdi", "_tmpfile_tmpdir_name");           // "TMPDIR" for getenv
+    emitter.instruction("call getenv");                                         // libc getenv("TMPDIR")
+    emitter.instruction("test rax, rax");                                       // unset?
+    emitter.instruction("je __rt_tmpfile_use_default_x86");                     // unset TMPDIR → the static /tmp template
+    emitter.instruction("mov r8, rax");                                         // TMPDIR string pointer
+    emitter.instruction("xor ecx, ecx");                                        // TMPDIR length cursor
+    emitter.label("__rt_tmpfile_tmpdir_len_x86");
+    emitter.instruction("cmp rcx, 240");                                        // cap the prefix so the suffix still fits
+    emitter.instruction("jae __rt_tmpfile_tmpdir_len_done_x86");                // capped: use what fits
+    emitter.instruction("movzx edx, BYTE PTR [r8 + rcx]");                      // next TMPDIR byte
+    emitter.instruction("test dl, dl");                                         // end of TMPDIR?
+    emitter.instruction("je __rt_tmpfile_tmpdir_len_done_x86");                 // stop at the terminator
+    emitter.instruction("inc rcx");                                             // advance the cursor
+    emitter.instruction("jmp __rt_tmpfile_tmpdir_len_x86");                     // keep scanning
+    emitter.label("__rt_tmpfile_tmpdir_len_done_x86");
+    emitter.instruction("test rcx, rcx");                                       // empty TMPDIR?
+    emitter.instruction("je __rt_tmpfile_use_default_x86");                     // empty → default template
+    emitter.instruction("xor r9d, r9d");                                        // copy cursor
+    emitter.label("__rt_tmpfile_tmpdir_copy_x86");
+    emitter.instruction("cmp r9, rcx");                                         // copied the whole prefix?
+    emitter.instruction("jae __rt_tmpfile_tmpdir_copy_done_x86");               // prefix copied
+    emitter.instruction("movzx edx, BYTE PTR [r8 + r9]");                       // prefix byte
+    emitter.instruction("mov BYTE PTR [rbp + r9 - 256], dl");                   // store it in the path buffer
+    emitter.instruction("inc r9");                                              // advance the copy cursor
+    emitter.instruction("jmp __rt_tmpfile_tmpdir_copy_x86");                    // keep copying
+    emitter.label("__rt_tmpfile_tmpdir_copy_done_x86");
+    abi::emit_symbol_address(emitter, "r8", "_tmpfile_suffix");                 // "/elephc-XXXXXX"
+    emitter.instruction("lea r9, [rbp - 256]");                                 // path buffer base
+    emitter.instruction("add r9, rcx");                                         // suffix lands right after TMPDIR
+    emitter.instruction("xor edx, edx");                                        // suffix cursor
+    emitter.label("__rt_tmpfile_suffix_copy_x86");
+    emitter.instruction("movzx eax, BYTE PTR [r8 + rdx]");                      // suffix byte (including the NUL)
+    emitter.instruction("mov BYTE PTR [r9 + rdx], al");                         // store it after the prefix
+    emitter.instruction("test al, al");                                         // copied the terminator?
+    emitter.instruction("je __rt_tmpfile_have_template_x86");                   // template complete
+    emitter.instruction("inc rdx");                                             // advance the suffix cursor
+    emitter.instruction("jmp __rt_tmpfile_suffix_copy_x86");                    // keep copying
+    emitter.label("__rt_tmpfile_use_default_x86");
     abi::emit_symbol_address(emitter, "rsi", "_tmpfile_template");              // source pointer
     emitter.instruction("mov rax, QWORD PTR [rsi]");                            // load first 8 bytes
-    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // store first 8 bytes
+    emitter.instruction("mov QWORD PTR [rbp - 256], rax");                      // store first 8 bytes
     emitter.instruction("mov rax, QWORD PTR [rsi + 8]");                        // load next 8 bytes
-    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // store next 8 bytes
+    emitter.instruction("mov QWORD PTR [rbp - 248], rax");                      // store next 8 bytes
     emitter.instruction("mov rax, QWORD PTR [rsi + 16]");                       // load remainder
-    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // store remainder
-    emitter.instruction("lea rdi, [rbp - 32]");                                 // mkstemp template arg
+    emitter.instruction("mov QWORD PTR [rbp - 240], rax");                      // store remainder
+    emitter.label("__rt_tmpfile_have_template_x86");
+    emitter.instruction("lea rdi, [rbp - 256]");                                 // mkstemp template arg
     emitter.instruction("call mkstemp");                                        // libc mkstemp
     emitter.instruction("cmp eax, 0");                                          // did mkstemp return a negative C int?
     emitter.instruction("jl __rt_tmpfile_fail_x86");                            // mkstemp failed
     emitter.instruction("cdqe");                                                // normalize the C int fd into the runtime's 64-bit descriptor value
-    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve fd across unlink
-    emitter.instruction("lea rdi, [rbp - 32]");                                 // unlink path
+    emitter.instruction("mov QWORD PTR [rbp - 272], rax");                      // preserve fd across unlink
+    emitter.instruction("lea rdi, [rbp - 256]");                                // unlink path
     emitter.instruction("call unlink");                                         // libc unlink — file auto-deletes on close
-    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // return fd
+    emitter.instruction("mov rax, QWORD PTR [rbp - 272]");                      // return fd
     abi::emit_symbol_address(emitter, "r10", "_eof_flags");                     // materialize the eof-flag table for the temporary descriptor
     emitter.instruction("mov BYTE PTR [r10 + rax], 0");                         // clear stale EOF state before returning the descriptor
-    emitter.instruction("add rsp, 48");                                         // release frame
+    emitter.instruction("add rsp, 288");                                        // release frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return fd
 
     emitter.label("__rt_tmpfile_fail_x86");
     emitter.instruction("mov rax, -1");                                         // failure sentinel
-    emitter.instruction("add rsp, 48");                                         // release frame (failure path)
+    emitter.instruction("add rsp, 288");                                        // release frame (failure path)
     emitter.instruction("pop rbp");                                             // restore caller frame pointer (failure path)
     emitter.instruction("ret");                                                 // return -1
 }

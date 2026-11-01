@@ -261,6 +261,38 @@ fn test_effect_analysis_preserves_throwing_builtin_metadata() {
     assert_eq!(eliminate_dead_code(vec![statement.clone()]), vec![statement]);
 }
 
+/// Verifies an unused `array_combine` call remains observable because unequal cardinalities
+/// raise a catchable `ValueError` at runtime.
+#[test]
+fn test_effect_analysis_preserves_array_combine_value_error() {
+    let expr = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::from("array_combine"),
+            args: vec![
+                Expr::new(
+                    ExprKind::ArrayLiteral(vec![Expr::string_lit("only")]),
+                    Span::dummy(),
+                ),
+                Expr::new(
+                    ExprKind::ArrayLiteral(vec![Expr::int_lit(1), Expr::int_lit(2)]),
+                    Span::dummy(),
+                ),
+            ],
+        },
+        Span::dummy(),
+    );
+
+    assert!(expr_effect(&expr).may_throw);
+    assert!(expr_is_observable(&expr));
+
+    let statement = Stmt::new(StmtKind::ExprStmt(expr), Span::dummy());
+    assert_eq!(
+        prune_constant_control_flow(vec![statement.clone()]),
+        vec![statement.clone()]
+    );
+    assert_eq!(eliminate_dead_code(vec![statement.clone()]), vec![statement]);
+}
+
 /// Verifies callback builtins combine a known callback summary with intrinsic array work.
 #[test]
 fn test_effect_analysis_refines_builtin_with_known_pure_callback() {
@@ -319,6 +351,39 @@ fn test_program_function_effects_recognize_pure_user_functions() {
     let (function_effects, _, _) = compute_program_callable_effects(&program);
 
     assert_eq!(function_effects.get("len3"), Some(&Effect::PURE));
+}
+
+/// Verifies a declared parameter type remains a throwing call-boundary effect even when the
+/// function body itself has no observable behavior.
+#[test]
+fn test_program_function_effects_preserve_typed_parameter_checks() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            type_params: Vec::new(),
+            name: "accept_int".to_string(),
+            params: vec![(
+                "value".to_string(),
+                Some(TypeExpr::Int),
+                None,
+                false,
+            )],
+            param_attributes: Vec::new(),
+            variadic: None,
+            variadic_by_ref: false,
+            variadic_type: None,
+            return_type: None,
+            by_ref_return: false,
+            body: Vec::new(),
+        },
+        Span::dummy(),
+    )];
+
+    let (function_effects, _, _) = compute_program_callable_effects(&program);
+
+    assert_eq!(
+        function_effects.get("accept_int"),
+        Some(&Effect::PURE.with_may_throw())
+    );
 }
 
 /// Verifies that a wrapper function calling a function that throws is classified

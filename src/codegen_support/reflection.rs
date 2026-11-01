@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::ir::Function;
 use crate::names::{php_symbol_key, Name};
-use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
+use crate::parser::ast::{Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
 use crate::types::{
     collect_attribute_args, collect_attribute_names, AttrArgEntry, AttrArgValue, AttrKey,
     ClassInfo, FunctionSig,
@@ -85,10 +85,14 @@ pub(crate) struct ReflectionAttributeFactory {
 /// Returns the canonical class name string from the HashMap key, or `None`
 /// if the class is not registered.
 pub(crate) fn resolve_class_name<'a>(
-    classes: &'a HashMap<String, ClassInfo>,
+    classes: &'a crate::fast_hash::FastMap<String, ClassInfo>,
     class_name: &str,
 ) -> Option<&'a str> {
-    let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
+    let trimmed = class_name.trim_start_matches('\\');
+    if let Some((canonical, _)) = classes.get_key_value(trimmed) {
+        return Some(canonical.as_str());
+    }
+    let class_key = php_symbol_key(trimmed);
     classes
         .keys()
         .find(|existing| php_symbol_key(existing) == class_key)
@@ -100,7 +104,7 @@ pub(crate) fn resolve_class_name<'a>(
 /// attribute name/argument pairs into a sorted vector of
 /// `ReflectionAttributeFactory` records with sequential ids.
 pub(crate) fn collect_attribute_factories(
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) -> Vec<ReflectionAttributeFactory> {
     collect_attribute_factories_with_extra(classes, &[])
 }
@@ -108,7 +112,7 @@ pub(crate) fn collect_attribute_factories(
 /// Scans class metadata plus additional attribute metadata sources and collects
 /// all distinct attribute name/argument pairs into deterministic factory records.
 pub(crate) fn collect_attribute_factories_with_extra(
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
     extra_attrs: &[AttributeMetadataSource<'_>],
 ) -> Vec<ReflectionAttributeFactory> {
     let mut unique = BTreeMap::new();
@@ -122,6 +126,20 @@ pub(crate) fn collect_attribute_factories_with_extra(
         for (member, names) in &class_info.method_attribute_names {
             if let Some(args) = class_info.method_attribute_args.get(member) {
                 collect_from_attribute_lists(classes, names, args, &mut unique);
+            }
+        }
+        for signature in class_info
+            .methods
+            .values()
+            .chain(class_info.static_methods.values())
+        {
+            for groups in &signature.param_attributes {
+                let names = crate::types::collect_attribute_names(groups);
+                if names.is_empty() {
+                    continue;
+                }
+                let args = crate::types::collect_attribute_args(groups);
+                collect_from_attribute_lists(classes, &names, &args, &mut unique);
             }
         }
         for (member, names) in &class_info.property_attribute_names {
@@ -169,32 +187,40 @@ pub(crate) fn collect_attribute_factories_with_extra(
 ///
 /// Numbering the factories walks every class and every lowered function, so a caller that
 /// materializes several attributes builds this table once and looks each attribute up in it,
-/// instead of renumbering the whole program per attribute.
-pub(crate) struct AttributeFactoryIds<'a> {
-    classes: &'a HashMap<String, ClassInfo>,
+/// instead of renumbering the whole program per attribute. The table is the module's
+/// (`Module::attribute_factory_ids`): numbering it per reflected member made the closed-world
+/// Laravel artisan build spend hours in this walk.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct AttributeFactoryIds {
     ids: HashMap<(String, Vec<AttrArgEntry>), i64>,
 }
 
-impl<'a> AttributeFactoryIds<'a> {
+impl AttributeFactoryIds {
     /// Numbers the factories of `classes` plus `extra_attrs` exactly as the synthetic
     /// `ReflectionAttribute` bodies do, so the ids agree with `newInstance()`'s dispatch.
     pub(crate) fn new(
-        classes: &'a HashMap<String, ClassInfo>,
+        classes: &crate::fast_hash::FastMap<String, ClassInfo>,
         extra_attrs: &[AttributeMetadataSource<'_>],
     ) -> Self {
         let ids = collect_attribute_factories_with_extra(classes, extra_attrs)
             .into_iter()
             .map(|factory| ((factory.class_name, factory.args), factory.id))
             .collect();
-        Self { classes, ids }
+        Self { ids }
     }
 
-    /// Returns the factory id of one attribute, or `0` when no factory matches it.
-    pub(crate) fn id(&self, attr_name: &str, attr_args: &[AttrArgEntry]) -> i64 {
+    /// Returns the factory id of one attribute, or `0` when no factory matches it. `classes`
+    /// is the table the ids were numbered from.
+    pub(crate) fn id(
+        &self,
+        classes: &crate::fast_hash::FastMap<String, ClassInfo>,
+        attr_name: &str,
+        attr_args: &[AttrArgEntry],
+    ) -> i64 {
         // Non-class attributes are registered under their raw name (see
         // `collect_from_attribute_lists`), so fall back to it when the name does
         // not resolve to a real class.
-        let lookup_name = resolve_class_name(self.classes, attr_name)
+        let lookup_name = resolve_class_name(classes, attr_name)
             .map(|resolved| resolved.to_string())
             .unwrap_or_else(|| attr_name.to_string());
         self.ids
@@ -207,12 +233,12 @@ impl<'a> AttributeFactoryIds<'a> {
 /// Builds the synthetic `ReflectionAttribute::newInstance()` body using class
 /// metadata plus additional attribute metadata sources.
 pub(crate) fn build_attribute_new_instance_body_with_extra(
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
     extra_attrs: &[AttributeMetadataSource<'_>],
 ) -> Vec<Stmt> {
     let span = crate::span::Span::dummy();
     let factories = collect_attribute_factories_with_extra(classes, extra_attrs);
-    let mut body = Vec::new();
+    let mut cases = Vec::new();
     for factory in factories {
         // Only resolvable attribute classes can be instantiated. Non-class
         // attributes are registered (so `getArguments()` can find them) but
@@ -220,9 +246,28 @@ pub(crate) fn build_attribute_new_instance_body_with_extra(
         if !factory.resolvable {
             continue;
         }
-        let condition = factory_condition(factory.id);
+        let args = positional_constructor_args(classes, &factory)
+            .unwrap_or_else(|| {
+                factory
+                    .args
+                    .iter()
+                    .map(|entry| match &entry.key {
+                        // Named attribute arguments must construct with
+                        // named-argument semantics, not positionally.
+                        Some(crate::types::AttrKey::Str(name)) => Expr::new(
+                            ExprKind::NamedArg {
+                                name: name.clone(),
+                                value: Box::new(attr_arg_expr(&entry.value)),
+                            },
+                            span,
+                        ),
+                        _ => attr_arg_expr(&entry.value),
+                    })
+                    .collect()
+            });
         let mut then_body = Vec::new();
         if let Some(flags) = crate::types::checker::core_attributes::flags(&factory.class_name) {
+            use crate::parser::ast::BinOp;
             use crate::synthetic_class::{e_binop, e_int, e_new_fq, e_str, e_this_prop, s_if, s_throw};
             then_body.push(s_if(e_binop(e_binop(e_this_prop("__target"), BinOp::BitAnd, e_int(flags)), BinOp::StrictEq, e_int(0)),
                 vec![s_throw(e_new_fq("Error", vec![e_str(&format!("Attribute \"{}\" cannot target this declaration", factory.class_name))]))], vec![], None));
@@ -235,61 +280,191 @@ pub(crate) fn build_attribute_new_instance_body_with_extra(
             StmtKind::Return(Some(Expr::new(
                 ExprKind::NewObject {
                     class_name: name_from_canonical(&factory.class_name),
-                    args: factory
-                        .args
-                        .iter()
-                        .map(|entry| match &entry.key {
-                            // Named attribute arguments must construct with
-                            // named-argument semantics, not positionally.
-                            Some(crate::types::AttrKey::Str(name)) => Expr::new(
-                                ExprKind::NamedArg {
-                                    name: name.clone(),
-                                    value: Box::new(attr_arg_expr(&entry.value)),
-                                },
-                                span,
-                            ),
-                            _ => attr_arg_expr(&entry.value),
-                        })
-                        .collect(),
+                    args,
                 },
                 span,
             ))),
             span,
         ));
-        body.push(Stmt::new(
-            StmtKind::If {
-                condition,
-                then_body,
-                elseif_clauses: Vec::new(),
-                else_body: None,
-            },
-            span,
-        ));
+        cases.push((factory.id, then_body));
     }
-    body.push(Stmt::new(
-        StmtKind::Return(Some(Expr::new(ExprKind::Null, span))),
-        span,
-    ));
+    let mut body: Vec<Stmt> = factory_switch(cases).into_iter().collect();
+    body.push(missing_attribute_class_guard(span));
+    body.push(runtime_attribute_new_instance_fallback(span));
     body
 }
 
-/// Creates `this->__factory === factory_id` for `newInstance()` dispatch routing.
-fn factory_condition(factory_id: i64) -> Expr {
-    let span = crate::span::Span::dummy();
-    Expr::new(
-        ExprKind::BinaryOp {
-            left: Box::new(Expr::new(
-                ExprKind::PropertyAccess {
-                    object: Box::new(Expr::new(ExprKind::This, span)),
-                    property: "__factory".to_string(),
-                },
-                span,
-            )),
-            op: BinOp::StrictEq,
-            right: Box::new(Expr::new(ExprKind::IntLiteral(factory_id), span)),
+/// Places a factory's named arguments by the constructor's parameter order.
+///
+/// Every factory branch is one synthetic `new C(...)` at `Span::dummy()`, and named arguments
+/// are normalized per call SPAN, so all the branches shared one placement: `#[Route('/p',
+/// name: 'n', requirements: [...])]` bound `'n'` to the parameter the FIRST branch put there,
+/// and every Symfony route whose attribute names its arguments out of declaration order --
+/// `defaults:` before `requirements:` -- threw a TypeError in `newInstance()` and vanished from
+/// the router. Resolved here instead, against the declared signature: a parameter skipped by
+/// name takes its declared default. Answers `None` (keep the named form) when a name is not a
+/// declared parameter or a skipped one has no default.
+fn positional_constructor_args(
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
+    factory: &ReflectionAttributeFactory,
+) -> Option<Vec<Expr>> {
+    let mut positional = Vec::new();
+    let mut named: Vec<(String, &AttrArgEntry)> = Vec::new();
+    for entry in &factory.args {
+        match &entry.key {
+            Some(crate::types::AttrKey::Str(name)) => named.push((name.clone(), entry)),
+            _ if named.is_empty() => positional.push(attr_arg_expr(&entry.value)),
+            _ => return None,
+        }
+    }
+    if named.is_empty() {
+        return Some(positional);
+    }
+    let signature = classes
+        .get(factory.class_name.trim_start_matches('\\'))?
+        .methods
+        .get("__construct")?;
+    if signature.variadic.is_some() {
+        return None;
+    }
+    let index_of = |name: &str| signature.params.iter().position(|(param, _)| param == name);
+    let last = named
+        .iter()
+        .map(|(name, _)| index_of(name))
+        .collect::<Option<Vec<_>>>()?
+        .into_iter()
+        .max()?;
+    for index in positional.len()..=last {
+        let param = &signature.params[index].0;
+        if let Some((_, entry)) = named.iter().find(|(name, _)| name == param) {
+            positional.push(attr_arg_expr(&entry.value));
+        } else {
+            positional.push(signature.defaults.get(index)?.clone()?);
+        }
+    }
+    Some(positional)
+}
+
+/// Throws php's `Error: Attribute class "X" not found` when the attribute names no class.
+///
+/// `class_exists()` autoloads, as php's `newInstance()` does before giving up. Without this the
+/// dynamic `new` below raised `Class "X" not found` instead.
+fn missing_attribute_class_guard(span: crate::span::Span) -> Stmt {
+    let name = || {
+        Expr::new(
+            ExprKind::PropertyAccess {
+                object: Box::new(Expr::new(ExprKind::This, span)),
+                property: "__name".to_string(),
+            },
+            span,
+        )
+    };
+    let concat = |left: Expr, right: Expr| {
+        Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(left),
+                op: crate::parser::ast::BinOp::Concat,
+                right: Box::new(right),
+            },
+            span,
+        )
+    };
+    let message = concat(
+        concat(
+            Expr::new(ExprKind::StringLiteral("Attribute class \"".to_string()), span),
+            name(),
+        ),
+        Expr::new(ExprKind::StringLiteral("\" not found".to_string()), span),
+    );
+    let class_exists = Expr::new(
+        ExprKind::FunctionCall {
+            name: crate::names::Name::unqualified("class_exists"),
+            args: vec![name()],
+        },
+        span,
+    );
+    let error = Expr::new(
+        ExprKind::NewObject {
+            class_name: name_from_canonical("Error"),
+            args: vec![message],
+        },
+        span,
+    );
+    Stmt::new(
+        StmtKind::If {
+            condition: Expr::new(ExprKind::Not(Box::new(class_exists)), span),
+            then_body: vec![Stmt::new(StmtKind::Throw(error), span)],
+            elseif_clauses: Vec::new(),
+            else_body: None,
         },
         span,
     )
+}
+
+/// Builds the metadata-driven fallback for ReflectionAttribute objects created by eval.
+///
+/// Eval-owned reflectors use factory id zero, but still retain the canonical attribute class name
+/// and its positional/named argument array. Dynamic construction with one spread reuses the normal
+/// call-argument planner and preserves both key forms without a framework-specific factory table.
+fn runtime_attribute_new_instance_fallback(span: crate::span::Span) -> Stmt {
+    let this = || Expr::new(ExprKind::This, span);
+    let class_name = Expr::new(
+        ExprKind::PropertyAccess {
+            object: Box::new(this()),
+            property: "__name".to_string(),
+        },
+        span,
+    );
+    let args = Expr::new(
+        ExprKind::PropertyAccess {
+            object: Box::new(this()),
+            property: "__args".to_string(),
+        },
+        span,
+    );
+    Stmt::new(
+        StmtKind::Return(Some(Expr::new(
+            ExprKind::NewDynamic {
+                name_expr: Box::new(class_name),
+                args: vec![Expr::new(ExprKind::Spread(Box::new(args)), span)],
+            },
+            span,
+        ))),
+        span,
+    )
+}
+
+/// Dispatches on `$this->__factory` with one `switch` over the factory ids, or `None` when there
+/// is no factory to dispatch to.
+///
+/// The ids are the dense `1..=N` the factory table numbers, so the switch lowers to a jump table.
+/// A chain of `if ($this->__factory === id)` re-read the property and compared once per factory
+/// the program declares -- every attribute of every compiled class -- before reaching the one it
+/// wanted: `ReflectionAttribute::newInstance()` alone was 1.2% of a Symfony request.
+fn factory_switch(cases: Vec<(i64, Vec<Stmt>)>) -> Option<Stmt> {
+    if cases.is_empty() {
+        return None;
+    }
+    let span = crate::span::Span::dummy();
+    let subject = Expr::new(
+        ExprKind::PropertyAccess {
+            object: Box::new(Expr::new(ExprKind::This, span)),
+            property: "__factory".to_string(),
+        },
+        span,
+    );
+    let cases = cases
+        .into_iter()
+        .map(|(id, body)| (vec![Expr::new(ExprKind::IntLiteral(id), span)], body))
+        .collect();
+    Some(Stmt::new(
+        StmtKind::Switch {
+            subject,
+            cases,
+            default: None,
+        },
+        span,
+    ))
 }
 
 /// Converts one captured attribute argument into a synthetic AST expression.
@@ -376,28 +551,22 @@ fn attr_key_expr(key: &AttrKey) -> Expr {
 /// Builds the synthetic `ReflectionAttribute::getArguments()` body using class
 /// metadata plus additional attribute metadata sources.
 pub(crate) fn build_attribute_get_arguments_body_with_extra(
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
     extra_attrs: &[AttributeMetadataSource<'_>],
 ) -> Vec<Stmt> {
     let span = crate::span::Span::dummy();
     let factories = collect_attribute_factories_with_extra(classes, extra_attrs);
-    let mut body = Vec::new();
-    for factory in factories {
-        let condition = factory_condition(factory.id);
-        let then_body = vec![Stmt::new(
-            StmtKind::Return(Some(entries_to_array_expr(&factory.args, true))),
-            span,
-        )];
-        body.push(Stmt::new(
-            StmtKind::If {
-                condition,
-                then_body,
-                elseif_clauses: Vec::new(),
-                else_body: None,
-            },
-            span,
-        ));
-    }
+    let cases = factories
+        .iter()
+        .map(|factory| {
+            let then_body = vec![Stmt::new(
+                StmtKind::Return(Some(entries_to_array_expr(&factory.args, true))),
+                span,
+            )];
+            (factory.id, then_body)
+        })
+        .collect();
+    let mut body: Vec<Stmt> = factory_switch(cases).into_iter().collect();
     // Runtime eval materializes `ReflectionAttribute` objects with factory id
     // zero and stores their retained arguments in `__args`, so the fallback
     // must preserve that path instead of returning an empty factory miss.
@@ -423,7 +592,7 @@ fn name_from_canonical(class_name: &str) -> Name {
 /// resolved (class-name, args) pair into `unique`. Skips entries where
 /// args is `None` or the class name cannot be resolved.
 fn collect_from_attribute_lists(
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
     names: &[String],
     args: &[Option<Vec<AttrArgEntry>>],
     unique: &mut BTreeMap<(String, Vec<AttrArgEntry>), bool>,
@@ -446,5 +615,37 @@ fn collect_from_attribute_lists(
         unique
             .entry((name, attr_args.clone()))
             .or_insert(resolvable);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies factory-zero attributes fall back to dynamic name construction with arg spread.
+    #[test]
+    fn new_instance_body_ends_with_runtime_metadata_fallback() {
+        let body = build_attribute_new_instance_body_with_extra(&crate::fast_hash::FastMap::default(), &[]);
+        let Some(Stmt {
+            kind: StmtKind::Return(Some(Expr {
+                kind: ExprKind::NewDynamic { name_expr, args },
+                ..
+            })),
+            ..
+        }) = body.last()
+        else {
+            panic!("newInstance fallback must dynamically construct retained metadata");
+        };
+        assert!(matches!(
+            name_expr.kind,
+            ExprKind::PropertyAccess { ref property, .. } if property == "__name"
+        ));
+        assert!(matches!(
+            args.as_slice(),
+            [Expr {
+                kind: ExprKind::Spread(inner),
+                ..
+            }] if matches!(inner.kind, ExprKind::PropertyAccess { ref property, .. } if property == "__args")
+        ));
     }
 }

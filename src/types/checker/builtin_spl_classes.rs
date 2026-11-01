@@ -65,7 +65,7 @@ pub(crate) fn inject_builtin_spl_classes(
     filters::insert_classes(class_map);
     caching::insert_class(class_map);
     recursive::insert_classes(class_map);
-    recursive_iterator_iterator::insert_class(class_map);
+    recursive_iterator_iterator::insert_classes(class_map);
     regex::insert_classes(class_map);
     filesystem::insert_classes(class_map);
     append::insert_classes(class_map);

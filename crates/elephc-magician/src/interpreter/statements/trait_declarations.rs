@@ -28,17 +28,27 @@ pub(in crate::interpreter) fn execute_interface_decl_stmt(
         || values.class_exists(name)?
         || values.enum_exists(name)?
     {
+        note_eval_runtime_failure(
+            format!("Cannot redeclare interface {}", name),
+            context,
+        );
         return Err(EvalStatus::RuntimeFatal);
     }
+    ensure_eval_interface_parents_available(interface.parents(), context, values)?;
     for parent in interface.parents() {
         if context
             .interface_parent_names(parent)
             .iter()
             .any(|ancestor| ancestor.eq_ignore_ascii_case(name))
         {
+            note_eval_runtime_failure(
+                format!("Interface {} cannot extend itself through {}", name, parent),
+                context,
+            );
             return Err(EvalStatus::RuntimeFatal);
         }
         if !context.has_interface(parent) && !eval_runtime_interface_exists(parent, values)? {
+            note_eval_runtime_failure(format!("Interface \"{}\" not found", parent), context);
             return Err(EvalStatus::RuntimeFatal);
         }
     }
@@ -47,7 +57,13 @@ pub(in crate::interpreter) fn execute_interface_decl_stmt(
     validate_eval_declared_constants(interface.constants())?;
     validate_eval_interface_constants(interface.constants())?;
     validate_interface_constant_parent_redeclarations(interface, context, values)?;
+    let declaration_file = eval_declaration_source_file(context);
     if context.define_interface(interface.clone()) {
+        // The declaring file is recorded for the same reason a class records it: reflection
+        // answers `getFileName()` from it, and without a record it falls back to the generated
+        // program's single source file -- the ENTRY point -- so an interface an included file
+        // declared claimed to live in the file that included it.
+        context.set_class_source_file(interface.name(), declaration_file);
         initialize_eval_declared_constants(
             interface.name(),
             interface.constants(),
@@ -56,8 +72,37 @@ pub(in crate::interpreter) fn execute_interface_decl_stmt(
             values,
         )
     } else {
+        note_eval_runtime_failure(format!("Cannot declare interface {}", name), context);
         Err(EvalStatus::RuntimeFatal)
     }
+}
+
+/// Loads missing parent interfaces before registering an eval interface declaration.
+///
+/// PHP resolves every `extends` target through the normal SPL autoload chain at declaration
+/// time. The callback can execute in another request-global eval context, so synchronize the
+/// local declaration registry before requiring that the resolved symbol is an interface.
+fn ensure_eval_interface_parents_available(
+    parents: &[String],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for parent in parents {
+        if context.has_interface(parent) || eval_runtime_interface_exists(parent, values)? {
+            continue;
+        }
+        crate::interpreter::eval_spl_autoload_classlike_definition(parent, context, values)?;
+        #[cfg(not(test))]
+        context.sync_global_eval_classes();
+        if !context.has_interface(parent) && !eval_runtime_interface_exists(parent, values)? {
+            // Named, because the generic statement fallback reported this as
+            // `unsupported InterfaceDecl statement` -- a gap in the interpreter rather than the
+            // missing parent PHP itself reports.
+            note_eval_runtime_failure(format!("Interface \"{}\" not found", parent), context);
+            return Err(EvalStatus::RuntimeFatal);
+        }
+    }
+    Ok(())
 }
 
 /// Registers an eval-declared trait in the dynamic trait table.
@@ -77,18 +122,20 @@ pub(in crate::interpreter) fn execute_trait_decl_stmt(
         || context.has_class(name)
         || context.has_interface(name)
         || context.has_enum(name)
-        || values.trait_exists(name)?
+        || (values.trait_exists(name)? && !context.executing_include())
         || values.class_exists(name)?
         || eval_runtime_interface_exists(name, values)?
         || values.enum_exists(name)?
     {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let trait_decl = expand_eval_trait_traits(trait_decl, context)?;
+    let trait_decl = expand_eval_trait_traits(trait_decl, context, values)?;
     validate_eval_trait_attribute_targets(&trait_decl)?;
     validate_eval_declared_constants(trait_decl.constants())?;
     validate_eval_magic_methods(trait_decl.methods())?;
+    let declaration_file = eval_declaration_source_file(context);
     if context.define_trait(trait_decl.clone()) {
+        context.set_class_source_file(trait_decl.name(), declaration_file);
         initialize_eval_declared_constants(
             trait_decl.name(),
             trait_decl.constants(),
@@ -104,11 +151,13 @@ pub(in crate::interpreter) fn execute_trait_decl_stmt(
 /// Expands nested eval trait uses into the trait metadata registered by eval.
 pub(super) fn expand_eval_trait_traits(
     trait_decl: &EvalTrait,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<EvalTrait, EvalStatus> {
     if trait_decl.traits().is_empty() {
         return Ok(trait_decl.clone());
     }
+    ensure_eval_traits_available(trait_decl.traits(), context, values)?;
     validate_eval_trait_decl_adaptations(trait_decl, context)?;
     let trait_method_names = trait_method_name_set(trait_decl);
     let mut imported_method_names = std::collections::HashSet::new();
@@ -244,11 +293,13 @@ pub(super) fn eval_trait_used_trait_decl<'a>(
 /// Expands eval trait uses into the class metadata used by dynamic dispatch.
 pub(super) fn expand_eval_class_traits(
     class: &EvalClass,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<EvalClass, EvalStatus> {
     if class.traits().is_empty() {
         return Ok(class.clone());
     }
+    ensure_eval_traits_available(class.traits(), context, values)?;
     validate_eval_trait_adaptations(class, context)?;
     let class_method_names = class_method_name_set(class);
     let mut trait_method_names = std::collections::HashSet::new();
@@ -302,6 +353,65 @@ pub(super) fn expand_eval_class_traits(
         expanded = expanded.with_anonymous();
     }
     Ok(expanded)
+}
+
+/// Loads every trait required by a pending dynamic declaration before composition.
+///
+/// Trait declarations execute at class-declaration time in PHP, so a missing trait first runs the
+/// regular SPL callback chain. The context is then synchronized because a foreign callback owner
+/// can have included the trait.
+fn ensure_eval_traits_available(
+    traits: &[String],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for trait_name in traits {
+        if context.trait_decl(trait_name).is_some() {
+            continue;
+        }
+        // A trait the compiled world has was declared from a file the compiler included, and
+        // the include the autoloader performs for it is skipped on that mark (see the retry
+        // below): the ordinary round can never produce the declaration, so it is skipped
+        // rather than paid -- a Composer `loadClass` and a bridge include per trait per request.
+        let compiled = values.trait_exists(trait_name)?;
+        if !compiled {
+            crate::interpreter::eval_spl_autoload_classlike_definition(
+                trait_name,
+                context,
+                values,
+            )?;
+            #[cfg(not(test))]
+            context.sync_global_eval_classes();
+        }
+        if context.trait_decl(trait_name).is_none() {
+            // The autoloader ran and the trait is still not here, which for a compiled program has
+            // ONE ordinary cause: the compiler already included the trait's file, so the include
+            // the autoloader performed was skipped on that mark
+            // (`interpreter::include_exec`, `phase=compiler_included_skip`). The mark is a promise
+            // about the COMPILED world, and a trait does not live there in any form this side can
+            // read: its members are copied into the using class at declaration time, so an
+            // interpreted class needs the trait's own body.
+            //
+            // MEASURED on Symfony's console: `RoutingControllerPass` uses
+            // `PriorityTaggedServiceTrait`, whose file traced as `compiler_included_skip`
+            // immediately before `stage=expand_traits` failed and the whole command died with
+            // `class ... could not be declared`.
+            //
+            // Retry once with the mark ignored. The skip stays in force everywhere else — it is
+            // what keeps a request stat-ing its vendor tree instead of re-reading it.
+            crate::interpreter::include_exec::with_compiler_included_sources_reincluded(|| {
+                crate::interpreter::eval_spl_autoload_classlike_definition(
+                    trait_name, context, values,
+                )
+            })?;
+            #[cfg(not(test))]
+            context.sync_global_eval_classes();
+        }
+        if context.trait_decl(trait_name).is_none() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+    }
+    Ok(())
 }
 
 /// Validates that trait adaptations reference used traits and existing methods.
@@ -579,8 +689,23 @@ pub(in crate::interpreter) fn append_eval_trait_methods(
             &method,
             trait_adaptations,
         );
-        if !trait_method_names.insert(key) {
-            return Err(EvalStatus::RuntimeFatal);
+        if !trait_method_names.insert(key.clone()) {
+            // An ABSTRACT trait method is a requirement, not a body: it never collides with a
+            // concrete one of the same name from another trait, in either order. symfony's
+            // `CurlResponse` uses `CommonResponseTrait` (abstract `close()`) and
+            // `TransportResponseTrait` (concrete `close()`); refusing the pair left the class
+            // undeclared and the Symfony demo dead at boot.
+            let existing = methods
+                .iter()
+                .position(|candidate| candidate.name().eq_ignore_ascii_case(&key));
+            match existing {
+                _ if method.is_abstract() => continue,
+                Some(index) if methods[index].is_abstract() => {
+                    methods[index] = method;
+                    continue;
+                }
+                _ => return Err(EvalStatus::RuntimeFatal),
+            }
         }
         methods.push(method);
     }
@@ -736,63 +861,129 @@ pub(super) fn validate_eval_class_does_not_implement_enum_interfaces(
     }
 }
 
-/// Rejects eval classes and enums that directly implement PHP's Throwable contract.
+/// Rejects eval classes and enums that implement PHP's Throwable contract without already
+/// inheriting it from their parent.
+///
+/// PHP's rule ("Class X cannot implement interface Throwable, extend Exception or Error
+/// instead", `php -n` 8.5.6) fires only when the class's ancestry does not already implement
+/// Throwable. A subclass of a Throwable-implementing native or eval class may freely implement
+/// an interface that itself extends Throwable -- Symfony's exception hierarchy relies on exactly
+/// this: `final class FormatException extends \LogicException implements ExceptionInterface`
+/// where `ExceptionInterface extends \Throwable`. Rejecting it unconditionally blocked every
+/// Symfony-shaped exception subclass at declaration.
 pub(super) fn validate_eval_class_does_not_implement_throwable_interfaces(
     class: &EvalClass,
     context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    if pending_class_interface_names(class, context)
+    if !pending_class_interface_names(class, context)
         .iter()
         .any(|interface| eval_builtin_throwable_interface_name(interface))
     {
-        Err(EvalStatus::RuntimeFatal)
-    } else {
-        Ok(())
+        return Ok(());
     }
+    if let Some(parent) = class.parent() {
+        if eval_class_or_native_parent_is_throwable(parent, context, values)? {
+            return Ok(());
+        }
+    }
+    Err(EvalStatus::RuntimeFatal)
+}
+
+/// Returns whether a class name -- eval-declared or native -- already implements Throwable.
+///
+/// Checks the eval class table first (`context.class_is_a`), then falls back to the runtime's
+/// own AOT instanceof machinery for a native name never itself eval-declared (e.g. `LogicException`
+/// as a bare `extends` target, which has no `native_class_parent` entry of its own since nothing
+/// eval-declared has registered it as an ancestor yet). This mirrors exactly what `is_a($name,
+/// 'Throwable', true)` does for a native class-name string.
+fn eval_class_or_native_parent_is_throwable(
+    parent: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let parent = context
+        .resolve_class_name(parent)
+        .unwrap_or_else(|| parent.trim_start_matches('\\').to_string());
+    if context.class_is_a(&parent, "Throwable", false) || native_class_is_a(&parent, "Throwable", context) {
+        return Ok(true);
+    }
+    let name_cell = values.string(&parent)?;
+    let result = values.object_is_a(name_cell, "Throwable", false);
+    values.release(name_cell)?;
+    result
 }
 
 /// Validates abstract/final modifiers on an eval-declared class and its methods.
 pub(super) fn validate_eval_class_modifiers(
     class: &EvalClass,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    if class.is_abstract() && class.is_final() {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    validate_eval_class_attribute_targets(class.attributes())?;
-    if class.is_readonly_class() && eval_class_has_allow_dynamic_properties_attribute(class) {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    validate_eval_declared_constants(class.constants())?;
-    for constant in class.constants() {
-        validate_constant_parent_redeclaration(class, constant, context, values)?;
-    }
-    validate_eval_declared_properties(class, context)?;
-    for property in class.properties() {
-        validate_property_parent_redeclaration(class, property, context, values)?;
-    }
-    for method in class.methods() {
-        validate_eval_method_attribute_targets(method.attributes())?;
-        for attributes in method.parameter_attributes() { validate_eval_core_attribute_targets(attributes, 32)?; }
-        validate_eval_magic_method(method)?;
-        if method.is_abstract() && method.is_final() {
+    let mut stage = "class_flags";
+    let mut member = None;
+    let result = (|| {
+        if class.is_abstract() && class.is_final() {
             return Err(EvalStatus::RuntimeFatal);
         }
-        if method.is_abstract() && method.visibility() == EvalVisibility::Private {
+        stage = "class_attribute_targets";
+        validate_eval_class_attribute_targets(class.attributes())?;
+        stage = "readonly_dynamic_properties";
+        if class.is_readonly_class() && eval_class_has_allow_dynamic_properties_attribute(class) {
             return Err(EvalStatus::RuntimeFatal);
         }
-        if method.is_static() && method.name().eq_ignore_ascii_case("__construct") {
-            return Err(EvalStatus::RuntimeFatal);
+        stage = "declared_constants";
+        validate_eval_declared_constants(class.constants())?;
+        for constant in class.constants() {
+            stage = "constant_parent_redeclaration";
+            validate_constant_parent_redeclaration(class, constant, context, values)?;
         }
-        if method.is_abstract() && !class.is_abstract() {
-            return Err(EvalStatus::RuntimeFatal);
+        stage = "declared_properties";
+        validate_eval_declared_properties(class, context)?;
+        for property in class.properties() {
+            stage = "property_parent_redeclaration";
+            validate_property_parent_redeclaration(class, property, context, values)?;
         }
-        validate_method_parent_override(class, method, context)?;
-        validate_method_aot_parent_override(class, method, context, values)?;
-        validate_eval_override_attribute(class, method, context, values)?;
+        for method in class.methods() {
+            member = Some(method.name());
+            stage = "method_attribute_targets";
+            validate_eval_method_attribute_targets(method.attributes())?;
+            for attributes in method.parameter_attributes() {
+                validate_eval_core_attribute_targets(attributes, 32)?;
+            }
+            stage = "magic_method";
+            validate_eval_magic_method(method)?;
+            stage = "method_flags";
+            if method.is_abstract() && method.is_final() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            if method.is_abstract() && method.visibility() == EvalVisibility::Private {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            if method.is_static() && method.name().eq_ignore_ascii_case("__construct") {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            if method.is_abstract() && !class.is_abstract() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            stage = "eval_parent_override";
+            validate_method_parent_override(class, method, context, values)?;
+            stage = "aot_parent_override";
+            validate_method_aot_parent_override(class, method, context, values)?;
+            stage = "override_attribute";
+            validate_eval_override_attribute(class, method, context, values)?;
+        }
+        Ok(())
+    })();
+    if let Err(status) = result.as_ref() {
+        if crate::eval_trace::enabled() {
+            eprintln!(
+                "[elephc-eval-trace] phase=class_modifier_error class={:?} member={member:?} stage={stage} status={status:?}",
+                class.name(),
+            );
+        }
     }
-    Ok(())
+    result
 }
 
 /// Returns whether a class carries PHP's global `#[AllowDynamicProperties]` attribute.

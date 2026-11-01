@@ -17,8 +17,8 @@ use crate::types::traits::FlattenedClass;
 use super::common::*;
 use super::recursive_iterator_iterator_traversal::*;
 
-/// Inserts class into the supplied builtin metadata registry.
-pub(super) fn insert_class(class_map: &mut HashMap<String, FlattenedClass>) {
+/// Inserts recursive iterator traversal classes into the supplied builtin metadata registry.
+pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
     class_map.insert(
         "RecursiveIteratorIterator".to_string(),
         FlattenedClass {
@@ -37,6 +37,30 @@ pub(super) fn insert_class(class_map: &mut HashMap<String, FlattenedClass>) {
             trait_aliases: Vec::new(),
         },
     );
+
+    class_map.insert(
+        "RecursiveTreeIterator".to_string(),
+        FlattenedClass {
+            name: "RecursiveTreeIterator".to_string(),
+            span: crate::span::Span::dummy(),
+            extends: Some("RecursiveIteratorIterator".to_string()),
+            implements: Vec::new(),
+            is_abstract: false,
+            is_final: false,
+            is_readonly_class: false,
+            properties: Vec::new(),
+            methods: vec![method_with_body(
+                "setPrefixPart",
+                vec![param("part", TypeExpr::Int), param("value", TypeExpr::Str)],
+                Some(TypeExpr::Void),
+                Vec::new(),
+            )],
+            attributes: Vec::new(),
+            constants: recursive_tree_iterator_constants(),
+            used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
+        },
+    );
 }
 
 /// Builds the property list for recursive iterator iterator.
@@ -51,6 +75,7 @@ fn recursive_iterator_iterator_properties() -> Vec<ClassProperty> {
         storage_property("depth", TypeExpr::Int),
         storage_property("slot", TypeExpr::Int),
         storage_property("currentValid", TypeExpr::Bool),
+        storage_property_default("maxDepth", TypeExpr::Int, int_expr(-1)),
     ]
 }
 
@@ -77,6 +102,22 @@ fn spl_recursive_iterator_iterator_methods() -> Vec<ClassMethod> {
             Vec::new(),
             Some(TypeExpr::Int),
             recursive_iterator_iterator_get_depth_body(),
+        ),
+        method_with_body(
+            "setMaxDepth",
+            vec![param("maxDepth", TypeExpr::Int)],
+            Some(TypeExpr::Void),
+            vec![property_assign_stmt(
+                this_expr(),
+                "maxDepth",
+                var_expr("maxDepth"),
+            )],
+        ),
+        method_with_body(
+            "getMaxDepth",
+            Vec::new(),
+            Some(TypeExpr::Int),
+            return_body(property_access(this_expr(), "maxDepth")),
         ),
         method_with_body(
             "getInnerIterator",
@@ -118,5 +159,23 @@ fn recursive_iterator_iterator_constants() -> Vec<ClassConst> {
         class_const("SELF_FIRST", 1),
         class_const("CHILD_FIRST", 2),
         class_const("CATCH_GET_CHILD", 16),
+    ]
+}
+
+/// Provides the RecursiveTreeIterator formatting and traversal constants.
+fn recursive_tree_iterator_constants() -> Vec<ClassConst> {
+    vec![
+        class_const("LEAVES_ONLY", 0),
+        class_const("SELF_FIRST", 1),
+        class_const("CHILD_FIRST", 2),
+        class_const("CATCH_GET_CHILD", 16),
+        class_const("BYPASS_CURRENT", 4),
+        class_const("BYPASS_KEY", 8),
+        class_const("PREFIX_LEFT", 0),
+        class_const("PREFIX_MID_HAS_NEXT", 1),
+        class_const("PREFIX_MID_LAST", 2),
+        class_const("PREFIX_END_HAS_NEXT", 3),
+        class_const("PREFIX_END_LAST", 4),
+        class_const("PREFIX_RIGHT", 5),
     ]
 }

@@ -2,7 +2,7 @@
 title: "imagecolorallocatealpha() - internals"
 description: "Compiler internals for imagecolorallocatealpha(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 474
+  order: 487
 ---
 
 ## `imagecolorallocatealpha()` - internals

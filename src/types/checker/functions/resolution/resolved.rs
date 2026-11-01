@@ -164,13 +164,24 @@ impl Checker {
                     // The callee holds a reference to this local from here on, and it can
                     // escape, so the local is never kill/retype eligible in this body.
                     self.record_reference_alias_root(arg);
+                    // A by-reference parameter a named argument SKIPPED receives its own
+                    // declared default, which is no caller expression at all: php binds it to a
+                    // fresh variable. `f(1, c: 2)` over `function f($a, &$b = null, $c = 1)`
+                    // refused to compile.
                     let property_place = match effective_sig.params.get(param_idx) {
                         Some((_, expected_ty)) => {
                             self.by_ref_property_place(arg, expected_ty, caller_env)?
                         }
                         None => false,
                     };
-                    if !property_place && !self.is_by_ref_argument_lvalue(arg, caller_env)? {
+                    if !super::super::call_validation::is_injected_declared_default(
+                        &effective_sig,
+                        param_idx,
+                        arg,
+                    ) && !property_place
+                        && !self.is_by_ref_argument_lvalue(arg, caller_env)?
+                        && !self.record_by_ref_call_result(arg)
+                    {
                         let param_name = effective_sig
                             .params
                             .get(param_idx)
@@ -186,6 +197,8 @@ impl Checker {
                     }
                 }
                 if let Some((param_name, expected_ty)) = effective_sig.params.get(param_idx) {
+                    self.binding_position = param_idx + 1;
+                    self.forget_definite_param_mismatch(arg);
                     let runtime_unboxed_callable = expected_ty.codegen_repr() == PhpType::Callable
                         && actual_ty.codegen_repr() == PhpType::Mixed
                         && descriptor_projected
@@ -270,9 +283,14 @@ impl Checker {
                         false,
                     )?;
                 }
+                self.binding_position = 0;
                 if let (Some(vname), Some(expected_ty)) =
                     (effective_sig.variadic.as_ref(), variadic_elem_ty.as_ref())
                 {
+                    // Same split as a regular parameter: PHP's binding coercion applies only to a
+                    // DECLARED variadic type hint, so an inferred one keeps the plain
+                    // compatibility check. The collector's own slot is the one
+                    // `variadic_param_index` names.
                     if variadic_index
                         .and_then(|index| effective_sig.declared_params.get(index))
                         .copied()
@@ -284,13 +302,26 @@ impl Checker {
                             arg.span,
                             &format!("Function '{}' variadic parameter ${}", name, vname),
                         )?;
+                        self.require_bound_param_arg_type(
+                            expected_ty,
+                            &actual_ty,
+                            arg,
+                            caller_env,
+                            &format!("Function '{}' variadic parameter ${}", name, vname),
+                            None,
+                            variadic_index
+                                .and_then(|index| effective_sig.ref_params.get(index))
+                                .copied()
+                                .unwrap_or(false),
+                        )?;
+                    } else {
+                        self.require_compatible_arg_type(
+                            expected_ty,
+                            &actual_ty,
+                            arg.span,
+                            &format!("Function '{}' variadic parameter ${}", name, vname),
+                        )?;
                     }
-                    self.require_compatible_arg_type(
-                        expected_ty,
-                        &actual_ty,
-                        arg.span,
-                        &format!("Function '{}' variadic parameter ${}", name, vname),
-                    )?;
                 }
             }
             param_idx += 1;

@@ -52,6 +52,29 @@ if (!is_dir("testdir")) { echo "gone"; }
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies mkdir honors permissions, recursive parent creation, and named optional arguments.
+#[test]
+fn test_mkdir_permissions_recursive_and_named_defaults() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$previousMask = umask(0);
+$made = mkdir("tree/branch/leaf", 0701, true);
+echo $made && is_dir("tree/branch/leaf") && (fileperms("tree/branch/leaf") & 0777) === 0701
+    ? "recursive:" : "bad:";
+$named = mkdir(directory: "named/child", recursive: true);
+echo $named && is_dir("named/child") ? "named" : "bad";
+rmdir("tree/branch/leaf");
+rmdir("tree/branch");
+rmdir("tree");
+rmdir("named/child");
+rmdir("named");
+umask($previousMask);
+"#,
+    );
+    assert_eq!(out, "recursive:named");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies copy, unlink, and file existence by creating a file, copying it,
 /// reading through the copy, deleting both files, and confirming removal.
 #[test]
@@ -156,6 +179,25 @@ rmdir("sd");
 "#,
     );
     assert_eq!(out, "ok");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies scandir's ascending, descending, named-argument, and context signatures match PHP.
+#[test]
+fn test_scandir_sorting_order_and_optional_context() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+mkdir("sd");
+file_put_contents("sd/a.txt", "a");
+file_put_contents("sd/z.txt", "z");
+echo implode(",", scandir("sd", SCANDIR_SORT_ASCENDING)) . "|";
+echo implode(",", scandir(directory: "sd", sorting_order: SCANDIR_SORT_DESCENDING, context: null));
+unlink("sd/a.txt");
+unlink("sd/z.txt");
+rmdir("sd");
+"#,
+    );
+    assert_eq!(out, ".,..,a.txt,z.txt|z.txt,a.txt,..,.");
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -300,6 +342,25 @@ echo ($free + 1.0) > $free ? "a" : "!";
 "#,
     );
     assert_eq!(out, "ftpoa");
+}
+
+/// Verifies `glob()` accepts flags assembled at runtime and still splits `GLOB_ONLYDIR`.
+#[test]
+fn test_glob_runtime_flags() {
+    let (out, _dir) = compile_and_run_in_dir(
+        r#"<?php
+mkdir("glob-runtime");
+mkdir("glob-runtime/dir");
+file_put_contents("glob-runtime/file.txt", "x");
+function find_dirs(int $flags): array { return glob("glob-runtime/*", $flags); }
+$matches = find_dirs(GLOB_NOSORT | GLOB_ONLYDIR);
+echo count($matches).":".basename($matches[0]);
+unlink("glob-runtime/file.txt");
+rmdir("glob-runtime/dir");
+rmdir("glob-runtime");
+"#,
+    );
+    assert_eq!(out, "1:dir");
 }
 
 /// Issue #506: `mkdir()` takes PHP's `$permissions` and `$recursive`.

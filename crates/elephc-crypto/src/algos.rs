@@ -200,6 +200,11 @@ fn crc32c(data: &[u8]) -> Vec<u8> {
     C.checksum(data).to_be_bytes().to_vec()
 }
 
+/// Computes PHP's seeded-default XXH3 128-bit digest in canonical byte order.
+fn xxh128(data: &[u8]) -> Vec<u8> {
+    xxhash_rust::xxh3::xxh3_128(data).to_be_bytes().to_vec()
+}
+
 /// Resolves a PHP hash() algorithm name to a freshly initialized `HashState`,
 /// or `None` if the algorithm is unsupported (caller maps to PHP ValueError).
 pub fn make(name: &str) -> Option<Box<dyn HashState>> {
@@ -214,9 +219,9 @@ pub fn make(name: &str) -> Option<Box<dyn HashState>> {
         "sha224" => digest_state::<Sha224>(64),
         "sha256" => digest_state::<Sha256>(64),
         "sha384" => digest_state::<Sha384>(128),
-        "sha512" => digest_state::<Sha512>(128),
         "sha512/224" => digest_state::<Sha512_224>(128),
         "sha512/256" => digest_state::<Sha512_256>(128),
+        "sha512" => digest_state::<Sha512>(128),
         "sha3-224" => digest_state::<Sha3_224>(144),
         "sha3-256" => digest_state::<Sha3_256>(136),
         "sha3-384" => digest_state::<Sha3_384>(104),
@@ -226,15 +231,16 @@ pub fn make(name: &str) -> Option<Box<dyn HashState>> {
         "ripemd256" => digest_state::<Ripemd256>(64),
         "ripemd320" => digest_state::<Ripemd320>(64),
         "whirlpool" => digest_state::<whirlpool::Whirlpool>(64),
+        "adler32" => buf(4, adler32),
         "crc32" => buf(4, crc32_bzip2),
         "crc32b" => buf(4, crc32b),
         "crc32c" => buf(4, crc32c),
-        "adler32" => buf(4, adler32),
         "fnv132" => buf(4, fnv132),
         "fnv1a32" => buf(4, fnv1a32),
         "fnv164" => buf(8, fnv164),
         "fnv1a64" => buf(8, fnv1a64),
         "joaat" => buf(4, joaat),
+        "xxh128" => buf(16, xxh128),
         _ => return None,
     })
 }

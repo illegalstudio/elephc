@@ -2,7 +2,7 @@
 title: "gmp_sqrt()"
 description: "Integer square root."
 sidebar:
-  order: 634
+  order: 647
 ---
 
 ## gmp_sqrt()

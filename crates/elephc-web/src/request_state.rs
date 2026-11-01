@@ -108,6 +108,7 @@ pub unsafe extern "C" fn elephc_web_write(ptr: *const u8, len: usize) {
     }
     if !*core::ptr::addr_of!(RESPONSE_COMMITTED) {
         core::ptr::write(core::ptr::addr_of_mut!(RESPONSE_COMMITTED), true);
+        apply_default_content_type(&mut *core::ptr::addr_of_mut!(RESPONSE_HEADERS));
         let cookie = request_header_owned("cookie");
         let host = request_header_owned("host");
         if crate::trans_sid::prepare_streaming_response(
@@ -161,6 +162,7 @@ pub(crate) fn finish_response_stream() -> bool {
         let mut complete = !failed;
         if complete && (buffered || !committed) {
             let mut headers = take_headers();
+            apply_default_content_type(&mut headers);
             let cookie = request_header_owned("cookie");
             let host = request_header_owned("host");
             let body = crate::trans_sid::maybe_rewrite_response(
@@ -188,6 +190,33 @@ pub fn take_body() -> Vec<u8> {
     // SAFETY: single-threaded per worker; the buffer is replaced through a raw
     // pointer to avoid forming a reference to the `static mut`.
     unsafe { core::mem::take(&mut *core::ptr::addr_of_mut!(RESPONSE_BODY)) }
+}
+
+/// Whether the response still gets PHP's default `Content-Type` when it is sent.
+///
+/// PHP's SAPI layer sends `Content-type: text/html; charset=UTF-8` (`default_mimetype` plus
+/// `default_charset`) for every response whose script set no Content-Type. Symfony leaves it to
+/// that default whenever a response is rendered outside `Response::prepare()` -- its error pages
+/// among them -- so a 404 went out with no Content-Type here. Measured against `php -S` 8.5.10:
+/// ANY `header('Content-Type: ...')` retires the default for the rest of the request (an empty
+/// value is sent as an empty header, and removing the header afterwards sends none at all), while
+/// `header_remove()` of a Content-Type nobody set leaves the default in place.
+static mut SEND_DEFAULT_CONTENT_TYPE: bool = true;
+
+/// PHP's default `Content-Type` header value (`default_mimetype` + `default_charset`).
+const PHP_DEFAULT_CONTENT_TYPE: &str = "text/html; charset=UTF-8";
+
+/// Adds PHP's default Content-Type to headers that are about to be sent, when it still applies.
+fn apply_default_content_type(headers: &mut Vec<(String, String)>) {
+    // SAFETY: single-threaded per worker; read through a raw pointer.
+    let send_default = unsafe { *core::ptr::addr_of!(SEND_DEFAULT_CONTENT_TYPE) };
+    if send_default
+        && !headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+    {
+        headers.push(("Content-Type".to_string(), PHP_DEFAULT_CONTENT_TYPE.to_string()));
+    }
 }
 
 /// HTTP response status for the current request. Reset to 200 each request.
@@ -306,10 +335,64 @@ pub unsafe extern "C" fn elephc_web_header(
     }
 
     let headers = &mut *core::ptr::addr_of_mut!(RESPONSE_HEADERS);
+    if name.eq_ignore_ascii_case("Content-Type") {
+        // Any explicit Content-Type -- an empty one included, which php sends as it is --
+        // retires the default for the rest of the request, even if it is removed again.
+        core::ptr::write(core::ptr::addr_of_mut!(SEND_DEFAULT_CONTENT_TYPE), false);
+    }
     if replace != 0 {
         headers.retain(|(n, _)| !n.eq_ignore_ascii_case(&name));
     }
     headers.push((name, value));
+}
+
+/// Removes response headers by case-insensitive name, or clears all headers for a negative length.
+///
+/// # Safety
+/// `ptr` must point to `len` valid bytes when `len >= 0`; each worker is single-threaded.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_web_header_remove(ptr: *const u8, len: i64) {
+    let headers = &mut *core::ptr::addr_of_mut!(RESPONSE_HEADERS);
+    if len < 0 {
+        headers.clear();
+        return;
+    }
+    if ptr.is_null() {
+        return;
+    }
+    let name = String::from_utf8_lossy(core::slice::from_raw_parts(ptr, len as usize)).into_owned();
+    headers.retain(|(candidate, _)| !candidate.eq_ignore_ascii_case(&name));
+}
+
+/// The header line `elephc_web_response_header_line` formatted last; the pointer it returns
+/// borrows this buffer until the next call.
+static mut RESPONSE_HEADER_LINE: String = String::new();
+
+/// Formats pending response header `index` as the `"Name: value"` line `headers_list()` reports,
+/// or returns null past the last header.
+///
+/// The list is the one `header()` and `header_remove()` edit, in send order. PHP's default
+/// Content-Type is not in it -- php adds that only when the headers go out, and `headers_list()`
+/// under `php -S` 8.5.10 does not show it either.
+///
+/// # Safety
+/// `out_len` must be null or writable; each worker is single-threaded. The returned bytes stay
+/// valid until the next call.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_web_response_header_line(index: i64, out_len: *mut i64) -> *const u8 {
+    let headers = &*core::ptr::addr_of!(RESPONSE_HEADERS);
+    let Some((name, value)) = usize::try_from(index).ok().and_then(|i| headers.get(i)) else {
+        return core::ptr::null();
+    };
+    let line = &mut *core::ptr::addr_of_mut!(RESPONSE_HEADER_LINE);
+    line.clear();
+    line.push_str(name);
+    line.push_str(": ");
+    line.push_str(value);
+    if !out_len.is_null() {
+        *out_len = line.len() as i64;
+    }
+    line.as_ptr()
 }
 
 /// Resets the response status (200) and clears the response headers. Called by
@@ -319,6 +402,7 @@ pub fn reset_response() {
     unsafe {
         core::ptr::write(core::ptr::addr_of_mut!(RESPONSE_STATUS), 200);
         (*core::ptr::addr_of_mut!(RESPONSE_HEADERS)).clear();
+        core::ptr::write(core::ptr::addr_of_mut!(SEND_DEFAULT_CONTENT_TYPE), true);
         core::ptr::write(core::ptr::addr_of_mut!(RESPONSE_COMMITTED), false);
         core::ptr::write(core::ptr::addr_of_mut!(LATE_HEADER_WARNED), false);
         core::ptr::write(core::ptr::addr_of_mut!(LATE_STATUS_WARNED), false);
@@ -330,6 +414,13 @@ pub fn reset_response() {
 pub fn take_status() -> u16 {
     // SAFETY: single-threaded per worker; read through a raw pointer.
     unsafe { *core::ptr::addr_of!(RESPONSE_STATUS) }
+}
+
+/// Takes the response headers as they are SENT: with PHP's default Content-Type when it applies.
+pub fn take_headers_for_send() -> Vec<(String, String)> {
+    let mut headers = take_headers();
+    apply_default_content_type(&mut headers);
+    headers
 }
 
 /// Drains and returns the response headers for the current request.
@@ -804,6 +895,34 @@ mod tests {
             let r2 = b"Location: /x";
             elephc_web_header(r2.as_ptr(), r2.len(), 1, 0);
             assert_eq!(take_status(), 303);
+
+            // `headers_list()` lines come out in send order and stop past the last header.
+            // (Kept in this test: the response state is process-global, so a second test
+            // touching it would race this one under the parallel harness.)
+            reset_response();
+            let mut len = -1i64;
+            assert!(elephc_web_response_header_line(0, &mut len).is_null());
+            let a = b"X-A: 1";
+            elephc_web_header(a.as_ptr(), a.len(), 0, 0);
+            let b = b"Set-Cookie: s=1; path=/";
+            elephc_web_header(b.as_ptr(), b.len(), 0, 0);
+            let line = |index: i64| {
+                let mut len = 0i64;
+                let ptr = elephc_web_response_header_line(index, &mut len);
+                (!ptr.is_null()).then(|| {
+                    String::from_utf8(core::slice::from_raw_parts(ptr, len as usize).to_vec())
+                        .unwrap()
+                })
+            };
+            assert_eq!(line(0).as_deref(), Some("X-A: 1"));
+            assert_eq!(line(1).as_deref(), Some("Set-Cookie: s=1; path=/"));
+            assert_eq!(line(2), None);
+            assert_eq!(line(-1), None);
+            let name = b"x-a";
+            elephc_web_header_remove(name.as_ptr(), name.len() as i64);
+            assert_eq!(line(0).as_deref(), Some("Set-Cookie: s=1; path=/"));
+            assert_eq!(line(1), None);
+            reset_response();
         }
     }
 }

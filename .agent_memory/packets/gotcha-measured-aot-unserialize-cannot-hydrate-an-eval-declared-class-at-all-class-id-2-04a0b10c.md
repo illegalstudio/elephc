@@ -1,0 +1,59 @@
+---
+type: "Gotcha"
+title: "MEASURED: AOT unserialize cannot hydrate an EVAL-declared class at all — class id -2 is the `__PHP_Incomplete_Class` sentinel, and the autoload hook proves the class exists but not in the AOT table"
+description: "The Symfony web frontier, now explained rather than guessed, with the wrong fixes eliminated. THE MEASUREMENT that settles it. phase=dynamic method bind error now prints the failing argument's tag, identity, class and RA"
+resource: "src/codegen_support/runtime/system/unserialize/decoder_aarch64.rs"
+tags: ["session-learning", "symfony", "unserialize", "autoload", "eval-bridge", "open", "runtime"]
+timestamp: "2026-09-12T21:42:11.590Z"
+x-kage-id: "repo:lazy-petting-popcorn:gotcha:measured-aot-unserialize-cannot-hydrate-an-eval-declared-class-at-all-class-id-2"
+x-kage-type: "gotcha"
+x-kage-status: "approved"
+x-kage-scope: "repo"
+x-kage-visibility: "team"
+x-kage-confidence: 0.7
+x-kage-verified: "verified"
+x-kage-paths: ["src/codegen_support/runtime/system/unserialize/decoder_aarch64.rs", "src/codegen_support/runtime/system/unserialize/decoder_x86_64.rs", "crates/elephc-magician/src/ffi/class_autoload.rs", "crates/elephc-magician/src/interpreter/builtins/core/unserialize.rs", "src/codegen_support/runtime/system/serialize.rs"]
+x-kage-stack: ["rust", "php", "aarch64", "x86_64"]
+---
+
+# MEASURED: AOT unserialize cannot hydrate an EVAL-declared class at all — class id -2 is the `__PHP_Incomplete_Class` sentinel, and the autoload hook proves the class exists but not in the AOT table
+
+> The Symfony web frontier, now explained rather than guessed, with the wrong fixes eliminated. THE MEASUREMENT that se…
+
+The Symfony `--web` frontier, now explained rather than guessed, with the wrong fixes eliminated.
+
+THE MEASUREMENT that settles it. `phase=dynamic_method_bind_error` now prints the failing argument's tag, identity, class and RAW OBJECT HEADER:
+`arg_tags=["6:4421115376:<unresolved>:header=Some((18446744073709551614, 1))"]`
+- `18446744073709551614` is `0xFFFFFFFFFFFFFFFE`, i.e. **-2**, which `src/codegen_support/runtime/system/serialize.rs:563` names the *synthetic `__PHP_Incomplete_Class` id*.
+- The refcount is **1**, so the object is ALIVE. This is not a use-after-free, which is what the earlier `<unresolved>` reading suggested.
+
+So the object is the incomplete-class stand-in the unserialize decoder builds, and `ContainerParametersResourceChecker::supports(ResourceInterface $metadata)` then cannot bind it.
+
+WHAT IS ALREADY RULED OUT. A class-autoload hook was added this session (`_elephc_eval_class_autoload_fn`, `ffi/class_autoload.rs`), wired into both decoders where `__rt_new_by_name` answers 0, and it WORKS:
+`phase=class_autoload name="Symfony\Component\DependencyInjection\Config\ContainerParametersResource" loaded=true declared=true`.
+The retry still fails, because `__rt_new_by_name` only knows classes in the AOT class table and this one is EVAL-DECLARED — it was autoloaded at run time and has no compiled layout. The hook is correct and worth keeping (it fixes the case where the class IS compiled but not yet loaded); it simply cannot fix this one.
+
+WHY "JUST DELEGATE unserialize TO THE INTERPRETER" IS WRONG. The interpreter's `eval_unserialize_hydrate_object` handles an eval class properly but falls back to `values.new_object` + DYNAMIC property writes for a native/AOT class — its own comment says so. Routing every `unserialize` through the bridge would therefore break `FileResource` (an AOT class with a typed private property), which the native decoder now hydrates correctly after this session's mangled-key fix. The two halves are each right for their own class kind.
+
+THE SHAPE THAT WOULD WORK: per-object delegation. When the decoder finds the class is declared but has no AOT layout, hand the class name AND the parsed property payload to the bridge and take the object back, instead of falling through to the incomplete stand-in. That needs a new bridge entry carrying the payload, which is the piece nobody has written yet.
+
+A CHEAPER LEVER WORTH CHECKING FIRST: why is `ContainerParametersResourceChecker` (and its `ContainerParametersResource`) not COMPILED at all? Both are named from the compiled container file, and the compile-time autoload pass is supposed to close over exactly that. If they were compiled, this rung disappears without touching unserialize.
+Evidence: scratchpad/trace.log: `phase=class_autoload name="…ContainerParametersResource" loaded=true declared=true` at line 2467, then `phase=dynamic_method_bind_error … arg_tags=["6:4421115376:<unresolved>:header=Some((18446744073709551614, 1))"]` at line 2555. codegen_tests unserialize 47/0 and elephc-magician 1687/2 unchanged across the hook.
+Verified by: The object-header diagnostic added this session; the class-autoload trace; the unchanged unserialize and magician suites.
+
+## Verification
+
+scratchpad/trace.log: `phase=class_autoload name="…ContainerParametersResource" loaded=true declared=true` at line 2467, then `phase=dynamic_method_bind_error … arg_tags=["6:4421115376:<unresolved>:header=Some((18446744073709551614, 1))"]` at line 2555. codegen_tests unserialize 47/0 and elephc-magician 1687/2 unchanged across the hook.
+
+# Citations
+
+[1] explicit_capture (2026-09-12T21:42:11.590Z)
+
+## Kage state
+
+Machine state for lossless round-trip; OKF consumers can ignore it.
+
+```json kage-state
+{"schema_version":2,"id":"repo:lazy-petting-popcorn:gotcha:measured-aot-unserialize-cannot-hydrate-an-eval-declared-class-at-all-class-id-2","title":"MEASURED: AOT unserialize cannot hydrate an EVAL-declared class at all — class id -2 is the `__PHP_Incomplete_Class` sentinel, and the autoload hook proves the class exists but not in the AOT table","summary":"The Symfony web frontier, now explained rather than guessed, with the wrong fixes eliminated. THE MEASUREMENT that settles it. phase=dynamic method bind error now prints the failing argument's tag, identity, class and RA","body":"The Symfony `--web` frontier, now explained rather than guessed, with the wrong fixes eliminated.\n\nTHE MEASUREMENT that settles it. `phase=dynamic_method_bind_error` now prints the failing argument's tag, identity, class and RAW OBJECT HEADER:\n`arg_tags=[\"6:4421115376:<unresolved>:header=Some((18446744073709551614, 1))\"]`\n- `18446744073709551614` is `0xFFFFFFFFFFFFFFFE`, i.e. **-2**, which `src/codegen_support/runtime/system/serialize.rs:563` names the *synthetic `__PHP_Incomplete_Class` id*.\n- The refcount is **1**, so the object is ALIVE. This is not a use-after-free, which is what the earlier `<unresolved>` reading suggested.\n\nSo the object is the incomplete-class stand-in the unserialize decoder builds, and `ContainerParametersResourceChecker::supports(ResourceInterface $metadata)` then cannot bind it.\n\nWHAT IS ALREADY RULED OUT. A class-autoload hook was added this session (`_elephc_eval_class_autoload_fn`, `ffi/class_autoload.rs`), wired into both decoders where `__rt_new_by_name` answers 0, and it WORKS:\n`phase=class_autoload name=\"Symfony\\Component\\DependencyInjection\\Config\\ContainerParametersResource\" loaded=true declared=true`.\nThe retry still fails, because `__rt_new_by_name` only knows classes in the AOT class table and this one is EVAL-DECLARED — it was autoloaded at run time and has no compiled layout. The hook is correct and worth keeping (it fixes the case where the class IS compiled but not yet loaded); it simply cannot fix this one.\n\nWHY \"JUST DELEGATE unserialize TO THE INTERPRETER\" IS WRONG. The interpreter's `eval_unserialize_hydrate_object` handles an eval class properly but falls back to `values.new_object` + DYNAMIC property writes for a native/AOT class — its own comment says so. Routing every `unserialize` through the bridge would therefore break `FileResource` (an AOT class with a typed private property), which the native decoder now hydrates correctly after this session's mangled-key fix. The two halves are each right for their own class kind.\n\nTHE SHAPE THAT WOULD WORK: per-object delegation. When the decoder finds the class is declared but has no AOT layout, hand the class name AND the parsed property payload to the bridge and take the object back, instead of falling through to the incomplete stand-in. That needs a new bridge entry carrying the payload, which is the piece nobody has written yet.\n\nA CHEAPER LEVER WORTH CHECKING FIRST: why is `ContainerParametersResourceChecker` (and its `ContainerParametersResource`) not COMPILED at all? Both are named from the compiled container file, and the compile-time autoload pass is supposed to close over exactly that. If they were compiled, this rung disappears without touching unserialize.\nEvidence: scratchpad/trace.log: `phase=class_autoload name=\"…ContainerParametersResource\" loaded=true declared=true` at line 2467, then `phase=dynamic_method_bind_error … arg_tags=[\"6:4421115376:<unresolved>:header=Some((18446744073709551614, 1))\"]` at line 2555. codegen_tests unserialize 47/0 and elephc-magician 1687/2 unchanged across the hook.\nVerified by: The object-header diagnostic added this session; the class-autoload trace; the unchanged unserialize and magician suites.","type":"gotcha","scope":"repo","visibility":"team","sensitivity":"internal","status":"approved","confidence":0.7,"tags":["session-learning","symfony","unserialize","autoload","eval-bridge","open","runtime"],"paths":["src/codegen_support/runtime/system/unserialize/decoder_aarch64.rs","src/codegen_support/runtime/system/unserialize/decoder_x86_64.rs","crates/elephc-magician/src/ffi/class_autoload.rs","crates/elephc-magician/src/interpreter/builtins/core/unserialize.rs","src/codegen_support/runtime/system/serialize.rs"],"stack":["rust","php","aarch64","x86_64"],"source_refs":[{"kind":"explicit_capture","captured_at":"2026-09-12T21:42:11.590Z"}],"context":{"fact":"The Symfony `--web` frontier, now explained rather than guessed, with the wrong fixes eliminated.","verification":"scratchpad/trace.log: `phase=class_autoload name=\"…ContainerParametersResource\" loaded=true declared=true` at line 2467, then `phase=dynamic_method_bind_error … arg_tags=[\"6:4421115376:<unresolved>:header=Some((18446744073709551614, 1))\"]` at line 2555. codegen_tests unserialize 47/0 and elephc-magician 1687/2 unchanged across the hook."},"freshness":{"ttl_days":365,"last_verified_at":"2026-09-12T21:42:11.590Z","path_fingerprints":[{"path":"src/codegen_support/runtime/system/unserialize/decoder_aarch64.rs","sha256":"425c17322c93cb2fe4a7b256059fc9dc2eab3c2cda8ef64d14978d316479e497","size":69276},{"path":"src/codegen_support/runtime/system/unserialize/decoder_x86_64.rs","sha256":"26c8ba0a864eae4a996e69cfd876218f2ff8da929768d190af7bb654593f9d3a","size":68355},{"path":"crates/elephc-magician/src/ffi/class_autoload.rs","sha256":"f9085f2f9f3c644a39d0c12f2f47c973d6d81b89b56c7018753b0629cc524425","size":3497},{"path":"crates/elephc-magician/src/interpreter/builtins/core/unserialize.rs","sha256":"5b913dceb3e50c19aafb150c6b6ac5884125dc204adaaa6382c789d584006b73","size":26083},{"path":"src/codegen_support/runtime/system/serialize.rs","sha256":"77c4f2b6a69f8f5e25268f730ac191f1948a2e8bfc155e67fc5e28d6371680fe","size":170258}],"path_fingerprint_policy":"source_hash_staleness","verification":"repo_local_agent_capture"},"edges":[],"quality":{"reviewer":"repo-local-agent","votes_up":0,"votes_down":0,"uses_30d":0,"reports_stale":0,"review_boundary":"git_or_pr","promotion_requires_review":true,"discovery_tokens":95000,"discovery_tokens_estimated":false,"score":94,"reasons":["high-value memory type","has source evidence","grounded to repo paths","tagged","actionable rationale or verification"],"risks":[],"duplicate_candidates":[],"stale_reasons":[],"estimated_tokens_saved":799},"created_at":"2026-09-12T21:42:11.590Z","updated_at":"2026-09-12T21:42:11.590Z","author_branch":"reconcile/dirname-symfony"}
+```
+

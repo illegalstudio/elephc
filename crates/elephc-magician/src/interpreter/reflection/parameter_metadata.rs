@@ -271,9 +271,13 @@ pub(super) fn eval_reflection_parameter_type_metadata(
     // orders its members the same way. Both surfaces have to agree: reflecting one class from
     // inside `eval()` and from compiled code must not answer `int|string` and `string|int`
     // (issues #1118, #1117). The table is shared rather than copied for the same reason.
-    let mut types = types;
+    // Class names come first as written, then the built-ins in `zend_type_to_string()`'s fixed
+    // order, `null` last; both `getTypes()` and the string form follow it (`int|string` reflects
+    // as `string|int`). The shared table is keyed by lowercase built-in names.
     types.sort_by_key(|member| {
-        elephc_builtin_contract::reflection_format::union_member_rank(&member.name)
+        elephc_builtin_contract::reflection_format::union_member_rank(
+            &member.name.to_ascii_lowercase(),
+        )
     });
     Some(EvalReflectionParameterTypeMetadata {
         kind: EvalReflectionParameterTypeKind::Union(EvalReflectionUnionTypeMetadata {
@@ -326,6 +330,12 @@ pub(super) fn eval_reflection_named_type_variant_metadata(
             allows_null,
             is_builtin: false,
         }),
+        EvalParameterTypeVariant::False => {
+            Some(eval_reflection_builtin_named_type("false", allows_null))
+        }
+        EvalParameterTypeVariant::True => {
+            Some(eval_reflection_builtin_named_type("true", allows_null))
+        }
         EvalParameterTypeVariant::Float => {
             Some(eval_reflection_builtin_named_type("float", allows_null))
         }

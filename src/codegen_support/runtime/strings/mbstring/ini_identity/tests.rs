@@ -156,7 +156,8 @@ fn mbstring_ini_native_identity_survives_persistence_and_final_free() {
         elephc_mbstring_native_string_lookup_v1 as *const (), elephc_mbstring_native_string_forget_v1 as *const (),
         elephc_mbstring_native_string_reset_v1 as *const (), elephc_mbstring_native_string_fresh_v1 as *const (),
         elephc_mbstring_native_string_literal_v1 as *const (), elephc_mbstring_native_string_persist_v1 as *const (),
-        elephc_mbstring_native_string_resolve_v1 as *const ()];
+        elephc_mbstring_native_string_resolve_v1 as *const (),
+        &ELEPHC_MBSTRING_NATIVE_ENTRIES as *const _ as *const ()];
     let check: unsafe extern "C" fn(*const *const ()) -> i32 = unsafe { std::mem::transmute(symbol) };
     let result = unsafe { check(functions.as_ptr()) };
     unsafe { libc::dlclose(handle); }
@@ -176,7 +177,9 @@ fn mbstring_ini_identity_hooks_cover_all_targets() {
             let assembly = emitter.output();
             for operation in ["bind", "copy", "fresh", "literal", "persist", "forget", "reset"] {
                 assert!(assembly.contains(&format!("__rt_mbstring_ini_{operation}:")), "{name}, PIC {pic}");
-                assert!(assembly.contains(&target.extern_symbol(&format!("elephc_mbstring_native_string_{operation}_v1"))));
+                // `literal` records nothing, so it has no Rust call (see `emit_literal_noop`).
+                let calls = assembly.contains(&target.extern_symbol(&format!("elephc_mbstring_native_string_{operation}_v1")));
+                assert_eq!(calls, operation != "literal", "{name}, PIC {pic}: {operation}");
             }
             assert!(assembly.contains(if target.arch == Arch::AArch64 { "stp q30, q31" } else { "and rsp, -16" }));
             assert!(assembly.contains(if target.arch == Arch::AArch64 { "ldp q30, q31" } else { "movdqu xmm15" }));
@@ -191,5 +194,76 @@ fn mbstring_ini_identity_hooks_cover_all_targets() {
             shared_fixture.contains(&format!("{visibility} __rt_mbstring_ini_bind\n")),
             "{name} shared fixture must bind the register-preserving hook locally"
         );
+    }
+}
+
+/// `forget` runs on every freed string once identity tracking is active, and its only caller is
+/// `__rt_heap_free`: it must not carry the full 30-GPR + 32-Q register save of the other hooks
+/// (that save was most of the mbstring cost of a compiled Symfony request). Float argument
+/// registers stay preserved.
+#[test]
+fn mbstring_ini_forget_hook_keeps_a_lean_frame() {
+    for name in ["macos-aarch64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let mut emitter = Emitter::new(target);
+        emit(&mut emitter);
+        let assembly = emitter.output();
+        let body = assembly
+            .split_once("__rt_mbstring_ini_forget:")
+            .and_then(|(_, rest)| rest.split_once("__rt_mbstring_ini_reset:"))
+            .map(|(body, _)| body)
+            .unwrap_or_else(|| panic!("{name}: forget body"));
+        let (full_save, float_kept) = if target.arch == Arch::AArch64 {
+            ("sub sp, sp, #768", "stp d6, d7")
+        } else {
+            ("push r15", "movdqu XMMWORD PTR [rsp + 112], xmm7")
+        };
+        assert!(!body.contains(full_save), "{name}: forget must not save every register");
+        assert!(!body.contains("q31") && !body.contains("xmm15"), "{name}: no full vector save");
+        assert!(body.contains(float_kept), "{name}: float argument registers stay preserved");
+    }
+}
+
+/// Until an INI input activates the registry, the creation hooks return before any Rust call, and
+/// the hooks that only retire or share existing metadata return while no allocation is tracked: a
+/// request must not pay a Rust call per persisted or freed string (that bookkeeping was a fifth of
+/// a compiled Symfony request). Only `bind` runs unconditionally.
+#[test]
+fn mbstring_ini_creation_hooks_stay_dormant_until_ini_input() {
+    for name in ["macos-aarch64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let mut emitter = Emitter::new(target);
+        emit(&mut emitter);
+        let assembly = emitter.output();
+        let operations = ["bind", "copy", "fresh", "literal", "persist", "forget", "reset"];
+        for (index, operation) in operations.iter().enumerate() {
+            let start = format!("__rt_mbstring_ini_{operation}:");
+            let body = assembly.split_once(start.as_str()).map(|(_, rest)| rest).unwrap();
+            let body = match operations.get(index + 1) {
+                Some(next) => body.split_once(format!("__rt_mbstring_ini_{next}:").as_str()).unwrap().0,
+                None => body,
+            };
+            if *operation == "literal" {
+                let first = body.lines().map(str::trim).find(|line| !line.is_empty());
+                assert_eq!(first, Some("ret"), "{name}: literal records nothing");
+                continue;
+            }
+            let gate = if needs_tracked_entries(operation) {
+                body.find("ELEPHC_MBSTRING_NATIVE_ENTRIES")
+            } else {
+                body.find("_mbstring_ini_native_active")
+            };
+            let call = body.find(&format!("elephc_mbstring_native_string_{operation}_v1")).unwrap();
+            if *operation == "bind" {
+                assert!(gate.is_none_or(|gate| gate > call), "{name}: bind activates the registry");
+            } else {
+                assert!(gate.is_some_and(|gate| gate < call), "{name}: {operation} is gated before its Rust call");
+            }
+        }
+    }
+    for name in ["macos-aarch64", "linux-x86_64"] {
+        let mut emitter = Emitter::new(Target::parse(name).unwrap());
+        super::super::ini_input::emit(&mut emitter);
+        assert!(emitter.output().contains("_mbstring_ini_native_active"), "{name}: INI input activates the registry");
     }
 }

@@ -27,7 +27,7 @@ const BASE_DIGITS: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
 const MAX_FLOAT_DIGITS: usize = 64;
 
 /// Numeric value parsed out of a numeral string, widened exactly where php-src widens.
-enum ParsedNumeral {
+pub(super) enum ParsedNumeral {
     /// The value still fits `PHP_INT_MAX` and renders exactly.
     Int(i64),
     /// The value overflowed and renders through php-src's lossy float loop.
@@ -69,7 +69,7 @@ pub(in crate::interpreter) fn eval_base_convert_result(
 }
 
 /// Parses `bytes` as a numeral in `base`, widening to `f64` exactly where php-src does.
-fn eval_base_to_number(bytes: &[u8], base: u32) -> ParsedNumeral {
+pub(super) fn eval_base_to_number(bytes: &[u8], base: u32) -> ParsedNumeral {
     let base_i64 = i64::from(base);
     let cutoff = i64::MAX / base_i64;
     let cutlim = i64::MAX % base_i64;
@@ -106,7 +106,7 @@ fn eval_base_to_number(bytes: &[u8], base: u32) -> ParsedNumeral {
 }
 
 /// Renders a parsed numeral in `base`, reproducing php-src's exact and lossy paths.
-fn eval_number_to_base(parsed: ParsedNumeral, base: u32) -> Vec<u8> {
+pub(super) fn eval_number_to_base(parsed: ParsedNumeral, base: u32) -> Vec<u8> {
     let value = match parsed {
         ParsedNumeral::Int(value) => {
             let mut unsigned = value as u64;

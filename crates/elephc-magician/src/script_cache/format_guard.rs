@@ -100,7 +100,11 @@ mod tests {
     /// BUMPED TO 21: both branches' deferred-default expressions and retained readonly
     /// setter contracts now share generic declarations and caller-scope access masks.
     /// BUMPED TO 22: retained token streams distinguish reserved qualified-name segments.
-    const RECORDED_FINGERPRINT: u64 = 11016239859085291084;
+    /// BUMPED TO 23 when the closed-world Symfony branch (its own versions 12 to 16: the
+    /// `EvalAttributeArg::Expr` variant, `SourceLine` markers on included files) was merged
+    /// in. The fingerprint below must be RE-RECORDED once the merged tree compiles: the guard
+    /// test prints the new value.
+    const RECORDED_FINGERPRINT: u64 = 16573123933117229063;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
     ///

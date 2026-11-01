@@ -31,6 +31,26 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     check_touch(cx.checker, cx.args, cx.span, cx.env)
 }
 
+/// Returns whether a type may reach `touch()`'s declared `?int` timestamp parameter.
+///
+/// GRADUAL is accepted, because that is what an ordinary int expression is here: `time() + 100`
+/// types as `Mixed`, since PHP promotes an overflowing int addition to float and the checker
+/// models that. The contract declares `mtime`/`atime` as `?int`, so lowering narrows the boxed
+/// value at the call boundary exactly as it does for `date('Y', time() + 100)` — which compiles
+/// and runs today, while `touch()` alone refused, from a hand-written test that predates that
+/// path. Symfony's `FilesystemCommonTrait::write()` writes
+/// `touch($tmp, $expiresAt ?: time() + 31556952)`.
+///
+/// `Float` rides along for the same reason it does at any declared `int` boundary; a type that
+/// is not numeric at all — a string, an array, an object — still gets the diagnostic.
+fn timestamp_type_is_accepted(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Int | PhpType::Float | PhpType::Void | PhpType::Mixed | PhpType::Never => true,
+        PhpType::Union(members) => members.iter().all(timestamp_type_is_accepted),
+        _ => false,
+    }
+}
+
 /// Validates `touch()` arity (1–3 args) and timestamp argument types.
 /// Timestamp args must be `int` (a Unix timestamp) or `null` (omit to use current time).
 ///
@@ -55,7 +75,7 @@ fn check_touch(
     let mut timestamp_types = Vec::new();
     for arg in args.iter().skip(1) {
         let ty = checker.infer_type(arg, env)?;
-        if !matches!(ty, PhpType::Int | PhpType::Void) {
+        if !timestamp_type_is_accepted(&ty) {
             return Err(CompileError::new(
                 arg.span,
                 "touch() timestamp arguments must be int or null",

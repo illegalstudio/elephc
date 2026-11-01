@@ -49,13 +49,15 @@ pub(in crate::interpreter) fn eval_reflection_class_get_reflection_constants_res
     if !method_name.eq_ignore_ascii_case("getReflectionConstants") {
         return Ok(None);
     }
-    let filter = eval_reflection_member_filter(evaluated_args, values)?;
+    // The receiver is checked BEFORE the filter argument is read: a user class with its own
+    // method of this name reaches here too, and its arguments are not a reflection filter.
     let Some(reflected_name) = context
         .eval_reflection_class_name(identity)
         .map(str::to_string)
     else {
         return Ok(None);
     };
+    let filter = eval_reflection_member_filter(evaluated_args, values)?;
     let names = eval_reflection_constant_names(&reflected_name, context, values)?;
     let mut result = values.array_new(names.len())?;
     let mut index = 0;
@@ -89,27 +91,65 @@ pub(in crate::interpreter) fn eval_reflection_class_get_members_result(
     } else {
         return Ok(None);
     };
-    let filter = eval_reflection_member_filter(evaluated_args, values)?;
+    // The receiver is checked BEFORE the filter argument is read: Symfony UX's
+    // `ComponentProperties::getProperties(object $component, bool $publicProps)` is an ordinary
+    // method of this name, and reading `$component` as a reflection filter failed the call, so
+    // every page rendering a Twig component died.
     let Some(reflected_name) = context
         .eval_reflection_class_name(identity)
         .map(str::to_string)
     else {
         return Ok(None);
     };
-    if let Some(metadata) = eval_reflection_class_like_attributes(&reflected_name, context) {
+    let filter = eval_reflection_member_filter(evaluated_args, values)?;
+    if eval_reflection_is_builtin_closure(&reflected_name, context) {
         let names = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
-            metadata.method_names
+            eval_reflection_builtin_closure_method_names()
         } else {
-            metadata.property_names
+            Vec::new()
         };
         return eval_reflection_member_object_array_result(
+            owner_kind,
+            "Closure",
+            &names,
+            filter,
+            context,
+            values,
+        )
+        .map(Some);
+    }
+    if let Some(metadata) = eval_reflection_class_like_attributes(&reflected_name, context) {
+        let is_eval_class = context.class(&reflected_name).is_some();
+        let names = if owner_kind != EVAL_REFLECTION_OWNER_METHOD {
+            metadata.property_names
+        } else if is_eval_class {
+            context.class_reflection_method_names(&reflected_name)
+        } else {
+            metadata.method_names
+        };
+        let result = eval_reflection_member_object_array_result(
             owner_kind,
             &reflected_name,
             &names,
             filter,
             context,
             values,
-        )
+        );
+        let result = if owner_kind == EVAL_REFLECTION_OWNER_METHOD && is_eval_class {
+            result.and_then(|result| {
+                eval_reflection_append_native_ancestor_methods(
+                    &reflected_name,
+                    &names,
+                    filter,
+                    result,
+                    context,
+                    values,
+                )
+            })
+        } else {
+            result
+        };
+        return result
         .and_then(|result| {
             eval_reflection_object_dynamic_property_array_result(
                 object,
@@ -183,28 +223,18 @@ pub(in crate::interpreter) fn eval_reflection_class_get_member_result(
     let Some(member_name) =
         eval_reflection_member_name(owner_kind, &reflected_name, &requested_name, context)
     else {
-        if owner_kind == EVAL_REFLECTION_OWNER_METHOD
-            && !eval_reflection_class_like_exists(&reflected_name, context)
-        {
-            if let Some(member) = eval_reflection_aot_method_metadata_with_signature_if_exists(
+        if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
+            // Walks the compiled ancestry, as `hasMethod()` does. An eval class's metadata lists
+            // only its own methods, so one inherited from a compiled parent was missing:
+            // Symfony's `CheckTypeDeclarationsPass` asked `getMethod('setName')` of the
+            // interpreted `AboutCommand` right after `hasMethod` said true.
+            if let Some(method) = eval_reflection_method_object_result_if_exists(
                 &reflected_name,
                 &requested_name,
                 context,
                 values,
             )? {
-                let member_name = eval_reflection_aot_declared_method_name(
-                    &reflected_name,
-                    &requested_name,
-                    values,
-                )?;
-                return eval_reflection_member_object_result(
-                    EVAL_REFLECTION_OWNER_METHOD,
-                    &member_name,
-                    &member,
-                    context,
-                    values,
-                )
-                .map(Some);
+                return Ok(Some(method));
             }
         }
         if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY
@@ -250,6 +280,7 @@ pub(in crate::interpreter) fn eval_reflection_class_get_member_result(
                 let exists = eval_reflection_object_dynamic_property_exists(
                     dynamic_object,
                     &requested_name,
+                    context,
                     values,
                 );
                 values.release(dynamic_object)?;
@@ -313,28 +344,28 @@ pub(super) fn eval_reflection_constant_names(
 pub(super) fn eval_reflection_eval_constant_value(
     reflected_name: &str,
     constant_name: &str,
-    context: &ElephcEvalContext,
-) -> Option<RuntimeCellHandle> {
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     if let Some(case) = context.enum_case(reflected_name, constant_name) {
-        return Some(case);
+        return Ok(Some(case));
     }
-    let (declaring_class, constant) = context.class_constant(reflected_name, constant_name)?;
-    context.class_constant_cell(&declaring_class, constant.name())
+    let Some((declaring_class, constant)) = context.class_constant(reflected_name, constant_name)
+    else {
+        return Ok(None);
+    };
+    eval_class_like_constant_cell(&declaring_class, &constant, context, values).map(Some)
 }
 
 /// Returns a materialized eval or AOT constant value for Reflection without visibility checks.
 pub(super) fn eval_reflection_constant_value(
     reflected_name: &str,
     constant_name: &str,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     if eval_reflection_class_like_exists(reflected_name, context) {
-        return Ok(eval_reflection_eval_constant_value(
-            reflected_name,
-            constant_name,
-            context,
-        ));
+        return eval_reflection_eval_constant_value(reflected_name, constant_name, context, values);
     }
     let runtime_class_name = reflected_name.trim_start_matches('\\');
     values.reflection_constant_value(runtime_class_name, constant_name)
@@ -406,6 +437,11 @@ pub(super) fn eval_reflection_member_name(
     requested_name: &str,
     context: &ElephcEvalContext,
 ) -> Option<String> {
+    if owner_kind == EVAL_REFLECTION_OWNER_METHOD
+        && eval_reflection_is_builtin_closure(reflected_name, context)
+    {
+        return eval_reflection_builtin_closure_method_metadata(requested_name).map(|(name, _)| name);
+    }
     let metadata = eval_reflection_class_like_attributes(reflected_name, context)?;
     let names = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
         metadata.method_names
@@ -436,4 +472,55 @@ pub(super) fn eval_reflection_missing_member_message(
             reflected_name, requested_name
         )
     }
+}
+
+/// Appends the methods an eval class inherits from its compiled ancestor to a `getMethods()` list.
+///
+/// An eval class that extends a compiled class inherits that class's methods, but the eval
+/// metadata only knows the eval part of the chain. PHP lists those inherited methods after the
+/// class's own, minus the ones redeclared below and minus privates, which are never inherited.
+fn eval_reflection_append_native_ancestor_methods(
+    reflected_name: &str,
+    listed: &[String],
+    filter: Option<u64>,
+    mut result: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Some(native_parent) = context.class_native_parent_name(reflected_name) else {
+        return Ok(result);
+    };
+    let mut seen: std::collections::HashSet<String> = listed.iter().map(|name| name.to_ascii_lowercase()).collect();
+    let names = eval_reflection_aot_member_names(EVAL_REFLECTION_OWNER_METHOD, &native_parent, values)?;
+    let mut index = values.array_len(result)? as i64;
+    for name in &names {
+        if !seen.insert(name.to_ascii_lowercase()) {
+            continue;
+        }
+        let Some(member) = eval_reflection_aot_method_metadata_with_signature_if_exists(
+            &native_parent,
+            name,
+            context,
+            values,
+        )?
+        else {
+            continue;
+        };
+        if member.visibility == EvalVisibility::Private
+            || !eval_reflection_member_matches_filter(&member, filter)
+        {
+            continue;
+        }
+        let member_object = eval_reflection_member_object_result(
+            EVAL_REFLECTION_OWNER_METHOD,
+            name,
+            &member,
+            context,
+            values,
+        )?;
+        let key = values.int(index)?;
+        result = eval_reflection_array_set_owned(result, key, member_object, values)?;
+        index += 1;
+    }
+    Ok(result)
 }

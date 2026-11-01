@@ -2,7 +2,7 @@
 title: "cairo_set_fill_rule()"
 description: "Selects the fill rule used to decide which regions a path encloses."
 sidebar:
-  order: 443
+  order: 456
 ---
 
 ## cairo_set_fill_rule()

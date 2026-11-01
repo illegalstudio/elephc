@@ -82,6 +82,7 @@ pub(crate) fn fixed_requirements(id: BuiltinId) -> &'static [BuiltinRequirement]
             "pcntl_wifstopped",
             "pcntl_wstopsig",
             "pcntl_wtermsig",
+            "posix_kill",
             "posix_setpgid",
             "posix_setsid",
         ],
@@ -144,6 +145,11 @@ pub(crate) fn fixed_requirements(id: BuiltinId) -> &'static [BuiltinRequirement]
             "openssl_encrypt",
             "openssl_get_cipher_methods",
             "sha1",
+            "__elephc_sodium_box",
+            "sodium_crypto_box_keypair",
+            "sodium_crypto_box_publickey",
+            "sodium_crypto_box_seal",
+            "sodium_crypto_box_seal_open",
         ],
     ) {
         return CRYPTO;
@@ -197,6 +203,9 @@ pub(crate) fn fixed_requirements(id: BuiltinId) -> &'static [BuiltinRequirement]
             "iconv_strpos",
             "iconv_strrpos",
             "iconv_substr",
+            // mbstring's case mapping lives in the same bridge crate.
+            "mb_strtolower",
+            "mb_strtoupper",
         ],
     ) {
         return ICONV_BRIDGE;

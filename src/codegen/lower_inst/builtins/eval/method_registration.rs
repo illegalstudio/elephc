@@ -184,7 +184,12 @@ pub(super) fn register_eval_native_method(
             );
         }
     }
-    if let Some(type_spec) = eval_native_callable_return_type_spec(&registration.signature) {
+    let return_spec = registration
+        .late_static_return
+        .as_ref()
+        .and_then(super::signature_metadata::eval_native_type_expr_spec)
+        .or_else(|| eval_native_callable_return_type_spec(&registration.signature));
+    if let Some(type_spec) = return_spec {
         register_eval_native_method_return_type(
             ctx,
             context_source,

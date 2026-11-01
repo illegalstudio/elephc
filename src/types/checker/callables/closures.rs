@@ -29,6 +29,30 @@ pub(crate) struct ClosureSignatureContext {
     pub declared_params: Vec<bool>,
 }
 
+/// Returns the captures of a closure that must exist in the enclosing scope.
+///
+/// An arrow function captures by value every outer variable its body names, and php skips the
+/// ones that do not exist: a name the body assigns itself (the `$f = function () use (&$f) {...}`
+/// recursion idiom inside `fn () => ...`, Laravel's `Vite::makePreloadTags`) is a local, not a
+/// capture. Only an explicit `use ($x)` of an unknown name is an error.
+pub(crate) fn closure_captures_for_check<'a>(
+    is_arrow: bool,
+    captures: &'a [String],
+    capture_refs: &[String],
+    env: &TypeEnv,
+) -> std::borrow::Cow<'a, [String]> {
+    if !is_arrow {
+        return std::borrow::Cow::Borrowed(captures);
+    }
+    std::borrow::Cow::Owned(
+        captures
+            .iter()
+            .filter(|name| env.contains_key(name.as_str()) || capture_refs.contains(name))
+            .cloned()
+            .collect(),
+    )
+}
+
 impl Checker {
     /// Builds the closure signature/environment, typing unannotated parameters
     /// from `contextual_param_types` when a hint is available at that position.
@@ -36,9 +60,10 @@ impl Checker {
     /// Callback builtins that know the argument types their comparator/visitor
     /// receives (for example `usort`/`uasort` over an array of objects) pass the
     /// element type as a hint so an unannotated parameter is checked against the
-    /// real value type instead of the default `Int`/`Mixed` placeholder. An
-    /// explicitly annotated parameter always keeps its declared type. An untyped by-reference
-    /// parameter uses canonical Mixed storage; other untyped parameters consult the hint.
+    /// real value type instead of the gradual `Mixed` fallback. An explicitly
+    /// annotated parameter always keeps its declared type; the hint is only
+    /// consulted for parameters with no type annotation.
+    /// An untyped by-reference parameter uses canonical Mixed storage instead of the hint.
     pub(crate) fn prepare_closure_signature_context_with_param_hints(
         &mut self,
         params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
@@ -46,12 +71,20 @@ impl Checker {
         variadic_by_ref: bool,
         variadic_type: &Option<TypeExpr>,
         captures: &[String],
+        capture_refs: &[String],
         span: Span,
         env: &TypeEnv,
         contextual_param_types: &[PhpType],
     ) -> Result<ClosureSignatureContext, CompileError> {
+        // A BY-REFERENCE capture of a name that does not exist yet is legal PHP: `use (&$x)`
+        // creates `$x`, which is how a recursive closure names itself
+        // (`$f = function () use (&$f) { … }`) and what Symfony's `UrlGenerator` writes. The
+        // parser records such a capture in BOTH lists, so the existence check has to consult the
+        // by-reference one or it refuses the whole idiom. A by-VALUE capture of an unknown name
+        // keeps its error: php warns and captures null there, and a typo is far likelier than
+        // the intent.
         for cap in captures {
-            if !env.contains_key(cap) {
+            if !env.contains_key(cap) && !capture_refs.iter().any(|name| name == cap) {
                 return Err(CompileError::new(
                     span,
                     &format!("Undefined variable in use(): ${}", cap),
@@ -60,6 +93,13 @@ impl Checker {
         }
 
         let mut closure_env = env.clone();
+        for cap in capture_refs {
+            // The body may read the new name before anything writes through the reference, and a
+            // PHP reference carries no type, so it enters as `Mixed`.
+            closure_env
+                .entry(cap.clone())
+                .or_insert(crate::types::PhpType::Mixed);
+        }
         let mut param_types = Vec::new();
         let mut param_type_exprs = Vec::new();
         let mut defaults = Vec::new();
@@ -163,6 +203,7 @@ impl Checker {
         return_type: &Option<TypeExpr>,
         body: &[Stmt],
         captures: &[String],
+        capture_refs: &[String],
         by_ref_return: bool,
         span: Span,
         env: &TypeEnv,
@@ -174,6 +215,7 @@ impl Checker {
             variadic_by_ref,
             variadic_type,
             captures,
+            capture_refs,
             span,
             env,
             param_hints,
@@ -219,6 +261,7 @@ impl Checker {
                     &declared_ret,
                     &generator_ty,
                     true,
+                    true,
                     span,
                     "Closure return type",
                 )?;
@@ -227,10 +270,16 @@ impl Checker {
             return Ok((generator_ty, false));
         }
 
+        let previous_loop_storage_scope = self.current_loop_storage_scope.clone();
+        self.current_loop_storage_scope = crate::types::nested_loop_storage_scope(
+            &previous_loop_storage_scope,
+            span,
+        );
         let mut all_return_infos = Vec::new();
         for stmt in body {
             self.collect_return_infos(stmt, env, &mut all_return_infos);
         }
+        self.current_loop_storage_scope = previous_loop_storage_scope;
 
         if let Some(type_ann) = return_type {
             let declared_ret =
@@ -252,6 +301,7 @@ impl Checker {
                     &declared_ret,
                     &return_info.ty,
                     return_info.has_value,
+                    return_info.strict_types,
                     span,
                     "Closure return type",
                 )?;
@@ -273,6 +323,7 @@ impl Checker {
             for return_info in &all_return_infos[1..] {
                 inferred_return = wider_type_syntactic(&inferred_return, &return_info.ty);
             }
+            let inferred_return = self.widen_return_for_fall_off(body, inferred_return);
             Ok((self.caller_visible_direct_call_return(body, inferred_return), false))
         }
     }
@@ -305,7 +356,7 @@ impl Checker {
         let ExprKind::FunctionCall { name, .. } = &expr.kind else {
             return inferred;
         };
-        if self.builtin_call_types.contains_key(&expr.span) {
+        if self.is_recorded_builtin_call(expr.span) {
             return inferred;
         }
         let Some(signature) = self.functions.get(name.as_str()) else {
@@ -341,8 +392,9 @@ impl Checker {
                 return_type,
                 body,
                 captures,
-                capture_refs: _,
+                capture_refs,
                 by_ref_return,
+                is_arrow,
                 ..
             } => self
                 .resolve_closure_signature_with_param_hints(
@@ -352,7 +404,8 @@ impl Checker {
                     variadic_type,
                     return_type,
                     body,
-                    captures,
+                    &closure_captures_for_check(*is_arrow, captures, capture_refs, env),
+                    capture_refs,
                     *by_ref_return,
                     expr.span,
                     env,
@@ -374,7 +427,20 @@ impl Checker {
             ExprKind::StaticMethodCall {
                 receiver, method, ..
             } => self.resolve_static_method_return_callable_sig(receiver, method, false),
+            ExprKind::StringLiteral(name) => Ok(self
+                .direct_function_call_signature(name)
+                .map(|(signature, _)| signature)),
             ExprKind::Variable(var_name) => Ok(self.callable_sigs.get(var_name).cloned()),
+            // `(self::$callback)(…)`. `record_static_property_callable_sig` records the closure a
+            // static property holds precisely so this call site can read its by-reference
+            // parameters back, and the read side was missing — the map was written and never
+            // consulted. Symfony's `AbstractAdapter::commit()` is the case it was written for:
+            // `(self::$mergeByLifetime)($this->deferred, $this->namespace, $expiredIds, …)`
+            // DEFINES `$expiredIds`, and without the signature the later `if ($expiredIds)` read
+            // an undefined variable.
+            ExprKind::StaticPropertyAccess { receiver, property } => {
+                Ok(self.static_property_callable_sig(receiver, property))
+            }
             ExprKind::ArrayAccess { array, .. } => {
                 if let ExprKind::Variable(array_name) = &array.kind {
                     Ok(self.callable_sigs.get(array_name).cloned())
@@ -394,6 +460,48 @@ impl Checker {
             }
             _ => Ok(None),
         }
+    }
+
+    /// Looks up the closure signature recorded for `Receiver::$property`, if any.
+    ///
+    /// Keyed the same way `record_static_property_callable_sig` writes it — by the DECLARING
+    /// class, so a subclass receiver finds the signature the parent's property carries. Resolution
+    /// failures answer `None` rather than an error: this is an optional refinement of a call, and
+    /// every real diagnostic about the receiver is raised by the access itself.
+    fn static_property_callable_sig(
+        &self,
+        receiver: &StaticReceiver,
+        property: &str,
+    ) -> Option<FunctionSig> {
+        let class_name = match receiver {
+            // A generic receiver is instantiated into an ordinary named one before type checking;
+            // a template has no class to reach through.
+            StaticReceiver::Generic(_) => unreachable!(
+                "StaticReceiver::Generic must be instantiated by generics::classes"
+            ),
+            StaticReceiver::Named(name) => {
+                let wanted = name.as_str().trim_start_matches('\\');
+                self.classes
+                    .keys()
+                    .find(|existing| existing.eq_ignore_ascii_case(wanted))
+                    .cloned()?
+            }
+            StaticReceiver::Self_ | StaticReceiver::Static => self.current_class.clone()?,
+            StaticReceiver::Parent => self
+                .classes
+                .get(self.current_class.as_ref()?)
+                .and_then(|class_info| class_info.parent.clone())?,
+        };
+        let declaring_class = self
+            .classes
+            .get(&class_name)
+            .and_then(|class_info| {
+                class_info.static_property_declaring_classes.get(property).cloned()
+            })
+            .unwrap_or(class_name);
+        self.static_property_callable_sigs
+            .get(&format!("{}::${}", declaring_class, property))
+            .cloned()
     }
 
     /// Returns the callable target tracked for a two-element callable-array local.
@@ -641,10 +749,10 @@ impl Checker {
 
     /// Resolves a class name case-insensitively for metadata lookups.
     fn resolve_class_name_for_metadata(&self, class_name: &str) -> Option<String> {
-        let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
+        let wanted = class_name.trim_start_matches('\\');
         self.classes
             .keys()
-            .find(|existing| php_symbol_key(existing) == class_key)
+            .find(|existing| existing.eq_ignore_ascii_case(wanted))
             .cloned()
     }
 

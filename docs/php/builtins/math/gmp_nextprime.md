@@ -2,7 +2,7 @@
 title: "gmp_nextprime()"
 description: "Returns the next prime greater than a GMP number."
 sidebar:
-  order: 617
+  order: 630
 ---
 
 ## gmp_nextprime()

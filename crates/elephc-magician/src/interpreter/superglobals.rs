@@ -89,6 +89,31 @@ pub(in crate::interpreter) fn seed_named_cli_superglobals(
     Ok(())
 }
 
+/// Creates the CLI-populated superglobal `name` the moment eval code reads it undefined.
+///
+/// `seed_named_cli_superglobals` runs once, when a fragment starts, and into the global scope
+/// that fragment's frame owns. A method such as `Illuminate\Foundation\Bootstrap\
+/// SetRequestForConsole::bootstrap()` declared by an `include` that an autoloader ran from
+/// another function frame reads `$_SERVER` later through a different frame's scope, which was
+/// never seeded, and found it undefined: php's `auto_globals_jit` creates it on first use
+/// wherever that is. Returns whether the superglobal now exists. A name eval code has unset
+/// stays undefined, as it does in php.
+pub(in crate::interpreter) fn seed_cli_superglobal_on_read(
+    name: &str,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if cli_superglobal_bit(name).is_none() || superglobal_was_unset(name) {
+        return Ok(false);
+    }
+    let value = eval_cli_superglobal_value(name, values)?;
+    for replaced in set_owned_scope_cell(context, scope, name.to_string(), value, values)? {
+        eval_release_value(context, values, replaced)?;
+    }
+    Ok(true)
+}
+
 /// Builds the value PHP's CLI SAPI gives one superglobal.
 fn eval_cli_superglobal_value(
     name: &str,

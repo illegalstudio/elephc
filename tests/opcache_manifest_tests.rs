@@ -11,8 +11,8 @@
 //!
 //! Key details:
 //! - The multi-file fixture is the point: the entry `require`s a sibling, pulls a PSR-4 class in
-//!   through composer.json `autoload.psr-4`, that class file itself `require`s a helper, and
-//!   composer.json `autoload.files` prefixes a bootstrap. All five files are compiled into the
+//!   through the manifest's `autoload.psr-4` map, that class file itself `require`s a helper, and
+//!   the manifest's `autoload.files` list prefixes a bootstrap. All five files are compiled into the
 //!   binary, so all five must be reported. The PSR-4 file is the load-bearing case: it is only
 //!   knowable AFTER name resolution (PSR-4 is a fixpoint over canonical FQNs), which is why the
 //!   compiler injects the OPcache declarations early and bakes their manifest late.
@@ -130,11 +130,11 @@ foreach ($probe_paths as $path) {
 /// - `second.php`         — a plain `require` from the entry (group 2)
 /// - `src/Widget.php`     — a PSR-4 class file, autoloaded via `new \App\Widget` (group 3)
 /// - `src/widget_helper.php` — `require`d BY the autoloaded class file (group 3, nested)
-/// - `src/bootstrap.php`  — composer.json `autoload.files` (group 3)
+/// - `src/bootstrap.php`  — manifest `autoload.files` entry (group 3)
 fn write_multi_fixture(dir: &Path) {
     fs::create_dir_all(dir.join("src")).unwrap();
     fs::write(
-        dir.join("composer.json"),
+        dir.join("project.json"),
         r#"{"autoload":{"psr-4":{"App\\":"src/"},"files":["src/bootstrap.php"]}}"#,
     )
     .unwrap();
@@ -164,7 +164,7 @@ fn write_multi_fixture(dir: &Path) {
 
 /// THE MULTI-FILE CASE. Every PHP source file compiled into the binary is a cached script:
 /// the entry, its `require`d sibling, the PSR-4 autoloaded class, the file that class itself
-/// `require`s, and the Composer `autoload.files` bootstrap. All five are counted, all five key
+/// `require`s, and the manifest `autoload.files` bootstrap. All five are counted, all five key
 /// the `scripts` map by canonical path, and both file predicates report `true` for each.
 ///
 /// The included and autoloaded files answering `true` IS the improvement this test guards: the
@@ -1012,4 +1012,20 @@ if (is_array($s)) {
         );
         let _ = fs::remove_dir_all(&dir);
     }
+}
+
+/// The CLI drops a leading `#!` line from every file it compiles, including the entry script
+/// when something re-requires it. With OPcache enabled the re-required entry is parsed by the
+/// script-cache path, which kept the line: Symfony Runtime re-requires `bin/console` through
+/// `$_SERVER['SCRIPT_FILENAME']`, so every console command printed `#!/usr/bin/env php` first.
+#[test]
+fn reentered_entry_script_drops_its_shebang_with_opcache_enabled() {
+    let dir = make_test_dir("elephc_opcache_shebang");
+    fs::write(
+        dir.join("entry.php"),
+        "#!/usr/bin/env php\n<?php\nif (!defined('AGAIN')) { define('AGAIN', 1); require $_SERVER['SCRIPT_FILENAME']; }\necho \"body\\n\";\n",
+    )
+    .unwrap();
+    let bin = compile(&dir, "entry", &["opcache.enable_cli=1"]);
+    assert_eq!(run_binary(&bin), "body\nbody\n");
 }

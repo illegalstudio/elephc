@@ -45,6 +45,17 @@ pub fn print_error(error: &CompileError) {
     }
 }
 
+/// The plain text `print_error` prints for `error` and its related errors, one per line.
+pub fn render_plain(error: &CompileError) -> String {
+    let file = diagnostic_file(&error.file, error.span);
+    let mut text = format_diagnostic("error", &file, error.span, &error.message);
+    for related in &error.related {
+        text.push('\n');
+        text.push_str(&render_plain(related));
+    }
+    text
+}
+
 /// Prints a compiler warning to stderr with optional line and column.
 ///
 /// Format varies based on available metadata:
@@ -85,6 +96,22 @@ fn diagnostic_file(file: &Option<String>, span: crate::span::Span) -> Option<Str
         }
     }
     file.clone()
+}
+
+/// Prints a `note: message` line to stderr: something the build did that is neither an error nor
+/// a warning but that a reader of the log should be able to find, such as a construct compiled
+/// as php's run-time fault (`autoload::runtime_faults`).
+pub fn print_note(message: &str) {
+    let plain = format_diagnostic("note", &None, crate::span::Span::dummy(), message);
+    if crate::progress::is_decorated() {
+        eprintln!(
+            "{} {}",
+            console::style("\u{2139}").cyan().bold(),
+            console::style(&plain).cyan()
+        );
+    } else {
+        eprintln!("{}", plain);
+    }
 }
 
 /// Builds the plain `kind[location]: message` diagnostic text shared by both

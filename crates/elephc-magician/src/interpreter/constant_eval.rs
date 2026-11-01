@@ -44,6 +44,7 @@ pub(super) fn eval_const_fetch(
         return Ok(value);
     }
     let Some(value) = context.constant(name) else {
+        note_eval_runtime_failure(format!("undefined constant \"{name}\""), context);
         return Err(EvalStatus::RuntimeFatal);
     };
     Ok(value)
@@ -163,6 +164,14 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
     if let Some(value) = elephc_pcntl::host_pcntl_int_constant(name) {
         return Some(EvalPredefinedConstant::Int(value));
     }
+    // The tokenizer ids are asked before the catalog for the same reason the PCNTL table is:
+    // neither has a single catalogued value. PCNTL's depend on the TARGET's libc, and `T_*`
+    // depend on the emulated PHP PROFILE — every id shifts between releases and `T_PIPE` does
+    // not exist before 8.4 — so `ConstValue` cannot express them and `eval_php_profile` owns
+    // the answer for the profile this bridge is emulating.
+    if let Some(value) = crate::eval_php_profile::eval_token_id(name) {
+        return Some(EvalPredefinedConstant::Int(value));
+    }
     if let Some(value) = eval_target_dependent_constant(name) {
         return Some(value);
     }
@@ -170,13 +179,15 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
     if !matches!(
         elephc_builtin_contract::eval_constant_support(constant),
         elephc_builtin_contract::BackendSupport::Implemented(_)
-    ) {
+    ) || !eval_constant_defined_on_host(constant)
+    {
         return None;
     }
     match constant.value {
         ConstValue::Int(value) => Some(EvalPredefinedConstant::Int(value)),
         ConstValue::Float(value) => Some(EvalPredefinedConstant::Float(value)),
         ConstValue::Str(value) => Some(EvalPredefinedConstant::String(value)),
+        // `ZEND_THREAD_SAFE` / `ZEND_DEBUG_BUILD`: catalogued booleans on the predefined route.
         ConstValue::Bool(value) => Some(EvalPredefinedConstant::Bool(value)),
         ConstValue::Null => Some(EvalPredefinedConstant::Null),
         // Standalone eval has no stream-resource provider; native programs register theirs.
@@ -185,6 +196,29 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
         // which `every_catalogued_constant_has_its_declared_eval_route` reports.
         ConstValue::TargetDependent(_) => None,
     }
+}
+
+/// Returns whether php defines `constant` on the platform this interpreter was built for.
+///
+/// The catalog restricts a few names to the platforms whose php has them and spells each target
+/// `<os>-<arch>` (`PHP_WINDOWS_VERSION_*` is `windows-x86_64` only). The interpreter is linked
+/// into the program it serves, so its own `target_os` is the program's OS; elsewhere the name is
+/// undefined, as the compiled side answers.
+pub(in crate::interpreter) fn eval_constant_defined_on_host(
+    constant: &elephc_builtin_contract::ConstantContract,
+) -> bool {
+    let os = if cfg!(target_os = "windows") {
+        "windows-"
+    } else if cfg!(target_os = "linux") {
+        "linux-"
+    } else if cfg!(target_os = "ios") {
+        "ios-"
+    } else {
+        "macos-"
+    };
+    constant
+        .target_support
+        .is_none_or(|targets| targets.iter().any(|target| target.starts_with(os)))
 }
 
 /// Values the catalog marks `TargetDependent`: Magician computes them for the target it is
@@ -222,12 +256,26 @@ fn eval_target_dependent_constant(name: &str) -> Option<EvalPredefinedConstant> 
         ),
         "PHP_RELEASE_VERSION" => EvalPredefinedConstant::Int(EVAL_PHP_RELEASE_VERSION),
         "PHP_EXTRA_VERSION" => EvalPredefinedConstant::String(EVAL_PHP_EXTRA_VERSION),
-        "PHP_SAPI" => EvalPredefinedConstant::String(EVAL_PHP_SAPI),
+        "PHP_SAPI" => EvalPredefinedConstant::String(crate::eval_php_profile::eval_php_sapi()),
         "E_ALL" => EvalPredefinedConstant::Int(crate::eval_php_profile::eval_all_error_mask()),
         "DIRECTORY_SEPARATOR" => EvalPredefinedConstant::String("/"),
+        "PATH_SEPARATOR" => EvalPredefinedConstant::String(":"),
+        // The platform's `MAXPATHLEN`, as the compiled prescan answers it (1024 on macOS, 4096 on
+        // Linux). It had no arm, so Laravel's `FileViewFinder::findInPaths()` fataled on it.
+        "PHP_MAXPATHLEN" => EvalPredefinedConstant::Int(if is_macos { 1024 } else { 4096 }),
         // Platform `fnmatch(3)` flag values; the fnmatch/glob builtins interpret the same bits.
         "FNM_NOESCAPE" => EvalPredefinedConstant::Int(EVAL_FNM_NOESCAPE),
         "FNM_PATHNAME" => EvalPredefinedConstant::Int(EVAL_FNM_PATHNAME),
+        // `setlocale()` categories: the catalog marks them `TargetDependent` because macOS/BSD
+        // libc and glibc number them differently, and nothing resolved them here, so every
+        // `setlocale(LC_NUMERIC, ...)` in an interpreted fragment (Twig's float repr) fataled.
+        "LC_ALL" => EvalPredefinedConstant::Int(EVAL_LC_ALL),
+        "LC_COLLATE" => EvalPredefinedConstant::Int(EVAL_LC_COLLATE),
+        "LC_CTYPE" => EvalPredefinedConstant::Int(EVAL_LC_CTYPE),
+        "LC_MONETARY" => EvalPredefinedConstant::Int(EVAL_LC_MONETARY),
+        "LC_NUMERIC" => EvalPredefinedConstant::Int(EVAL_LC_NUMERIC),
+        "LC_TIME" => EvalPredefinedConstant::Int(EVAL_LC_TIME),
+        "LC_MESSAGES" => EvalPredefinedConstant::Int(EVAL_LC_MESSAGES),
         _ => return None,
     })
 }
@@ -312,12 +360,17 @@ mod curl_constant_fallback_tests {
     }
 
     /// Verifies Magician resolves exactly the constants whose catalog eval route says it
-    /// does: every `Implemented` one has a value, every `Unsupported` one has none.
+    /// does: every `Implemented` one has a value, every `Unsupported` one has none, and a name
+    /// the catalog restricts to other platforms has none here.
     #[test]
     fn every_catalogued_constant_has_its_declared_eval_route() {
         use elephc_builtin_contract::{constants, eval_constant_support, BackendSupport};
         for constant in constants() {
             let resolved = eval_predefined_constant_value(constant.name).is_some();
+            if !eval_constant_defined_on_host(constant) {
+                assert!(!resolved, "{} resolves off its catalogued targets", constant.name);
+                continue;
+            }
             match eval_constant_support(constant) {
                 BackendSupport::Implemented(_) => assert!(
                     resolved,

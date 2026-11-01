@@ -15,21 +15,22 @@ sidebar:
 | [`feof()`](./io/feof.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`fflush()`](./io/fflush.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`fgetc()`](./io/fgetc.md) | `(resource $stream): mixed` | `mixed` | ✓ | ✓ |
-| [`fgetcsv()`](./io/fgetcsv.md) | `(resource $stream, ?int $length = null, string $separator = ','): mixed` | `mixed` | ✓ | ✓ |
-| [`fgets()`](./io/fgets.md) | `(resource $stream): mixed` | `mixed` | ✓ | ✓ |
-| [`file()`](./io/file.md) | `(string $filename, int $flags = 0): mixed` | `mixed` | ✓ | ✓ |
+| [`fgetcsv()`](./io/fgetcsv.md) | `(resource $stream, ?int $length = null, string $separator = ',', string $enclosure = '"', string $escape = '\\'): mixed` | `mixed` | ✓ | ✓ |
+| [`fgets()`](./io/fgets.md) | `(resource $stream, int $length = null): mixed` | `mixed` | ✓ | ✓ |
+| [`file()`](./io/file.md) | `(string $filename, int $flags = 0, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
 | [`file_get_contents()`](./io/file_get_contents.md) | `(string $filename, bool $use_include_path = false, mixed $context = null, int $offset = 0, int $length = null): mixed` | `mixed` | ✓ | ✓ |
-| [`file_put_contents()`](./io/file_put_contents.md) | `(string $filename, string $data, int $flags = 0): int` | `int` | ✓ | ✓ |
+| [`file_put_contents()`](./io/file_put_contents.md) | `(string $filename, mixed $data, int $flags = 0, mixed $context = null): int` | `int` | ✓ | ✓ |
 | [`finfo_buffer()`](./io/finfo_buffer.md) | `(finfo $finfo, string $string, int $flags = 0, ?resource $context = null): string|false` | `string|false` | ✓ | ✓ |
 | [`finfo_close()`](./io/finfo_close.md) | `(finfo $finfo): bool` | `bool` | ✓ | ✓ |
 | [`finfo_file()`](./io/finfo_file.md) | `(finfo $finfo, string $filename, int $flags = 0, ?resource $context = null): string|false` | `string|false` | ✓ | ✓ |
 | [`finfo_open()`](./io/finfo_open.md) | `(int $flags = 0, ?string $magic_database = null): finfo|false` | `finfo|false` | ✓ | ✓ |
 | [`finfo_set_flags()`](./io/finfo_set_flags.md) | `(finfo $finfo, int $flags): bool` | `bool` | ✓ | ✓ |
 | [`flock()`](./io/flock.md) | `(resource $stream, int $operation, bool $would_block = null): bool` | `bool` | ✓ | ✓ |
+| [`flush()`](./io/flush.md) | `(): void` | `void` | ✓ | ✓ |
 | [`fopen()`](./io/fopen.md) | `(string $filename, string $mode, bool $use_include_path = false, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
 | [`fpassthru()`](./io/fpassthru.md) | `(resource $stream): int` | `int` | ✓ | ✓ |
 | [`fprintf()`](./io/fprintf.md) | `(resource $stream, string $format, ...$values): int` | `int` | ✓ | ✓ |
-| [`fputcsv()`](./io/fputcsv.md) | `(resource $stream, array $fields, string $separator = ',', string $enclosure = '"'): int` | `int` | ✓ | ✓ |
+| [`fputcsv()`](./io/fputcsv.md) | `(resource $stream, array $fields, string $separator = ',', string $enclosure = '"', string $escape = '\\', string $eol = "\n"): int` | `int` | ✓ | ✓ |
 | [`fread()`](./io/fread.md) | `(resource $stream, int $length): string` | `string` | ✓ | ✓ |
 | [`fscanf()`](./io/fscanf.md) | `(resource $stream, string $format, ...$vars): array` | `array` | ✓ | ✓ |
 | [`fseek()`](./io/fseek.md) | `(resource $stream, int $offset, int $whence = 0): int` | `int` | ✓ | ✓ |
@@ -37,7 +38,7 @@ sidebar:
 | [`fsync()`](./io/fsync.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`ftell()`](./io/ftell.md) | `(resource $stream): int` | `int` | ✓ | ✓ |
 | [`ftruncate()`](./io/ftruncate.md) | `(resource $stream, int $size): bool` | `bool` | ✓ | ✓ |
-| [`fwrite()`](./io/fwrite.md) | `(resource $stream, string $data): mixed` | `mixed` | ✓ | ✓ |
+| [`fwrite()`](./io/fwrite.md) | `(resource $stream, string $data, int $length = null): mixed` | `mixed` | ✓ | ✓ |
 | [`gethostbyaddr()`](./io/gethostbyaddr.md) | `(string $ip): mixed` | `mixed` | ✓ | ✓ |
 | [`gethostbyname()`](./io/gethostbyname.md) | `(string $hostname): string` | `string` | ✓ | ✓ |
 | [`gethostname()`](./io/gethostname.md) | `(): string` | `string` | ✓ | ✓ |
@@ -60,7 +61,7 @@ sidebar:
 | [`ob_implicit_flush()`](./io/ob_implicit_flush.md) | `(bool $enable = true): bool` | `bool` | ✓ | ✓ |
 | [`ob_list_handlers()`](./io/ob_list_handlers.md) | `(): array` | `array` | ✓ | ✓ |
 | [`ob_start()`](./io/ob_start.md) | `(mixed $callback = null, int $chunk_size = 0, int $flags = 112): bool` | `bool` | ✓ | ✓ |
-| [`opendir()`](./io/opendir.md) | `(string $directory): mixed` | `mixed` | ✓ | ✓ |
+| [`opendir()`](./io/opendir.md) | `(string $directory, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
 | [`readdir()`](./io/readdir.md) | `(resource $dir_handle): mixed` | `mixed` | ✓ | ✓ |
 | [`rewind()`](./io/rewind.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`rewinddir()`](./io/rewinddir.md) | `(resource $dir_handle): void` | `void` | ✓ | ✓ |
@@ -92,7 +93,7 @@ sidebar:
 | [`stream_set_timeout()`](./io/stream_set_timeout.md) | `(resource $stream, int $seconds, int $microseconds = 0): bool` | `bool` | ✓ | ✓ |
 | [`stream_set_write_buffer()`](./io/stream_set_write_buffer.md) | `(resource $stream, int $size): int` | `int` | ✓ | ✓ |
 | [`stream_socket_accept()`](./io/stream_socket_accept.md) | `(resource $socket, float $timeout = null, string $peer_name = null): mixed` | `mixed` | ✓ | ✓ |
-| [`stream_socket_client()`](./io/stream_socket_client.md) | `(string $address): mixed` | `mixed` | ✓ | ✓ |
+| [`stream_socket_client()`](./io/stream_socket_client.md) | `(string $address, mixed $error_code = null, mixed $error_message = null, mixed $timeout = null, int $flags = 4, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_socket_enable_crypto()`](./io/stream_socket_enable_crypto.md) | `(resource $stream, bool $enable, int $crypto_method = null, resource $session_stream = null): bool` | `bool` | ✓ | ✓ |
 | [`stream_socket_get_name()`](./io/stream_socket_get_name.md) | `(resource $socket, bool $remote): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_socket_pair()`](./io/stream_socket_pair.md) | `(int $domain, int $type, int $protocol): mixed` | `mixed` | ✓ | ✓ |
@@ -104,4 +105,5 @@ sidebar:
 | [`stream_wrapper_register()`](./io/stream_wrapper_register.md) | `(string $protocol, string $class, int $flags = 0): bool` | `bool` | ✓ | ✓ |
 | [`stream_wrapper_restore()`](./io/stream_wrapper_restore.md) | `(string $protocol): bool` | `bool` | ✓ | ✓ |
 | [`stream_wrapper_unregister()`](./io/stream_wrapper_unregister.md) | `(string $protocol): bool` | `bool` | ✓ | ✓ |
+| [`var_export()`](./io/var_export.md) | `(mixed $value, bool $return = false): mixed` | `mixed` | ✓ | ✓ |
 | [`vfprintf()`](./io/vfprintf.md) | `(resource $stream, string $format, array $values): int` | `int` | ✓ | ✓ |

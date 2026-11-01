@@ -145,6 +145,22 @@ fn test_interpolation_simple_property() {
     );
 }
 
+/// Keeps a dollar followed by a digit literal because PHP variable names cannot start with it.
+#[test]
+fn test_interpolation_dollar_digit_is_literal_text() {
+    let t = tokens("<?php echo \"fee$0\";");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Echo,
+            Token::StringLiteral("fee$0".into()),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
 /// Verifies double-quoted string `"hello\nworld\t!"` produces `StringLiteral`
 /// with actual newline (`\n`) and tab (`\t`) characters — confirming escape sequence
 /// interpretation, not raw literal text.

@@ -24,7 +24,9 @@ pub(crate) fn lower_array_keys(ctx: &mut FunctionContext<'_>, inst: &Instruction
 
 /// Lowers `array_rand()` for indexed arrays.
 pub(crate) fn lower_array_rand(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::super::ensure_arg_count(inst, "array_rand", 1)?;
+    // The checker has already refused every `$num` but the literal 1, and one key is exactly what
+    // the single-argument form returns, so the second operand carries no work for the backend.
+    super::super::ensure_arg_count_between(inst, "array_rand", 1, 2)?;
     let array = expect_operand(inst, 0)?;
     require_indexed_array_builtin(ctx.value_php_type(array)?, "array_rand")?;
     ctx.load_value_to_result(array)?;
@@ -48,6 +50,11 @@ pub(crate) fn lower_range(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     let step = inst.operands.get(2).copied();
     require_range_endpoint(ctx.value_php_type(start)?, "start")?;
     require_range_endpoint(ctx.value_php_type(end)?, "end")?;
+    // Two string endpoints are a CHARACTER range (`range('a', 'e')`), which this integer
+    // constructor cannot build; one string against a number is a numeric string php converts.
+    if ctx.value_php_type(start)? == PhpType::Str && ctx.value_php_type(end)? == PhpType::Str {
+        return Err(CodegenIrError::unsupported("range between two string endpoints"));
+    }
     if let Some(step) = step {
         require_range_endpoint(ctx.value_php_type(step)?, "step")?;
     }
@@ -144,6 +151,9 @@ pub(crate) fn lower_array_pop(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         PhpType::Mixed => {
             return boxed_mutation::lower_boxed_array_take(ctx, inst, array, false);
         }
+        PhpType::Union(_) => {
+            return pop_shift_dynamic::lower_array_pop_dynamic(ctx, inst, array);
+        }
         PhpType::AssocArray { .. } => {
             return boxed_mutation::lower_assoc_array_pop(ctx, inst, array);
         }
@@ -152,6 +162,13 @@ pub(crate) fn lower_array_pop(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let elem_ty = array_pop_element_type(ctx.value_php_type(array)?)?;
     require_array_pop_result_type(&inst.result_php_type.codegen_repr())?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
+    // A load out of a Mixed-widened local carries a detached owner of its own, so the slot's box
+    // still owns the array the split below consumes from. Retiring that box first lets the
+    // publish install the only box; without it `array_pop()` on such a local left the superseded
+    // box (and the array behind it) unreleased on every call.
+    if matches!(receiver, ReceiverPlace::Local(_)) {
+        receiver.prepare_consuming_storeback(ctx, array)?;
+    }
     ensure_unique_array_pop_source(ctx, array)?;
     receiver.store_back_after_consuming_split(ctx, array)?;
     match ctx.emitter.target.arch {
@@ -163,6 +180,17 @@ pub(crate) fn lower_array_pop(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 
 /// Lowers `array_shift()` for indexed arrays by compacting slots and boxing `T|null` as Mixed.
 pub(crate) fn lower_array_shift(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::super::ensure_arg_count(inst, "array_shift", 1)?;
+    let array = expect_operand(inst, 0)?;
+    match ctx.value_php_type(array)?.codegen_repr() {
+        PhpType::Mixed | PhpType::Union(_) => {
+            return pop_shift_dynamic::lower_array_shift_dynamic(ctx, inst, array);
+        }
+        PhpType::AssocArray { .. } => {
+            return pop_shift_dynamic::lower_assoc_array_shift(ctx, inst, array);
+        }
+        _ => {}
+    }
     shift::lower_array_shift(ctx, inst)
 }
 
@@ -194,7 +222,13 @@ pub(crate) fn lower_rsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 /// order changes, which `__rt_hash_asort` implements by relinking the table's chain.
 /// Indexed arrays have no separate key storage, so they keep using the slot permuter.
 pub(crate) fn lower_asort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::super::ensure_arg_count(inst, "asort", 1)?;
+    ensure_arg_count_between(inst, "asort", 1, 2)?;
+    let array = expect_operand(inst, 0)?;
+    if ctx.value_php_type(array)?.codegen_repr() == PhpType::Mixed {
+        return super::boxed_mutation::lower_boxed_array_value_sort(
+            ctx, inst, array, "asort", "__rt_hash_asort",
+        );
+    }
     if sort_receiver_is_hash(ctx, inst)? {
         return lower_hash_link_sort(ctx, inst, "__rt_hash_asort");
     }
@@ -204,7 +238,13 @@ pub(crate) fn lower_asort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 /// Lowers `arsort()` for indexed integer arrays through the descending value-sort wrapper.
 /// Lowers `arsort()`, routing hash receivers to the descending insertion-order value sorter.
 pub(crate) fn lower_arsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::super::ensure_arg_count(inst, "arsort", 1)?;
+    ensure_arg_count_between(inst, "arsort", 1, 2)?;
+    let array = expect_operand(inst, 0)?;
+    if ctx.value_php_type(array)?.codegen_repr() == PhpType::Mixed {
+        return super::boxed_mutation::lower_boxed_array_value_sort(
+            ctx, inst, array, "arsort", "__rt_hash_arsort",
+        );
+    }
     if sort_receiver_is_hash(ctx, inst)? {
         return lower_hash_link_sort(ctx, inst, "__rt_hash_arsort");
     }
@@ -233,6 +273,16 @@ pub(crate) fn lower_natcasesort(ctx: &mut FunctionContext<'_>, inst: &Instructio
 
 /// Lowers `shuffle()` for indexed arrays with 8-byte slots by mutating the source array in place.
 pub(crate) fn lower_shuffle(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    // `Iterable` belongs with the gradual shapes here: it is the representation a local takes
+    // when it can hold either array shape, and the indexed lowering below walks fixed-size slots
+    // that a hash does not have -- it segfaults rather than refusing.
+    if matches!(
+        ctx.value_php_type(array)?.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable
+    ) {
+        return pop_shift_dynamic::lower_shuffle_dynamic(ctx, inst, array);
+    }
     lower_indexed_array_shuffle(ctx, inst)
 }
 
@@ -359,6 +409,8 @@ fn lower_array_edge_value(
 pub(super) fn require_array_like_operand(ty: PhpType, name: &str) -> Result<()> {
     match ty.codegen_repr() {
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed => Ok(()),
+        // A named-argument variadic's raw list or hash pointer; the runtime reads the heap kind.
+        PhpType::Iterable if name == "array_is_list" => Ok(()),
         other => Err(CodegenIrError::unsupported(format!(
             "{} for PHP type {:?}",
             name, other
@@ -368,14 +420,18 @@ pub(super) fn require_array_like_operand(ty: PhpType, name: &str) -> Result<()> 
 
 /// Validates a two-input hash builtin operand and reports whether it must be converted to a hash.
 ///
-/// Associative arrays are used directly; scalar indexed arrays (`int`/`float`/`bool` elements) are
-/// converted to integer-keyed hashes at runtime. Any other shape is unsupported.
-pub(super) fn two_hash_operand_needs_conversion(ty: PhpType, name: &str) -> Result<bool> {
+/// Associative arrays are used directly. Indexed arrays are converted to integer-keyed hashes at
+/// runtime when their element representation is supported by the selected operation.
+pub(super) fn two_hash_operand_needs_conversion(
+    ty: PhpType,
+    name: &str,
+    allow_heap_indexed: bool,
+) -> Result<bool> {
     match ty.codegen_repr() {
         PhpType::AssocArray { .. } => Ok(false),
-        PhpType::Array(elem) if matches!(*elem, PhpType::Int | PhpType::Float | PhpType::Bool) => {
-            Ok(true)
-        }
+        PhpType::Array(elem)
+            if allow_heap_indexed
+                || matches!(*elem, PhpType::Int | PhpType::Float | PhpType::Bool) => Ok(true),
         other => Err(CodegenIrError::unsupported(format!(
             "{} hash operand PHP type {:?}",
             name, other
@@ -388,19 +444,108 @@ pub(super) fn two_hash_operand_needs_conversion(ty: PhpType, name: &str) -> Resu
 /// `__rt_array_to_hash` reads its argument from the first argument register; on AArch64 the result
 /// register already is that register, but on x86_64 the value lives in `rax` and must move to `rdi`.
 pub(super) fn emit_convert_indexed_to_hash(ctx: &mut FunctionContext<'_>) {
+    emit_convert_indexed_to_hash_with_gradual(ctx, false)
+}
+
+/// Promotes an operand to hash storage, checking the RUNTIME kind first when the operand's
+/// static type is the gradual `array<mixed>`.
+///
+/// `array<mixed>` is what a declared `array` parameter carries and says nothing about keys, so
+/// promoting unconditionally walked hash storage as if it were indexed — `array_diff_key()` on
+/// a hash answered with invented keys and values. The conditional helper retains the operand on
+/// its pass-through path, which keeps the caller's release of the "converted temporary" balanced.
+pub(super) fn emit_convert_indexed_to_hash_with_gradual(
+    ctx: &mut FunctionContext<'_>,
+    gradual: bool,
+) {
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // move the array pointer into the first SysV argument register
     }
-    abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");
+    let label = if gradual {
+        "__rt_array_to_hash_if_indexed"
+    } else {
+        "__rt_array_to_hash"
+    };
+    abi::emit_call_label(ctx.emitter, label);
 }
 
-/// Lowers a two-input hash builtin: materializes both operands (converting scalar indexed inputs to
-/// owned hashes), calls `runtime_label`, then releases any converted temporaries.
+/// Materializes one array-like operand as an independently owned Mixed-valued hash.
+pub(super) fn materialize_owned_mixed_hash_operand(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    name: &str,
+) -> Result<()> {
+    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    ctx.load_value_to_reg(value, arg_reg)?;
+    match ctx.value_php_type(value)?.codegen_repr() {
+        PhpType::Mixed | PhpType::Union(_) => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_to_owned_hash");
+        }
+        PhpType::AssocArray { .. } => {
+            abi::emit_call_label(ctx.emitter, "__rt_hash_clone_shallow");
+            if ctx.emitter.target.arch == Arch::X86_64 {
+                ctx.emitter.instruction("mov rdi, rax");                        // pass the owned hash clone to the Mixed-value normalizer
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+        }
+        PhpType::Array(_) => {
+            materialize_runtime_array_storage_to_owned_mixed_hash(ctx, value)?;
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "{} hash operand PHP type {:?}",
+                name, other
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Converts indexed or runtime-promoted array storage to an owned Mixed-valued hash.
 ///
-/// `mode` is loaded into the third argument register for `array_diff_assoc` (0) /
-/// `array_intersect_assoc` (1). The result hash pointer is left in the integer result register.
-/// Mirrors the legacy two-hash choreography but sources operands from EIR values.
-pub(super) fn lower_two_hash_arg_builtin(
+/// A static `array<T>` may carry hash storage after a runtime string-keyed write. Array
+/// consumers that need a hash must inspect that storage kind before deciding whether to convert
+/// indexed entries or clone an existing hash; both branches normalize destination entries to
+/// boxed Mixed cells for the shared gradual-container ABI.
+fn materialize_runtime_array_storage_to_owned_mixed_hash(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    let hash = ctx.next_label("array_storage_to_mixed_hash_hash");
+    let done = ctx.next_label("array_storage_to_mixed_hash_done");
+    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    ctx.load_value_to_reg(value, arg_reg)?;
+    abi::emit_push_reg(ctx.emitter, arg_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #3");                             // runtime kind 3 is promoted hash storage
+            ctx.emitter.instruction(&format!("b.eq {}", hash));
+            abi::emit_pop_reg(ctx.emitter, arg_reg);
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");
+            ctx.emitter.instruction(&format!("b {}", done));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 3");                             // runtime kind 3 is promoted hash storage
+            ctx.emitter.instruction(&format!("je {}", hash));
+            abi::emit_pop_reg(ctx.emitter, arg_reg);
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");
+            ctx.emitter.instruction(&format!("jmp {}", done));
+        }
+    }
+    ctx.emitter.label(&hash);
+    abi::emit_pop_reg(ctx.emitter, arg_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_hash_clone_shallow");
+    ctx.emitter.label(&done);
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the owned hash to the Mixed-entry normalizer
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+    Ok(())
+}
+
+/// Lowers a two-array hash operation through owned Mixed-valued operand snapshots.
+pub(super) fn lower_gradual_two_hash_arg_builtin(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
@@ -410,21 +555,100 @@ pub(super) fn lower_two_hash_arg_builtin(
     super::super::ensure_arg_count(inst, name, 2)?;
     let first = expect_operand(inst, 0)?;
     let second = expect_operand(inst, 1)?;
-    let conv0 = two_hash_operand_needs_conversion(ctx.value_php_type(first)?, name)?;
-    let conv1 = two_hash_operand_needs_conversion(ctx.value_php_type(second)?, name)?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+
+    materialize_owned_mixed_hash_operand(ctx, first, name)?;
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    materialize_owned_mixed_hash_operand(ctx, second, name)?;
+    abi::emit_push_reg(ctx.emitter, result_reg);
+
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // load the first owned hash snapshot
+            ctx.emitter.instruction("ldr x1, [sp]");                            // load the second owned hash snapshot
+            if let Some(mode) = mode {
+                ctx.emitter.instruction(&format!("mov x2, #{}", mode));         // pass the set-operation mode selector
+            }
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");           // load the first owned hash snapshot
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp]");                // load the second owned hash snapshot
+            if let Some(mode) = mode {
+                ctx.emitter.instruction(&format!("mov edx, {}", mode));         // pass the set-operation mode selector
+            }
+        }
+    }
+    abi::emit_call_label(ctx.emitter, runtime_label);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // reload and release the second owned snapshot
+            abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+            ctx.emitter.instruction("ldr x0, [sp, #32]");                       // reload and release the first owned snapshot
+            abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");           // reload and release the second owned snapshot
+            abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");           // reload and release the first owned snapshot
+            abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+        }
+    }
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    box_hash_result_for_mixed_builtin(ctx, inst, &PhpType::Mixed);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers a two-input hash builtin: materializes both operands (converting scalar indexed inputs to
+/// owned hashes), calls `runtime_label`, then releases any converted temporaries.
+///
+/// `mode` is loaded into the third argument register for `array_diff_assoc` (0) /
+/// `array_intersect_assoc` (1). The result hash pointer is left in the integer result register.
+/// `allow_heap_indexed` permits indexed arrays whose elements own runtime storage when the helper
+/// preserves those values rather than comparing them through scalar-only paths.
+/// Mirrors the legacy two-hash choreography but sources operands from EIR values.
+pub(super) fn lower_two_hash_arg_builtin(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    runtime_label: &str,
+    mode: Option<i64>,
+    allow_heap_indexed: bool,
+) -> Result<()> {
+    super::super::ensure_arg_count(inst, name, 2)?;
+    let first = expect_operand(inst, 0)?;
+    let second = expect_operand(inst, 1)?;
+    let conv0 = two_hash_operand_needs_conversion(
+        ctx.value_php_type(first)?,
+        name,
+        allow_heap_indexed,
+    )?;
+    let conv1 = two_hash_operand_needs_conversion(
+        ctx.value_php_type(second)?,
+        name,
+        allow_heap_indexed,
+    )?;
+    let gradual0 = crate::codegen::lower_inst::arrays::array_union_operand_is_gradual(
+        &ctx.value_php_type(first)?,
+    );
+    let gradual1 = crate::codegen::lower_inst::arrays::array_union_operand_is_gradual(
+        &ctx.value_php_type(second)?,
+    );
     let result_reg = abi::int_result_reg(ctx.emitter);
 
     // -- materialize first operand into the result register, convert if indexed, then spill --
     ctx.load_value_to_reg(first, result_reg)?;
     if conv0 {
-        emit_convert_indexed_to_hash(ctx);
+        emit_convert_indexed_to_hash_with_gradual(ctx, gradual0);
     }
     abi::emit_push_reg(ctx.emitter, result_reg);
 
     // -- materialize second operand into the result register, convert if indexed --
     ctx.load_value_to_reg(second, result_reg)?;
     if conv1 {
-        emit_convert_indexed_to_hash(ctx);
+        emit_convert_indexed_to_hash_with_gradual(ctx, gradual1);
     }
 
     if !conv0 && !conv1 {
@@ -499,7 +723,30 @@ pub(super) fn lower_two_hash_arg_builtin(
 
 /// Lowers `array_replace()` (right-wins hash merge of two hashes).
 pub(crate) fn lower_array_replace(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_two_hash_arg_builtin(ctx, inst, "array_replace", "__rt_array_replace", None)
+    if inst.operands.iter().any(|operand| {
+        ctx.value_php_type(*operand).is_ok_and(|ty| {
+            matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        })
+    }) || matches!(
+        inst.result_php_type.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        return lower_gradual_two_hash_arg_builtin(
+            ctx,
+            inst,
+            "array_replace",
+            "__rt_array_replace",
+            Some(0),
+        );
+    }
+    lower_two_hash_arg_builtin(
+        ctx,
+        inst,
+        "array_replace",
+        "__rt_array_replace",
+        Some(0),
+        true,
+    )
 }
 
 /// Lowers `array_replace_recursive()` (recursive right-wins hash merge).
@@ -507,12 +754,29 @@ pub(crate) fn lower_array_replace_recursive(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
+    if inst.operands.iter().any(|operand| {
+        ctx.value_php_type(*operand).is_ok_and(|ty| {
+            matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        })
+    }) || matches!(
+        inst.result_php_type.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        return lower_gradual_two_hash_arg_builtin(
+            ctx,
+            inst,
+            "array_replace_recursive",
+            "__rt_array_replace_recursive",
+            None,
+        );
+    }
     lower_two_hash_arg_builtin(
         ctx,
         inst,
         "array_replace_recursive",
         "__rt_array_replace_recursive",
         None,
+        true,
     )
 }
 
@@ -527,6 +791,7 @@ pub(crate) fn lower_array_diff_assoc(
         "array_diff_assoc",
         "__rt_assoc_diff_intersect",
         Some(0),
+        false,
     )
 }
 
@@ -541,10 +806,14 @@ pub(crate) fn lower_array_intersect_assoc(
         "array_intersect_assoc",
         "__rt_assoc_diff_intersect",
         Some(1),
+        false,
     )
 }
 
 /// Lowers `array_merge_recursive()` (recursive merge with scalar collisions combined into lists).
+///
+/// Its runtime helper retains or copies every heap-backed entry before publishing the merged hash,
+/// so indexed arrays with string, object, or nested-array values can use the shared conversion.
 pub(crate) fn lower_array_merge_recursive(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -555,5 +824,6 @@ pub(crate) fn lower_array_merge_recursive(
         "array_merge_recursive",
         "__rt_array_merge_recursive",
         None,
+        true,
     )
 }

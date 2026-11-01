@@ -42,7 +42,7 @@ pub fn infer_return_type_syntactic(body: &[Stmt]) -> PhpType {
 fn collect_return_types_syntactic(stmt: &Stmt, types: &mut Vec<PhpType>) {
     match &stmt.kind {
         StmtKind::NamespaceDecl { .. } | StmtKind::UseDecl { .. } => {}
-        StmtKind::NamespaceBlock { body, .. } => {
+        StmtKind::NamespaceBlock { body, .. } | StmtKind::Synthetic(body) => {
             for inner in body {
                 collect_return_types_syntactic(inner, types);
             }
@@ -135,6 +135,25 @@ pub(crate) fn wider_type_syntactic(a: &PhpType, b: &PhpType) -> PhpType {
     if matches!((a, b), (PhpType::Bool, PhpType::False) | (PhpType::False, PhpType::Bool)) {
         return PhpType::Bool;
     }
+    // Same rule as `Checker::wider_type`, which replaces this provisional answer once a method
+    // body is checked: `string`/`float` absorb only scalars. Disagreeing here left every caller
+    // checked before the method pass on `string` while the method returned a boxed array.
+    let absorbed = |ty: &PhpType| {
+        matches!(
+            ty,
+            PhpType::Int
+                | PhpType::Bool
+                | PhpType::False
+                | PhpType::Str
+                | PhpType::Float
+                | PhpType::Void
+        )
+    };
+    if matches!(a, PhpType::Str | PhpType::Float) && !absorbed(b)
+        || matches!(b, PhpType::Str | PhpType::Float) && !absorbed(a)
+    {
+        return PhpType::Mixed;
+    }
     if *a == PhpType::Str || *b == PhpType::Str {
         return PhpType::Str;
     }
@@ -175,8 +194,24 @@ pub(crate) fn null_coalesce_merge_type(value_ty: &PhpType, default_ty: &PhpType)
     if matches!(value_ty, PhpType::Never | PhpType::Void) {
         return default_ty.clone();
     }
-    if matches!(default_ty, PhpType::Never | PhpType::Void) {
+    if matches!(default_ty, PhpType::Never) {
         return value_ty.clone();
+    }
+    // `$map[$k] ?? null` is the value's type OR null. Dropping the null typed it as the bare
+    // element type, whose storage cannot hold null: a missing int read as 0, a string as "", and
+    // a callable as a null descriptor that is truthy and crashes when called -- Laravel's
+    // `Connection::getResolver()` (`static::$resolvers[$driver] ?? null`) on every query.
+    if matches!(default_ty, PhpType::Void) {
+        return match value_ty {
+            PhpType::Mixed => PhpType::Mixed,
+            PhpType::Union(members) if members.contains(&PhpType::Void) => value_ty.clone(),
+            PhpType::Union(members) => {
+                let mut members = members.clone();
+                members.push(PhpType::Void);
+                PhpType::Union(members)
+            }
+            other => PhpType::Union(vec![other.clone(), PhpType::Void]),
+        };
     }
     if matches!(
         (value_ty, default_ty),
@@ -310,6 +345,13 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             target: CastType::Array,
             expr,
         } => crate::types::array_cast_result_type(&infer_expr_type_syntactic(expr)),
+        ExprKind::Cast {
+            target: CastType::Object,
+            expr,
+        } => match infer_expr_type_syntactic(expr) {
+            object @ PhpType::Object(_) => object,
+            _ => PhpType::Object("stdClass".to_string()),
+        },
         ExprKind::FunctionCall { name, args } => match name.as_str() {
             "eval" => PhpType::Mixed,
             "substr" | "strtolower" | "strtoupper" | "trim" | "ltrim" | "rtrim" | "str_repeat"
@@ -344,7 +386,9 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             | "rand" | "time" | "fpassthru" | "linkinfo"
             // Listed explicitly rather than left to the `_ => PhpType::Int` fallback, so a
             // future change to that fallback cannot silently retype them.
-            | "substr_count" | "strncmp" | "strncasecmp" => PhpType::Int,
+            | "substr_compare" | "substr_count" | "strncmp" | "strncasecmp"
+            // Both memory reporters answer a byte count from one allocator counter word.
+            | "memory_get_usage" | "memory_get_peak_usage" => PhpType::Int,
             "floatval" | "floor" | "ceil" | "round" | "sqrt" | "pow" | "fmod" | "sin" | "cos"
             | "tan" | "asin" | "acos" | "atan" | "atan2" | "sinh" | "cosh" | "tanh" | "log"
             | "log2" | "log10" | "exp" | "hypot" | "pi" | "deg2rad" | "rad2deg" => PhpType::Float,
@@ -362,8 +406,15 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             "ptr_is_null" | "__elephc_ptr_is_null" | "define" | "json_validate" | "flock" | "symlink"
             | "link" => PhpType::Bool,
             "ptr_sizeof" | "ptr_get" | "__elephc_ptr_get" | "ptr_read8" | "ptr_read32" => PhpType::Int,
-            _ => PhpType::Int,
+            _ => PhpType::Mixed,
         },
+        ExprKind::MethodCall { .. }
+        | ExprKind::NullsafeMethodCall { .. }
+        | ExprKind::NullsafeDynamicMethodCall { .. }
+        | ExprKind::StaticMethodCall { .. }
+        | ExprKind::ClosureCall { .. }
+        | ExprKind::ExprCall { .. } => PhpType::Mixed,
+        ExprKind::Assignment { value, .. } => infer_expr_type_syntactic(value),
         ExprKind::NullCoalesce { value, default } => {
             let left_ty = infer_expr_type_syntactic(value);
             let right_ty = infer_expr_type_syntactic(default);
@@ -467,9 +518,24 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             PhpType::Object(fallback_class.as_str().to_string())
         }
         ExprKind::NewScopedObject { .. } => PhpType::Object(String::new()),
+        // `new $class()` names its class at run time: an object of a class nothing here knows,
+        // which the checker already types `Mixed`. Left to the `int` fallback, a closure whose
+        // body is `fn ($class) => new $class()` was given an `int` return type and converted
+        // every object it built to a number on the way out -- Doctrine DBAL's
+        // `Type::createTypeRegistry()` maps its type classes exactly so.
+        ExprKind::NewDynamic { .. } => PhpType::Mixed,
+        // A catalogued global constant has its catalogued type: left to the `int` fallback,
+        // `private string $algorithm = \PASSWORD_BCRYPT;` (Symfony's `NativePasswordHasher`) was
+        // refused as "default expects Str, got Int", and with it the class.
+        ExprKind::ConstRef(name) => {
+            elephc_builtin_contract::lookup_constant(name.as_str())
+                .map(|constant| crate::types::predefined_constants::php_type_of(constant.value))
+                .unwrap_or(PhpType::Int)
+        }
         ExprKind::ClassConstant { .. }
         | ExprKind::ObjectClassName { .. }
         | ExprKind::ScopedConstantAccess { .. } => PhpType::Str,
+        ExprKind::DynamicScopedConstantAccess { .. } => PhpType::Mixed,
         ExprKind::This => PhpType::Object(String::new()),
         ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_) => PhpType::Callable,
         ExprKind::PtrCast { target_type, .. } => PhpType::Pointer(Some(target_type.clone())),
@@ -500,7 +566,9 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             BinOp::Sub | BinOp::Mul | BinOp::Mod => {
                 let lt = infer_expr_type_syntactic(left);
                 let rt = infer_expr_type_syntactic(right);
-                if lt == PhpType::Float || rt == PhpType::Float {
+                if *op == BinOp::Mod {
+                    PhpType::Int
+                } else if lt == PhpType::Float || rt == PhpType::Float {
                     PhpType::Float
                 } else if matches!(op, BinOp::Sub | BinOp::Mul) {
                     if let Some(ty) = checked_literal_int_arithmetic_type(op, left, right) {
@@ -514,7 +582,24 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                     PhpType::Int
                 }
             }
-            BinOp::Div => PhpType::Float,
+            // php's `int / int` is an `int` when exact; see `infer_binary_op_type`. Like `**`,
+            // only lowering knows whether both operands really are integers, and it emits the
+            // int-preserving `ICheckedDiv` for those alone.
+            BinOp::Div => {
+                let lt = infer_expr_type_syntactic(left);
+                let rt = infer_expr_type_syntactic(right);
+                if lt == PhpType::Float || rt == PhpType::Float {
+                    PhpType::Float
+                } else if let (Some(lhs), Some(rhs)) = (int_literal_value(left), int_literal_value(right)) {
+                    if rhs != 0 && lhs.checked_rem(rhs) == Some(0) {
+                        PhpType::Int
+                    } else {
+                        PhpType::Float
+                    }
+                } else {
+                    PhpType::Mixed
+                }
+            }
             BinOp::Pow => {
                 // PHP's `**` keeps an integer result when both operands are ints, the
                 // exponent is non-negative and the value fits; otherwise it is a float.
@@ -615,7 +700,7 @@ fn int_arithmetic_identity_is_always_int(op: &BinOp, left: &Expr, right: &Expr) 
 }
 
 /// Extracts an integer literal value from a literal expression.
-fn int_literal_value(expr: &Expr) -> Option<i64> {
+pub(super) fn int_literal_value(expr: &Expr) -> Option<i64> {
     match &expr.kind {
         ExprKind::IntLiteral(value) => Some(*value),
         _ => None,
@@ -679,6 +764,7 @@ fn merge_array_literal_element_type_syntactic(existing: PhpType, next: PhpType) 
 mod tests {
     use super::*;
     use crate::names::Name;
+    use crate::parser::ast::StaticReceiver;
     use crate::span::Span;
 
     /// Verifies syntactic type inference treats eval as a runtime Mixed value.
@@ -696,6 +782,93 @@ mod tests {
         };
 
         assert_eq!(infer_expr_type_syntactic(&expr), PhpType::Mixed);
+    }
+
+    /// Verifies an unresolved function call retains a dynamic result instead of inventing an
+    /// integer contract that later chained operations cannot satisfy.
+    #[test]
+    fn test_syntactic_unknown_function_call_is_mixed() {
+        let expr = Expr::new(
+            ExprKind::FunctionCall {
+                name: Name::unqualified("unknown_result"),
+                args: Vec::new(),
+            },
+            Span::dummy(),
+        );
+
+        assert_eq!(infer_expr_type_syntactic(&expr), PhpType::Mixed);
+    }
+
+    /// Verifies a method call without semantic metadata keeps a dynamic syntactic result.
+    #[test]
+    fn test_syntactic_method_call_is_mixed() {
+        let expr = Expr::new(
+            ExprKind::MethodCall {
+                object: Box::new(Expr::new(ExprKind::Variable("value".to_string()), Span::dummy())),
+                method: "produce".to_string(),
+                args: Vec::new(),
+            },
+            Span::dummy(),
+        );
+
+        assert_eq!(infer_expr_type_syntactic(&expr), PhpType::Mixed);
+    }
+
+    /// Verifies a static method call without semantic metadata keeps a dynamic syntactic result.
+    #[test]
+    fn test_syntactic_static_method_call_is_mixed() {
+        let expr = Expr::new(
+            ExprKind::StaticMethodCall {
+                receiver: StaticReceiver::Named(Name::unqualified("Factory")),
+                method: "produce".to_string(),
+                args: Vec::new(),
+            },
+            Span::dummy(),
+        );
+
+        assert_eq!(infer_expr_type_syntactic(&expr), PhpType::Mixed);
+    }
+
+    /// Verifies indirect callable syntax has no fabricated scalar return contract.
+    #[test]
+    fn test_syntactic_indirect_callable_calls_are_mixed() {
+        let expr_call = Expr::new(
+            ExprKind::ExprCall {
+                callee: Box::new(Expr::new(ExprKind::Variable("callback".to_string()), Span::dummy())),
+                args: Vec::new(),
+            },
+            Span::dummy(),
+        );
+        let closure_call = Expr::new(
+            ExprKind::ClosureCall {
+                var: "callback".to_string(),
+                args: Vec::new(),
+            },
+            Span::dummy(),
+        );
+
+        assert_eq!(infer_expr_type_syntactic(&expr_call), PhpType::Mixed);
+        assert_eq!(infer_expr_type_syntactic(&closure_call), PhpType::Mixed);
+    }
+
+    /// Verifies an assignment expression has the assigned value's syntactic result type.
+    #[test]
+    fn test_syntactic_assignment_uses_value_type() {
+        let expr = Expr::new(
+            ExprKind::Assignment {
+                target: Box::new(Expr::new(
+                    ExprKind::Variable("value".to_string()),
+                    Span::dummy(),
+                )),
+                value: Box::new(Expr::float_lit(1.5)),
+                result_target: None,
+                prelude: Vec::new(),
+                conditional_value_temp: None,
+            },
+            Span::dummy(),
+        );
+
+        assert_eq!(infer_expr_type_syntactic(&expr), PhpType::Float);
     }
 
     /// Verifies syntactic indexed plus assoc array union type.

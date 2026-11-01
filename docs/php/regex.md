@@ -198,12 +198,18 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
-| [`preg_match()`](./builtins/regex/preg_match.md) | `(string $pattern, string $subject, array $matches = null): int|false` | `int|false` | ✓ | ✓ |
-| [`preg_match_all()`](./builtins/regex/preg_match_all.md) | `(string $pattern, string $subject, mixed $matches = null, int $flags = 0): int|false` | `int|false` | ✓ | ✓ |
-| [`preg_replace()`](./builtins/regex/preg_replace.md) | `(string $pattern, string $replacement, string $subject): mixed` | `mixed` | ✓ | ✓ |
-| [`preg_replace_callback()`](./builtins/regex/preg_replace_callback.md) | `(string $pattern, callable $callback, string $subject): mixed` | `mixed` | ✓ | ✓ |
+| [`preg_filter()`](./builtins/misc/preg_filter.md) | `(mixed $pattern, mixed $replacement, mixed $subject, int $limit = -1, mixed $count = null): mixed` | `mixed` | ✓ | ✓ |
+| [`preg_grep()`](./builtins/misc/preg_grep.md) | `(string $pattern, mixed $array, int $flags = 0): mixed` | `mixed` | ✓ | ✓ |
+| [`preg_last_error()`](./builtins/misc/preg_last_error.md) | `(): int` | `int` | ✓ | ✓ |
+| [`preg_last_error_msg()`](./builtins/misc/preg_last_error_msg.md) | `(): string` | `string` | ✓ | ✓ |
+| [`preg_match()`](./builtins/regex/preg_match.md) | `(string $pattern, string $subject, array $matches = null, int $flags = 0, int $offset = 0): int|false` | `int|false` | ✓ | ✓ |
+| [`preg_match_all()`](./builtins/regex/preg_match_all.md) | `(string $pattern, string $subject, mixed $matches = null, int $flags = 0, int $offset = 0): int|false` | `int|false` | ✓ | ✓ |
+| [`preg_quote()`](./builtins/string/preg_quote.md) | `(string $str, string $delimiter = null): string` | `string` | ✓ | ✓ |
+| [`preg_replace()`](./builtins/regex/preg_replace.md) | `(string $pattern, string $replacement, string $subject, int $limit = -1, mixed $count = null): string` | `string` | ✓ | ✓ |
+| [`preg_replace_callback()`](./builtins/regex/preg_replace_callback.md) | `(string $pattern, callable $callback, string $subject, int $limit = -1, mixed $count = null, int $flags = 0): mixed` | `mixed` | ✓ | ✓ |
+| [`preg_replace_callback_array()`](./builtins/misc/preg_replace_callback_array.md) | `(array $pattern, mixed $subject, int $limit = -1, mixed $count = null, int $flags = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`preg_split()`](./builtins/regex/preg_split.md) | `(string $pattern, string $subject, int $limit = -1, int $flags = 0): array|false` | `array|false` | ✓ | ✓ |
 
-Constants: `PREG_OFFSET_CAPTURE`, `PREG_PATTERN_ORDER`, `PREG_SET_ORDER`, `PREG_SPLIT_DELIM_CAPTURE`, `PREG_SPLIT_NO_EMPTY`, `PREG_SPLIT_OFFSET_CAPTURE`, `PREG_UNMATCHED_AS_NULL`.
+Constants: `PCRE_VERSION`, `PCRE_VERSION_MAJOR`, `PCRE_VERSION_MINOR`, `PREG_BACKTRACK_LIMIT_ERROR`, `PREG_BAD_UTF8_ERROR`, `PREG_BAD_UTF8_OFFSET_ERROR`, `PREG_GREP_INVERT`, `PREG_INTERNAL_ERROR`, `PREG_JIT_STACKLIMIT_ERROR`, `PREG_NO_ERROR`, `PREG_OFFSET_CAPTURE`, `PREG_PATTERN_ORDER`, `PREG_RECURSION_LIMIT_ERROR`, `PREG_SET_ORDER`, `PREG_SPLIT_DELIM_CAPTURE`, `PREG_SPLIT_NO_EMPTY`, `PREG_SPLIT_OFFSET_CAPTURE`, `PREG_UNMATCHED_AS_NULL`.
 
 <!-- elephc:generated:symbols:end -->

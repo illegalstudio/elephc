@@ -1335,7 +1335,7 @@ fn test_enum_from_string_failure_throws_value_error() {
 
 /// Compiles and runs the checked-in `examples/enums/main.php` fixture and asserts stdout includes
 /// user-declared enum output, the `->name`/`->value` case introspection loop, the builtin
-/// `SortDirection` helper result, and the enum-case property defaults.
+/// `SortOrder` match result, and the enum-case property defaults.
 ///
 /// The last row is the #566 section: a declared property, a promoted one and a static one all
 /// defaulted to an enum case, plus `=== Level::Low` on the declared one. The identity check is
@@ -1452,11 +1452,11 @@ echo Renderer::isSplit(RenderMode::Split) ? "import" : "bad";
     assert_eq!(out, "local|import");
 }
 
-/// Verifies PHP 8.6's builtin `SortDirection` unit enum exposes both singleton
+/// Verifies PHP 8.6's builtin `SortDirection` unit enum (8.6 profile only) exposes both singleton
 /// cases through direct access, `cases()`, `enum_exists()`, and class-like introspection.
 #[test]
 fn test_builtin_sort_direction_cases_and_introspection() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_php_version(
         "<?php
         $cases = SortDirection::cases();
         echo count($cases);
@@ -1469,6 +1469,7 @@ fn test_builtin_sort_direction_cases_and_introspection() {
         echo '|';
         echo class_exists('SortDirection', false) ? 'class' : 'missing';
         ",
+        elephc::php_version::PhpVersion::Php86,
     );
     assert_eq!(out, "2|A|D|enum|class");
 }
@@ -1477,7 +1478,7 @@ fn test_builtin_sort_direction_cases_and_introspection() {
 /// declarations and can drive a `match` expression over enum case singletons.
 #[test]
 fn test_builtin_sort_direction_typed_function_return_and_match() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_php_version(
         "<?php
         function default_direction(): SortDirection {
             return SortDirection::Ascending;
@@ -1494,6 +1495,7 @@ fn test_builtin_sort_direction_typed_function_return_and_match() {
         echo '|';
         echo sort_keyword(SortDirection::Descending);
         ",
+        elephc::php_version::PhpVersion::Php86,
     );
     assert_eq!(out, "ASC|DESC");
 }
@@ -1502,7 +1504,7 @@ fn test_builtin_sort_direction_typed_function_return_and_match() {
 /// through PHP class-like name rules: imports and fully-qualified names work.
 #[test]
 fn test_builtin_sort_direction_resolves_from_namespaced_code() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_php_version(
         r#"<?php
 namespace App;
 
@@ -1516,19 +1518,37 @@ echo is_ascending(SortDirection::Ascending) ? "import" : "bad";
 echo "|";
 echo \SortDirection::Descending === SortDirection::Descending ? "fqcn" : "bad";
 "#,
+        elephc::php_version::PhpVersion::Php86,
     );
     assert_eq!(out, "import|fqcn");
+}
+
+/// Verifies an 8.5 program may declare its own `SortDirection`, as Symfony's polyfill-php86
+/// stub does: the name is only built in from the 8.6 profile on (`php -n` 8.5 agrees).
+#[test]
+fn test_sort_direction_is_a_user_name_before_php_86() {
+    let out = compile_and_run(
+        "<?php
+        enum SortDirection { case Ascending; case Descending; }
+        echo count(SortDirection::cases()) === 2 ? 'free' : 'builtin';
+        echo '|';
+        echo SortDirection::Descending->name, '|';
+        echo (new ReflectionEnum(SortDirection::class))->isInternal() ? 'internal' : 'user';
+        ",
+    );
+    assert_eq!(out, "free|Descending|user");
 }
 
 /// Verifies builtin `SortDirection` cases can be used as enum case constants
 /// and then compared by singleton identity.
 #[test]
 fn test_builtin_sort_direction_case_constant() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_php_version(
         "<?php
         const DEFAULT_DIRECTION = SortDirection::Descending;
         echo DEFAULT_DIRECTION === SortDirection::Descending ? 'ok' : 'bad';
         ",
+        elephc::php_version::PhpVersion::Php86,
     );
     assert_eq!(out, "ok");
 }
@@ -1618,6 +1638,65 @@ fn test_enum_implements_interface() {
         ",
     );
     assert_eq!(out, "hearts");
+}
+
+/// Verifies pure and backed enums expose PHP's implicit enum interfaces and their parents.
+#[test]
+fn test_enum_implicit_unit_and_backed_interfaces() {
+    let out = compile_and_run(
+        r#"<?php
+interface UnitMarker extends UnitEnum {}
+interface BackedMarker extends BackedEnum {}
+enum PureState implements UnitMarker { case Ready; }
+enum BackedState: string implements BackedMarker { case Ready = "ready"; }
+function acceptUnit(UnitEnum $value): string { return "unit"; }
+function acceptBacked(BackedEnum $value): string { return "backed"; }
+echo interface_exists("UnitEnum") ? "U" : "u";
+echo interface_exists("BackedEnum") ? "B" : "b";
+echo PureState::Ready instanceof UnitEnum ? "P" : "p";
+echo PureState::Ready instanceof BackedEnum ? "bad" : "N";
+echo BackedState::Ready instanceof UnitEnum ? "U" : "u";
+echo BackedState::Ready instanceof BackedEnum ? "B" : "b";
+echo ":", acceptUnit(PureState::Ready), ":", acceptBacked(BackedState::Ready);
+echo ":", implode(",", class_implements("PureState"));
+echo ":", implode(",", class_implements("BackedState"));
+"#,
+    );
+    assert_eq!(
+        out,
+        "UBPNUB:unit:backed:UnitMarker,UnitEnum:BackedMarker,UnitEnum,BackedEnum"
+    );
+}
+
+/// Verifies `instanceof` narrowing from `mixed` preserves enum interface property access and
+/// dispatches the differing pure/backed enum object layouts by runtime class id.
+#[test]
+fn test_enum_interface_properties_after_mixed_narrowing() {
+    let out = compile_and_run(
+        r#"<?php
+enum PureState { case Ready; }
+enum StringState: string { case Ready = "ready"; }
+enum IntState: int { case Ready = 7; }
+function describe(mixed $value): string {
+    if (!$value instanceof UnitEnum) { return "none"; }
+    return $value::class . ":" . $value->name;
+}
+function backing(mixed $value): mixed {
+    if (!$value instanceof BackedEnum) { return "none"; }
+    return $value->value;
+}
+echo describe(null), "|";
+echo describe(PureState::Ready), "|";
+echo describe(StringState::Ready), "|";
+echo backing(PureState::Ready), "|";
+echo backing(StringState::Ready), "|";
+echo backing(IntState::Ready);
+"#,
+    );
+    assert_eq!(
+        out,
+        "none|PureState:Ready|StringState:Ready|none|ready|7"
+    );
 }
 
 /// Verifies that an enum instance method can read `$this->name` (and `$this->value`), dispatching

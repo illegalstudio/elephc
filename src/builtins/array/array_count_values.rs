@@ -52,6 +52,13 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             key: Box::new(array_key_type_from_value_type(*value)),
             value: Box::new(PhpType::Int),
         }),
+        // A bare `array` parameter or property is gradual: its shape is known only at run time.
+        // Doctrine's `ClassMetadata` tallies field names this way, and refusing it left the
+        // whole class to the interpreter.
+        PhpType::Mixed | PhpType::Union(_) => Ok(PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Int),
+        }),
         _ => Err(CompileError::new(
             cx.span,
             "array_count_values() argument must be array",

@@ -5,15 +5,12 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - The PHP golden signature is `variadic(&[], "arrays")` (min=0). The legacy CHECK
-//!   arm requires exactly 2 arguments. `min_args: 2, max_args: 2` reproduce that
-//!   enforcement in `check_arity` only; `function_sig` and the parity gate keep the
-//!   variadic shape from the golden.
-//! - `check` validates that both arguments are associative or scalar-indexed arrays and
+//! - The PHP golden signature is `variadic(&[], "arrays")`: any number of arrays, as in php.
+//! - `check` validates that every argument is an array (including gradual array boundaries) and
 //!   returns an `AssocArray` whose value type is always `Mixed` (scalar collisions
 //!   combine into lists). The key type widens to `Mixed` when the two input key types
 //!   disagree.
-//! - Arity is pre-validated by `check_arity`; the hook can assume exactly 2 args.
+//! - Arity is pre-validated by `check_arity`; any count of arrays is valid, as in php.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
@@ -27,26 +24,37 @@ builtin! {
     ),
 }
 
-/// Validates both arguments are compatible arrays and returns the recursively-merged type.
+/// Validates every argument is a compatible array and returns the recursively-merged type.
 ///
-/// Arity (exactly 2 args) is pre-validated by `check_arity`. The hook re-infers both
-/// argument types. Both must be associative arrays or indexed arrays of scalars. Scalar
-/// collisions combine into lists, so the value type of the result is always `Mixed`; the
-/// key type widens to `Mixed` when the two input key types disagree.
+/// php takes any number of arrays (`array_merge_recursive()` is `[]`). The native runtime merges
+/// two operands of concrete layout; every other call (another count, or a `mixed`, union or
+/// declared-`array` operand) answers a declared PHP array and lowers through
+/// `crate::array_gradual_prelude`, whose helper raises php's `TypeError` for a non-array.
+/// The native result is an `AssocArray` whose value type is always `Mixed` (scalar collisions
+/// combine into lists); its key type widens to `Mixed` when the input key types disagree.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    let ty1 = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    let ty2 = cx.checker.infer_type(&cx.args[1], cx.env)?;
-    let accepted = |t: &PhpType| {
-        matches!(t, PhpType::AssocArray { .. }) || t.is_scalar_indexed_array()
-    };
-    if !accepted(&ty1) || !accepted(&ty2) {
-        return Err(CompileError::new(
-            cx.span,
-            "array_merge_recursive() arguments must be associative arrays or indexed arrays of scalars",
-        ));
+    let accepted = crate::types::checker::builtins::array_arg_is_gradually_acceptable;
+    let mut key: Option<PhpType> = None;
+    let mut concrete = cx.args.len() == 2;
+    for arg in cx.args.iter() {
+        let ty = cx.checker.infer_type(arg, cx.env)?;
+        if !accepted(&ty) {
+            return Err(CompileError::new(
+                cx.span,
+                "array_merge_recursive() arguments must be arrays",
+            ));
+        }
+        concrete &= matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. });
+        key = Some(match key {
+            None => ty.hash_key_type(),
+            Some(previous) => PhpType::widen(previous, ty.hash_key_type()),
+        });
+    }
+    if !concrete {
+        return Ok(PhpType::php_array());
     }
     Ok(PhpType::AssocArray {
-        key: Box::new(PhpType::widen(ty1.hash_key_type(), ty2.hash_key_type())),
+        key: Box::new(key.unwrap_or(PhpType::Int)),
         value: Box::new(PhpType::Mixed),
     })
 }

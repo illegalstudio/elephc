@@ -9,6 +9,228 @@
 
 use super::*;
 
+/// Loads the raw reference-cell pointer selected by a runtime property name.
+pub(in crate::codegen::lower_inst) fn lower_dynamic_prop_ref_cell(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let object = expect_operand(inst, 0)?;
+    let property_value = expect_operand(inst, 1)?;
+    if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        return lower_mixed_dynamic_prop_ref_cell(ctx, inst, object, property_value);
+    }
+    let class_name = dynamic_property_object_class(ctx, object, inst)?;
+    ensure_runtime_dynamic_property_name(ctx, property_value, inst)?;
+    if crate::types::checker::builtin_stdclass::is_stdclass(&class_name) {
+        // A stdClass property is an entry of its per-instance hash, made a reference in place.
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.load_value_to_reg(object, "x0")?;
+                abi::emit_push_reg(ctx.emitter, "x0");
+                ctx.load_string_value_to_regs(property_value, "x1", "x2")?;
+                abi::emit_pop_reg(ctx.emitter, "x0");
+            }
+            Arch::X86_64 => {
+                ctx.load_value_to_reg(object, "rdi")?;
+                abi::emit_push_reg(ctx.emitter, "rdi");
+                ctx.load_string_value_to_regs(property_value, "rsi", "rdx")?;
+                abi::emit_pop_reg(ctx.emitter, "rdi");
+            }
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_stdclass_prop_ref_cell");
+        return store_ref_cell_pointer_result(ctx, inst);
+    }
+    // A class with no reference property, or one the closed world never declared (a builtin
+    // elephc does not model, such as `SimpleXMLElement`), has no cell to hand out: every name is
+    // the miss arm's answer, `0`, which the consumer already takes as "no reference cell". The
+    // refusal this replaced sent Symfony's validator `XmlFileLoader` to the interpreter and cost
+    // the Symfony demo a whole second compile.
+    let slots = if ctx
+        .module
+        .class_infos
+        .contains_key(class_name.trim_start_matches('\\'))
+    {
+        declared_dynamic_property_slots(ctx, &class_name, inst)?
+            .into_iter()
+            .filter(|slot| slot.is_reference)
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    if slots.is_empty() {
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        return store_ref_cell_pointer_result(ctx, inst);
+    }
+    let match_labels = slots
+        .iter()
+        .map(|slot| ctx.next_label(&format!("dyn_propref_{}", label_fragment(&slot.property))))
+        .collect::<Vec<_>>();
+    let miss_label = ctx.next_label("dyn_propref_miss");
+    let done_label = ctx.next_label("dyn_propref_done");
+
+    let object_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, object_reg)?;
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    ctx.load_string_value_to_regs(property_value, ptr_reg, len_reg)?;
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+
+    for (slot, label) in slots.iter().zip(match_labels.iter()) {
+        emit_branch_if_dynamic_name_matches(ctx, &slot.property, label);
+    }
+    abi::emit_jump(ctx.emitter, &miss_label);
+
+    for (slot, label) in slots.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 16);
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        abi::emit_load_from_address(ctx.emitter, result_reg, base_reg, slot.offset);
+        abi::emit_release_temporary_stack(ctx.emitter, 32);
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    ctx.emitter.label(&miss_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    ctx.emitter.label(&done_label);
+    store_ref_cell_pointer_result(ctx, inst)
+}
+
+/// Loads the reference cell `$object->$name` selects when the receiver is a boxed `Mixed`
+/// (`$r = &$object->$name` with an untyped `$object`, Symfony's `PropertyAccessor`).
+///
+/// The checker promoted every property this scope can see to a boxed reference cell, so the
+/// dispatch is a class-id ladder over the classes owning a visible reference slot, each arm a
+/// name ladder over its own slots. A non-object receiver, another class or another name is the
+/// miss answer `0`, as for a typed receiver.
+fn lower_mixed_dynamic_prop_ref_cell(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    property_value: ValueId,
+) -> Result<()> {
+    ensure_runtime_dynamic_property_name(ctx, property_value, inst)?;
+    let mut owners = Vec::new();
+    let class_names = ctx.module.class_infos.keys().cloned().collect::<Vec<_>>();
+    for class_name in class_names {
+        if crate::types::checker::builtin_stdclass::is_stdclass(&class_name) {
+            continue;
+        }
+        let Some(info) = ctx.module.class_infos.get(&class_name) else {
+            continue;
+        };
+        let class_id = info.class_id;
+        let names = info
+            .properties
+            .iter()
+            .filter(|(name, _)| info.reference_properties.contains(name))
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+        let mut slots = Vec::new();
+        for name in names {
+            if let Some(PropertyNameArm::Slot(slot)) =
+                resolve_property_reference_arm(ctx, &class_name, &name, inst)?
+            {
+                if slot.is_reference && slot.php_type.codegen_repr() == PhpType::Mixed {
+                    slots.push(slot);
+                }
+            }
+        }
+        if !slots.is_empty() {
+            owners.push((class_id, slots));
+        }
+    }
+    owners.sort_by_key(|(class_id, _)| *class_id);
+    // A stdClass receiver binds an entry of its property hash (`__rt_stdclass_prop_ref_cell`).
+    let stdclass_id = ctx
+        .module
+        .class_infos
+        .iter()
+        .find(|(name, _)| crate::types::checker::builtin_stdclass::is_stdclass(name))
+        .map(|(_, info)| info.class_id);
+
+    let int_reg = abi::int_result_reg(ctx.emitter);
+    if owners.is_empty() && stdclass_id.is_none() {
+        abi::emit_load_int_immediate(ctx.emitter, int_reg, 0);
+        return store_ref_cell_pointer_result(ctx, inst);
+    }
+    let not_object_label = ctx.next_label("mixed_dyn_propref_not_object");
+    let miss_label = ctx.next_label("mixed_dyn_propref_miss");
+    let done_label = ctx.next_label("mixed_dyn_propref_done");
+    let class_labels = owners
+        .iter()
+        .map(|(class_id, _)| ctx.next_label(&format!("mixed_dyn_propref_class_{class_id}")))
+        .collect::<Vec<_>>();
+
+    ctx.load_value_to_reg(object, int_reg)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    super::mixed_property_reads::emit_mixed_object_payload_or_null(ctx, &not_object_label);
+    abi::emit_push_reg(ctx.emitter, int_reg);
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    ctx.load_string_value_to_regs(property_value, ptr_reg, len_reg)?;
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, int_reg, 16);
+    let mut class_ids = owners.iter().map(|(class_id, _)| *class_id).collect::<Vec<_>>();
+    let mut dispatch_labels = class_labels.clone();
+    let stdclass_label = stdclass_id.map(|class_id| {
+        let label = ctx.next_label("mixed_dyn_propref_stdclass");
+        class_ids.push(class_id);
+        dispatch_labels.push(label.clone());
+        label
+    });
+    super::mixed_property_reads::emit_mixed_property_class_dispatch(
+        ctx,
+        &class_ids,
+        &dispatch_labels,
+        &miss_label,
+        &miss_label,
+    );
+    if let Some(label) = &stdclass_label {
+        ctx.emitter.label(label);
+        let (object_reg, ptr_reg, len_reg) = match ctx.emitter.target.arch {
+            Arch::AArch64 => ("x0", "x1", "x2"),
+            Arch::X86_64 => ("rdi", "rsi", "rdx"),
+        };
+        abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 16);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, ptr_reg, 0);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, len_reg, 8);
+        abi::emit_release_temporary_stack(ctx.emitter, 32);
+        abi::emit_call_label(ctx.emitter, "__rt_stdclass_prop_ref_cell");
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    for ((_, slots), class_label) in owners.iter().zip(class_labels.iter()) {
+        ctx.emitter.label(class_label);
+        let slot_labels = slots
+            .iter()
+            .map(|slot| ctx.next_label(&format!("mixed_dyn_propref_{}", label_fragment(&slot.property))))
+            .collect::<Vec<_>>();
+        for (slot, label) in slots.iter().zip(slot_labels.iter()) {
+            emit_branch_if_dynamic_name_matches(ctx, &slot.property, label);
+        }
+        abi::emit_jump(ctx.emitter, &miss_label);
+        for (slot, label) in slots.iter().zip(slot_labels.iter()) {
+            ctx.emitter.label(label);
+            let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 16);
+            abi::emit_load_from_address(ctx.emitter, int_reg, base_reg, slot.offset); // load the matched slot's reference-cell pointer
+            abi::emit_release_temporary_stack(ctx.emitter, 32);
+            abi::emit_jump(ctx.emitter, &done_label);
+        }
+    }
+
+    ctx.emitter.label(&miss_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    ctx.emitter.label(&not_object_label);
+    // Never a zero cell pointer: the alias would dereference it (see the message's doc). A
+    // `stdClass` or undeclared name lands here too -- per-instance hash references are not
+    // supported yet.
+    super::super::exceptions::emit_error(ctx, super::known_property_reads::REFERENCE_WITHOUT_CELL_MESSAGE);
+    ctx.emitter.label(&done_label);
+    store_ref_cell_pointer_result(ctx, inst)
+}
+
 /// Lowers a runtime-name dynamic property read from a statically known `stdClass`.
 pub(super) fn lower_runtime_dynamic_stdclass_prop_get(
     ctx: &mut FunctionContext<'_>,
@@ -219,6 +441,7 @@ pub(super) fn declared_mixed_property_get_candidates(
     ctx: &FunctionContext<'_>,
     mode: PropertyFetchMode,
     inst: &Instruction,
+    only: Option<&crate::fast_hash::FastSet<(String, String)>>,
 ) -> Result<Vec<MixedPropertyReadCandidate>> {
     let mut candidates = Vec::new();
     let mut sorted_classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
@@ -228,6 +451,9 @@ pub(super) fn declared_mixed_property_get_candidates(
             continue;
         }
         for (property, _) in &class_info.properties {
+            if only.is_some_and(|only| !only.contains(&(class_name.clone(), property.clone()))) {
+                continue;
+            }
             let (slot, kind) =
                 match resolve_property_read_arm(ctx, class_name, property, mode, inst) {
                     Ok(Some(PropertyNameArm::Slot(slot))) => (slot, MixedPropertyReadKind::Slot),
@@ -321,6 +547,13 @@ pub(super) fn ensure_dynamic_property_miss_supported(inst: &Instruction) -> Resu
     match inst.result_php_type.codegen_repr() {
         PhpType::Mixed | PhpType::TaggedScalar | PhpType::Bool | PhpType::Int
         | PhpType::Buffer(_) => Ok(()),
+        // An array result misses as the null CONTAINER sentinel `emit_dynamic_property_miss_result`
+        // already produces for every non-Mixed type, which array readers and the nested-append
+        // vivify step treat as the empty/absent array. Refusing it made
+        // `$this->{$kind . 'Configurators'}[$name][] = $callable` uncompilable, and a program that
+        // links the eval bridge then routed the statement through an eval fragment whose barrier
+        // froze the method's other locals at their pre-loop types.
+        PhpType::Array(_) | PhpType::AssocArray { .. } => Ok(()),
         ty => Err(CodegenIrError::unsupported(format!(
             "{} runtime miss for result PHP type {:?}",
             inst.op.name(),
@@ -464,7 +697,7 @@ fn emit_runtime_name_plan_read(
         // php would answer the accessor, which a RUNTIME name cannot reach in this phase. It
         // answers php null and, above all, never reads the slot. `MagicGet` is a DIRECT-name
         // answer and is never built for a runtime name, but it takes the same safe arm.
-        PropertyRuntimeAction::MagicDeferred | PropertyRuntimeAction::MagicGet => {
+        PropertyRuntimeAction::MagicDeferred | PropertyRuntimeAction::MagicGet | PropertyRuntimeAction::DynamicHashThenMagicGet { .. } => {
             let _ = static_class;
             emit_boxed_null(ctx);
             Ok(())
@@ -473,4 +706,28 @@ fn emit_runtime_name_plan_read(
             "property dispatch handed a refusal arm to its action emitter",
         )),
     }
+}
+
+/// Resolves all declared property slots that a runtime dynamic property read may match.
+pub(super) fn declared_dynamic_property_slots(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    inst: &Instruction,
+) -> Result<Vec<PropertySlot>> {
+    let normalized = class_name.trim_start_matches('\\');
+    let property_names = {
+        let class_info =
+            ctx.module.class_infos.get(normalized).ok_or_else(|| {
+                CodegenIrError::unsupported(format!("unknown class {}", normalized))
+            })?;
+        class_info
+            .properties
+            .iter()
+            .map(|(property, _)| property.clone())
+            .collect::<Vec<_>>()
+    };
+    property_names
+        .iter()
+        .map(|property| resolve_property_slot_for_class(ctx, normalized, property, inst))
+        .collect()
 }

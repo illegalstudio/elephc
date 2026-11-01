@@ -519,3 +519,63 @@ fn test_array_chunk_dynamic_callable_dispatch() {
     );
     assert_eq!(out, "2:2:3");
 }
+
+
+/// Verifies `array_reverse()` accepts a source that is already a HASH, in both `preserve_keys`
+/// forms.
+///
+/// `__rt_array_to_hash_reverse` walks fixed-size payload slots, which a hash does not have, so
+/// this refused to compile at all: `unsupported EIR backend feature: array_reverse preserve_keys
+/// for PHP type AssocArray`. It became a build failure for ordinary PHP the moment a bare `array`
+/// contract started resolving to the hash -- it is what stopped Symfony compiling.
+///
+/// `__rt_hash_to_hash_reverse` walks the insertion-order chain backwards from `tail` through the
+/// `prev` links, so the reverse walk is the forward walk with the two links swapped: no temporary
+/// buffer, no second pass, still linear.
+///
+/// The fixtures pin what a naive implementation gets wrong: mixed integer and string keys keep
+/// BOTH kinds, a nested array payload is retained rather than shared into a freed slot, the
+/// reversed copy is independent of its source, an empty source answers `[]`, and an indexed source
+/// still takes the original helper.
+///
+/// Oracle: `php -n` 8.5.10 prints the asserted line.
+#[test]
+fn test_array_reverse_accepts_a_hash_source() {
+    let out = compile_and_run(
+        r#"<?php
+function pass(array $h): array { return $h; }
+
+$assoc = pass(['a' => 1, 'b' => 2, 'c' => 3]);
+echo json_encode(array_reverse($assoc, true)), '|';
+echo json_encode(array_reverse($assoc)), '|';
+
+$mixedKeys = pass(['x' => 'X', 5 => 'five', 'y' => 'Y']);
+echo json_encode(array_reverse($mixedKeys, true)), '|';
+
+$nested = pass(['k1' => ['a'], 'k2' => ['b']]);
+echo json_encode(array_reverse($nested, true)), '|';
+
+$one = pass(['only' => 1]);
+echo json_encode(array_reverse($one, true)), '|';
+
+$empty = pass([]);
+echo json_encode(array_reverse($empty, true)), '|';
+
+$src = pass(['p' => 'q', 'r' => 's']);
+$rev = array_reverse($src, true);
+echo json_encode($src), '+', json_encode($rev), '|';
+
+echo json_encode(array_reverse([10, 20, 30], true));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            r#"{"c":3,"b":2,"a":1}|{"c":3,"b":2,"a":1}|"#,
+            r#"{"y":"Y","5":"five","x":"X"}|{"k2":["b"],"k1":["a"]}|"#,
+            r#"{"only":1}|[]|"#,
+            r#"{"p":"q","r":"s"}+{"r":"s","p":"q"}|"#,
+            r#"{"2":30,"1":20,"0":10}"#,
+        ),
+    );
+}

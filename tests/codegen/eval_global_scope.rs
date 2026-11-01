@@ -131,3 +131,108 @@ eval($checkServer);
         output.stderr
     );
 }
+
+/// A runtime-declared class must keep reading the request's live superglobals after its loader
+/// returns, including native writes made after the declaration context was retained.
+#[test]
+fn test_eval_retained_class_reads_live_superglobals_after_loader_returns() {
+    let source = r#"<?php
+class NativeScopeOwner {}
+function registerScopeReader(string $source): void {
+    echo $_ENV['SCOPE_LIFETIME_PROBE'], ':';
+    eval($source);
+    $class = 'RuntimeScopeReader';
+    $reader = new $class();
+    echo $reader->read(), "\n";
+}
+$_ENV['SCOPE_LIFETIME_PROBE'] = 2;
+$source = $argc > 0 ? 'class RuntimeScopeReader extends NativeScopeOwner {
+    public function read(): int { return (int) ($_ENV["SCOPE_LIFETIME_PROBE"] ?? 0); }
+}' : '';
+registerScopeReader($source);
+$class = 'RuntimeScopeReader';
+$reader = new $class();
+echo $reader->read(), ':', $_ENV['SCOPE_LIFETIME_PROBE'], "\n";
+$_ENV['SCOPE_LIFETIME_PROBE'] = 3;
+echo $reader->read(), ':', $_ENV['SCOPE_LIFETIME_PROBE'], "\n";
+"#;
+    assert_eq!(compile_and_run(source), "2:2\n2:2\n3:3\n");
+}
+
+/// Native construction imports globals, and interpreted writes must be exported even when a
+/// later method throws back through the native caller.
+#[test]
+fn test_eval_retained_class_global_writes_reach_native_on_error() {
+    let source = r#"<?php
+class NativeGlobalWriteOwner {}
+function declareGlobalWriter(string $source): void { eval($source); }
+$_ENV['SCOPE_WRITE_PROBE'] = 'native';
+$source = $argc > 0 ? 'class RuntimeGlobalWriter extends NativeGlobalWriteOwner {
+    public string $seen;
+    public function __construct() {
+        $this->seen = $_ENV["SCOPE_WRITE_PROBE"] ?? "missing";
+        $_ENV["SCOPE_WRITE_PROBE"] = "constructor";
+    }
+    public function fail(): void {
+        $_ENV["SCOPE_WRITE_PROBE"] = "method";
+        throw new RuntimeException("expected");
+    }
+}' : '';
+declareGlobalWriter($source);
+$class = 'RuntimeGlobalWriter';
+$writer = new $class();
+echo $writer->seen, ':', $_ENV['SCOPE_WRITE_PROBE'], "\n";
+try { $writer->fail(); } catch (RuntimeException $error) {
+    echo $error->getMessage(), ':', $_ENV['SCOPE_WRITE_PROBE'], "\n";
+}
+"#;
+    assert_eq!(compile_and_run(source), "native:constructor\nexpected:method\n");
+}
+
+/// An interpreted construction boundary must not restore its pre-call global snapshot over
+/// writes performed by the selected native constructor.
+#[test]
+fn test_eval_native_constructor_global_writes_are_not_reverted() {
+    let source = r#"<?php
+class NativeGlobalPublisher {
+    public function __construct() { $_ENV['NATIVE_PUBLISH_PROBE'] = 'constructor'; }
+}
+function constructPublisher(string $class): object { return new $class(); }
+function declarePublisher(string $source): void { eval($source); }
+$_ENV['NATIVE_PUBLISH_PROBE'] = 'before';
+$publisher = constructPublisher('NativeGlobalPublisher');
+echo $_ENV['NATIVE_PUBLISH_PROBE'], "\n";
+$source = $argc > 0 ? 'class RuntimeGlobalPublisher extends NativeGlobalPublisher {}' : '';
+declarePublisher($source);
+$_ENV['NATIVE_PUBLISH_PROBE'] = 'before';
+$publisher = constructPublisher('RuntimeGlobalPublisher');
+echo $_ENV['NATIVE_PUBLISH_PROBE'], "\n";
+"#;
+    assert_eq!(compile_and_run(source), "constructor\nconstructor\n");
+}
+
+/// Native inherited methods must publish global changes on both normal and exceptional
+/// returns through the interpreted receiver's owner context.
+#[test]
+fn test_eval_native_inherited_method_global_writes_are_not_reverted() {
+    let source = r#"<?php
+class NativeMethodPublisher {
+    public function publish(bool $fail): void {
+        $_ENV['NATIVE_METHOD_PROBE'] = $fail ? 'error-write' : 'method-write';
+        if ($fail) { throw new RuntimeException('expected'); }
+    }
+}
+function declareMethodPublisher(string $source): void { eval($source); }
+$source = $argc > 0 ? 'class RuntimeMethodPublisher extends NativeMethodPublisher {}' : '';
+declareMethodPublisher($source);
+$_ENV['NATIVE_METHOD_PROBE'] = 'before';
+$class = 'RuntimeMethodPublisher';
+$publisher = new $class();
+$publisher->publish(false);
+echo $_ENV['NATIVE_METHOD_PROBE'], "\n";
+try { $publisher->publish(true); } catch (RuntimeException $error) {
+    echo $error->getMessage(), ':', $_ENV['NATIVE_METHOD_PROBE'], "\n";
+}
+"#;
+    assert_eq!(compile_and_run(source), "method-write\nexpected:error-write\n");
+}

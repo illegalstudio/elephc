@@ -56,7 +56,7 @@ fn native_array_reference_staging_owns_a_boxed_slot() {
         &function,
         vec![EvaluatedCallArg {
             name: None, value: array.borrowed(),
-            ref_target: Some(EvalReferenceTarget::Variable { scope: &mut scope, name: "items".into() }),
+            ref_target: Some(EvalReferenceTarget::Variable { scope: crate::scope::EvalScopeRef::new(&mut scope), name: "items".into() }),
         }],
         &mut context, &mut values,
     ).unwrap();
@@ -252,7 +252,7 @@ fn native_function_staging_releases_partial_markers_and_payloads() {
             assert!(function.set_param_by_ref(position, true));
             arguments.push(EvaluatedCallArg {
                 name: None, value,
-                ref_target: Some(EvalReferenceTarget::Variable { scope: &mut scope, name: position.to_string() }),
+                ref_target: Some(EvalReferenceTarget::Variable { scope: crate::scope::EvalScopeRef::new(&mut scope), name: position.to_string() }),
             });
         }
         let caller_values: Vec<_> = arguments.iter().map(|argument| argument.value).collect();
@@ -323,11 +323,11 @@ fn native_ref_writeback_preserves_published_values_and_finishes_later_slots() {
         ref_slots: vec![
             BoundNativeFunctionRefSlot::Mixed {
                 original: old_first, slot: Box::new(first.as_ptr()),
-                target: Some(EvalReferenceTarget::Variable { scope: &mut scope, name: "first".into() }),
+                target: Some(EvalReferenceTarget::Variable { scope: crate::scope::EvalScopeRef::new(&mut scope), name: "first".into() }),
             },
             BoundNativeFunctionRefSlot::Mixed {
                 original: old_second, slot: Box::new(second.as_ptr()),
-                target: Some(EvalReferenceTarget::Variable { scope: &mut scope, name: "second".into() }),
+                target: Some(EvalReferenceTarget::Variable { scope: crate::scope::EvalScopeRef::new(&mut scope), name: "second".into() }),
             },
         ],
     };
@@ -373,7 +373,7 @@ fn native_function_discards_result_and_all_slots_when_writeback_fails() {
         ref_slots: vec![
             BoundNativeFunctionRefSlot::Mixed {
                 original, slot: Box::new(first.as_ptr()),
-                target: Some(EvalReferenceTarget::Variable { scope: std::ptr::null_mut(), name: "missing".into() }),
+                target: Some(EvalReferenceTarget::Variable { scope: crate::scope::EvalScopeRef::dangling(), name: "missing".into() }),
             },
             BoundNativeFunctionRefSlot::Mixed {
                 original: later, slot: Box::new(later.as_ptr()), target: None,

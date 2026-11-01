@@ -2,7 +2,7 @@
 title: "cairo_image_surface_get_width()"
 description: "Returns an image surface's width in pixels."
 sidebar:
-  order: 420
+  order: 433
 ---
 
 ## cairo_image_surface_get_width()

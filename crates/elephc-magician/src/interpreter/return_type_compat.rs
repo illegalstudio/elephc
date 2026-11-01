@@ -13,6 +13,7 @@
 //! - Readonly storage over setter-only abstract contracts uses the same supertype relation.
 
 use super::*;
+use crate::context::{eval_array_iterator_class_is_a, eval_builtin_class_is_a};
 
 /// Returns whether an implementation can accept every required declared parameter type.
 pub(super) fn method_parameter_type_signature_accepts(
@@ -437,9 +438,25 @@ fn eval_return_variant_accepts_actual_variant(
         | (EvalParameterTypeVariant::Float, EvalParameterTypeVariant::Float)
         | (EvalParameterTypeVariant::Int, EvalParameterTypeVariant::Int)
         | (EvalParameterTypeVariant::Iterable, EvalParameterTypeVariant::Iterable)
-        | (EvalParameterTypeVariant::String, EvalParameterTypeVariant::String) => true,
+        | (EvalParameterTypeVariant::String, EvalParameterTypeVariant::String)
+        | (EvalParameterTypeVariant::False, EvalParameterTypeVariant::False)
+        | (EvalParameterTypeVariant::True, EvalParameterTypeVariant::True) => true,
+        // PHP's value types NARROW `bool`: an override may return `false` where the parent
+        // promised `bool`, never the other way round.
+        (
+            EvalParameterTypeVariant::Bool,
+            EvalParameterTypeVariant::False | EvalParameterTypeVariant::True,
+        ) => true,
         (EvalParameterTypeVariant::Object, EvalParameterTypeVariant::Class(_)) => true,
         (EvalParameterTypeVariant::Iterable, EvalParameterTypeVariant::Array) => true,
+        // `Closure` is the one class php accepts as a narrowing of `callable` (an invokable class
+        // is not). Compiled metadata also spells a declared `Closure` return as `callable`, so
+        // Carbon's `getTestNow(): Closure|CarbonInterface|null` implementing its compiled
+        // interface's `Closure|self|null` reached this arm as `callable` vs `Closure`.
+        (EvalParameterTypeVariant::Callable, EvalParameterTypeVariant::Class(actual_name)) => {
+            eval_resolve_return_class_type_name(actual_name, actual_owner, pending_class, context)
+                .is_some_and(|resolved| resolved.eq_ignore_ascii_case("Closure"))
+        }
         (EvalParameterTypeVariant::Iterable, EvalParameterTypeVariant::Class(actual_name)) => {
             eval_return_class_type_is_a(
                 actual_name,
@@ -485,9 +502,13 @@ fn eval_return_class_type_accepts(
         return actual_name.eq_ignore_ascii_case("static");
     }
     if actual_name.eq_ignore_ascii_case("static") {
+        // `static` is the class being declared, not the one that wrote the method: an inherited
+        // `withTimeZone(): static` from `Carbon\Factory` satisfies `ClockInterface` because the
+        // pending `FactoryImmutable` implements it, though `Factory` itself does not.
+        let static_owner = pending_class.map_or(actual_owner, EvalClass::name);
         return eval_return_class_type_is_a(
-            actual_owner,
-            actual_owner,
+            static_owner,
+            static_owner,
             expected_name,
             expected_owner,
             pending_class,
@@ -536,7 +557,29 @@ fn eval_return_class_type_is_a(
         return pending_class_return_type_is_a(pending_class, &expected_resolved, context);
     }
     if context.has_class(&actual_resolved) {
-        return context.class_is_a(&actual_resolved, &expected_resolved, false);
+        if context.class_is_a(&actual_resolved, &expected_resolved, false) {
+            return true;
+        }
+        // An eval class whose ancestry reaches a NATIVE class or interface inherits what that one
+        // is: `class MyIter extends \ArrayIterator` is a `Traversable`, and
+        // `getIterator(): MyIter` narrows `IteratorAggregate::getIterator(): Traversable`. The eval
+        // walk above stops at the first ancestor it has no declaration for, so each such ancestor
+        // is asked through the rest of this function, which knows the native hierarchies.
+        return context
+            .class_parent_names(&actual_resolved)
+            .into_iter()
+            .chain(context.class_interface_names(&actual_resolved))
+            .filter(|ancestor| !context.has_class(ancestor) && !context.has_interface(ancestor))
+            .any(|ancestor| {
+                eval_return_class_type_is_a(
+                    &ancestor,
+                    actual_owner,
+                    &expected_resolved,
+                    expected_owner,
+                    pending_class,
+                    context,
+                )
+            });
     }
     if context.has_interface(&actual_resolved) {
         return context
@@ -544,7 +587,106 @@ fn eval_return_class_type_is_a(
             .iter()
             .any(|parent| parent.eq_ignore_ascii_case(&expected_resolved));
     }
+    // `ArrayIterator` is a native CLASS with no eval declaration and no eval-interface entry, so
+    // it reaches none of the three branches above -- `has_class`, `has_interface`, and the
+    // eval-parent walk all answer false, and the builtin-interface fallback below only has
+    // entries for INTERFACE names, not concrete native classes. Symfony's `ParameterBag`,
+    // `HeaderBag`, and `RouteCollection` all declare `getIterator(): \ArrayIterator`, which is
+    // php's covariant narrowing of `IteratorAggregate::getIterator(): Traversable`. This table
+    // already answers the identical question for `instanceof`
+    // (`dynamic_object_is_a` -> `eval_array_iterator_class_is_a`); wire it in here too so the
+    // declared-return-type/parameter check agrees with the runtime check instead of refusing the
+    // class before any object exists.
+    if actual_resolved.eq_ignore_ascii_case("ArrayIterator") {
+        return eval_array_iterator_class_is_a(&expected_resolved);
+    }
+    // Every other PHP builtin iterator or container class is in the same position -- native, no
+    // eval declaration -- and `getIterator(): \EmptyIterator` (phpoption's `None`) was refused at
+    // declaration for it. PHP's own hierarchy for those classes answers the question.
+    if let Some(is_a) = eval_builtin_class_is_a(&actual_resolved, &expected_resolved) {
+        return is_a;
+    }
+    if context
+        .class_parent_names(&actual_resolved)
+        .iter()
+        .any(|parent| parent.eq_ignore_ascii_case(&expected_resolved))
+    {
+        return true;
+    }
+    // A PHP BUILTIN interface reaches NEITHER branch above: it is not an eval-declared class and
+    // not an eval-declared interface, so it had no parents at all and `Iterator` could never be
+    // a `Traversable`. That made `getIterator(): Iterator` -- php's own covariant narrowing of
+    // `IteratorAggregate::getIterator(): Traversable`, and the spelling Symfony writes -- a
+    // fatal at class declaration.
+    if context
+        .interface_parent_names(&actual_resolved)
+        .iter()
+        .any(|parent| parent.eq_ignore_ascii_case(&expected_resolved))
+    {
+        return true;
+    }
+    // A COMPILED class-like reaches none of the tables above either: the interpreter holds no
+    // declaration for it, so Carbon's `getStartDate(): CarbonInterface` -- a compiled interface
+    // extending `DateTimeInterface` -- was refused over `DatePeriod::getStartDate()`. The
+    // compiled program knows its own hierarchy; ask it.
+    #[cfg(not(test))]
+    if let Some(is_a) = runtime_class_like_is_a(&actual_resolved, &expected_resolved, context) {
+        return is_a;
+    }
     false
+}
+
+/// Asks the compiled program whether one class-like it declares is-a another.
+///
+/// `None` when the compiled program does not know `actual` at all, so the caller's answer stands.
+#[cfg(not(test))]
+fn runtime_class_like_is_a(
+    actual: &str,
+    expected: &str,
+    context: &ElephcEvalContext,
+) -> Option<bool> {
+    let mut values =
+        crate::runtime_hooks::ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+    let known = values.class_exists(actual).ok()?
+        || eval_runtime_interface_exists(actual, &mut values).ok()?;
+    if !known {
+        return None;
+    }
+    // The class's (or interface's) own interface list is every interface it inherits; its class
+    // ancestry is already in the native parent table the caller walked.
+    let mut owners = vec![actual.to_string()];
+    owners.extend(context.class_parent_names(actual));
+    for owner in owners {
+        let Ok(names) = values.reflection_class_interface_names(&owner) else {
+            continue;
+        };
+        let len = values.array_len(names).unwrap_or(0);
+        let mut found = false;
+        for position in 0..len {
+            let Ok(key) = values.array_iter_key(names, position) else {
+                break;
+            };
+            let Ok(name) = values.array_get(names, key) else {
+                break;
+            };
+            let Ok(bytes) = values.string_bytes(name) else {
+                continue;
+            };
+            let name = String::from_utf8_lossy(&bytes);
+            let name = name.trim_start_matches('\\');
+            if name.eq_ignore_ascii_case(expected)
+                || eval_builtin_class_is_a(name, expected).unwrap_or(false)
+            {
+                found = true;
+                break;
+            }
+        }
+        let _ = values.release(names);
+        if found {
+            return Some(true);
+        }
+    }
+    Some(false)
 }
 
 /// Returns whether the pending class declaration satisfies one expected class-like type.

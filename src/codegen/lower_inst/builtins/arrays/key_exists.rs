@@ -40,6 +40,15 @@ pub(super) fn lower_array_key_exists(ctx: &mut FunctionContext<'_>, inst: &Instr
         PhpType::Mixed | PhpType::Union(_) => {
             lower_mixed_container_key_exists(ctx, inst, key, array)
         }
+        PhpType::Void | PhpType::Never => {
+            crate::codegen::lower_inst::exceptions::emit_type_error(
+                ctx,
+                "array_key_exists(): Argument #2 ($array) must be of type array, null given",
+            );
+            let result_reg = abi::int_result_reg(ctx.emitter);
+            abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+            store_if_result(ctx, inst)
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "array_key_exists for PHP array type {:?}",
             other

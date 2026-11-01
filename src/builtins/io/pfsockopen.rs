@@ -13,7 +13,6 @@
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
-use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
@@ -27,7 +26,7 @@ builtin! {
 /// Validates ref output params are plain variables, then returns `Union(stream_resource, Bool)`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     if let Some(ec) = cx.args.get(2) {
-        if !matches!(ec.kind, ExprKind::Variable(_)) {
+        if !super::fsockopen::is_writable_place(ec) {
             return Err(CompileError::new(
                 ec.span,
                 &format!("{}() parameter $error_code must be passed a variable", cx.name),
@@ -35,7 +34,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         }
     }
     if let Some(em) = cx.args.get(3) {
-        if !matches!(em.kind, ExprKind::Variable(_)) {
+        if !super::fsockopen::is_writable_place(em) {
             return Err(CompileError::new(
                 em.span,
                 &format!("{}() parameter $error_message must be passed a variable", cx.name),

@@ -64,12 +64,12 @@ fn test_error_empty_variable() {
     expect_error("<?php $;", "Expected variable name");
 }
 
-/// Verifies the error diagnostic for bare identifier.
+/// Verifies a bare identifier naming no constant compiles with a warning.
 #[test]
-fn test_error_bare_identifier() {
-    // An unquoted identifier with no matching constant definition produces
-    // "Undefined constant: foo". The lexer treats `foo` as a name token, not a variable.
-    expect_error("<?php foo;", "Undefined constant: foo");
+fn test_warning_bare_identifier() {
+    // The lexer treats `foo` as a name token, not a variable: a constant read php compiles and
+    // throws `Undefined constant "foo"` for at runtime.
+    expect_warning("<?php foo;", "Undefined constant: foo");
 }
 
 /// Verifies the error diagnostic for unexpected character.
@@ -398,11 +398,10 @@ fn test_error_unexpected_token_in_expr() {
     expect_error("<?php echo ;", "Unexpected token");
 }
 
-/// Verifies the error diagnostic for unexpected token in stmt.
+/// A bare expression statement such as `42;` is valid php, so it is accepted.
 #[test]
-fn test_error_unexpected_token_in_stmt() {
-    // A bare expression statement (e.g., `42;`) in statement position produces "Unexpected token".
-    expect_error("<?php 42;", "Unexpected token");
+fn test_bare_expression_statement_is_accepted() {
+    expect_no_error("<?php 42;");
 }
 
 /// Verifies the error diagnostic for missing function name.
@@ -634,45 +633,41 @@ fn test_error_alternative_if_rejects_brace_else() {
     );
 }
 
-// --- goto (unsupported) ---
+// --- terminal goto ---
 
-/// Verifies `goto` is rejected with a diagnostic that names the construct, not a generic
-/// "unexpected token" error.
+/// Verifies a goto whose target can fall through compiles: non-terminal `goto` is supported.
 #[test]
-fn test_error_goto_is_not_supported() {
-    expect_error("<?php goto done; done: echo 1;", "`goto` is not supported");
-}
-
-/// Verifies a `goto` target label on its own is rejected and names the label.
-#[test]
-fn test_error_goto_label_is_not_supported() {
-    expect_error("<?php done: echo 1;", "`goto` labels are not supported");
-    expect_error("<?php done: echo 1;", "the label `done:`");
+fn test_non_terminal_goto_compiles() {
+    expect_no_error("<?php goto done; done: echo 1;")
 }
 
 // --- References inside array literals ---
 
-/// Verifies `[&$x]` reports the unsupported construct by name instead of "Unexpected token:
-/// Ampersand". elephc arrays hold values, so an element cannot alias a variable's storage.
+/// `[&$first]` is valid php; elephc now accepts a reference element that outlives its declaring local
+/// and the program output matches php.
 #[test]
-fn test_error_reference_element_in_array_literal() {
-    expect_error(
+fn test_reference_element_in_array_literal_is_accepted() {
+    expect_no_error(
         "<?php $first = 1; $r = [&$first];",
-        "Reference elements in array literals (`[&$x]`) are not supported",
     );
 }
 
-/// Verifies the same diagnostic covers a keyed element and the legacy `array(...)` spelling.
+/// A keyed `["k" => &$a]` element and the legacy `array(&$a)` spelling are valid php; elephc now
+/// accepts both and the program output matches php.
 #[test]
-fn test_error_reference_element_in_keyed_and_legacy_array_literals() {
-    expect_error(
+fn test_reference_element_in_keyed_and_legacy_array_literals_is_accepted() {
+    expect_no_error(
         "<?php $a = 1; $r = [\"k\" => &$a];",
-        "Reference elements in array literals (`[&$x]`) are not supported",
     );
-    expect_error(
+    expect_no_error(
         "<?php $a = 1; $r = array(&$a);",
-        "Reference elements in array literals (`[&$x]`) are not supported",
     );
+}
+
+/// Verifies that a unary plus with no operand is a syntax error, like a unary minus.
+#[test]
+fn test_error_unary_plus_without_operand() {
+    expect_error("<?php echo +;", "Unexpected token");
 }
 
 /// Verifies a `(object)` cast with no operand is rejected rather than silently accepted.

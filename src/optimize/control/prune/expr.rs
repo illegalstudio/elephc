@@ -83,6 +83,9 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
                 .map(|(key, value)| (prune_expr(key), prune_expr(value)))
                 .collect(),
         ),
+        ExprKind::ArrayReference(value) => {
+            ExprKind::ArrayReference(Box::new(prune_expr(*value)))
+        }
         ExprKind::ArrayLiteralMixed(entries) => ExprKind::ArrayLiteralMixed(
             entries.into_iter()
                 .map(|entry| entry.map_exprs(prune_expr))
@@ -202,6 +205,12 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
                 property: Box::new(prune_expr(*property)),
             }
         }
+        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+            ExprKind::DynamicStaticPropertyAccess {
+                receiver,
+                property: Box::new(prune_expr(*property)),
+            }
+        }
         ExprKind::NullsafePropertyAccess { object, property } => {
             ExprKind::NullsafePropertyAccess {
                 object: Box::new(prune_expr(*object)),
@@ -272,6 +281,12 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
         ExprKind::ScopedConstantAccess { receiver, name } => {
             ExprKind::ScopedConstantAccess { receiver, name }
         }
+        ExprKind::DynamicScopedConstantAccess { receiver, name } => {
+            ExprKind::DynamicScopedConstantAccess {
+                receiver: Box::new(prune_expr(*receiver)),
+                name,
+            }
+        }
         ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
             receiver,
             args: args.into_iter().map(prune_expr).collect(),
@@ -306,14 +321,27 @@ pub(crate) fn expr_has_side_effects(expr: &Expr) -> bool {
     expr_effect(expr).has_side_effects
 }
 
-/// Returns the effect summary for a callable target. Static methods and plain
-/// functions are treated as PURE; instance methods carry the effect of the
-/// receiver expression.
+/// Creation resolves a callable immediately and can fail even if never invoked.
+/// Static class lookup can also execute an autoloader with observable effects.
 pub(crate) fn callable_target_effect(target: &CallableTarget) -> Effect {
-    match target {
-        CallableTarget::Function(_) | CallableTarget::StaticMethod { .. } => Effect::PURE,
-        CallableTarget::Method { object, .. } => expr_effect(object),
+    // A registry builtin always resolves, so naming one (`strlen(...)`) cannot fail on its own;
+    // a user function may be undefined at that point and still reports a throw.
+    if let CallableTarget::Function(name) = target {
+        if crate::builtins::registry::lookup(name.as_str()).is_some() {
+            return Effect::PURE;
+        }
     }
+    let mut effect = match target {
+        CallableTarget::Function(_) => Effect::PURE,
+        CallableTarget::StaticMethod { .. } => Effect {
+            has_side_effects: true,
+            may_throw: true,
+            writes_globals: true,
+        },
+        CallableTarget::Method { object, .. } => expr_effect(object),
+    };
+    effect.may_throw = true;
+    effect
 }
 
 /// Eliminates pure/constant subexpressions in ternary, short-ternary, null coalesce,

@@ -40,7 +40,8 @@ const OUT_OF_RANGE_POSITION_MESSAGE: &str =
 ///
 /// `param_names` lists the scope's declared regular parameters in order; `args` is the
 /// (already rewritten) call-site argument list, which is empty except for
-/// `func_get_arg($position)`.
+/// `func_get_arg($position)`. `count_metadata` is set for a scope with optional parameters, whose
+/// hidden collector begins with the count the caller really passed.
 pub(super) fn replacement(
     call: IntrospectionCall,
     param_names: &[String],

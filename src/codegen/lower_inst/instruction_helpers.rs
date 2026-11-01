@@ -145,6 +145,9 @@ pub(in crate::codegen) fn instruction_strict_php_profile(inst: &Instruction) -> 
         | Some(Immediate::ProfiledData { strict_php, .. })
         | Some(Immediate::RuntimeCall(
             crate::ir::RuntimeCallTarget::ProfiledFunction { strict_php, .. },
+        ))
+        | Some(Immediate::RuntimeCall(
+            crate::ir::RuntimeCallTarget::DynamicInclude { strict_php, .. },
         )) => strict_php,
         _ => false,
     }

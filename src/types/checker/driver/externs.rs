@@ -11,7 +11,6 @@
 use std::collections::HashSet;
 
 use crate::errors::CompileError;
-use crate::names::php_symbol_key;
 use crate::parser::ast::{Program, StmtKind, TypeExpr};
 use crate::types::{
     align_up, ctype_field_layout, ctype_to_abi_type, ctype_to_php_type, packed_type_layout,
@@ -124,22 +123,24 @@ impl Checker {
     /// names (every class in the class map, builtin injections included, plus every enum) are what
     /// catches an extern or packed class that reuses an ordinary class name.
     pub(super) fn has_class_decl_folded(&self, name: &str) -> bool {
-        let key = php_symbol_key(name);
+        // Three whole-table scans, asked per declaration: the folded form allocated a
+        // lowercased `String` for every registered class each time. `eq_ignore_ascii_case`
+        // is the same predicate.
         self.classes
             .keys()
-            .any(|existing| php_symbol_key(existing) == key)
+            .any(|existing| existing.eq_ignore_ascii_case(name))
             || self
                 .declared_classes
                 .iter()
-                .any(|existing| php_symbol_key(existing) == key)
+                .any(|existing| existing.eq_ignore_ascii_case(name))
             || self
                 .extern_classes
                 .keys()
-                .any(|existing| php_symbol_key(existing) == key)
+                .any(|existing| existing.eq_ignore_ascii_case(name))
             || self
                 .packed_classes
                 .keys()
-                .any(|existing| php_symbol_key(existing) == key)
+                .any(|existing| existing.eq_ignore_ascii_case(name))
     }
 
     /// Validates and registers an extern function declaration if no prior declaration exists.

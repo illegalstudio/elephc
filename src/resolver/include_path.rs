@@ -10,6 +10,7 @@
 
 use crate::parser::ast::{BinOp, Expr, ExprKind};
 
+use super::path_eval::{fold_dirname, is_dirname_call};
 use super::state::{resolve_constant_ref, ResolveState};
 
 /// Fold a path expression to a compile-time string. Handles string literals,
@@ -36,6 +37,31 @@ pub(super) fn fold_include_path(expr: &Expr, state: &ResolveState) -> Result<Str
                 name.as_str()
             )
         }),
+        ExprKind::FunctionCall { name, args } if is_dirname_call(name) => {
+            if args.is_empty() || args.len() > 2 {
+                return Err(format!(
+                    "include path calls `dirname()` with {} arguments; \
+                     dirname() takes 1 or 2 arguments in include paths",
+                    args.len()
+                ));
+            }
+            let path = fold_include_path(&args[0], state)?;
+            let levels = match args.get(1) {
+                None => 1,
+                Some(arg) => match &arg.kind {
+                    ExprKind::IntLiteral(levels) if *levels >= 1 => *levels,
+                    _ => {
+                        return Err(
+                            "include path calls `dirname()` with a `levels` argument that is \
+                             not an integer literal >= 1; the levels argument must be a literal \
+                             to fold at compile time"
+                                .to_string(),
+                        );
+                    }
+                },
+            };
+            fold_dirname(&path, levels).ok_or_else(|| include_path_error_message(expr))
+        }
         _ => Err(include_path_error_message(expr)),
     }
 }
@@ -60,6 +86,54 @@ fn include_path_error_message(expr: &Expr) -> String {
          string constant): {}",
         invalid_include_path_detail(expr)
     )
+}
+
+/// Returns whether `path` names a PHP stream-wrapper URL (`phar://…`, `compress.zlib://…`)
+/// rather than a filesystem path.
+///
+/// A scheme is at least two characters of `[A-Za-z0-9+.-]` followed by `://`, which is how
+/// PHP's `php_stream_locate_url_wrapper` recognizes one; the two-character floor keeps a
+/// Windows drive letter out.
+pub(super) fn is_stream_wrapper_path(path: &str) -> bool {
+    path.find("://").is_some_and(|end| {
+        end >= 2
+            && path[..end]
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'.' | b'-'))
+    })
+}
+
+/// Returns whether an include must stay a RUNTIME include: its path is only known at run
+/// time, or it folds to a stream-wrapper URL the compiler cannot open as a file.
+///
+/// PHP opens a wrapper URL through the wrapper when the statement executes, and a `require`
+/// that never executes never fails. Refusing the build because `phar://…` is not a file on
+/// disk stopped the whole compile over code on a path the program may never take.
+pub(super) fn stays_runtime_include(expr: &Expr, state: &ResolveState) -> bool {
+    is_runtime_dynamic_include_path(expr)
+        || fold_include_path(expr, state).is_ok_and(|path| is_stream_wrapper_path(&path))
+}
+
+/// Returns whether an include path depends on a value that is only known at runtime.
+pub(super) fn is_runtime_dynamic_include_path(expr: &Expr) -> bool {
+    if let ExprKind::FunctionCall { name, args } = &expr.kind {
+        if is_dirname_call(name) {
+            return args.iter().any(is_runtime_dynamic_include_path);
+        }
+    }
+    if runtime_dynamic_include_path_detail(expr).is_some() {
+        return true;
+    }
+    match &expr.kind {
+        ExprKind::BinaryOp {
+            left,
+            op: BinOp::Concat,
+            right,
+        } => {
+            is_runtime_dynamic_include_path(left) || is_runtime_dynamic_include_path(right)
+        }
+        _ => false,
+    }
 }
 
 /// Classifies runtime-dynamic expression kinds for the include path error message.
@@ -122,5 +196,22 @@ fn invalid_include_path_detail(expr: &Expr) -> String {
         ExprKind::BoolLiteral(_) => "boolean literals are not valid include paths".to_string(),
         ExprKind::Null => "null is not a valid include path".to_string(),
         _ => "this expression cannot be folded to a string at compile time".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_stream_wrapper_path;
+
+    /// Stream-wrapper URLs are recognized by their scheme and filesystem paths are not.
+    #[test]
+    fn stream_wrapper_paths_are_recognized_by_scheme() {
+        assert!(is_stream_wrapper_path("phar:///app/tool.phar/vendor/autoload.php"));
+        assert!(is_stream_wrapper_path("compress.zlib://file.php.gz"));
+        assert!(!is_stream_wrapper_path("/app/vendor/autoload.php"));
+        assert!(!is_stream_wrapper_path("relative/path.php"));
+        assert!(!is_stream_wrapper_path("C://drive/letter.php"));
+        assert!(!is_stream_wrapper_path("://no-scheme.php"));
+        assert!(!is_stream_wrapper_path("/dir/with a space://x.php"));
     }
 }

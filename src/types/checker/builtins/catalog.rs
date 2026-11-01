@@ -110,9 +110,20 @@ pub(crate) fn supported_builtin_function_names_for_profile(
     all_supported_builtin_function_names()
         .into_iter()
         .filter(|name| {
-            !strict_php_hidden_builtin_for_profile(&name.to_ascii_lowercase(), strict_php)
+            let canonical = name.to_ascii_lowercase();
+            !strict_php_hidden_builtin_for_profile(&canonical, strict_php)
+                && !is_recognition_only_platform_builtin(&canonical)
         })
         .collect()
+}
+
+/// Returns whether a legacy signature is retained only to type-check runtime-dead platform code.
+///
+/// PHP exposes the `sapi_windows_*` family only on Windows. Elephc currently recognizes direct
+/// calls so vendor method bodies can be checked, but none of its supported targets provides those
+/// functions. They must therefore stay out of `function_exists()` and callable discovery tables.
+fn is_recognition_only_platform_builtin(canonical: &str) -> bool {
+    canonical.starts_with("sapi_windows_")
 }
 
 /// Returns PHP-visible builtin names implemented for one explicit target platform.
@@ -160,7 +171,9 @@ pub(crate) fn is_php_visible_builtin_function_for_profile(
     strict_php: bool,
 ) -> bool {
     let canonical = name.to_ascii_lowercase();
-    if strict_php_hidden_builtin_for_profile(&canonical, strict_php) {
+    if strict_php_hidden_builtin_for_profile(&canonical, strict_php)
+        || is_recognition_only_platform_builtin(&canonical)
+    {
         return false;
     }
     COMPILER_RESIDENT_BUILTIN_FUNCTIONS.contains(&canonical.as_str())
@@ -209,6 +222,38 @@ pub(crate) fn builtin_is_available_for_target(
             }
         })
         .unwrap_or(true)
+}
+
+/// Returns whether a builtin's absence from `target` is php's OWN platform rule rather than a gap
+/// in elephc.
+///
+/// MEASURED on php 8.5.10 / macOS aarch64: `extension_loaded('pcntl')` is `true` while
+/// `function_exists('pcntl_unshare')` is `false`, because php-src builds `pcntl_unshare`,
+/// `pcntl_setns`, `pcntl_rfork`, `pcntl_sigtimedwait`, `pcntl_sigwaitinfo` and the two
+/// `pcntl_*cpuaffinity` entries on Linux only — and elephc's macOS surface is missing exactly the
+/// same seven names. An extension's completeness must be judged against what php exports ON THIS
+/// PLATFORM, or elephc would report `pcntl` absent on the one target where its coverage equals
+/// php's exactly.
+///
+/// `HostOnly` is deliberately NOT platform-scoped in this sense: it marks a builtin elephc refuses
+/// on iOS that php would provide, so its absence is a real gap and must keep its extension
+/// unreported there.
+pub(crate) fn builtin_absent_by_php_platform_rule(
+    name: &str,
+    target: crate::codegen_support::platform::Target,
+) -> bool {
+    use crate::builtins::semantics::BuiltinTargetSupport;
+    use crate::codegen_support::platform::Platform;
+
+    crate::builtins::registry::lookup(name)
+        .map(|def| match def.spec.semantics.target_support {
+            BuiltinTargetSupport::Linux => !matches!(target.platform, Platform::Linux),
+            BuiltinTargetSupport::MacOs => {
+                !matches!(target.platform, Platform::MacOS) || target.is_ios()
+            }
+            BuiltinTargetSupport::All | BuiltinTargetSupport::HostOnly => false,
+        })
+        .unwrap_or(false)
 }
 
 /// Returns `true` if the name is a supported builtin function (case-insensitive).

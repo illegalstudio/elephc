@@ -16,11 +16,12 @@ mod backtrace_runtime;
 mod call_user_func;
 mod call_user_func_array;
 mod constant;
+mod debug_backtrace;
 mod define;
 mod defined;
-mod debug_backtrace;
 mod debug_print_backtrace;
 mod die;
+mod error_log;
 mod error_reporting;
 mod exit;
 mod func_args;
@@ -51,6 +52,7 @@ mod memory_query;
 mod memory_reset_peak_usage;
 mod ob_clean;
 mod ob_end_clean;
+mod flush;
 mod ob_end_flush;
 mod ob_flush;
 mod ob_get_clean;
@@ -64,14 +66,17 @@ mod ob_list_handlers;
 mod ob_start;
 mod object_inventory;
 mod print_r;
+mod var_export;
+mod compact;
+mod serialize;
+mod tick_functions;
+mod trigger_error;
+mod unserialize;
 mod restore_error_handler;
 mod restore_exception_handler;
 mod runtime_introspection;
-mod serialize;
 mod set_error_handler;
 mod set_exception_handler;
-mod trigger_error;
-mod unserialize;
 mod user_error;
 mod var_dump;
 mod zend_version;
@@ -79,10 +84,12 @@ mod zend_version;
 pub(in crate::interpreter) use call_user_func::*;
 pub(in crate::interpreter) use call_user_func_array::*;
 pub(in crate::interpreter) use constant::*;
+pub(in crate::interpreter) use debug_backtrace::*;
 pub(in crate::interpreter) use define::*;
 pub(in crate::interpreter) use defined::*;
 pub(in crate::interpreter) use runtime_introspection::*;
 pub(in crate::interpreter) use die::*;
+pub(in crate::interpreter) use error_log::*;
 pub(in crate::interpreter) use exit::*;
 pub(in crate::interpreter) use func_get_arg::*;
 pub(in crate::interpreter) use func_get_args::*;
@@ -94,13 +101,25 @@ pub(in crate::interpreter) use gc_enabled::*;
 pub(in crate::interpreter) use gc_mem_caches::*;
 pub(in crate::interpreter) use gc_status::*;
 pub(in crate::interpreter) use ob_get_clean::*;
+pub(in crate::interpreter) use compact::*;
+pub(in crate::interpreter) use serialize::*;
+pub(in crate::interpreter) use tick_functions::*;
 pub(in crate::interpreter) use ob_get_contents::*;
+pub(in crate::interpreter) use flush::*;
 pub(in crate::interpreter) use ob_get_flush::*;
 pub(in crate::interpreter) use ob_get_status::*;
 pub(in crate::interpreter) use ob_implicit_flush::*;
 pub(in crate::interpreter) use ob_list_handlers::*;
 pub(in crate::interpreter) use ob_start::*;
 pub(in crate::interpreter) use print_r::*;
+pub(in crate::interpreter) use var_export::*;
+pub(in crate::interpreter) use unserialize::*;
+#[cfg(not(test))]
+pub(crate) use unserialize::eval_unserialize_declared_object_from_hash;
+#[cfg(not(test))]
+pub(crate) use serialize::eval_serialize_object_fragment;
+#[cfg(not(test))]
+pub(crate) use debug_backtrace::eval_throwable_trace_value;
 pub(in crate::interpreter) use var_dump::*;
 pub(in crate::interpreter) use zend_version::*;
 
@@ -117,6 +136,7 @@ pub(in crate::interpreter) fn eval_builtin_core_call(
         "call_user_func_array" => eval_builtin_call_user_func_array(args, context, scope, values),
         "constant" => eval_builtin_constant(args, context, scope, values),
         "define" => eval_builtin_define(args, context, scope, values),
+        "flush" => eval_builtin_flush(args, values),
         "defined" => eval_builtin_defined(args, context, scope, values),
         "debug_backtrace" | "debug_print_backtrace" | "error_reporting"
         | "get_defined_constants" | "get_defined_functions" | "get_defined_vars"
@@ -128,6 +148,7 @@ pub(in crate::interpreter) fn eval_builtin_core_call(
             eval_builtin_runtime_introspection_call(name, args, context, scope, values)
         }
         "die" => eval_builtin_die(args, context, scope, values),
+        "error_log" => eval_builtin_error_log(args, context, scope, values),
         "exit" => eval_builtin_exit(args, context, scope, values),
         "func_get_arg" => eval_builtin_func_get_arg(args, context, scope, values),
         "func_get_args" => eval_builtin_func_get_args(args, context, scope, values),
@@ -152,7 +173,16 @@ pub(in crate::interpreter) fn eval_builtin_core_call(
         "ob_list_handlers" => eval_builtin_ob_list_handlers(args, context, scope, values),
         "ob_start" => eval_builtin_ob_start(args, context, scope, values),
         "print_r" => eval_builtin_print_r(args, context, scope, values),
+        "register_tick_function" => {
+            eval_builtin_register_tick_function(args, context, scope, values)
+        }
+        "serialize" => eval_builtin_serialize(args, context, scope, values),
+        "unregister_tick_function" => {
+            eval_builtin_unregister_tick_function(args, context, scope, values)
+        }
+        "unserialize" => eval_builtin_unserialize(args, context, scope, values),
         "var_dump" => eval_builtin_var_dump(args, context, scope, values),
+        "var_export" => eval_builtin_var_export(args, context, scope, values),
         "zend_version" => eval_builtin_zend_version(args, values),
         _ => Err(EvalStatus::RuntimeFatal),
     }
@@ -167,6 +197,10 @@ pub(in crate::interpreter) fn eval_core_values_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match name {
+        "flush" => match evaluated_args {
+            [] => eval_flush_result(values),
+            _ => Err(EvalStatus::RuntimeFatal),
+        },
         "call_user_func" => eval_call_user_func_with_values_from_scope(
             evaluated_args.to_vec(),
             lexical_scope,
@@ -198,6 +232,7 @@ pub(in crate::interpreter) fn eval_core_values_result(
             eval_runtime_introspection_values_result(name, evaluated_args, context, values)
         }
         "die" => eval_die_values_result(evaluated_args, values),
+        "error_log" => eval_error_log_declared_values_result(evaluated_args, context, values),
         "exit" => eval_exit_values_result(evaluated_args, values),
         "func_get_arg" => {
             eval_func_get_arg_values_result(evaluated_args, context, values)
@@ -228,7 +263,16 @@ pub(in crate::interpreter) fn eval_core_values_result(
         "ob_list_handlers" => eval_ob_list_handlers_result(evaluated_args, context, values),
         "ob_start" => eval_ob_start_result(evaluated_args, context, values),
         "print_r" => eval_print_r_result(evaluated_args, context, values),
+        "register_tick_function" => {
+            eval_register_tick_function_result(evaluated_args, context, values)
+        }
+        "serialize" => eval_serialize_declared_values_result(evaluated_args, context, values),
+        "unregister_tick_function" => {
+            eval_unregister_tick_function_result(evaluated_args, context, values)
+        }
+        "unserialize" => eval_unserialize_declared_values_result(evaluated_args, context, values),
         "var_dump" => eval_var_dump_result(evaluated_args, context, values),
+        "var_export" => eval_var_export_result(evaluated_args, context, values),
         "zend_version" => eval_zend_version_values_result(evaluated_args, values),
         _ => Err(EvalStatus::RuntimeFatal),
     }

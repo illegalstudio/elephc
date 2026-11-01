@@ -210,6 +210,19 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
+        lib_name: "elephc_highlight",
+        env_var: "ELEPHC_HIGHLIGHT_LIB_DIR",
+        crate_name: "elephc-highlight",
+        flag_name: "highlight",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: false,
+        // highlight_string()/highlight_file() belong to the always-present `standard` extension.
+        php_extensions: &[],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
         lib_name: "elephc_tz",
         env_var: "ELEPHC_TZ_LIB_DIR",
         crate_name: "elephc-tz",
@@ -270,7 +283,9 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         env_var: "ELEPHC_WEB_LIB_DIR",
         crate_name: "elephc-web",
         flag_name: "web",
-        whole_archive: true,
+        // CLI builds may link only the shared session entry points. The --web linker
+        // path explicitly whole-archives this bridge because it owns the program entry.
+        whole_archive: false,
         apple_frameworks: &[],
         apple_libraries: &[],
         needs_libdl: true,
@@ -291,6 +306,19 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         needs_libdl: true,
         // The process-control bridge implements PHP's `pcntl` and `posix` extensions.
         php_extensions: &["pcntl", "posix"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
+        lib_name: "elephc_proc",
+        env_var: "ELEPHC_PROC_LIB_DIR",
+        crate_name: "elephc-proc",
+        flag_name: "proc",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        // `proc_open()` belongs to PHP's always-present `standard` extension.
+        php_extensions: &[],
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
@@ -1820,6 +1848,11 @@ mod tests {
         assert_eq!(magician.archive_filename(), "libelephc_magician.a");
         assert!(!magician.whole_archive);
 
+        let web = bridge_for_library("elephc_web").expect("web/session bridge");
+        assert_eq!(web.crate_name, "elephc-web");
+        assert!(!web.whole_archive);
+        assert_eq!(web.php_extensions, &["session"]);
+
         // `--with-curl` force-links the whole archive: a program that names no
         // `curl_*` function/class/constant (the ordinary pay-for-use detection path,
         // `src/curl_prelude/detect.rs`) but is compiled with the flag anyway references
@@ -2009,6 +2042,7 @@ mod tests {
             php_extensions_for_lib("elephc_pcntl"),
             ["pcntl", "posix"]
         );
+        assert!(php_extensions_for_lib("elephc_proc").is_empty());
         assert!(php_extensions_for_lib("elephc_tz").is_empty());
         assert!(php_extensions_for_lib("elephc_magician").is_empty());
         assert_eq!(php_extensions_for_lib("elephc_curl"), ["curl"]);
@@ -2038,6 +2072,36 @@ mod tests {
             .plan
             .items()
             .contains(&LinkItem::Framework("SystemConfiguration".to_string())));
+        assert!(!resolution
+            .plan
+            .items()
+            .contains(&LinkItem::named_runtime("iconv")));
+    }
+
+    /// Verifies the Magician archive retains its Apple-only libiconv dependency.
+    ///
+    /// The interpreter's encoding-aware `mb_strlen()` fallback calls libiconv, which glibc
+    /// provides from libc and every Apple SDK ships separately, so the library must trail the
+    /// archive on an Apple link and must not appear on a Linux one.
+    #[test]
+    fn magician_archive_retains_apple_library_metadata() {
+        let executable = std::env::current_exe().expect("test executable path");
+        let archive = LinkItem::bridge_archive(executable, "elephc_magician", false);
+        let resolve = |platform| {
+            resolve_with(
+                &LinkPlan::from_items(vec![archive.clone()]),
+                &[],
+                platform,
+                |_| panic!("an exact bridge archive must not trigger discovery"),
+            )
+            .expect("exact Magician metadata must resolve")
+        };
+
+        let iconv = LinkItem::named_runtime("iconv");
+        let apple = resolve(Platform::MacOS);
+        assert!(apple.plan.items().contains(&iconv), "{:?}", apple.plan.items());
+        let linux = resolve(Platform::Linux);
+        assert!(!linux.plan.items().contains(&iconv), "{:?}", linux.plan.items());
     }
 
     /// Verifies bridge resolution keeps Magician as the sole provider of its embedded crates.

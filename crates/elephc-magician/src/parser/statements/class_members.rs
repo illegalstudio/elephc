@@ -22,6 +22,9 @@ impl Parser {
         let type_scope = self.type_parameters.len();
         let source_start_line = self.current_line();
         self.advance();
+        // PHP's return-by-reference marker sits between the keyword and the name. It was never
+        // consumed here, so `function &f()` died on an `Ident` that was an `&`.
+        let returns_by_ref = self.consume(TokenKind::Ampersand);
         let TokenKind::Ident(name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
         };
@@ -45,7 +48,10 @@ impl Parser {
         if !promoted_properties.is_empty() && (is_abstract || is_static) {
             return Err(EvalParseError::UnsupportedConstruct);
         }
-        let return_type = self.parse_optional_return_type(EvalTypePosition::MethodReturn)?;
+        let return_type = super::parameters_types::eval_method_return_type_with_implicit(
+            &name,
+            self.parse_optional_return_type(EvalTypePosition::MethodReturn)?,
+        );
         let (body, source_end_line) = if is_abstract {
             let source_end_line = self.current_line();
             self.expect_semicolon()?;
@@ -74,7 +80,8 @@ impl Parser {
             .with_parameter_defaults(parameter_defaults)
             .with_parameter_by_ref_flags(parameter_is_by_ref)
             .with_parameter_variadic_flags(parameter_is_variadic)
-            .with_return_type(return_type);
+            .with_return_type(return_type)
+            .with_returns_by_ref(returns_by_ref);
         self.type_parameters.truncate(type_scope);
         self.type_parameter_origins.truncate(type_scope);
         if !generic_parameters.is_empty() {
@@ -82,7 +89,7 @@ impl Parser {
                 attributes: method.attributes().to_vec(), params: method.params().to_vec(),
                 parameter_attributes: method.parameter_attributes().to_vec(), parameter_types: method.parameter_types().to_vec(),
                 parameter_defaults: method.parameter_defaults().to_vec(), parameter_is_by_ref: method.parameter_is_by_ref().to_vec(),
-                parameter_is_variadic: method.parameter_is_variadic().to_vec(), return_type: method.return_type().cloned(), body: method.body().to_vec() };
+                parameter_is_variadic: method.parameter_is_variadic().to_vec(), return_type: method.return_type().cloned(), returns_by_ref: method.returns_by_ref(), body: method.body().to_vec() };
             let template = self.retain_template(template_start, name_index, header_start, header_end, name, generic_parameters, prototype);
             method = method.with_generic_template(template);
         }

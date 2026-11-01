@@ -39,67 +39,51 @@ pub(super) fn builtin_reflection_owner_constructor_method(
     }
 }
 
-/// Returns a public `getAttributes()` method over the private `__attrs` property.
+/// Returns PHP's public `getAttributes(?string $name = null, int $flags = 0)` method.
 ///
-/// PHP's signature is `getAttributes(?string $name = null, int $flags = 0)`, and the `$name`
-/// filter is not decoration: Symfony's container asks for one attribute at a time and treats
-/// the answer as already filtered — `RegisterAutoconfigureAttributesPass` throws as soon as it
-/// sees more than it expected. This method took NO parameters at all, so the AOT path refused
-/// `getAttributes(A::class)` outright ("expects 0 arguments, got 1") and the eval bridge answered
-/// with every attribute on the target (issue #983).
+/// The body filters the collected attributes the way php does:
 ///
-/// The body filters on the attribute's class name, case-insensitively, which is what PHP does
-/// with `$flags = 0`: measured against 8.5.10, `getAttributes("markerone")` finds `#[MarkerOne]`
-/// while `getAttributes("\\MarkerOne")` finds nothing, so the comparison folds ASCII case but
-/// does not resolve a leading separator.
+/// ```php
+/// $matching = array_slice($this->__attrs, 0, 0);
+/// foreach ($this->__attrs as $attribute) {
+///     $attributeName = (string) $attribute->getName();
+///     $keep = $name === null ? true : (($flags & ReflectionAttribute::IS_INSTANCEOF) !== 0
+///         ? is_a($attributeName, (string) $name, true)
+///         : strcasecmp(ltrim($attributeName, '\\'), (string) $name) === 0);
+///     if ($keep) { $matching[] = $attribute; }
+/// }
+/// return $matching;
+/// ```
 ///
-/// `$flags` is checked first, as php-src does: any value but `0` and
+/// It used to return every attribute whatever was asked for. symfony/routing's attribute loader
+/// asks each method for `Route::class` with `IS_INSTANCEOF`, got the `#[Required]` on
+/// `AbstractController::setContainer()` back as a route, and the console's route collection came
+/// out empty.
+///
+/// PHP validates `$flags` first, as php-src does: any value but `0` and
 /// `ReflectionAttribute::IS_INSTANCEOF` (2) raises PHP's `ValueError`, named after
 /// `declaring_owner` (the class PHP declares the method on, such as
-/// `ReflectionFunctionAbstract` for `ReflectionMethod`), whatever `$name` holds. `IS_INSTANCEOF`
-/// itself would need a subclass test against a class name that is only known at runtime, so with
-/// a non-null `$name` the body throws a `ReflectionException` instead of answering with a silent
-/// subset; a null `$name` filters nothing, so PHP ignores the flag there.
-/// `Checker::reject_unsupported_reflection_attribute_filter_flags` still refuses a call it can
-/// prove requests `IS_INSTANCEOF` for a name, and leaves every other spelling (a runtime flag, a
-/// spread, a first-class callable, `call_user_func_array`, a dynamic method name) to these
-/// checks. Both paths collect into a fresh typed array, giving returned elements independent
-/// ownership.
+/// `ReflectionFunctionAbstract` for `ReflectionMethod`), whatever `$name` holds. With
+/// `IS_INSTANCEOF` the filter is `is_a($attributeName, $name, true)`.
+///
+/// The exact-name filter folds ASCII case but does not resolve a leading separator in `$name`,
+/// as PHP 8.5 does: `getAttributes("markerone")` finds `#[MarkerOne]` while
+/// `getAttributes("\\MarkerOne")` finds nothing.
 pub(super) fn builtin_reflection_owner_get_attributes_method(declaring_owner: &str) -> ClassMethod {
+    use crate::synthetic_class::{
+        e_binop, e_bool, e_call, e_cast, e_int, e_method_call, e_null, e_str, e_ternary,
+        e_this_prop, e_var, s_array_push, s_assign, s_foreach, s_if, s_return,
+    };
+    use crate::parser::ast::CastType;
+    const IS_INSTANCEOF: i64 = 2;
     let dummy_span = crate::span::Span::dummy();
-    let name = variable_expr("name", dummy_span);
-    let attribute = variable_expr("attribute", dummy_span);
-    let source = reflection_this_property("__attrs", dummy_span);
-    let attribute_name = method_call_expr(attribute.clone(), "getName", Vec::new(), dummy_span);
-
-    let name_is_null = binary_expr(
-        name.clone(),
-        BinOp::StrictEq,
-        Expr::new(ExprKind::Null, dummy_span),
-        dummy_span,
-    );
-    let flags_requested = binary_expr(
-        variable_expr("flags", dummy_span),
-        BinOp::StrictNotEq,
-        Expr::new(ExprKind::IntLiteral(0), dummy_span),
-        dummy_span,
-    );
-    // `strcasecmp($attribute->getName(), $name) === 0`. PHP compares the two class names the way
-    // it compares every class name — folding ASCII case — so `===` on the two strings would miss
-    // `getAttributes("markerone")` for `#[MarkerOne]`.
-    let matches_name = binary_expr(
-        Expr::new(
-            ExprKind::FunctionCall {
-                name: Name::unqualified("strcasecmp".to_string()),
-                args: vec![attribute_name, name.clone()],
-            },
-            dummy_span,
-        ),
-        BinOp::StrictEq,
-        Expr::new(ExprKind::IntLiteral(0), dummy_span),
-        dummy_span,
-    );
-    let matches_filter = binary_expr(name_is_null, BinOp::Or, matches_name, dummy_span);
+    let attributes = || e_this_prop("__attrs");
+    let unqualified = |value: Expr| e_call("ltrim", vec![value, e_str("\\")]);
+    let wanted = || e_cast(CastType::String, e_var("name"));
+    // `__attrs` is typed `array<ReflectionAttribute>` (`patch_reflection_attribute_result`), so
+    // the pushed values keep the object representation the caller reads the result with.
+    // No early `return $this->__attrs` for the unfiltered call: returning the property converted
+    // its object array to the boxed result in place, and the next call freed those cells twice.
     // `($flags & ~ReflectionAttribute::IS_INSTANCEOF) !== 0`: php-src's validity test.
     let invalid_flags = binary_expr(
         binary_expr(
@@ -112,14 +96,74 @@ pub(super) fn builtin_reflection_owner_get_attributes_method(declaring_owner: &s
         Expr::new(ExprKind::IntLiteral(0), dummy_span),
         dummy_span,
     );
-    let unsupported_flags = binary_expr(
-        binary_expr(name.clone(), BinOp::StrictNotEq, Expr::new(ExprKind::Null, dummy_span), dummy_span),
-        BinOp::And, flags_requested, dummy_span,
-    );
     let invalid_flags_message = format!(
         "{declaring_owner}::getAttributes(): Argument #2 ($flags) must be a valid attribute filter flag"
     );
-
+    let body = vec![
+        Stmt::new(
+            StmtKind::If {
+                condition: invalid_flags,
+                then_body: vec![Stmt::new(
+                    StmtKind::Throw(Expr::new(
+                        ExprKind::NewObject {
+                            class_name: Name::unqualified("ValueError"),
+                            args: vec![string_lit(&invalid_flags_message, dummy_span)],
+                        },
+                        dummy_span,
+                    )),
+                    dummy_span,
+                )],
+                elseif_clauses: Vec::new(),
+                else_body: None,
+            },
+            dummy_span,
+        ),
+        // Seeded as an EMPTY SLICE of the property rather than `[]`: this body is lowered without a
+        // checker pass, and a `[]` grown inside the loop is widened to `array<mixed>` at the loop
+        // header -- boxed cells the caller then read as attribute objects.
+        s_assign("matching", e_call("array_slice", vec![attributes(), e_int(0), e_int(0)])),
+        s_foreach(
+            attributes(),
+            None,
+            "attribute",
+            vec![
+                s_assign(
+                    "attributeName",
+                    e_cast(CastType::String, e_method_call(e_var("attribute"), "getName", vec![])),
+                ),
+                s_assign(
+                    "keep",
+                    e_ternary(
+                        e_binop(e_var("name"), BinOp::StrictEq, e_null()),
+                        e_bool(true),
+                        e_ternary(
+                            e_binop(
+                                e_binop(e_var("flags"), BinOp::BitAnd, e_int(IS_INSTANCEOF)),
+                                BinOp::StrictNotEq,
+                                e_int(0),
+                            ),
+                            e_call("is_a", vec![e_var("attributeName"), wanted(), e_bool(true)]),
+                            e_binop(
+                                e_call(
+                                    "strcasecmp",
+                                    vec![unqualified(e_var("attributeName")), wanted()],
+                                ),
+                                BinOp::StrictEq,
+                                e_int(0),
+                            ),
+                        ),
+                    ),
+                ),
+                s_if(
+                    e_var("keep"),
+                    vec![s_array_push("matching", e_var("attribute"))],
+                    vec![],
+                    None,
+                ),
+            ],
+        ),
+        s_return(e_var("matching")),
+    ];
     ClassMethod {
         type_params: Vec::new(),
         name: "getAttributes".to_string(),
@@ -132,15 +176,10 @@ pub(super) fn builtin_reflection_owner_get_attributes_method(declaring_owner: &s
             (
                 "name".to_string(),
                 Some(TypeExpr::Nullable(Box::new(TypeExpr::Str))),
-                null_expr(),
+                null_lit(),
                 false,
             ),
-            (
-                "flags".to_string(),
-                Some(TypeExpr::Int),
-                Some(Expr::new(ExprKind::IntLiteral(0), dummy_span)),
-                false,
-            ),
+            ("flags".to_string(), Some(TypeExpr::Int), int_lit(0), false),
         ],
         param_attributes: Vec::new(),
         variadic: None,
@@ -148,100 +187,7 @@ pub(super) fn builtin_reflection_owner_get_attributes_method(declaring_owner: &s
         variadic_type: None,
         return_type: Some(array_type()),
         by_ref_return: false,
-        body: vec![
-            Stmt::new(
-                StmtKind::If {
-                    condition: invalid_flags,
-                    then_body: vec![Stmt::new(
-                        StmtKind::Throw(Expr::new(
-                            ExprKind::NewObject {
-                                class_name: Name::unqualified("ValueError"),
-                                args: vec![string_lit(&invalid_flags_message, dummy_span)],
-                            },
-                            dummy_span,
-                        )),
-                        dummy_span,
-                    )],
-                    elseif_clauses: Vec::new(),
-                    else_body: None,
-                },
-                dummy_span,
-            ),
-            Stmt::new(
-                StmtKind::If {
-                    condition: unsupported_flags,
-                    then_body: vec![throw_new_reflection_exception(
-                        string_lit(
-                            "ReflectionAttribute::IS_INSTANCEOF is not supported yet: it needs a \
-                             subclass test on a class name known only at runtime, and AOT mode \
-                             has no name-keyed class hierarchy query",
-                            dummy_span,
-                        ),
-                        dummy_span,
-                    )],
-                    elseif_clauses: Vec::new(),
-                    else_body: None,
-                },
-                dummy_span,
-            ),
-            Stmt::new(
-                StmtKind::TypedAssign {
-                    type_expr: object_array_type("ReflectionAttribute"),
-                    name: "matched".to_string(),
-                    value: Expr::new(ExprKind::ArrayLiteral(Vec::new()), dummy_span),
-                },
-                dummy_span,
-            ),
-            Stmt::new(
-                StmtKind::Foreach {
-                    array: source,
-                    key_var: None,
-                    value_var: "attribute".to_string(),
-                    value_by_ref: false,
-                    body: vec![Stmt::new(
-                        StmtKind::If {
-                            condition: matches_filter,
-                            then_body: vec![
-                                // The loop variable is whatever `__attrs` holds, and that differs
-                                // by who populated the slot: the AOT emitter stamps the array
-                                // `Object(ReflectionAttribute)` and stores bare pointers, while the
-                                // eval bridge builds a plain Mixed array. Landing the element in a
-                                // typed local first normalizes both to an object before it reaches
-                                // an `array<ReflectionAttribute>`, whose elements the CALLER reads
-                                // as bare pointers because of the `getAttributes` signature patch.
-                                // Pushing the loop variable straight through instead stores a Mixed
-                                // box that the caller then misreads as an object.
-                                Stmt::new(
-                                    StmtKind::TypedAssign {
-                                        type_expr: TypeExpr::Named(Name::unqualified(
-                                            "ReflectionAttribute",
-                                        )),
-                                        name: "selected".to_string(),
-                                        value: attribute,
-                                    },
-                                    dummy_span,
-                                ),
-                                Stmt::new(
-                                    StmtKind::ArrayPush {
-                                        array: "matched".to_string(),
-                                        value: variable_expr("selected", dummy_span),
-                                    },
-                                    dummy_span,
-                                ),
-                            ],
-                            elseif_clauses: Vec::new(),
-                            else_body: None,
-                        },
-                        dummy_span,
-                    )],
-                },
-                dummy_span,
-            ),
-            Stmt::new(
-                StmtKind::Return(Some(variable_expr("matched", dummy_span))),
-                dummy_span,
-            ),
-        ],
+        body,
         span: dummy_span,
         attributes: Vec::new(),
     }

@@ -54,7 +54,7 @@ pub(super) fn emit(emitter: &mut Emitter, module: &Module, data: &DataSection) {
         "_json_error_candidate_ptr", "_json_error_location_active", "_json_last_error",
         "_json_error_line", "_json_error_column", "_json_error_scan_count", "_json_error_scan_bytes",
         "_ser_value_counter", "_ser_legacy_active", "_unser_legacy_active",
-        "_ser_obj_count", "_unser_count", "_unser_active", "_php_backtrace_next_line",
+        "_ser_obj_count", "_unser_count", "_unser_active",
         "_http_active_host_ptr", "_http_active_proxy_ptr",
     ] {
         abi::emit_store_zero_to_symbol(emitter, symbol, 0);

@@ -43,7 +43,7 @@ use super::{abi, DataSection, Emitter, InvokerEmitContext, InvokerParamShape};
 pub(in crate::codegen) type InvokerDefaults = Vec<Option<InvokerDefaultValue>>;
 
 /// One descriptor-invoker default after nested object calls have been physically normalized.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(in crate::codegen) enum InvokerDefaultValue {
     DeferredError(String),
     EirHelper(String),
@@ -54,17 +54,24 @@ pub(in crate::codegen) enum InvokerDefaultValue {
         class_name: String,
         args: Vec<InvokerDefaultObjectArg>,
     },
+    /// A compiled enum's case singleton (`$direction = SortDirection::Ascending`), with the
+    /// symbols resolved ahead of emission because the invoker body has no module at hand.
+    EnumCase {
+        enum_name: String,
+        slot_symbol: String,
+        materializer: Option<String>,
+    },
 }
 
 /// One array element whose nested value is ready for invoker materialization.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(in crate::codegen) struct InvokerDefaultArrayElement {
     key: Option<ConstDefaultArrayKey>,
     default: InvokerDefaultValue,
 }
 
 /// One physical constructor slot plus the storage type the raw constructor expects.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(in crate::codegen) struct InvokerDefaultObjectArg {
     default: InvokerDefaultValue,
     target_ty: PhpType,
@@ -83,22 +90,40 @@ pub(in crate::codegen) fn resolve_invoker_defaults(
         module,
         current_class,
     };
+    let debug = std::env::var_os("ELEPHC_DEBUG_INVOKER_DEFAULTS").is_some();
     sig.defaults
         .iter()
-        .map(|default| {
-            let default = default.as_ref()?;
-            if let Some(message) = deferred_error_message(default) {
-                return Some(InvokerDefaultValue::DeferredError(message.to_string()));
+        .enumerate()
+        .map(|(index, default)| {
+            let resolved = (|| {
+                let default = default.as_ref()?;
+                if let Some(message) = deferred_error_message(default) {
+                    return Some(InvokerDefaultValue::DeferredError(message.to_string()));
+                }
+                if let Some(helper) = module.closures.iter().chain(module.functions.iter()).find(|function|
+                    function.callable_default.as_ref().is_some_and(|value|
+                        value == default && value.span == default.span)
+                        && function.lexical_class.as_deref() == current_class) {
+                    return Some(InvokerDefaultValue::EirHelper(helper.name.clone()));
+                }
+                if let Some(case) = enum_case_default(module, default) {
+                    return Some(case);
+                }
+                let value = resolve_const_default(default, &context)?;
+                let value = normalize_invoker_default(module, value)?;
+                materializable(module, &value).then_some(value)
+            })();
+            if debug && resolved.is_none() {
+                if let Some(expr) = default {
+                    eprintln!(
+                        "[invoker-default] class={:?} param={:?} default={:?}",
+                        current_class,
+                        sig.params.get(index).map(|(name, _)| name),
+                        expr.kind
+                    );
+                }
             }
-            if let Some(helper) = module.closures.iter().chain(module.functions.iter()).find(|function|
-                function.callable_default.as_ref().is_some_and(|value|
-                    value == default && value.span == default.span)
-                    && function.lexical_class.as_deref() == current_class) {
-                return Some(InvokerDefaultValue::EirHelper(helper.name.clone()));
-            }
-            let value = resolve_const_default(default, &context)?;
-            let value = normalize_invoker_default(module, value)?;
-            materializable(module, &value).then_some(value)
+            resolved
         })
         .collect()
 }
@@ -111,6 +136,44 @@ fn deferred_error_message(default: &Expr) -> Option<&str> {
         return None;
     };
     (class_name.as_str() == "Error").then_some(message.as_str())
+}
+
+/// Recognizes a default naming a case of a COMPILED enum by its class name.
+///
+/// The shared constant folder has no value for an enum case (it is an object singleton, not a
+/// constant), so without this the invoker aborted on it: Laravel's
+/// `Query\Builder::orderBy($column, $direction = SortDirection::Ascending)`, reached through
+/// Eloquent's dynamic `__call` forwarding, killed `/api/posts`. `self::`/`static::` receivers are
+/// left to the folder.
+fn enum_case_default(
+    module: &Module,
+    default: &crate::parser::ast::Expr,
+) -> Option<InvokerDefaultValue> {
+    let crate::parser::ast::ExprKind::ScopedConstantAccess { receiver, name } = &default.kind else {
+        return None;
+    };
+    let crate::parser::ast::StaticReceiver::Named(class) = receiver else {
+        return None;
+    };
+    let wanted = class.as_str().trim_start_matches('\\');
+    let (enum_name, enum_info) = module.enum_infos.get_key_value(wanted).or_else(|| {
+        module
+            .enum_infos
+            .iter()
+            .find(|(candidate, _)| candidate.eq_ignore_ascii_case(wanted))
+    })?;
+    if !enum_info.cases.iter().any(|case| case.name == *name)
+        || !module.class_infos.contains_key(enum_name)
+    {
+        return None;
+    }
+    let (slot_symbol, materializer) =
+        crate::codegen::enum_singletons::lazy_case_symbols(module, enum_name, name);
+    Some(InvokerDefaultValue::EnumCase {
+        enum_name: enum_name.clone(),
+        slot_symbol,
+        materializer,
+    })
 }
 
 /// Recursively converts shared source defaults into descriptor-invoker materialization values.
@@ -287,7 +350,9 @@ fn normalize_object_args_for_signature(
 fn materializable(module: &Module, value: &InvokerDefaultValue) -> bool {
     match value {
         InvokerDefaultValue::DeferredError(_) | InvokerDefaultValue::EirHelper(_) => true,
-        InvokerDefaultValue::Scalar { .. } | InvokerDefaultValue::String(_) => true,
+        InvokerDefaultValue::Scalar { .. }
+        | InvokerDefaultValue::String(_)
+        | InvokerDefaultValue::EnumCase { .. } => true,
         InvokerDefaultValue::Array(elements) => elements
             .iter()
             .all(|element| materializable(module, &element.default)),
@@ -385,6 +450,22 @@ pub(super) fn emit_const_default_to_result(
         }
         InvokerDefaultValue::Object { class_name, args } => {
             emit_object_default(class_name, args, emitter, ctx, data)
+        }
+        InvokerDefaultValue::EnumCase {
+            enum_name,
+            slot_symbol,
+            materializer,
+        } => {
+            // Same sequence as `enum_singletons::emit_lazy_case_load_unguarded`: the materializer
+            // is idempotent, so it runs unconditionally. The singleton is shared, and the caller
+            // adopts one owner like any other default, so it is retained here.
+            if let Some(materializer) = materializer {
+                abi::emit_call_label(emitter, materializer);
+            }
+            abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), slot_symbol, 0);
+            let ty = PhpType::Object(enum_name.clone());
+            abi::emit_incref_if_refcounted(emitter, &ty);
+            ty
         }
         InvokerDefaultValue::Scalar { .. } => {
             super::emit_unsupported_default_abort(emitter, data, ctx);

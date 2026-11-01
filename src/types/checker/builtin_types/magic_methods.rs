@@ -54,47 +54,52 @@ fn declares_source_variadic(method: &ClassMethod) -> bool {
 /// Does nothing for classes that do not declare these methods.
 pub(crate) fn patch_magic_method_signatures(checker: &mut Checker) {
     for class_info in checker.classes.values_mut() {
-        for name in ["__get", "__isset", "__unset"] {
-            if let Some(sig) = class_info.methods.get_mut(name) {
-                if let Some(param) = sig.params.get_mut(0) {
-                    param.1 = PhpType::Str;
-                }
-            }
-        }
-        if let Some(sig) = class_info.methods.get_mut("__set") {
-            if let Some(param) = sig.params.get_mut(0) {
-                param.1 = PhpType::Str;
-            }
-            if let Some(param) = sig.params.get_mut(1) {
-                param.1 = PhpType::Mixed;
-            }
-        }
-        if let Some(sig) = class_info.methods.get_mut("__isset") {
-            if let Some(param) = sig.params.get_mut(0) {
-                param.1 = PhpType::Str;
-            }
-        }
-        if let Some(sig) = class_info.methods.get_mut("__unset") {
+        patch_magic_signatures_in(&mut class_info.methods, &mut class_info.static_methods);
+    }
+    // An interface that declares `__get($key)` (Laravel's `Enumerable`) is a call contract for
+    // its implementers, whose own signatures are patched above: left at `mixed`, the interface
+    // entry and the `string` implementation disagreed on the first parameter, and the method
+    // table adapter -- which can box but not unbox -- refused `Collection::__get`.
+    for interface_info in checker.interfaces.values_mut() {
+        patch_magic_signatures_in(&mut interface_info.methods, &mut interface_info.static_methods);
+    }
+}
+
+/// Applies the PHP magic-method parameter types to one class-like's method tables.
+fn patch_magic_signatures_in<S: std::hash::BuildHasher, T: std::hash::BuildHasher>(
+    methods: &mut std::collections::HashMap<String, crate::types::FunctionSig, S>,
+    static_methods: &mut std::collections::HashMap<String, crate::types::FunctionSig, T>,
+) {
+    for name in ["__get", "__isset", "__unset"] {
+        if let Some(sig) = methods.get_mut(name) {
             if let Some(param) = sig.params.get_mut(0) {
                 param.1 = PhpType::Str;
             }
         }
-        if let Some(sig) = class_info.methods.get_mut("__call") {
-            if let Some(param) = sig.params.get_mut(0) {
-                param.1 = PhpType::Str;
-            }
-            if let Some(param) = sig.params.get_mut(1) {
-                param.1 = PhpType::Array(Box::new(PhpType::Never));
-            }
+    }
+    if let Some(sig) = methods.get_mut("__set") {
+        if let Some(param) = sig.params.get_mut(0) {
+            param.1 = PhpType::Str;
         }
-        // `__callStatic` is a static method, so it lives in `static_methods`.
-        if let Some(sig) = class_info.static_methods.get_mut("__callstatic") {
-            if let Some(param) = sig.params.get_mut(0) {
-                param.1 = PhpType::Str;
-            }
-            if let Some(param) = sig.params.get_mut(1) {
-                param.1 = PhpType::Array(Box::new(PhpType::Never));
-            }
+        if let Some(param) = sig.params.get_mut(1) {
+            param.1 = PhpType::Mixed;
+        }
+    }
+    if let Some(sig) = methods.get_mut("__call") {
+        if let Some(param) = sig.params.get_mut(0) {
+            param.1 = PhpType::Str;
+        }
+        if let Some(param) = sig.params.get_mut(1) {
+            param.1 = PhpType::Array(Box::new(PhpType::Never));
+        }
+    }
+    // `__callStatic` is a static method, so it lives in `static_methods`.
+    if let Some(sig) = static_methods.get_mut("__callstatic") {
+        if let Some(param) = sig.params.get_mut(0) {
+            param.1 = PhpType::Str;
+        }
+        if let Some(param) = sig.params.get_mut(1) {
+            param.1 = PhpType::Array(Box::new(PhpType::Never));
         }
     }
 }

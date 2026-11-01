@@ -2,7 +2,7 @@
 title: "vfprintf()"
 description: "Write a formatted string to a stream."
 sidebar:
-  order: 407
+  order: 420
 ---
 
 ## vfprintf()

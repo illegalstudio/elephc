@@ -43,8 +43,23 @@ fn call_user_func_releases_partial_operands_and_failed_dispatch() {
             args.push(EvalExpr::Call { name: "missingOwnershipOperand".into(), args: vec![] });
         }
         assert!(eval_builtin_call_user_func(&args, &mut context, &mut scope, &mut values).is_err());
+        // The thrown `Error` records its `file` through `initialize_native_throwable_source`, which
+        // releases its own cell after `property_set` stored (retained) it: that string (empty for a
+        // fragment with no call site) and the `line` int (0) stay owned by the throwable. Every other released
+        // cell must be fully retired.
+        // (Only the failed-dispatch case throws; a failed operand evaluation returns its status.)
+        let _ = context.take_pending_throw();
         for value in &values.releases {
-            assert_eq!(values.cell_owners[&(value.as_ptr() as usize)], 0);
+            let owners = values.cell_owners[&(value.as_ptr() as usize)];
+            let held_by_throwable = matches!(
+                values.get(*value),
+                FakeValue::String(ref file) if file.is_empty()
+            ) || values.get(*value) == FakeValue::Int(0);
+            assert!(
+                owners == 0 || (owners == 1 && held_by_throwable),
+                "{:?} still has {owners} owner(s)",
+                values.get(*value)
+            );
         }
         assert!(values.releases.iter().any(|value| values.get(*value) == FakeValue::String("temporary".into())));
         assert!(values.releases.iter().any(|value| values.get(*value) == FakeValue::String("missingOwnershipCallback".into())));

@@ -82,6 +82,12 @@ macro_rules! impl_lifecycle_scalar_ops {
         Ok(())
     }
 
+    /// Copies one boxed Mixed PHP value through the generated runtime wrapper.
+    fn copy_value(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        let out = Self::handle(unsafe { __elephc_eval_value_copy(value.as_ptr()) });
+        out
+    }
+
     /// Reads the generated-runtime automatic collection flag.
     fn gc_enabled(&mut self) -> Result<bool, EvalStatus> {
         Ok(unsafe { __elephc_eval_gc_enabled() } != 0)
@@ -108,6 +114,14 @@ macro_rules! impl_lifecycle_scalar_ops {
         Ok(RuntimeCellHandle::from_raw(unsafe {
             __elephc_eval_value_retain(value.as_ptr())
         }))
+    }
+
+    /// Binds the class-scope-sensitive hooks to a foreign closure's owner context for its call.
+    fn rebind_context(
+        &mut self,
+        context: *const crate::abi::ElephcEvalContext,
+    ) -> *const crate::abi::ElephcEvalContext {
+        std::mem::replace(&mut self.context, context)
     }
 
     /// Attaches retained receiver cells to the native object's GC graph and final-release callback.
@@ -143,19 +157,28 @@ macro_rules! impl_lifecycle_scalar_ops {
         if previous.is_null() { self.null() } else { Self::handle(previous) }
     }
 
-    /// Detaches a reference before returning an ordinary PHP value copy.
-    fn copy_value(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
-        Self::handle(unsafe { __elephc_eval_value_copy(value.as_ptr()) })
-    }
 
     /// Emits one PHP warning through the generated runtime diagnostic helper.
     fn warning(&mut self, message: &str) -> Result<(), EvalStatus> {
-        // Magician submits complete diagnostics, unlike native fragment producers.
-        let terminated;
-        let message = if message.ends_with('\n') { message } else {
-            terminated = format!("{message}\n");
-            &terminated
+        // The dispatcher classifies a diagnostic by its severity word and strips it for a
+        // handler's `$message`. Most interpreter sites pass the bare text ("Undefined variable
+        // $x"), which matched no category and printed without the `Warning: ` php shows.
+        let message = if ["Warning: ", "Notice: ", "Deprecated: "]
+            .iter()
+            .any(|prefix| message.starts_with(prefix))
+        {
+            std::borrow::Cow::Borrowed(message)
+        } else {
+            std::borrow::Cow::Owned(format!("Warning: {message}"))
         };
+        // Magician submits complete diagnostics, unlike native fragment producers.
+        let message = if message.ends_with('\n') { message } else {
+            std::borrow::Cow::Owned(format!("{message}\n"))
+        };
+        // Name the eval'd code's own location, not the compiled caller's last published one.
+        if let Some(context) = unsafe { self.context.as_ref() } {
+            crate::runtime_hooks::publish_diagnostic_site(context);
+        }
         unsafe {
             __elephc_eval_warning(message.as_ptr(), message.len() as u64);
         }
@@ -182,6 +205,11 @@ macro_rules! impl_lifecycle_scalar_ops {
     /// Creates a boxed null Mixed cell through the generated runtime wrapper.
     fn null(&mut self) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_null() })
+    }
+
+    /// Boxes the running `Fiber` (or null) through the generated runtime wrapper.
+    fn fiber_current(&mut self) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_fiber_current() })
     }
 
     /// Creates a boxed bool Mixed cell through the generated runtime wrapper.

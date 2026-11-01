@@ -840,6 +840,10 @@ pub(crate) fn root_owned_call_operand(
     ctx.store_local(&name, rooted, ty, Some(span));
     let slot = ctx.local_slots[&name];
     register_owned_call_operand(ctx, slot, span);
+    // The operand record now owns the unwind-time release. A construction-time guard on the same
+    // temporary (an owned callback guarded while its arguments were evaluated) would release the
+    // value a second time when a throw unwinds past both records.
+    ctx.unguard_call_argument(value.value, span);
     crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     (rooted, Some(slot))
 }

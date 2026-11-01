@@ -207,6 +207,22 @@ pub enum RuntimeBuiltinId {
     Serialize = 94,
     /// PHP `unserialize` with its default options.
     Unserialize = 95,
+    /// PHP `headers_sent` with no arguments.
+    ///
+    /// The flag lives in generated-runtime storage, so an interpreted caller has to ask the
+    /// compiled side for it: an eval-local answer would report "not sent" for output the
+    /// compiled program had already flushed.
+    HeadersSent = 96,
+    /// PHP `headers_list`.
+    ///
+    /// The pending headers live in the web bridge the compiled runtime writes through, so an
+    /// interpreted caller reads the same list the compiled `header()` fills.
+    HeadersList = 97,
+    /// PHP `header_remove` with no argument (clear all) or one header name.
+    ///
+    /// Removal has to act on the same bridge list: an eval-local copy would leave the header
+    /// that `SessionUtils::popSessionCookie()`-style code removes in the response.
+    HeaderRemove = 98,
 }
 
 /// Status returned by `__elephc_runtime_builtin_call_v1`.
@@ -238,7 +254,7 @@ impl RuntimeBuiltinStatus {
 
 impl RuntimeBuiltinId {
     /// Every version-one runtime builtin in stable ABI order.
-    pub const ALL: [Self; 95] = [
+    pub const ALL: [Self; 98] = [
         Self::Boolval,
         Self::Floatval,
         Self::Intval,
@@ -334,6 +350,9 @@ impl RuntimeBuiltinId {
         Self::MemoryResetPeakUsage,
         Self::Serialize,
         Self::Unserialize,
+        Self::HeadersSent,
+        Self::HeadersList,
+        Self::HeaderRemove,
     ];
 
     /// Every operation currently implemented by the optional mbstring engine.
@@ -520,6 +539,9 @@ impl RuntimeBuiltinId {
             Self::MbSendMail => "mb_send_mail",
             Self::MbEncodeNumericentity => "mb_encode_numericentity",
             Self::MbDecodeNumericentity => "mb_decode_numericentity",
+            Self::HeadersSent => "headers_sent",
+            Self::HeadersList => "headers_list",
+            Self::HeaderRemove => "header_remove",
         };
         BuiltinId::from_canonical_name(name)
     }
@@ -627,6 +649,9 @@ impl RuntimeBuiltinId {
             93 => Some(Self::MemoryResetPeakUsage),
             94 => Some(Self::Serialize),
             95 => Some(Self::Unserialize),
+            96 => Some(Self::HeadersSent),
+            97 => Some(Self::HeadersList),
+            98 => Some(Self::HeaderRemove),
 
             _ => None,
         }
@@ -704,7 +729,10 @@ impl RuntimeBuiltinId {
             | Self::ObClean
             | Self::ObFlush
             | Self::ObEndClean
-            | Self::ObEndFlush => arg_count == 0,
+            | Self::ObEndFlush
+            | Self::HeadersSent
+            | Self::HeadersList => arg_count == 0,
+            Self::HeaderRemove => arg_count <= 1,
         }
     }
 }
@@ -743,7 +771,9 @@ mod tests {
                 | RuntimeBuiltinId::ObClean
                 | RuntimeBuiltinId::ObFlush
                 | RuntimeBuiltinId::ObEndClean
-                | RuntimeBuiltinId::ObEndFlush => 0,
+                | RuntimeBuiltinId::ObEndFlush
+                | RuntimeBuiltinId::HeadersSent
+                | RuntimeBuiltinId::HeadersList => 0,
                 RuntimeBuiltinId::MbEncodeNumericentity | RuntimeBuiltinId::MbDecodeNumericentity | RuntimeBuiltinId::MbConvertEncoding => 2,
                 RuntimeBuiltinId::MbStrimwidth | RuntimeBuiltinId::MbSendMail | RuntimeBuiltinId::MbConvertVariables => 3,
                 RuntimeBuiltinId::MbSubstr => 2,
@@ -783,6 +813,8 @@ mod tests {
         assert_eq!(RuntimeBuiltinId::from_u32(0), None);
         let next = RuntimeBuiltinId::ALL.iter().map(|id| id.as_u32()).max().unwrap() + 1;
         assert_eq!(RuntimeBuiltinId::from_u32(next), None);
+        assert!(RuntimeBuiltinId::HeaderRemove.supports_arity(0));
+        assert!(!RuntimeBuiltinId::HeaderRemove.supports_arity(2));
         assert_eq!(
             RuntimeBuiltinStatus::from_i32(0),
             Some(RuntimeBuiltinStatus::Success)

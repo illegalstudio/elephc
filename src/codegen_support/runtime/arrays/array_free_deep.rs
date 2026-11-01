@@ -78,6 +78,8 @@ pub fn emit_array_free_deep(emitter: &mut Emitter) {
     emitter.instruction("cmp x10, #7");                                         // is this an array of boxed mixed values?
     emitter.instruction("b.eq __rt_array_free_deep_loop_setup");                // boxed mixed values need decref_any cleanup too
     emitter.instruction("cmp x10, #10");                                        // is this an array of callable descriptors?
+    emitter.instruction("b.eq __rt_array_free_deep_loop_setup");                // callable descriptors need per-element cleanup
+    emitter.instruction("cmp x10, #11");                                        // is this an array of reference cells?
     emitter.instruction("b.ne __rt_array_free_deep_struct");                    // scalar arrays need no per-element cleanup
 
     // -- free each releasable element --
@@ -193,6 +195,8 @@ fn emit_array_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp ecx, 7");                                          // does this indexed array store boxed mixed values?
     emitter.instruction("je __rt_array_free_deep_loop_setup");                  // boxed mixed values need decref_any cleanup
     emitter.instruction("cmp ecx, 10");                                         // does this indexed array store callable descriptors?
+    emitter.instruction("je __rt_array_free_deep_loop_setup");                  // callable descriptors need per-element cleanup
+    emitter.instruction("cmp ecx, 11");                                         // does this indexed array store reference cells?
     emitter.instruction("jne __rt_array_free_deep_struct");                     // scalar indexed arrays need no per-element cleanup
 
     emitter.label("__rt_array_free_deep_loop_setup");

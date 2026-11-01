@@ -28,7 +28,8 @@ try { runTemporaryCallback($kept); }
 catch (Exception $error) { echo "kept|"; unset($error); }
 unset($kept);
 "#;
-    assert_clean_sort(source, "released|caught|kept|released|");
+    // php 8.5 retires the temporary callback during unwinding, after the catch block runs.
+    assert_clean_sort(source, "caught|released|kept|released|");
 }
 
 /// Runtime-selected sort descriptors share the direct boxed-array copy and exceptional publication.

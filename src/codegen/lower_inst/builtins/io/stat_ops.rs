@@ -209,7 +209,11 @@ pub(crate) fn lower_fstat(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     store_if_result(ctx, inst)
 }
 
-/// Lowers `clearstatcache(...)` as an ordered no-op after EIR operand evaluation.
+/// Lowers `clearstatcache(...)`.
+///
+/// There is no stat cache to clear -- every stat helper asks the kernel -- but there is a
+/// realpath cache, and `clearstatcache(true)` is php's way to empty it. A first argument whose
+/// type is not a plain bool/int is treated as true: forgetting too much only costs a lookup.
 pub(crate) fn lower_clearstatcache(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -219,6 +223,19 @@ pub(crate) fn lower_clearstatcache(
             "clearstatcache expected at most 2 args, got {}",
             inst.operands.len()
         )));
+    }
+    if let Some(&clear_realpath_cache) = inst.operands.first() {
+        let ty = ctx.value_php_type(clear_realpath_cache)?.codegen_repr();
+        if matches!(ty, PhpType::Bool | PhpType::Int) {
+            let skip = ctx.next_label("clearstatcache_keep_realpaths");
+            let reg = abi::int_result_reg(ctx.emitter);
+            ctx.load_value_to_reg(clear_realpath_cache, reg)?;
+            abi::emit_branch_if_int_result_zero(ctx.emitter, &skip);
+            crate::codegen_support::runtime::emit_realpath_cache_invalidate(ctx.emitter);
+            ctx.emitter.label(&skip);
+        } else {
+            crate::codegen_support::runtime::emit_realpath_cache_invalidate(ctx.emitter);
+        }
     }
     store_if_result(ctx, inst)
 }

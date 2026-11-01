@@ -14,6 +14,7 @@ mod control_flow;
 mod narrowing;
 
 pub(super) use assignments::expr_is_string_offset_target;
+pub(super) use control_flow::widen_property_for_element_reference;
 
 use std::collections::HashSet;
 
@@ -102,9 +103,12 @@ impl Checker {
             | StmtKind::Global { .. }
             | StmtKind::StaticVar { .. }
             | StmtKind::PropertyAssign { .. }
+            | StmtKind::PropertyRefAssign { .. }
             | StmtKind::StaticPropertyAssign { .. }
             | StmtKind::StaticPropertyArrayPush { .. }
             | StmtKind::StaticPropertyArrayAssign { .. }
+            | StmtKind::StaticPropertyElementRefAssign { .. }
+            | StmtKind::DynamicStaticPropertyWrite { .. }
             | StmtKind::PropertyArrayPush { .. }
             | StmtKind::PropertyArrayAssign { .. } => self.check_assignment_like_stmt(stmt, env),
             StmtKind::Foreach { .. }
@@ -119,21 +123,34 @@ impl Checker {
                     checker.check_control_flow_stmt(stmt, env)
                 })
             }
-            StmtKind::Include { .. } => {
-                Err(CompileError::new(stmt.span, "Unresolved include statement"))
+            StmtKind::Include { path, .. } => {
+                self.infer_type(path, env)?;
+                Ok(())
             }
             StmtKind::PackedClassDecl { .. } => Ok(()),
             // An included file's `return`, rewritten into a `break` to the include's wrapper,
             // may leave a `finally` as the `return` could. Its depth still has to hold.
             StmtKind::Break(levels) if stmt.is_include_return_break() => {
-                if *levels <= self.break_continue_depth {
-                    Ok(())
-                } else {
-                    self.check_loop_exit(stmt.span, "break", *levels)
+                if *levels > self.break_continue_depth {
+                    self.check_loop_exit(stmt.span, "break", *levels)?;
                 }
+                self.record_break_env(*levels, env);
+                Ok(())
             }
-            StmtKind::Break(levels) => self.check_loop_exit(stmt.span, "break", *levels),
-            StmtKind::Continue(levels) => self.check_loop_exit(stmt.span, "continue", *levels),
+            StmtKind::Break(levels) => {
+                self.check_loop_exit(stmt.span, "break", *levels)?;
+                self.record_break_env(*levels, env);
+                Ok(())
+            }
+            StmtKind::Continue(levels) => {
+                self.check_loop_exit(stmt.span, "continue", *levels)?;
+                // A `continue` goes back to the loop's condition, which can end the loop: what the
+                // skipped iteration left in its locals reaches the code after the loop exactly as
+                // a `break`'s does. Dropping it typed Doctrine's `InsertBatch::batchByEntityType()`
+                // result as an empty array -- its only push sits in a branch that `continue`s.
+                self.record_break_env(*levels, env);
+                Ok(())
+            }
             StmtKind::ExprStmt(expr) => {
                 // The one position an `unset(...)` may end a local binding from. elephc's parser
                 // accepts `unset` as an expression (PHP's grammar does not), so the kill has to
@@ -148,6 +165,16 @@ impl Checker {
                 self.statement_position_expr = saved_statement_position;
                 result?;
                 super::core_attributes::check_discarded(self, expr, env);
+                // elephc's `assert()` always runs and throws `AssertionError` on a false
+                // assertion, so the statements after it see the asserted class, exactly as after
+                // `if (!$x instanceof C) { throw ...; }`. Doctrine's `Parser::getAST()` reads
+                // `$AST->selectClause` after `assert($AST instanceof AST\SelectStatement)`, on a
+                // union with `DeleteStatement`. Lowering applies the same narrowing.
+                if let Some(condition) = crate::types::asserted_instanceof_condition(expr) {
+                    if let Some(narrowing) = self.guard_narrowing(condition, env)? {
+                        env.insert(narrowing.var, narrowing.then_ty);
+                    }
+                }
                 Ok(())
             }
             StmtKind::FunctionDecl { .. } => Ok(()),
@@ -159,7 +186,10 @@ impl Checker {
                     // only holds further down the body to this return. See
                     // `Checker::flow_typed_returns`.
                     self.flow_typed_returns.insert(
-                        stmt as *const Stmt as usize,
+                        (
+                            self.current_loop_storage_scope.clone(),
+                            stmt as *const Stmt as usize,
+                        ),
                         (stmt.span, returned),
                     );
                     // `function &f() { return $obj->prop; }` returns a reference to the
@@ -175,7 +205,14 @@ impl Checker {
                             // then could not match at all.
                             let rebindable_this =
                                 self.closure_depth > 0 && matches!(object.kind, ExprKind::This);
-                            let declared_class = if rebindable_this {
+                            // `Closure::bind($closure, $object)` with an object of one known class
+                            // settles the receiver of a literal closure for good.
+                            let bound_class = rebindable_this
+                                .then(|| self.closure_bound_this_class.clone())
+                                .flatten();
+                            let declared_class = if bound_class.is_some() {
+                                bound_class
+                            } else if rebindable_this {
                                 None
                             } else {
                                 crate::types::checker::single_object_class_name(&object_ty)
@@ -212,6 +249,7 @@ impl Checker {
             | StmtKind::TraitDecl { .. } => Ok(()),
             StmtKind::ExternFunctionDecl { .. }
             | StmtKind::ExternClassDecl { .. }
+            | StmtKind::ClassLikeActivate { .. }
             | StmtKind::ExternGlobalDecl { .. } => Ok(()),
         }
     }
@@ -250,6 +288,15 @@ impl Checker {
         boxed_ref_aliased.retain(|name| !invalidated.contains(name));
         self.boxed_ref_aliased_locals = boxed_ref_aliased;
         result
+    }
+
+    /// Files the environment a `break` carries out of the construct it targets.
+    fn record_break_env(&mut self, levels: usize, env: &TypeEnv) {
+        let frames = self.loop_break_envs.len();
+        if levels == 0 || levels > frames {
+            return;
+        }
+        self.loop_break_envs[frames - levels].push(env.clone());
     }
 
     /// Validates a `break` or `continue` statement against the current loop depth.

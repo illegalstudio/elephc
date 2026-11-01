@@ -9,6 +9,7 @@
 //! - Class-default Errors are retained until getDefaultProperties requests their values.
 
 use super::*;
+use crate::codegen::shared_reflection::ReflectionOwnerKind;
 
 /// Releases generic defaults in the builtin Reflection prefix before metadata replaces them.
 ///
@@ -56,11 +57,26 @@ pub(super) fn clear_reflection_owner_prefix(
     Ok(())
 }
 
-/// Allocates and populates one builtin Reflection owner object from metadata.
+/// Allocates and populates one builtin Reflection owner object from metadata, member
+/// reflectors included.
 pub(super) fn emit_reflection_owner_object(
     ctx: &mut FunctionContext<'_>,
     class_name: &str,
     metadata: &ReflectionOwnerMetadata,
+) -> Result<()> {
+    emit_reflection_owner_object_with_members(ctx, class_name, metadata, None)
+}
+
+/// Allocates and populates one builtin Reflection owner object from metadata.
+///
+/// With `lazy_members`, a class-like owner builds no member reflector: each member slot that has
+/// members records the address of its shared filler in `<slot>_filler` (see
+/// `REFLECTION_LAZY_MEMBER_SLOTS`), and the getters that read the slot run it on first use.
+pub(super) fn emit_reflection_owner_object_with_members(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    metadata: &ReflectionOwnerMetadata,
+    lazy_members: Option<ReflectionOwnerKind>,
 ) -> Result<()> {
     let (class_id, property_count, uninitialized_marker_offsets) = {
         let class_info = ctx
@@ -82,7 +98,7 @@ pub(super) fn emit_reflection_owner_object(
         &uninitialized_marker_offsets,
         &[],
     )?;
-    emit_reflection_owner_metadata(ctx, class_name, metadata)
+    emit_reflection_owner_metadata_with_members(ctx, class_name, metadata, lazy_members)
 }
 
 /// Populates Reflection metadata on an object already held in the integer result register.
@@ -92,12 +108,24 @@ pub(super) fn emit_reflection_owner_metadata(
     class_name: &str,
     metadata: &ReflectionOwnerMetadata,
 ) -> Result<()> {
+    emit_reflection_owner_metadata_with_members(ctx, class_name, metadata, None)
+}
+
+/// The metadata writer behind both entry points; `lazy_members` is `emit_reflection_owner_object_with_members`'s.
+fn emit_reflection_owner_metadata_with_members(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    metadata: &ReflectionOwnerMetadata,
+    lazy_members: Option<ReflectionOwnerKind>,
+) -> Result<()> {
     let object_class_name = class_name;
     let owner_class_name = reflection_owner_base_class(ctx, object_class_name)
         .unwrap_or_else(|| object_class_name.to_string());
     let class_name = owner_class_name.as_str();
+    // `ReflectionEnum` extends `ReflectionClass`: it carries the same member slots, filled the same way.
     let is_reflection_class_owner =
-        matches!(class_name, "ReflectionClass" | "ReflectionObject");
+        matches!(class_name, "ReflectionClass" | "ReflectionObject" | "ReflectionEnum");
+    emit_reflection_source_properties(ctx, class_name, metadata)?;
     if let Some(reflected_name) = metadata.reflected_name.as_deref() {
         emit_reflection_owner_string_property_by_name(ctx, class_name, "__name", reflected_name)?;
         let public_name_offset = ctx
@@ -110,7 +138,18 @@ pub(super) fn emit_reflection_owner_metadata(
                 emit_reflection_literal_string_property(ctx, reflected_name, offset, offset + 8);
             }
         }
-        if is_reflection_class_owner || owner_class_name == "ReflectionEnum" {
+        if is_reflection_class_owner {
+            if let Some(doc_comment) = metadata.doc_comment.as_deref() {
+                emit_reflection_owner_string_property_by_name(
+                    ctx,
+                    class_name,
+                    "__doc_comment",
+                    doc_comment,
+                )?;
+                emit_reflection_owner_bool_property(ctx, class_name, "__has_doc_comment", true)?;
+            }
+        }
+        if is_reflection_class_owner {
             emit_reflection_class_name_parts(ctx, class_name, reflected_name)?;
         }
         if is_reflection_class_owner {
@@ -120,22 +159,10 @@ pub(super) fn emit_reflection_owner_metadata(
                 "__interface_names",
                 &metadata.interface_names,
             )?;
-            emit_reflection_class_array_property_by_name(
-                ctx,
-                class_name,
-                "__interfaces",
-                &metadata.interface_names,
-            )?;
             emit_reflection_owner_string_array_property_by_name(
                 ctx,
                 class_name,
                 "__trait_names",
-                &metadata.trait_names,
-            )?;
-            emit_reflection_class_array_property_by_name(
-                ctx,
-                class_name,
-                "__traits",
                 &metadata.trait_names,
             )?;
             emit_reflection_string_assoc_property_by_name(
@@ -195,64 +222,20 @@ pub(super) fn emit_reflection_owner_metadata(
                 "__static_properties",
                 &metadata.static_property_members,
             )?;
-            emit_reflection_member_array_property_by_name(
-                ctx,
-                class_name,
-                "__reflection_constants",
-                "ReflectionClassConstant",
-                &metadata.constant_reflection_members,
-            )?;
-            emit_reflection_member_array_property_by_name(
-                ctx,
-                class_name,
-                "__methods",
-                "ReflectionMethod",
-                &metadata.method_members,
-            )?;
-            emit_reflection_constructor_property(
-                ctx,
-                class_name,
-                metadata.constructor_member.as_ref(),
-            )?;
-            emit_reflection_parent_class_property(
-                ctx,
-                class_name,
-                metadata.parent_class_name.as_deref(),
-            )?;
-            emit_reflection_member_array_property_by_name(
-                ctx,
-                class_name,
-                "__properties",
-                "ReflectionProperty",
-                &metadata.property_members,
-            )?;
-        } else if owner_class_name == "ReflectionFunction" {
-            let (_, short_name) = reflection_name_parts(reflected_name);
-            emit_reflection_owner_string_property_by_name(ctx, class_name, "__short_name", short_name)?;
         }
+        // `ReflectionFunction`'s `__short_name` is written by `emit_reflection_function_name_parts`
+        // below; a second store here overwrote a persisted copy without releasing it.
         if owner_class_name == "ReflectionEnum" {
             let case_names = metadata
                 .enum_case_members
                 .iter()
                 .map(|member| member.name.clone())
                 .collect::<Vec<_>>();
-            let case_class = if metadata.type_metadata.is_some() {
-                "ReflectionEnumBackedCase"
-            } else {
-                "ReflectionEnumUnitCase"
-            };
             emit_reflection_owner_string_array_property_by_name(
                 ctx,
                 class_name,
                 "__case_names",
                 &case_names,
-            )?;
-            emit_reflection_member_array_property_by_name(
-                ctx,
-                class_name,
-                "__cases",
-                case_class,
-                &metadata.enum_case_members,
             )?;
             emit_reflection_owner_bool_property(
                 ctx,
@@ -267,6 +250,14 @@ pub(super) fn emit_reflection_owner_metadata(
                 metadata.type_metadata.as_ref(),
             )?;
         }
+        if is_reflection_class_owner {
+            match lazy_members {
+                Some(owner) => {
+                    emit_reflection_owner_lazy_members(ctx, owner, class_name, metadata, false)?
+                }
+                None => emit_reflection_owner_members(ctx, class_name, metadata)?,
+            }
+        }
         if owner_class_name == "ReflectionFunction" {
             emit_reflection_function_name_parts(ctx, reflected_name)?;
         }
@@ -275,7 +266,7 @@ pub(super) fn emit_reflection_owner_metadata(
         }
     }
     emit_reflection_attrs_property(ctx, class_name, &metadata.attr_names, &metadata.attr_args)?;
-    if is_reflection_class_owner || owner_class_name == "ReflectionEnum" {
+    if is_reflection_class_owner {
         emit_reflection_owner_bool_property(ctx, class_name, "__is_final", metadata.is_final)?;
         emit_reflection_owner_bool_property(ctx, class_name, "__is_abstract", metadata.is_abstract)?;
         emit_reflection_owner_bool_property(ctx, class_name, "__is_interface", metadata.is_interface)?;
@@ -312,6 +303,17 @@ pub(super) fn emit_reflection_owner_metadata(
             class_name,
             metadata.parent_class_name.as_deref(),
         )?;
+        if matches!(
+            owner_class_name.as_str(),
+            "ReflectionClassConstant" | "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase"
+        ) {
+            emit_reflection_owner_string_property_by_name(
+                ctx,
+                class_name,
+                "__class",
+                metadata.parent_class_name.as_deref().unwrap_or(""),
+            )?;
+        }
         if matches!(owner_class_name.as_str(), "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase") {
             emit_reflection_enum_property(ctx, class_name, metadata.parent_class_name.as_deref())?;
         }
@@ -359,10 +361,10 @@ pub(super) fn emit_reflection_owner_metadata(
             "__is_user_defined",
             metadata.reflected_name.is_some() && !is_internal,
         )?;
-        emit_reflection_parameter_array_property_by_name(
+        emit_reflection_lazy_parameters(
             ctx,
             class_name,
-            "__parameters",
+            metadata.reflected_name.as_deref().unwrap_or(""),
             &metadata.parameter_members,
         )?;
         emit_reflection_owner_int_property(
@@ -436,6 +438,12 @@ pub(super) fn emit_reflection_owner_metadata(
         emit_reflection_owner_int_property(ctx, class_name, "__modifiers", metadata.modifiers)?;
     }
     if owner_class_name == "ReflectionMethod" {
+        emit_reflection_owner_string_property_by_name(
+            ctx,
+            class_name,
+            "__class",
+            metadata.parent_class_name.as_deref().unwrap_or(""),
+        )?;
         emit_reflection_owner_int_property(ctx, class_name, "__modifiers", metadata.modifiers)?;
         emit_reflection_owner_bool_property(
             ctx,
@@ -446,6 +454,12 @@ pub(super) fn emit_reflection_owner_metadata(
         emit_reflection_method_prototype_property(ctx, metadata.prototype_member.as_deref())?;
     }
     if owner_class_name == "ReflectionProperty" {
+        emit_reflection_owner_string_property_by_name(
+            ctx,
+            class_name,
+            "__class",
+            metadata.parent_class_name.as_deref().unwrap_or(""),
+        )?;
         emit_reflection_owner_int_property(ctx, class_name, "__modifiers", metadata.modifiers)?;
         emit_reflection_owner_type_property(ctx, class_name, metadata.type_metadata.as_ref())?;
         emit_reflection_owner_type_property_by_name(
@@ -497,6 +511,125 @@ pub(super) fn emit_reflection_owner_metadata(
     }
     emit_reflection_member_flag_properties(ctx, class_name, metadata.member_flags)?;
     Ok(())
+}
+
+/// Populates the source-file and line slots shared by class-like and callable reflection owners.
+fn emit_reflection_source_properties(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    metadata: &ReflectionOwnerMetadata,
+) -> Result<()> {
+    if !matches!(
+        class_name,
+        "ReflectionClass"
+            | "ReflectionObject"
+            | "ReflectionEnum"
+            | "ReflectionFunction"
+            | "ReflectionMethod"
+    ) {
+        return Ok(());
+    }
+    let Some(source_path) = reflection_source_file(ctx, class_name, metadata) else {
+        return Ok(());
+    };
+    let (start_line, end_line) = reflection_source_lines(ctx, class_name, metadata);
+    emit_reflection_owner_string_property_by_name(
+        ctx,
+        class_name,
+        "__file_name",
+        &source_path,
+    )?;
+    emit_reflection_owner_int_property(ctx, class_name, "__start_line", start_line as i64)?;
+    emit_reflection_owner_int_property(ctx, class_name, "__end_line", end_line as i64)?;
+    Ok(())
+}
+
+/// Resolves the physical source path for one reflected declaration.
+pub(super) fn reflection_source_file(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    metadata: &ReflectionOwnerMetadata,
+) -> Option<String> {
+    if class_name == "ReflectionFunction" {
+        return metadata
+            .reflected_name
+            .as_deref()
+            .and_then(|name| {
+                ctx.module
+                    .declared_function_source_files
+                    .get(&php_symbol_key(name))
+            })
+            .cloned()
+            .or_else(|| ctx.module.source_path.clone());
+    }
+    let reflected_class = if class_name == "ReflectionMethod" {
+        metadata.parent_class_name.as_deref()
+    } else {
+        metadata.reflected_name.as_deref()
+    };
+    reflected_class
+        .and_then(|name| {
+            ctx.module
+                .declared_class_source_files
+                .get(&php_symbol_key(name))
+        })
+        .cloned()
+        .or_else(|| ctx.module.source_path.clone())
+}
+
+/// Resolves the best available declaration line range for one reflected owner.
+pub(super) fn reflection_source_lines(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    metadata: &ReflectionOwnerMetadata,
+) -> (u32, u32) {
+    if class_name == "ReflectionFunction" {
+        return metadata
+            .reflected_name
+            .as_deref()
+            .and_then(|name| ctx.module.declared_function_source_lines.get(name).copied())
+            .unwrap_or((0, 0));
+    }
+    let reflected_class = if class_name == "ReflectionMethod" {
+        metadata.parent_class_name.as_deref()
+    } else {
+        metadata.reflected_name.as_deref()
+    };
+    let Some(reflected_class) = reflected_class else {
+        return (0, 0);
+    };
+    // A method's lines are its OWN declaration's, not its class's: php's
+    // `ReflectionMethod::getStartLine()` names the `function` line and `getEndLine()` the
+    // closing brace.
+    if class_name == "ReflectionMethod" {
+        let method_key = metadata.reflected_name.as_deref().map(php_symbol_key);
+        let method_span = ctx
+            .module
+            .class_infos
+            .get(reflected_class)
+            .zip(method_key)
+            .and_then(|(info, method_key)| {
+                info.method_decls
+                    .iter()
+                    .find(|method| php_symbol_key(&method.name) == method_key)
+                    .map(|method| method.span)
+            });
+        if let Some(span) = method_span.filter(|span| span.line > 0) {
+            return (span.line, span.end_line.max(span.line));
+        }
+    }
+    if let Some(info) = ctx.module.class_infos.get(reflected_class) {
+        return (info.declaration_span.line, info.declaration_span.end_line);
+    }
+    if let Some(info) = ctx.module.interface_infos.get(reflected_class) {
+        return (info.declaration_span.line, info.declaration_span.end_line);
+    }
+    ctx.module
+        .declared_trait_source_lines
+        .get(reflected_class)
+        .copied()
+        .map(|line| (line, line))
+        .unwrap_or((0, 0))
 }
 
 /// Stores an integer immediate into a Reflection object's property slot.
@@ -594,4 +727,262 @@ pub(super) fn reflection_name_parts(reflected_name: &str) -> (&str, &str) {
         ),
         None => ("", reflected_name),
     }
+}
+
+/// The member-reflector slots a compiled class-like reflector fills on first use, each through
+/// its own `<slot>_filler` (the checker's `REFLECTION_*_MEMBER_READERS` run them). `__interfaces`
+/// and `__traits` are not here: no getter reads them, so a lazy reflector never builds them.
+pub(super) const REFLECTION_LAZY_MEMBER_SLOTS: &[&str] = &[
+    "__reflection_constants",
+    "__methods",
+    "__constructor",
+    "__parent_class",
+    "__properties",
+    "__cases",
+];
+
+/// Builds a class-like owner's member reflectors into their slots: interfaces, traits, class
+/// constants, methods, constructor, parent class, properties and, for an enum, its cases.
+///
+/// The object is in the integer result register on entry and exit, as for every slot emitter.
+pub(super) fn emit_reflection_owner_members(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    metadata: &ReflectionOwnerMetadata,
+) -> Result<()> {
+    emit_reflection_class_array_property_by_name(
+        ctx,
+        class_name,
+        "__interfaces",
+        &metadata.interface_names,
+    )?;
+    emit_reflection_class_array_property_by_name(
+        ctx,
+        class_name,
+        "__traits",
+        &metadata.trait_names,
+    )?;
+    for slot in REFLECTION_LAZY_MEMBER_SLOTS {
+        emit_reflection_owner_member_slot(ctx, class_name, metadata, slot)?;
+    }
+    Ok(())
+}
+
+/// Leaves each member slot that has members to its filler, and fills the empty ones now: an
+/// empty array, a null constructor or a `false` parent costs no reflector object.
+fn emit_reflection_owner_lazy_members(
+    ctx: &mut FunctionContext<'_>,
+    owner: ReflectionOwnerKind,
+    class_name: &str,
+    metadata: &ReflectionOwnerMetadata,
+    skip_generic: bool,
+) -> Result<()> {
+    for slot in REFLECTION_LAZY_MEMBER_SLOTS {
+        if !reflection_owner_member_slot_applies(class_name, slot) {
+            continue;
+        }
+        // A table-built reflector builds this slot from the row's name list when it is read.
+        if skip_generic && crate::reflection_table::generic_slots_for(ctx.module.closed_world).contains(slot) {
+            continue;
+        }
+        if reflection_owner_member_slot_is_empty(metadata, slot) {
+            emit_reflection_owner_member_slot(ctx, class_name, metadata, slot)?;
+            continue;
+        }
+        let label =
+            reflection_member_slot_filler_label(ctx, owner.clone(), class_name, metadata, slot)?;
+        emit_reflection_owner_code_address_property(
+            ctx,
+            class_name,
+            &format!("{}_filler", slot),
+            &label,
+        )?;
+    }
+    Ok(())
+}
+
+/// Whether `slot` exists on this owner class: only `ReflectionEnum` has `__cases`.
+fn reflection_owner_member_slot_applies(class_name: &str, slot: &str) -> bool {
+    slot != "__cases" || class_name == "ReflectionEnum"
+}
+
+/// Whether the reflected class-like has nothing for `slot`.
+fn reflection_owner_member_slot_is_empty(metadata: &ReflectionOwnerMetadata, slot: &str) -> bool {
+    match slot {
+        "__reflection_constants" => metadata.constant_reflection_members.is_empty(),
+        "__methods" => metadata.method_members.is_empty(),
+        "__constructor" => metadata.constructor_member.is_none(),
+        "__parent_class" => metadata.parent_class_name.is_none(),
+        "__properties" => metadata.property_members.is_empty(),
+        "__cases" => metadata.enum_case_members.is_empty(),
+        _ => true,
+    }
+}
+
+/// Builds one member slot of a class-like owner held in the integer result register.
+pub(super) fn emit_reflection_owner_member_slot(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    metadata: &ReflectionOwnerMetadata,
+    slot: &str,
+) -> Result<()> {
+    match slot {
+        "__reflection_constants" => emit_reflection_member_array_property_by_name(
+            ctx,
+            class_name,
+            "__reflection_constants",
+            "ReflectionClassConstant",
+            &metadata.constant_reflection_members,
+        ),
+        "__methods" => emit_reflection_member_array_property_by_name(
+            ctx,
+            class_name,
+            "__methods",
+            "ReflectionMethod",
+            &metadata.method_members,
+        ),
+        "__constructor" => {
+            emit_reflection_constructor_property(ctx, class_name, metadata.constructor_member.as_ref())
+        }
+        "__parent_class" => emit_reflection_parent_class_property(
+            ctx,
+            class_name,
+            metadata.parent_class_name.as_deref(),
+        ),
+        "__properties" => emit_reflection_member_array_property_by_name(
+            ctx,
+            class_name,
+            "__properties",
+            "ReflectionProperty",
+            &metadata.property_members,
+        ),
+        "__cases" if class_name == "ReflectionEnum" => {
+            let case_class = if metadata.type_metadata.is_some() {
+                "ReflectionEnumBackedCase"
+            } else {
+                "ReflectionEnumUnitCase"
+            };
+            emit_reflection_member_array_property_by_name(
+                ctx,
+                "ReflectionEnum",
+                "__cases",
+                case_class,
+                &metadata.enum_case_members,
+            )
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Stores the address of the code at `label` into one integer slot of the owner object held in
+/// the integer result register, which it leaves there.
+pub(super) fn emit_reflection_owner_code_address_property(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    property_name: &str,
+    label: &str,
+) -> Result<()> {
+    let class_info = ctx
+        .module
+        .class_infos
+        .get(class_name)
+        .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+    let offset = reflection_property_offset(class_info, property_name)?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let address_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_reg_move(ctx.emitter, object_reg, result_reg);
+    abi::emit_symbol_address(ctx.emitter, address_reg, label);
+    abi::emit_store_to_address(ctx.emitter, address_reg, object_reg, offset);
+    abi::emit_store_zero_to_address(ctx.emitter, object_reg, offset + 8);
+    abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
+    Ok(())
+}
+
+/// Which value-bearing slots the reflection table row already carries as data, so the extras
+/// filler need not store them.
+#[derive(Clone, Copy, Default)]
+pub(super) struct TableValues {
+    pub(super) constants: bool,
+    pub(super) defaults: bool,
+}
+
+/// Fills the slots of a table-built class reflector that are not plain data: attributes, trait
+/// aliases, constant values, default and static property values, an enum's backing type, and --
+/// when `lazy_members` -- the addresses of the shared member fillers.
+///
+/// The reflector is in the integer result register on entry and exit, as for every slot emitter.
+/// The constructor (`ReflectionClass::__construct`, filled from the module reflection table) has
+/// already stored every name, flag, line and list; this is the part that needs code.
+pub(super) fn emit_reflection_class_extras(
+    ctx: &mut FunctionContext<'_>,
+    owner: ReflectionOwnerKind,
+    class_name: &str,
+    metadata: &ReflectionOwnerMetadata,
+    lazy_members: bool,
+    in_table: TableValues,
+) -> Result<()> {
+    if !metadata.attr_names.is_empty() {
+        emit_reflection_attrs_property(ctx, class_name, &metadata.attr_names, &metadata.attr_args)?;
+    }
+    if !metadata.trait_aliases.is_empty() {
+        emit_reflection_string_assoc_property_by_name(
+            ctx,
+            class_name,
+            "__trait_aliases",
+            &metadata.trait_aliases,
+        )?;
+    }
+    if !in_table.constants && !metadata.constant_members.is_empty() {
+        emit_reflection_constant_array_property_by_name(
+            ctx,
+            class_name,
+            "__constants",
+            &metadata.constant_members,
+        )?;
+    }
+    if !in_table.defaults && !metadata.default_property_members.is_empty() {
+        emit_reflection_default_property_array_property_by_name(
+            ctx,
+            class_name,
+            "__default_properties",
+            &metadata.default_property_members,
+        )?;
+    }
+    if !metadata.static_property_members.is_empty() {
+        emit_reflection_static_property_array_property_by_name(
+            ctx,
+            class_name,
+            "__static_properties",
+            &metadata.static_property_members,
+        )?;
+    }
+    if class_name == "ReflectionEnum" && metadata.type_metadata.is_some() {
+        emit_reflection_owner_type_property_by_name(
+            ctx,
+            class_name,
+            "__backing_type",
+            metadata.type_metadata.as_ref(),
+        )?;
+    }
+    if lazy_members {
+        emit_reflection_owner_lazy_members(ctx, owner, class_name, metadata, true)?;
+    }
+    Ok(())
+}
+
+/// Whether a table-built reflector of this class-like needs the extras filler at all.
+pub(super) fn reflection_class_extras_are_needed(
+    class_name: &str,
+    metadata: &ReflectionOwnerMetadata,
+    lazy_members: bool,
+    in_table: TableValues,
+) -> bool {
+    !metadata.attr_names.is_empty()
+        || !metadata.trait_aliases.is_empty()
+        || (!in_table.constants && !metadata.constant_members.is_empty())
+        || (!in_table.defaults && !metadata.default_property_members.is_empty())
+        || !metadata.static_property_members.is_empty()
+        || (class_name == "ReflectionEnum" && metadata.type_metadata.is_some())
+        || lazy_members
 }

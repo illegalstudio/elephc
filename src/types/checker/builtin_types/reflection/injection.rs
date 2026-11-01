@@ -32,10 +32,13 @@ pub(crate) fn inject_builtin_reflection(
         "ReflectionClass",
         "ReflectionObject",
         "ReflectionEnum",
+        "ReflectionFunctionAbstract",
         "ReflectionFunction",
         "ReflectionMethod",
         "ReflectionProperty",
         "ReflectionParameter",
+        "ReflectionReference",
+        "ReflectionType",
         "ReflectionNamedType",
         "ReflectionUnionType",
         "ReflectionIntersectionType",
@@ -106,6 +109,16 @@ pub(crate) fn inject_builtin_reflection(
                     Some(TypeExpr::Bool),
                     false_bool(),
                 ),
+                // Filled when the object is materialized, like every other reflection class's
+                // `__string`. BOTH materializers fill it: the compile-time emitter in
+                // `lower_inst::builtins::attributes`, and `__elephc_eval_reflection_attribute_new`
+                // for the eval bridge, which is the one a Symfony build actually uses.
+                builtin_property(
+                    "__string",
+                    Visibility::Private,
+                    Some(TypeExpr::Str),
+                    empty_string(),
+                ),
             ],
             methods: vec![
                 builtin_reflection_attribute_constructor_method(),
@@ -114,6 +127,7 @@ pub(crate) fn inject_builtin_reflection(
                 builtin_reflection_attribute_new_instance_method(),
                 builtin_reflection_class_int_method("getTarget", "__target"),
                 builtin_reflection_class_bool_method("isRepeated", "__is_repeated"),
+                builtin_reflection_class_string_method("__toString", "__string"),
             ],
             attributes: Vec::new(),
             // PHP declares exactly one constant on this class, and it is the second argument to
@@ -131,14 +145,12 @@ pub(crate) fn inject_builtin_reflection(
         builtin_reflection_object_class(),
     );
     class_map.insert("ReflectionEnum".to_string(), builtin_reflection_enum_class());
-    class_map.insert("ReflectionFunction".to_string(), builtin_reflection_function());
-    class_map.insert(
-        "ReflectionMethod".to_string(),
-        builtin_reflection_owner_class(
+    let mut reflection_function = builtin_reflection_function();
+    let mut reflection_method = builtin_reflection_owner_class(
             "ReflectionMethod",
             true,
             vec![
-                ("class_name", Some(TypeExpr::Str), None, false),
+                ("class_name", Some(class_string_or_object_type()), None, false),
                 (
                     "method_name",
                     Some(TypeExpr::Nullable(Box::new(TypeExpr::Str))),
@@ -146,48 +158,80 @@ pub(crate) fn inject_builtin_reflection(
                     false,
                 ),
             ],
-        ),
     );
+    let reflection_function_abstract = builtin_reflection_function_abstract_class(
+        &reflection_function,
+        &reflection_method,
+    );
+    if crate::reflection_table::enabled() {
+        member_table_ctor::apply_method_table(&mut reflection_method);
+    }
+    if crate::reflection_table::enabled() {
+        member_table_ctor::apply_function_table(&mut reflection_function);
+    }
+    reflection_function.extends = Some("ReflectionFunctionAbstract".to_string());
+    reflection_function.is_final = false;
+    reflection_method.extends = Some("ReflectionFunctionAbstract".to_string());
+    reflection_method.is_final = false;
     class_map.insert(
-        "ReflectionProperty".to_string(),
-        builtin_reflection_owner_class(
-            "ReflectionProperty",
-            true,
-            vec![
-                ("class_name", Some(TypeExpr::Str), None, false),
-                ("property_name", Some(TypeExpr::Str), None, false),
-            ],
-        ),
+        "ReflectionFunctionAbstract".to_string(),
+        reflection_function_abstract,
     );
+    class_map.insert("ReflectionFunction".to_string(), reflection_function);
+    class_map.insert("ReflectionMethod".to_string(), reflection_method);
+    let mut reflection_property = builtin_reflection_owner_class(
+        "ReflectionProperty",
+        true,
+        vec![
+            ("class_name", Some(class_string_or_object_type()), None, false),
+            ("property_name", Some(TypeExpr::Str), None, false),
+        ],
+    );
+    if crate::reflection_table::enabled() {
+        member_table_ctor::apply_property_table(&mut reflection_property);
+    }
+    class_map.insert("ReflectionProperty".to_string(), reflection_property);
+    let mut reflection_parameter = builtin_reflection_parameter();
+    if crate::reflection_table::enabled() {
+        member_table_ctor::apply_parameter_table(&mut reflection_parameter);
+    }
+    class_map.insert("ReflectionParameter".to_string(), reflection_parameter);
     class_map.insert(
-        "ReflectionParameter".to_string(),
-        builtin_reflection_parameter(),
+        "ReflectionReference".to_string(),
+        builtin_reflection_reference(),
     );
-    class_map.insert("ReflectionNamedType".to_string(), builtin_reflection_named_type());
-    class_map.insert(
-        "ReflectionUnionType".to_string(),
-        builtin_reflection_union_type(),
-    );
-    class_map.insert(
-        "ReflectionIntersectionType".to_string(),
-        builtin_reflection_intersection_type(),
-    );
+    class_map.insert("ReflectionType".to_string(), builtin_reflection_type());
+    let mut named_type = builtin_reflection_named_type();
+    let mut union_type = builtin_reflection_union_type();
+    let mut intersection_type = builtin_reflection_intersection_type();
+    if crate::reflection_table::enabled() {
+        member_table_ctor::apply_type_tables(&mut named_type, &mut union_type, &mut intersection_type);
+    }
+    class_map.insert("ReflectionNamedType".to_string(), named_type);
+    class_map.insert("ReflectionUnionType".to_string(), union_type);
+    class_map.insert("ReflectionIntersectionType".to_string(), intersection_type);
     for class_name in [
         "ReflectionClassConstant",
         "ReflectionEnumUnitCase",
         "ReflectionEnumBackedCase",
     ] {
-        class_map.insert(
-            class_name.to_string(),
-            builtin_reflection_owner_class(
-                class_name,
-                true,
-                vec![
-                    ("class_name", Some(TypeExpr::Str), None, false),
-                    ("constant_name", Some(TypeExpr::Str), None, false),
-                ],
-            ),
+        let mut class = builtin_reflection_owner_class(
+            class_name,
+            true,
+            vec![
+                ("class_name", Some(class_string_or_object_type()), None, false),
+                ("constant_name", Some(TypeExpr::Str), None, false),
+            ],
         );
+        if crate::reflection_table::enabled() {
+            let kind = match class_name {
+                "ReflectionClassConstant" => member_table_ctor::ConstantKind::Constant,
+                "ReflectionEnumUnitCase" => member_table_ctor::ConstantKind::UnitCase,
+                _ => member_table_ctor::ConstantKind::BackedCase,
+            };
+            member_table_ctor::apply_constant_table(&mut class, kind);
+        }
+        class_map.insert(class_name.to_string(), class);
     }
 
     Ok(())

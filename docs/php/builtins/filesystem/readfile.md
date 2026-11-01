@@ -2,19 +2,21 @@
 title: "readfile()"
 description: "Outputs a file."
 sidebar:
-  order: 296
+  order: 307
 ---
 
 ## readfile()
 
 ```php
-function readfile(string $filename): mixed
+function readfile(string $filename, bool $use_include_path = false, mixed $context = null): mixed
 ```
 
 Outputs a file.
 
 **Parameters**:
 - `$filename` (`string`)
+- `$use_include_path` (`bool`), default `false`, optional
+- `$context` (`mixed`), default `null`, optional
 
 **Returns**: `mixed`
 

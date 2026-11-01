@@ -31,6 +31,7 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::abi;
+use crate::codegen_support::runtime::eval_bridge::EVAL_OWNER_FILTER_MASK;
 
 /// Emits `__rt_call_object_destructor` for the active target.
 /// Input: x0/rdi = object pointer (heap-backed, non-null, an object instance).
@@ -87,6 +88,17 @@ fn emit_call_object_destructor_aarch64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x10", "_elephc_eval_dynamic_object_destruct_fn");
     emitter.instruction("ldr x10, [x10]");                                      // x10 = optional eval dynamic destructor callback
     emitter.instruction("cbz x10, __rt_call_object_destructor_static");         // no eval callback installed → use static class table
+    // Only an identity the interpreter registered can have an eval destructor, and the owner
+    // filter counts those per bucket: an empty bucket skips the call into the registry, which
+    // every object free used to make once the bridge was linked.
+    abi::emit_symbol_address(emitter, "x11", "_elephc_eval_owner_filter");
+    emitter.instruction("ldr x11, [x11]");                                      // x11 = eval owner filter, published with the callback
+    emitter.instruction("cbz x11, __rt_call_object_destructor_eval");           // no filter published → let the callback decide
+    emitter.instruction("lsr x12, x0, #4");                                     // drop the identity's alignment bits, as the registry does
+    emitter.instruction(&format!("and x12, x12, #{}", EVAL_OWNER_FILTER_MASK)); // x12 = filter bucket of this object
+    emitter.instruction("ldr w12, [x11, x12, lsl #2]");                         // w12 = eval-owned identities in that bucket
+    emitter.instruction("cbz w12, __rt_call_object_destructor_static");         // none → this object has no eval destructor
+    emitter.label("__rt_call_object_destructor_eval");
     emitter.instruction("movz w12, #0x8000, lsl #16");                          // w12 = 0x80000000, the destruction-in-progress flag bit
     emitter.instruction("orr w9, w9, w12");                                     // mark destruction in progress before boxing borrowed $this
     emitter.instruction("str w9, [x0, #-12]");                                  // persist the guard flag in the refcount field
@@ -150,6 +162,18 @@ fn emit_call_object_destructor_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // r10 = optional eval dynamic destructor callback
     emitter.instruction("test r10, r10");                                       // is the eval callback installed?
     emitter.instruction("jz __rt_call_object_destructor_static_x86");           // no eval callback installed → use static class table
+    // Only an identity the interpreter registered can have an eval destructor, and the owner
+    // filter counts those per bucket: an empty bucket skips the call into the registry.
+    abi::emit_symbol_address(emitter, "r11", "_elephc_eval_owner_filter");
+    emitter.instruction("mov r11, QWORD PTR [r11]");                            // r11 = eval owner filter, published with the callback
+    emitter.instruction("test r11, r11");                                       // was a filter published?
+    emitter.instruction("jz __rt_call_object_destructor_eval_x86");             // no filter published → let the callback decide
+    emitter.instruction("mov rcx, rdi");                                        // copy the identity to derive its bucket
+    emitter.instruction("shr rcx, 4");                                          // drop the identity's alignment bits, as the registry does
+    emitter.instruction(&format!("and rcx, {}", EVAL_OWNER_FILTER_MASK));       // rcx = filter bucket of this object
+    emitter.instruction("cmp DWORD PTR [r11 + rcx * 4], 0");                    // any eval-owned identity in that bucket?
+    emitter.instruction("je __rt_call_object_destructor_static_x86");           // none → this object has no eval destructor
+    emitter.label("__rt_call_object_destructor_eval_x86");
     emitter.instruction("or eax, 0x80000000");                                  // mark destruction in progress before boxing borrowed $this
     emitter.instruction("mov DWORD PTR [rdi - 12], eax");                       // persist the guard flag in the refcount field
     emitter.instruction("push rbp");                                            // align the stack and save the caller frame pointer

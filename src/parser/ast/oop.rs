@@ -82,6 +82,13 @@ pub struct PropertyHooks {
     pub get: bool,
     pub set: bool,
     pub get_by_ref: bool,
+    /// Whether any hook body touches `$this-><prop>`, which is what makes the property BACKED.
+    ///
+    /// PHP gives a hooked property a slot exactly when a hook names it, and calls it VIRTUAL
+    /// otherwise. Only a virtual property refuses a write: a backed one keeps ordinary storage
+    /// that the declaring class assigns like any other. Recorded by the parser, which is where
+    /// the hook bodies are still in hand.
+    pub backed: bool,
     /// Whether the original hook bodies explicitly access this property's backing value.
     pub uses_backing_slot: bool,
 }

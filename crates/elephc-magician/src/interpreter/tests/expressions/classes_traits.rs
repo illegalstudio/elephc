@@ -11,6 +11,59 @@
 use super::super::super::*;
 use super::super::support::*;
 
+#[test]
+fn duplicate_interface_reports_redeclaration_not_unsupported_syntax() {
+    crate::errors::clear_eval_runtime_failure();
+    let program = parse_fragment(b"interface CollisionProbe {} interface CollisionProbe {}")
+        .expect("parse interfaces");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    assert_eq!(execute_program(&program, &mut scope, &mut values).err(),
+        Some(EvalStatus::RuntimeFatal));
+    let failure = crate::errors::take_eval_runtime_failure().expect("redeclaration diagnostic");
+    assert!(failure.clause().contains("Cannot redeclare interface CollisionProbe"),
+        "{}", failure.clause());
+}
+
+/// Concrete constructors have no signature or visibility inheritance contract.
+#[test]
+fn execute_program_constructor_override_concrete_parent() {
+    for source in [
+        "class P { public function __construct(?string $name = null, ?callable $loader = null) {} } class C extends P { public function __construct() {} }",
+        "class P { public function __construct(int $value) {} } class C extends P { private function __construct(string $value, int $extra) {} }",
+        "class P { public function __construct(int &$value, ...$rest) {} } class C extends P { public function __construct(string $value) {} }",
+        "abstract class A { abstract public function __construct(int $x); } abstract class B extends A { abstract public function __construct(mixed $x); } class C extends B { public function __construct(int $x) {} }",
+    ] {
+        let program = parse_fragment(source.as_bytes()).expect("parse constructor override");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        execute_program(&program, &mut scope, &mut values)
+            .unwrap_or_else(|status| panic!("valid constructor override rejected: {status:?}: {source}"));
+    }
+}
+
+/// Constructor exceptions must not bypass final methods or abstract prototypes.
+#[test]
+fn execute_program_constructor_override_preserves_constraints() {
+    for source in [
+        "class P { final public function __construct() {} } class C extends P { public function __construct() {} }",
+        "class P { final private function __construct() {} } class C extends P { public function __construct() {} }",
+        "abstract class P { abstract public function __construct(int $value); } class C extends P { public function __construct() {} }",
+        "abstract class P { abstract public function __construct(int $value); } class M extends P { public function __construct(int $value) {} } class C extends M { public function __construct() {} }",
+        "interface I { public function __construct(int $value); } class P implements I { public function __construct(int $value) {} } class C extends P { public function __construct() {} }",
+        "abstract class A { abstract protected function __construct(int $x); } class B extends A { public function __construct(mixed $x) {} } class C extends B { protected function __construct(int $x) {} }",
+    ] {
+        let program = parse_fragment(source.as_bytes()).expect("parse constructor override");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        assert_eq!(
+            execute_program(&program, &mut scope, &mut values).err(),
+            Some(EvalStatus::RuntimeFatal),
+            "invalid constructor override accepted: {source}",
+        );
+    }
+}
+
 /// Verifies eval-declared classes create objects with properties and methods.
 #[test]
 fn execute_program_constructs_eval_declared_class_with_method() {

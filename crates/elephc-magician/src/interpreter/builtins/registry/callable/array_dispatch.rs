@@ -18,17 +18,52 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match callback {
         EvaluatedCallable::ForeignContext { callback, owner } => {
-            let Some(owner_context) = (unsafe { owner.context_ptr().as_mut() }) else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_evaluated_callable_with_call_array_args(
-                callback,
-                evaluated_args,
-                owner_context,
-                values,
-            )
+            with_foreign_owner_context(owner, context, values, |owner_context, values| {
+                eval_evaluated_callable_with_call_array_args(
+                    callback,
+                    evaluated_args,
+                    owner_context,
+                    values,
+                )
+            })
         }
         EvaluatedCallable::Named { name, .. } => {
+            if let Some(closure) = context.closure(name).cloned() {
+                let parameter_is_by_ref = closure.function().parameter_is_by_ref();
+                let by_ref_mode = EvalByRefBindingMode::WarnByValue {
+                    callable_name: closure.function().name(),
+                };
+                // A non-static closure or arrow function declared inside a method implicitly
+                // captured `$this` at its declaration site (`eval_closure_expr`); an unbound call
+                // through a plain variable (`$f(...)`) must still see it, exactly as it would
+                // through the direct call path in `execution.rs`. Deriving the called (late
+                // static) class from the captured object itself -- rather than reusing whatever
+                // lexical scope was captured -- is also what makes `static::` inside the closure
+                // follow the RUNTIME class of that `$this`, not the class that lexically declared
+                // the closure (a closure declared in a parent method but invoked on a child
+                // instance must see `static::` as the child).
+                return match closure.declaring_this() {
+                    Some(this_object) => eval_closure_with_evaluated_args_and_bound_this_scope_ref_mode(
+                        &closure,
+                        this_object,
+                        closure.declaring_class_scope().map(str::to_string),
+                        parameter_is_by_ref,
+                        evaluated_args,
+                        by_ref_mode,
+                        context,
+                        values,
+                    ),
+                    None => eval_closure_with_evaluated_args_and_bound_scope_ref_mode(
+                        &closure,
+                        closure.declaring_class_scope().map(str::to_string),
+                        parameter_is_by_ref,
+                        evaluated_args,
+                        by_ref_mode,
+                        context,
+                        values,
+                    ),
+                };
+            }
             eval_callable_with_call_array_args(name, evaluated_args, context, values)
         }
         EvaluatedCallable::BoundClosure {
@@ -55,6 +90,16 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
         EvaluatedCallable::InvokableObject { object } => {
             eval_invokable_object_with_call_user_func_args(*object, evaluated_args, context, values)
         }
+        EvaluatedCallable::NativeDescriptor { descriptor } => {
+            let Some(decoded) =
+                (unsafe { decode_callable_descriptor(*descriptor as *mut std::ffi::c_void) })
+            else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            let bound =
+                bind_evaluated_native_function_args(&decoded.function, evaluated_args, context, values)?;
+            eval_native_function_with_values(decoded.function, bound, context, values)
+        }
         EvaluatedCallable::ObjectMethod {
             object,
             method,
@@ -68,6 +113,14 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
                 context,
                 values,
             )?;
+            // A Reflection owner's methods are answered by the interpreter's own reflection
+            // layer, which the ordinary method dispatch consults first; the native body sees a
+            // reflector the interpreter materialized and answers nothing useful for it. Doctrine's
+            // Instantiator returns `[$reflectionClass, 'newInstanceWithoutConstructor']` and calls
+            // it, so every entity hydration built a null and then `ReflectionClass("")`.
+            let native_class = native_class
+                .as_deref()
+                .filter(|class| !crate::interpreter::reflection::eval_is_reflection_owner_class(class));
             match native_class {
             Some(native_class) => eval_native_method_with_evaluated_args_for_call_user_func_unchecked_bridge_scope(
                 *object,
@@ -79,13 +132,19 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
                 context,
                 values,
             ),
-            None => eval_object_method_with_call_user_func_args(
-                *object,
-                method,
-                EvalObjectCallbackKind::Method,
-                evaluated_args,
+            None => super::execution::with_closure_method_scope(
+                bridge_scope.as_deref(),
                 context,
-                values,
+                |context| {
+                    eval_object_method_with_call_user_func_args(
+                        *object,
+                        method,
+                        EvalObjectCallbackKind::Method,
+                        evaluated_args,
+                        context,
+                        values,
+                    )
+                },
             ),
             }
         }
@@ -222,7 +281,7 @@ pub(in crate::interpreter) fn eval_callable_with_call_array_args(
     if let Some(closure) = context.closure(name).cloned() {
         return eval_closure_with_evaluated_args_and_bound_scope_ref_mode(
             &closure,
-            None,
+            closure.declaring_class_scope().map(str::to_string),
             closure.function().parameter_is_by_ref(),
             evaluated_args,
             EvalByRefBindingMode::WarnByValue {
@@ -265,5 +324,6 @@ pub(in crate::interpreter) fn eval_callable_with_call_array_args(
             return Ok(result);
         }
     }
+    note_eval_runtime_failure(format!("callable {name}() is not defined"), context);
     Err(EvalStatus::UnsupportedConstruct)
 }

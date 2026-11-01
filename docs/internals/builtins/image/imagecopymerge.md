@@ -2,7 +2,7 @@
 title: "imagecopymerge() - internals"
 description: "Compiler internals for imagecopymerge(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 491
+  order: 504
 ---
 
 ## `imagecopymerge()` - internals

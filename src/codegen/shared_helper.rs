@@ -7,6 +7,8 @@
 //! - `crate::codegen::shared_count_guard` for `count()`'s countable check.
 //! - `crate::codegen::eval_inventory_helper` and `crate::codegen::eval_status_helper`
 //!   for the eval catalog and status helpers.
+//! - `crate::codegen::lower_inst::objects::reflection::materializer` for the per-class
+//!   Reflection owner object, through the zero-argument `emit_shared_object_helper` variant.
 //!
 //! Key details:
 //! - The helper takes its boxed `Mixed` in the INT RESULT register, not an argument register,
@@ -58,7 +60,27 @@ pub(super) fn emit_shared_helper(
     comment: &str,
     body: impl FnOnce(&mut FunctionContext<'_>) -> Result<()>,
 ) -> Result<()> {
-    let function = helper_function(label, return_php_type);
+    emit_shared_helper_in_scope(
+        module, emitter, data, shared, regalloc_linear, label, return_php_type, None, comment, body,
+    )
+}
+
+/// [`emit_shared_helper`] for a body that resolves php visibility from `lexical_class`.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn emit_shared_helper_in_scope(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    shared: &mut SharedCodegenState,
+    regalloc_linear: bool,
+    label: &str,
+    return_php_type: PhpType,
+    lexical_class: Option<&str>,
+    comment: &str,
+    body: impl FnOnce(&mut FunctionContext<'_>) -> Result<()>,
+) -> Result<()> {
+    let mut function = helper_function(label, return_php_type);
+    function.lexical_class = lexical_class.map(str::to_string);
     // Shared helpers own no cleanup-tracked locals, so an exception can skip
     // their synthetic frame and unwind through the caller's activation record.
     let layout = frame::layout_for_function(
@@ -123,6 +145,55 @@ pub(super) fn emit_global_shared_helper(
     body(&mut ctx)?;
     emit_helper_exit(&mut ctx);
     Ok(())
+}
+
+/// Emits a zero-argument shared helper that returns one fresh object in the integer result register.
+///
+/// The Reflection materializers take nothing and hand back an owned object, so they need a
+/// frame but not the boxed-`Mixed` parameter `emit_shared_helper` declares.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn emit_shared_object_helper(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    shared: &mut SharedCodegenState,
+    label: &str,
+    owner_class: &str,
+    comment: &str,
+    body: impl FnOnce(&mut FunctionContext<'_>) -> Result<()>,
+) -> Result<()> {
+    let function = object_helper_function(label, owner_class);
+    // Shared helpers own no cleanup-tracked locals, so an exception can skip
+    // their synthetic frame and unwind through the caller's activation record.
+    let layout = frame::layout_for_function(&function, emitter.target, false, false, false);
+    let mut ctx = FunctionContext::new(
+        module, &function, emitter, data, shared, layout, false, false, false, None,
+    );
+
+    ctx.emitter.blank();
+    ctx.emitter.comment(comment);
+    ctx.emitter.label(label);
+    emit_helper_entry(&mut ctx);
+    body(&mut ctx)?;
+    emit_helper_exit(&mut ctx);
+    Ok(())
+}
+
+/// Builds the minimal zero-argument EIR function used by object materializer helpers.
+fn object_helper_function(label: &str, owner_class: &str) -> Function {
+    let return_php_type = PhpType::Object(owner_class.to_string());
+    let mut function = Function::new(
+        label.to_string(),
+        IrType::Heap(IrHeapKind::Object),
+        return_php_type,
+    );
+    function.flags.is_synthetic = true;
+    let entry = BlockId::from_raw(0);
+    function
+        .blocks
+        .push(BasicBlock::new(entry, "entry".to_string(), Vec::new()));
+    function.entry = entry;
+    function
 }
 
 /// Builds the minimal EIR function a `FunctionContext` needs to exist.

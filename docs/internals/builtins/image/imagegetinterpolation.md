@@ -2,7 +2,7 @@
 title: "imagegetinterpolation() - internals"
 description: "Compiler internals for imagegetinterpolation(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 520
+  order: 533
 ---
 
 ## `imagegetinterpolation()` - internals

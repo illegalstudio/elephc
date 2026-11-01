@@ -490,7 +490,11 @@ pub(crate) fn build_interface_info_recursive(
                 ));
             }
         }
-        iface_constants.insert(c.name.clone(), c.value.clone());
+        let value = super::classes::constants::resolve_lexical_interface_constant_value(
+            &c.value,
+            &interface.name,
+        )?;
+        iface_constants.insert(c.name.clone(), value);
         if let Some(type_expr) = &c.type_expr {
             constant_types.insert(c.name.clone(), type_expr.clone());
         } else {
@@ -518,6 +522,7 @@ pub(crate) fn build_interface_info_recursive(
         interface.name.clone(),
         InterfaceInfo {
             interface_id: *next_interface_id,
+            doc_comment: checker.interface_doc_comments.get(&interface.name).cloned(),
             declaration_span: interface.span,
             parents: interface.extends.clone(),
             properties,

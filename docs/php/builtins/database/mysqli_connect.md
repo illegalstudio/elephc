@@ -2,7 +2,7 @@
 title: "mysqli_connect()"
 description: "Opens a connection to a MySQL server."
 sidebar:
-  order: 108
+  order: 119
 ---
 
 ## mysqli_connect()

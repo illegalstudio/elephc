@@ -58,3 +58,32 @@ mod tests {
         }
     }
 }
+
+/// Drops one leading `\` from the class-name string in the string result registers.
+///
+/// php resolves a runtime class name written `'\Foo\Bar'` as `Foo\Bar`. Candidate ladders that
+/// compare the string against bare class names (`new $c`, `class_exists($c)`) must see the bare
+/// spelling: Laravel's console component factory builds `'\Illuminate\Console\View\Components\'
+/// . ucfirst($method)`, matched nothing, and every `$this->components->info()` failed.
+/// `bare_label` must be unique; the registers are left unchanged for an already bare name.
+pub fn emit_strip_leading_namespace_separator(emitter: &mut Emitter, bare_label: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cbz x2, {}", bare_label));            // an empty name has no separator to drop
+            emitter.instruction("ldrb w9, [x1]");                               // read the first byte of the class name
+            emitter.instruction("cmp w9, #92");                                 // is it the namespace separator?
+            emitter.instruction(&format!("b.ne {}", bare_label));               // a bare name is used as is
+            emitter.instruction("add x1, x1, #1");                              // skip the leading separator
+            emitter.instruction("sub x2, x2, #1");                              // and shorten the name by one byte
+        }
+        Arch::X86_64 => {
+            emitter.instruction("test rdx, rdx");                               // an empty name has no separator to drop
+            emitter.instruction(&format!("jz {}", bare_label));
+            emitter.instruction("cmp BYTE PTR [rax], 92");                      // is the first byte the namespace separator?
+            emitter.instruction(&format!("jne {}", bare_label));                // a bare name is used as is
+            emitter.instruction("add rax, 1");                                  // skip the leading separator
+            emitter.instruction("sub rdx, 1");                                  // and shorten the name by one byte
+        }
+    }
+    emitter.label(bare_label);
+}

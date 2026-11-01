@@ -15,8 +15,10 @@ mod postfix;
 mod simple;
 
 pub(crate) use list::{
+    lower_destructuring_assignment_expression,
     parse_destructuring_pattern_unpack,
     starts_destructuring_pattern,
+    try_parse_destructuring_assignment_expression_pattern,
 };
 pub(super) use list::{
     parse_list_construct_unpack,
@@ -30,12 +32,13 @@ pub(super) use locals::{
     parse_typed_assign,
 };
 pub(crate) use postfix::{
-    assignment_target_store_stmt, lower_nested_append_assignment,
+    assignment_target_append_stmt, assignment_target_store_stmt, lower_nested_append_assignment,
     can_replay_assignment_target,
     lower_postfix_incdec_assignment,
     update_dimension_base_is_snapshotted,
     update_index_needs_snapshot,
 };
+pub(crate) use compound::is_valid_reference_source;
 pub(super) use postfix::{
     try_parse_postfix_assignment,
     try_parse_postfix_incdec,

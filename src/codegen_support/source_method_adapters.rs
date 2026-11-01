@@ -37,13 +37,53 @@ pub(crate) enum MethodAbiPlan {
     AppendEmptyCollector,
     BoxArguments,
     BoxArgumentsAndAppendEmptyCollector,
+    /// The physical method adds optional int/bool parameters with literal defaults and the
+    /// generated collector (`RecursiveDirectoryIterator::hasChildren(bool $allowLinks = false)`
+    /// implementing `RecursiveIterator::hasChildren()` while every frame carries the backtrace
+    /// collector). The runtime's iterator machinery calls with the interface's arity, so the
+    /// wrapper appends each default and an empty collector.
+    AppendDefaultsAndEmptyCollector,
+    /// Both sides carry the generated collector, and the physical method inserts optional
+    /// parameters before it (`ObjectManager::find(string $className, $id)` implemented by
+    /// Doctrine's `EntityManager::find($className, $id, LockMode|int|null $lockMode = null,
+    /// ?int $lockVersion = null)`). The wrapper boxes the shared prefix where the representation
+    /// differs, materializes each inserted default, and forwards the caller's own collector.
+    BoxPrefixAppendDefaultsForwardCollector,
 }
 
 impl MethodAbiPlan {
     /// Returns whether the adapter must append an empty variadic collector argument.
     fn appends_collector(self) -> bool {
-        matches!(self, Self::AppendEmptyCollector | Self::BoxArgumentsAndAppendEmptyCollector)
+        matches!(
+            self,
+            Self::AppendEmptyCollector
+                | Self::BoxArgumentsAndAppendEmptyCollector
+                | Self::AppendDefaultsAndEmptyCollector
+        )
     }
+}
+
+/// Whether an implementation DECLARES more parameters than the interface method it satisfies.
+///
+/// php allows trailing optional ones (Symfony's `CacheWarmerAggregate::warmUp(..., ?SymfonyStyle
+/// $io = null)` behind `WarmableInterface::warmUp()`). [`plan_method_abi`] then keeps the
+/// wrapper plans that materialize those defaults, instead of the EIR adapter, which forwards only
+/// the interface's arity -- a call no ABI of the implementation accepts. The hidden
+/// `func_get_args` parameters are not declared ones.
+pub(crate) fn implementation_extends_interface_arity(
+    interface_sig: &crate::types::FunctionSig,
+    actual_sig: &crate::types::FunctionSig,
+) -> bool {
+    let declared = |sig: &crate::types::FunctionSig| {
+        sig.params
+            .iter()
+            .filter(|(name, _)| {
+                name != crate::func_args::HIDDEN_ARGC_PARAM
+                    && name != crate::func_args::HIDDEN_ARGS_PARAM
+            })
+            .count()
+    };
+    declared(actual_sig) > declared(interface_sig)
 }
 
 /// Plans the safe adaptation between one caller contract and its physical implementation.
@@ -54,7 +94,16 @@ pub(crate) fn plan_method_abi(
     if caller.by_ref_return && !physical.by_ref_return {
         return Err("source method ABI adaptation cannot bridge a by-reference return mismatch".to_string());
     }
-    if needs_eir_call_adapter(caller, physical) {
+    // An implementation declaring MORE parameters than its interface while carrying the
+    // generated argument collector takes the wrapper plans below
+    // (`BoxPrefixAppendDefaultsForwardCollector`, `AppendDefaultsAndEmptyCollector`), which
+    // materialize its inserted defaults and forward (or append) the collector. The EIR adapter
+    // re-spreads the collector after only the interface's arity, a call the backend cannot match
+    // to either ABI of the implementation (Symfony's `CacheWarmerAggregate::warmUp(..., $io)`).
+    if needs_eir_call_adapter(caller, physical)
+        && !(implementation_extends_interface_arity(caller, physical)
+            && crate::func_args::sig_collects_surplus_args(physical))
+    {
         return Ok(MethodAbiPlan::OptionalDefaults);
     }
     if caller.by_ref_return != physical.by_ref_return {
@@ -69,6 +118,46 @@ pub(crate) fn plan_method_abi(
         return Err("source method ABI adaptation cannot synthesize the hidden actual-count parameter".to_string());
     }
     if caller.variadic.is_some() {
+        if collector_bearing_defaulted_tail(caller, physical) {
+            // `ContainerInterface::get($id)` implemented by `Container::get($id, int
+            // $invalidBehavior = ...)` while every frame carries the backtrace collector: an
+            // interface call site passes the implementation's physical arity
+            // (`common_interface_implementation_signature`), so the table entry is the method
+            // itself, exactly as for the collector-free shape below.
+            return Ok(MethodAbiPlan::Direct);
+        }
+        // Both sides carry the collector at the same position and only a visible parameter's
+        // representation differs (`TranslatorInterface::trans(string $id, ...)` implemented with
+        // `?string $id`): the collector is an ordinary forwarded argument, and the boxing
+        // wrapper below handles the rest.
+        // Two REAL variadics in the same position align the same way: the caller packs the
+        // list, and only its element representation may need the boxing the wrapper performs
+        // (`CalculatorInterface::add(NumberInterface ...$addends)` implemented with the same
+        // declaration whose list the body widened to `array<mixed>`).
+        let collectors_align = crate::func_args::sig_collects_surplus_args(caller)
+            == crate::func_args::sig_collects_surplus_args(physical)
+            && physical.variadic.is_some()
+            && caller.params.len() == physical.params.len()
+            && caller.ref_params == physical.ref_params;
+        if collectors_align {
+            let mut boxes = false;
+            let compatible = caller.params.iter().zip(&physical.params).enumerate().all(
+                |(index, ((_, source_ty), (_, target_ty)))| {
+                    if same_physical_param_abi(source_ty, target_ty) {
+                        return true;
+                    }
+                    let boxable = !caller.ref_params[index] && can_box_param_as_mixed(source_ty, target_ty);
+                    boxes |= boxable;
+                    boxable
+                },
+            );
+            if compatible {
+                return Ok(if boxes { MethodAbiPlan::BoxArguments } else { MethodAbiPlan::Direct });
+            }
+        }
+        if collector_forwarding_defaulted_tail(caller, physical) {
+            return Ok(MethodAbiPlan::BoxPrefixAppendDefaultsForwardCollector);
+        }
         return Err("source method ABI adaptation cannot forward a source variadic with an unknown actual count".to_string());
     }
     let append_collector = crate::func_args::sig_collects_surplus_args(physical);
@@ -93,6 +182,29 @@ pub(crate) fn plan_method_abi(
                 || (projected.variadic.is_some() && index + 1 == projected.params.len()));
     if optional_tail && compatible_values {
         return Ok(MethodAbiPlan::OptionalDefaults);
+    }
+    if !compatible_shape
+        && !append_collector
+        && physical_only_adds_defaulted_tail(caller, &projected)
+    {
+        // `RecursiveDirectoryIterator::hasChildren(bool $allowLinks = false)` implementing
+        // `RecursiveIterator::hasChildren()`: php accepts the extra optional parameter, and the
+        // interface call reaches the implementation directly, as it did before this planner.
+        // The adapter cannot materialize the omitted default itself.
+        return Ok(MethodAbiPlan::Direct);
+    }
+    if !compatible_shape
+        && append_collector
+        && physical_only_adds_defaulted_tail(caller, &projected)
+        && (caller.params.len()..projected.params.len()).all(|index| {
+            matches!(projected.params[index].1.codegen_repr(), PhpType::Int | PhpType::Bool)
+                && projected.defaults[index]
+                    .as_ref()
+                    .and_then(literal_default_word)
+                    .is_some()
+        })
+    {
+        return Ok(MethodAbiPlan::AppendDefaultsAndEmptyCollector);
     }
     if !compatible_shape || !compatible_values {
         let reason = if append_collector {
@@ -214,6 +326,291 @@ fn variadic_absorbs_source_parameters(
     })
 }
 
+/// Returns whether `caller` and `physical` both end in the generated collector and `physical`
+/// only inserts optional by-value parameters before it.
+fn collector_bearing_defaulted_tail(caller: &FunctionSig, physical: &FunctionSig) -> bool {
+    if !crate::func_args::sig_collects_surplus_args(caller)
+        || !crate::func_args::sig_collects_surplus_args(physical)
+    {
+        return false;
+    }
+    let (Ok(caller_visible), Ok(physical_visible)) =
+        (source_visible_signature(caller), source_visible_signature(physical))
+    else {
+        return false;
+    };
+    physical_only_adds_defaulted_tail(&caller_visible, &physical_visible)
+}
+
+/// Returns whether both sides end in the generated collector and the physical method only
+/// inserts optional by-value parameters before it, with a prefix the wrapper can forward or box
+/// and defaults it can materialize.
+fn collector_forwarding_defaulted_tail(caller: &FunctionSig, physical: &FunctionSig) -> bool {
+    if !crate::func_args::sig_collects_surplus_args(caller)
+        || !crate::func_args::sig_collects_surplus_args(physical)
+    {
+        return false;
+    }
+    let (Ok(caller_visible), Ok(physical_visible)) =
+        (source_visible_signature(caller), source_visible_signature(physical))
+    else {
+        return false;
+    };
+    let prefix = caller_visible.params.len();
+    caller_visible.variadic.is_none()
+        && physical_visible.variadic.is_none()
+        && prefix < physical_visible.params.len()
+        && caller_visible.params.iter().zip(&physical_visible.params).enumerate().all(
+            |(index, ((_, source_ty), (_, target_ty)))| {
+                caller_visible.ref_params.get(index) == physical_visible.ref_params.get(index)
+                    && (same_physical_param_abi(source_ty, target_ty)
+                        || (!caller_visible.ref_params[index]
+                            && !indexed_array_widens_to_mixed_elements(source_ty, target_ty)
+                            && can_box_param_as_mixed(source_ty, target_ty)))
+            },
+        )
+        && (prefix..physical_visible.params.len()).all(|index| {
+            !physical_visible.ref_params.get(index).copied().unwrap_or(false)
+                && materialized_default(
+                    &physical_visible.params[index].1,
+                    physical_visible.defaults.get(index).and_then(Option::as_ref),
+                )
+                .is_some()
+        })
+}
+
+/// One inserted parameter's default as the wrapper writes it.
+#[derive(Clone, Debug)]
+enum MaterializedDefault {
+    /// A raw int/bool payload word.
+    Word(PhpType, i64),
+    /// `null` for a `mixed`-represented parameter: a boxed null the wrapper owns.
+    MixedNull,
+    /// `null` for a tagged-scalar parameter (`?int`): payload 0, tag null.
+    TaggedNull,
+}
+
+/// Returns how the wrapper materializes one inserted parameter's default, if it can.
+fn materialized_default(
+    ty: &PhpType,
+    default: Option<&crate::parser::ast::Expr>,
+) -> Option<MaterializedDefault> {
+    let default = default?;
+    let is_null = matches!(default.kind, crate::parser::ast::ExprKind::Null);
+    match ty.codegen_repr() {
+        PhpType::Int | PhpType::Bool => {
+            literal_default_word(default).map(|word| MaterializedDefault::Word(ty.codegen_repr(), word))
+        }
+        PhpType::Mixed if is_null => Some(MaterializedDefault::MixedNull),
+        PhpType::TaggedScalar if is_null => Some(MaterializedDefault::TaggedNull),
+        _ => None,
+    }
+}
+
+/// Emits the wrapper for [`MethodAbiPlan::BoxPrefixAppendDefaultsForwardCollector`].
+///
+/// Frame: one 16-byte slot per incoming argument (receiver first, the caller's collector last),
+/// then one per boxed prefix argument, one per inserted default, and the return slot. Every box
+/// the wrapper creates is published as a call-operand owner, so a throwing callee releases it on
+/// the unwind path, and released here after a normal return.
+fn emit_collector_forwarding_adapter(
+    emitter: &mut Emitter,
+    wrapper: &str,
+    implementation: &str,
+    kind: MethodKind,
+    caller: &FunctionSig,
+    physical: &FunctionSig,
+    box_return_as_mixed: bool,
+) -> Result<(), String> {
+    let caller_visible = source_visible_signature(caller)?;
+    let physical_visible = source_visible_signature(physical)?;
+    let prefix = caller_visible.params.len();
+    let implicit_ty = match kind {
+        MethodKind::Instance => PhpType::Object("__source_method_receiver".to_string()),
+        MethodKind::Static => PhpType::Int,
+    };
+    let mut incoming_types = vec![implicit_ty];
+    incoming_types.extend(caller.params.iter().map(|(_, ty)| ty.codegen_repr()));
+    let mut incoming_refs = vec![false];
+    incoming_refs.extend(caller.ref_params.iter().copied());
+    let collector_index = incoming_types.len() - 1;
+    let boxed_params = (0..prefix)
+        .filter(|&index| {
+            !caller_visible.ref_params[index]
+                && !same_physical_param_abi(&caller_visible.params[index].1, &physical_visible.params[index].1)
+        })
+        .map(|index| index + 1)
+        .collect::<Vec<_>>();
+    let defaults = (prefix..physical_visible.params.len())
+        .map(|index| {
+            materialized_default(
+                &physical_visible.params[index].1,
+                physical_visible.defaults.get(index).and_then(Option::as_ref),
+            )
+            .ok_or_else(|| "source method ABI adapter lost an inserted default".to_string())
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let boxed_offsets = (0..boxed_params.len())
+        .map(|index| (incoming_types.len() + 1 + index) * 16)
+        .collect::<Vec<_>>();
+    let default_offsets = (0..defaults.len())
+        .map(|index| (incoming_types.len() + boxed_params.len() + 1 + index) * 16)
+        .collect::<Vec<_>>();
+    let return_offset = (incoming_types.len() + boxed_params.len() + defaults.len() + 1) * 16;
+    let frame_size = return_offset + 16;
+
+    emitter.raw(".align 2");
+    emitter.label_global(wrapper);
+    emitter.comment("adapt an interface call to an implementation that inserts defaulted parameters");
+    abi::emit_frame_prologue(emitter, frame_size);
+    let mut cursor = abi::IncomingArgCursor::for_target(emitter.target, 0);
+    for (index, (ty, by_ref)) in incoming_types.iter().zip(&incoming_refs).enumerate() {
+        abi::emit_store_incoming_param(
+            emitter,
+            "source_method_arg",
+            ty,
+            (index + 1) * 16,
+            *by_ref,
+            &mut cursor,
+        );
+    }
+    let mut owner_offsets = Vec::new();
+    let mut outgoing: Vec<(PhpType, bool, usize)> = Vec::new();
+    outgoing.push((incoming_types[0].clone(), false, 16));
+    for param_index in 1..=prefix {
+        let incoming_offset = (param_index + 1) * 16;
+        if let Some(position) = boxed_params.iter().position(|&boxed| boxed == param_index) {
+            let source_ty = incoming_types[param_index].clone();
+            let offset = boxed_offsets[position];
+            restore_return_value(emitter, &source_ty, incoming_offset);
+            if source_ty == PhpType::Void {
+                abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0x7fff_ffff_ffff_fffe);
+            }
+            super::value_boxing::emit_box_current_value_as_mixed(emitter, &source_ty);
+            abi::store_at_offset(emitter, abi::int_result_reg(emitter), offset);
+            let owner_address = abi::tertiary_scratch_reg(emitter);
+            abi::emit_frame_slot_address(emitter, owner_address, offset);
+            abi::emit_push_call_operand_owner(emitter, owner_address, false);
+            owner_offsets.push(offset);
+            outgoing.push((PhpType::Mixed, false, offset));
+        } else {
+            outgoing.push((
+                incoming_types[param_index].clone(),
+                incoming_refs[param_index],
+                incoming_offset,
+            ));
+        }
+    }
+    for (default, &offset) in defaults.iter().zip(&default_offsets) {
+        match default {
+            MaterializedDefault::Word(ty, word) => {
+                abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), *word);
+                abi::store_at_offset(emitter, abi::int_result_reg(emitter), offset);
+                outgoing.push((ty.clone(), false, offset));
+            }
+            MaterializedDefault::MixedNull => {
+                abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0x7fff_ffff_ffff_fffe);
+                super::value_boxing::emit_box_current_value_as_mixed(emitter, &PhpType::Void);
+                abi::store_at_offset(emitter, abi::int_result_reg(emitter), offset);
+                let owner_address = abi::tertiary_scratch_reg(emitter);
+                abi::emit_frame_slot_address(emitter, owner_address, offset);
+                abi::emit_push_call_operand_owner(emitter, owner_address, false);
+                owner_offsets.push(offset);
+                outgoing.push((PhpType::Mixed, false, offset));
+            }
+            MaterializedDefault::TaggedNull => {
+                abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
+                abi::store_at_offset(emitter, abi::int_result_reg(emitter), offset);
+                abi::emit_load_int_immediate(
+                    emitter,
+                    abi::int_result_reg(emitter),
+                    crate::codegen_support::sentinels::TAGGED_SCALAR_TAG_NULL,
+                );
+                abi::store_at_offset(emitter, abi::int_result_reg(emitter), offset - 8);
+                outgoing.push((PhpType::TaggedScalar, false, offset));
+            }
+        }
+    }
+    outgoing.push((
+        incoming_types[collector_index].clone(),
+        incoming_refs[collector_index],
+        (collector_index + 1) * 16,
+    ));
+
+    let abi_types = outgoing
+        .iter()
+        .map(|(ty, by_ref, _)| if *by_ref { PhpType::Int } else { ty.codegen_repr() })
+        .collect::<Vec<_>>();
+    for (ty, (_, _, offset)) in abi_types.iter().zip(&outgoing) {
+        push_frame_value(emitter, ty, *offset);
+    }
+    let assignments = abi::build_outgoing_arg_assignments_for_target(emitter.target, &abi_types, 0);
+    let overflow = abi::materialize_outgoing_args(emitter, &assignments);
+    let pad = abi::outgoing_call_stack_pad_bytes(emitter.target, overflow);
+    abi::emit_reserve_temporary_stack(emitter, pad);
+    abi::emit_call_label(emitter, implementation);
+    abi::emit_release_temporary_stack(emitter, pad);
+    abi::emit_release_temporary_stack(emitter, overflow);
+
+    let physical_return = if physical.by_ref_return {
+        PhpType::Int
+    } else {
+        physical.return_type.codegen_repr()
+    };
+    preserve_return_value(emitter, &physical_return, return_offset);
+    for &offset in owner_offsets.iter().rev() {
+        abi::emit_pop_call_operand_owner(emitter);
+        abi::load_at_offset(emitter, abi::int_result_reg(emitter), offset);
+        abi::emit_store_zero_to_local_slot(emitter, offset);
+        abi::emit_call_label(emitter, "__rt_decref_any");
+    }
+    restore_return_value(emitter, &physical_return, return_offset);
+    if box_return_as_mixed {
+        if physical_return == PhpType::Void {
+            abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0x7fff_ffff_ffff_fffe);
+        }
+        // The implementation's return is owned and the box takes its own share: the
+        // retaining boxer leaked every `current()` value read through `Iterator` (an interface
+        // declared `mixed`, implemented `string`/`Item`).
+        super::value_boxing::emit_box_current_owned_value_as_mixed(emitter, &physical_return);
+    }
+    abi::emit_frame_restore(emitter, frame_size);
+    abi::emit_return(emitter);
+    Ok(())
+}
+
+/// Resolves a literal int/bool default to its argument word.
+fn literal_default_word(default: &crate::parser::ast::Expr) -> Option<i64> {
+    use crate::parser::ast::ExprKind;
+    match &default.kind {
+        ExprKind::IntLiteral(value) => Some(*value),
+        ExprKind::BoolLiteral(value) => Some(i64::from(*value)),
+        ExprKind::Negate(inner) => match inner.kind {
+            ExprKind::IntLiteral(value) => value.checked_neg(),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Returns whether `physical` is `caller` plus trailing optional by-value parameters, with the
+/// shared prefix already ABI-identical.
+fn physical_only_adds_defaulted_tail(caller: &FunctionSig, physical: &FunctionSig) -> bool {
+    caller.variadic.is_none()
+        && physical.variadic.is_none()
+        && caller.params.len() < physical.params.len()
+        && caller.params.iter().zip(&physical.params).enumerate().all(
+            |(index, ((_, source_ty), (_, target_ty)))| {
+                same_physical_param_abi(source_ty, target_ty)
+                    && caller.ref_params.get(index) == physical.ref_params.get(index)
+            },
+        )
+        && (caller.params.len()..physical.params.len()).all(|index| {
+            physical.defaults.get(index).is_some_and(Option::is_some)
+                && !physical.ref_params.get(index).copied().unwrap_or(false)
+        })
+}
+
 /// Selects a source-vtable entry, keeping every source variadic on its raw physical entry.
 ///
 /// A source variadic reports its generated slots through `uses_physical_func_args_abi()`, so
@@ -301,7 +698,9 @@ pub(crate) fn source_method_entry_symbol(
         MethodAbiPlan::OptionalDefaults => Err("optional method defaults require an EIR adapter".to_string()),
         MethodAbiPlan::AppendEmptyCollector
         | MethodAbiPlan::BoxArguments
-        | MethodAbiPlan::BoxArgumentsAndAppendEmptyCollector => Ok(source_method_adapter_symbol(
+        | MethodAbiPlan::BoxArgumentsAndAppendEmptyCollector
+        | MethodAbiPlan::AppendDefaultsAndEmptyCollector
+        | MethodAbiPlan::BoxPrefixAppendDefaultsForwardCollector => Ok(source_method_adapter_symbol(
             class_name,
             method_name,
             kind,
@@ -312,7 +711,7 @@ pub(crate) fn source_method_entry_symbol(
 /// Emits one deduplicated source adapter for every collector-bearing implementation in scope.
 pub(crate) fn emit_source_method_adapters(
     emitter: &mut Emitter,
-    classes: &HashMap<String, ClassInfo>,
+    classes: &HashMap<String, ClassInfo, impl std::hash::BuildHasher>,
     emitted_class_names: Option<&HashSet<String>>,
 ) -> Result<(), String> {
     let mut specs = Vec::new();
@@ -385,6 +784,17 @@ pub(crate) fn emit_method_adapter(
     if box_return_as_mixed && physical.by_ref_return {
         return Err("source method ABI adapter cannot value-box a by-reference return".to_string());
     }
+    if plan == MethodAbiPlan::BoxPrefixAppendDefaultsForwardCollector {
+        return emit_collector_forwarding_adapter(
+            emitter,
+            wrapper,
+            implementation,
+            kind,
+            caller,
+            physical,
+            box_return_as_mixed,
+        );
+    }
     let implicit_ty = match kind {
         MethodKind::Instance => PhpType::Object("__source_method_receiver".to_string()),
         MethodKind::Static => PhpType::Int,
@@ -399,11 +809,34 @@ pub(crate) fn emit_method_adapter(
                 .then_some(index + 1)
         })
         .collect::<Vec<_>>();
+    let boxed_targets = boxed_params
+        .iter()
+        .map(|&param_index| physical.params[param_index - 1].1.codegen_repr())
+        .collect::<Vec<_>>();
     let mut outgoing_offsets = (1..=incoming_types.len()).map(|index| index * 16).collect::<Vec<_>>();
     let boxed_offsets = boxed_params.iter().enumerate().map(|(index, _)| {
         (incoming_types.len() + 1 + index) * 16
     }).collect::<Vec<_>>();
-    let owner_offset = (incoming_types.len() + boxed_offsets.len() + 1) * 16;
+    // `AppendDefaultsAndEmptyCollector`: the physical parameters past the caller's, each with
+    // its literal default word.
+    let appended_defaults = if plan == MethodAbiPlan::AppendDefaultsAndEmptyCollector {
+        let projected = source_visible_signature(physical)?;
+        (caller.params.len()..projected.params.len())
+            .map(|index| {
+                let word = projected.defaults[index]
+                    .as_ref()
+                    .and_then(literal_default_word)
+                    .ok_or_else(|| "source method ABI adapter lost a literal default".to_string())?;
+                Ok((projected.params[index].1.codegen_repr(), word))
+            })
+            .collect::<Result<Vec<_>, String>>()?
+    } else {
+        Vec::new()
+    };
+    let default_offsets = (0..appended_defaults.len())
+        .map(|index| (incoming_types.len() + boxed_offsets.len() + 1 + index) * 16)
+        .collect::<Vec<_>>();
+    let owner_offset = (incoming_types.len() + boxed_offsets.len() + default_offsets.len() + 1) * 16;
     let return_offset = owner_offset + 16;
     let frame_size = return_offset + 16;
 
@@ -423,25 +856,49 @@ pub(crate) fn emit_method_adapter(
         );
     }
     let mut outgoing_types = incoming_types.clone();
-    for (&param_index, &offset) in boxed_params.iter().zip(&boxed_offsets) {
+    for ((&param_index, &offset), target_ty) in
+        boxed_params.iter().zip(&boxed_offsets).zip(&boxed_targets)
+    {
         let source_ty = &incoming_types[param_index];
         restore_return_value(emitter, source_ty, (param_index + 1) * 16);
-        if *source_ty == PhpType::Void {
-            abi::emit_load_int_immediate(
-                emitter,
-                abi::int_result_reg(emitter),
-                0x7fff_ffff_ffff_fffe,
-            );
+        if indexed_array_widens_to_mixed_elements(source_ty, target_ty) {
+            // `__rt_array_to_mixed` consumes one reference and answers a list of boxed elements;
+            // the retain keeps the caller's own list intact, and the result is this frame's owner.
+            let PhpType::Array(source_elem) = source_ty.codegen_repr() else { unreachable!() };
+            abi::emit_incref_if_refcounted(emitter, &source_ty.codegen_repr());
+            let tag = super::runtime_value_tag(&source_elem.codegen_repr()) as i64;
+            match emitter.target.arch {
+                crate::codegen_support::platform::Arch::AArch64 => {
+                    abi::emit_load_int_immediate(emitter, "x1", tag);
+                }
+                crate::codegen_support::platform::Arch::X86_64 => {
+                    abi::emit_load_int_immediate(emitter, "rsi", tag);
+                    emitter.instruction("mov rdi, rax");                        // pass the caller's list to the element-boxing helper
+                }
+            }
+            abi::emit_call_label(emitter, "__rt_array_to_mixed");
+        } else {
+            if *source_ty == PhpType::Void {
+                abi::emit_load_int_immediate(
+                    emitter,
+                    abi::int_result_reg(emitter),
+                    0x7fff_ffff_ffff_fffe,
+                );
+            }
+            // A `?ptr<T>` argument keeps its union, so address 0 is PHP null.
+            let box_ty = crate::types::mixed_box_php_type(&caller.params[param_index - 1].1);
+            super::value_boxing::emit_box_current_value_as_mixed(emitter, &box_ty);
         }
-        // A `?ptr<T>` argument keeps its union, so address 0 is PHP null.
-        let box_ty = crate::types::mixed_box_php_type(&caller.params[param_index - 1].1);
-        super::value_boxing::emit_box_current_value_as_mixed(emitter, &box_ty);
         abi::store_at_offset(emitter, abi::int_result_reg(emitter), offset);
         let owner_address = abi::tertiary_scratch_reg(emitter);
         abi::emit_frame_slot_address(emitter, owner_address, offset);
         abi::emit_push_call_operand_owner(emitter, owner_address, false);
-        outgoing_types[param_index] = PhpType::Mixed;
+        outgoing_types[param_index] = target_ty.clone();
         outgoing_offsets[param_index] = offset;
+    }
+    for ((_, word), &offset) in appended_defaults.iter().zip(&default_offsets) {
+        abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), *word);
+        abi::store_at_offset(emitter, abi::int_result_reg(emitter), offset);
     }
     if plan.appends_collector() {
         abi::emit_store_zero_to_local_slot(emitter, owner_offset);
@@ -449,6 +906,11 @@ pub(crate) fn emit_method_adapter(
     }
 
     let mut outgoing_refs = incoming_refs.clone();
+    for ((ty, _), &offset) in appended_defaults.iter().zip(&default_offsets) {
+        outgoing_types.push(ty.clone());
+        outgoing_refs.push(false);
+        outgoing_offsets.push(offset);
+    }
     if plan.appends_collector() {
         outgoing_types.push(PhpType::Array(Box::new(PhpType::Mixed)));
         outgoing_refs.push(false);
@@ -497,13 +959,16 @@ pub(crate) fn emit_method_adapter(
                 0x7fff_ffff_ffff_fffe,
             );
         }
-        // A `?ptr<T>` implementation keeps its union, so address 0 is PHP null.
+        // The implementation's return is owned and the box takes its own share: the
+        // retaining boxer leaked every `current()` value read through `Iterator` (an interface
+        // declared `mixed`, implemented `string`/`Item`). A `?ptr<T>` implementation keeps its
+        // union, so address 0 is PHP null.
         let box_ty = if physical.by_ref_return {
             physical_return.clone()
         } else {
             crate::types::mixed_box_php_type(&physical.return_type)
         };
-        super::value_boxing::emit_box_current_value_as_mixed(emitter, &box_ty);
+        super::value_boxing::emit_box_current_owned_value_as_mixed(emitter, &box_ty);
     }
     abi::emit_frame_restore(emitter, frame_size);
     abi::emit_return(emitter);
@@ -533,9 +998,24 @@ fn same_physical_param_abi(left: &PhpType, right: &PhpType) -> bool {
 
 /// Returns whether a source parameter can be boxed for a physical Mixed parameter.
 fn can_box_param_as_mixed(source: &PhpType, target: &PhpType) -> bool {
+    if indexed_array_widens_to_mixed_elements(source, target) {
+        return true;
+    }
     target.codegen_repr() == PhpType::Mixed
         && source.codegen_repr() != PhpType::Mixed
         && !matches!(source.codegen_repr(), PhpType::Never)
+}
+
+/// Returns whether a caller's typed list must be rebuilt with boxed elements for the physical
+/// method: a declared variadic (`NumberInterface ...$addends`) stays `array<NumberInterface>` on
+/// a bodiless interface method while its implementation's collector is `array<mixed>`.
+fn indexed_array_widens_to_mixed_elements(source: &PhpType, target: &PhpType) -> bool {
+    matches!(
+        (source.codegen_repr(), target.codegen_repr()),
+        (PhpType::Array(source_elem), PhpType::Array(target_elem))
+            if target_elem.codegen_repr() == PhpType::Mixed
+                && !matches!(source_elem.codegen_repr(), PhpType::Mixed | PhpType::Never)
+    )
 }
 
 /// Selects the raw instance or static method symbol for the physical ABI.
@@ -730,7 +1210,11 @@ mod tests {
         optional.defaults[1] = Some(crate::parser::ast::Expr::new(
             crate::parser::ast::ExprKind::IntLiteral(2), crate::span::Span::dummy(),
         ));
-        assert_eq!(plan_method_abi(&source, &optional).unwrap(), MethodAbiPlan::OptionalDefaults);
+        // An implementation that declares an extra optional parameter while both sides carry the
+        // collector is `Direct`: the interface call site passes the implementation's physical
+        // arity, and the EIR adapter's re-spread collector is a call the backend cannot match
+        // (`test_interface_call_reaches_an_implementation_with_extra_optional_params`).
+        assert_eq!(plan_method_abi(&source, &optional).unwrap(), MethodAbiPlan::Direct);
         let variadic = signature(vec![
             ("x".to_string(), PhpType::Int),
             ("rest".to_string(), PhpType::Array(Box::new(PhpType::Int))),
@@ -1063,12 +1547,7 @@ mod tests {
             assert!(publish < call, "{target}: owner must be visible before entering PHP");
             assert!(call < detach, "{target}: normal return must detach the cleanup record");
             assert!(detach < release, "{target}: detach must precede normal decref");
-            let stamp = if target == "linux-x86_64" {
-                "mov r12, 7"
-            } else {
-                "mov x11, #7"
-            };
-            assert!(asm.contains(stamp), "{target}: {asm}");
+            assert!(asm.contains("__rt_array_stamp_7"), "{target}: {asm}");
 
             let mut wide_source = signature(
                 (0..10)

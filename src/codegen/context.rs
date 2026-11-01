@@ -9,9 +9,10 @@
 //! Key details:
 //! - SSA values load from allocated registers, scalar recipes, or backing stack slots.
 //! - The context delegates target-specific movement to `crate::codegen::abi`.
-//! - Local labels carry a module-unique trailing id from `SharedCodegenState::next_label_id()`.
-//!   The readable part is `crate::names::label_fragment()`, which is intentionally lossy, so the
-//!   id — not the fragment — is what keeps two similarly named functions from colliding.
+//! - Local labels carry a trailing `<body hash>_<body counter>` pair. The readable part is
+//!   `crate::names::label_fragment()`, which is intentionally lossy, so that pair — not the
+//!   fragment — is what keeps two similarly named functions from colliding. Both halves are
+//!   fixed before emission starts, which is what lets bodies be emitted independently.
 
 use std::collections::{HashMap, HashSet};
 
@@ -37,9 +38,60 @@ use super::{CodegenIrError, Result};
 
 mod machine_layout;
 mod operand_owners;
+mod value_uses;
 mod ref_cell_state;
 
 pub(crate) use machine_layout::MachineLayoutState;
+
+/// Returns the readable part of a label: the body's name, collapsed and capped.
+///
+/// The cap is what keeps 3.65 million labels from spelling out a fully-qualified PHP name each.
+/// It is safe because it is only the READABLE part — a label's uniqueness comes from the
+/// `<body hash>_<body counter>` pair `next_body_label_id()` appends, and `label_fragment()` was
+/// already lossy (`a_b` and `aéb` collapse to the same text), so nothing depended on the
+/// fragment being complete.
+const LABEL_FRAGMENT_BUDGET: usize = 24;
+
+/// The readable part of a label minted inside a shared-helper scope.
+///
+/// Spelling the host body's name there would make an identical helper look different in every
+/// worker that emitted it, which is exactly what the keyed scope exists to prevent.
+const SHARED_HELPER_FRAGMENT: &str = "shared";
+
+/// Opens the emitted region holding one shared helper, followed by its key scope in hex.
+pub(crate) const HELPER_MARKER_OPEN: &str = "@helper key=";
+
+/// Closes the region opened by `HELPER_MARKER_OPEN`.
+pub(crate) const HELPER_MARKER_CLOSE: &str = "@endhelper";
+
+fn capped_label_fragment(name: &str) -> String {
+    let fragment = label_fragment(name);
+    match fragment.char_indices().nth(LABEL_FRAGMENT_BUDGET) {
+        Some((cut, _)) => fragment[..cut].to_string(),
+        None => fragment,
+    }
+}
+
+/// The scope a shared helper's `@helper key=` marker spells, for emitters that bracket a helper
+/// region themselves instead of through `FunctionContext::emit_keyed_helper`.
+pub(crate) fn helper_marker_scope(key: &str) -> u64 {
+    body_label_scope(key)
+}
+
+/// Returns the 48-bit label scope for one body name.
+///
+/// FNV-1a rather than a standard-library hasher: the value ends up in the emitted assembly, so
+/// it has to be identical on every run and every host, which `RandomState` is not. 48 bits keeps
+/// the label short while leaving collisions across a few thousand bodies negligible — and a
+/// collision is an assembler error, never silent.
+fn body_label_scope(name: &str) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in name.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash & 0x0000_ffff_ffff_ffff
+}
 
 /// Runtime representation known for one local slot at the current EIR instruction.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -59,12 +111,33 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) placement: ValuePlacement,
     pub(super) allocation: Allocation,
     pub(super) callee_saved_offsets: Vec<(&'static str, usize)>,
+    /// 48-bit FNV-1a of the emitting body's name: the half of a label id that separates two
+    /// bodies whose readable fragments collapse to the same text.
+    label_scope: u64,
+    /// Set while a receiver publish must box the value by adopting its owner (see
+    /// `store_receiver_value_to_local_before_callback`), whatever the general predicate says.
+    adopt_mixed_box_source: bool,
+    /// Labels emitted by THIS body so far. Private to the context so a body's labels do not
+    /// shift when another body is emitted before it.
+    label_counter: usize,
+    /// The key scope of the shared helper currently being emitted, if any. While it is set,
+    /// labels spell `shared` rather than the host body's name, so every worker that emits this
+    /// helper spells it identically.
+    helper_scope: Option<u64>,
     local_offsets: HashMap<LocalSlotId, usize>,
     pub(super) numeric_cell_offsets: HashMap<ValueId, usize>,
     pub(super) numeric_local_slots: HashSet<LocalSlotId>,
     pub(super) numeric_values: HashSet<ValueId>,
     ref_cell_state_offsets: HashMap<LocalSlotId, usize>,
     local_analysis: LocalSlotAnalysis,
+    /// Release/store positions of this body, indexed on first use (see `value_uses`).
+    value_uses: std::cell::OnceCell<value_uses::ValueUseIndex>,
+    /// The numeric-domain proof codegen falls back to for values the frame proof did not cover,
+    /// built on first use and kept for the body: one per question rescanned the whole function.
+    /// `Function::value_use_counts` of this body, counted on first use: a `yield` asked it per
+    /// site and recounted the whole body each time.
+    use_counts: std::cell::OnceCell<crate::ir::ValueUseCounts>,
+    numeric_proof: std::cell::OnceCell<std::cell::RefCell<crate::ir_passes::numeric_domain::NumericInputs<'a>>>,
     callable_reachability: CallableReachabilityAnalysis,
     current_inst: Option<InstId>,
     current_inst_promoted_ref_cells: HashSet<LocalSlotId>,
@@ -73,10 +146,16 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) frame_size: usize,
     pub(super) concat_base_offset: usize,
     pub(super) exception_activation_offset: Option<usize>,
+    /// First synthetic include-frame record slot; `None` when traces are unobservable.
+    pub(super) include_frame_base: Option<usize>,
     pub(super) exception_cleanup_activation: bool,
     /// Exceptional callbacks accumulate destructor throws instead of abandoning sibling cleanup.
     pub(super) unwinding_cleanup: bool,
     pub(super) backtrace_activation: bool,
+    /// The function's one backtrace frame-reader callback, emitted at its first call site and
+    /// shared by every later one: the reader reads the caller line from the activation record,
+    /// so nothing in it depends on which call site published it.
+    pub(super) backtrace_frame_reader: Option<String>,
     pub(super) backtrace_enabled: bool,
     pub(super) epilogue_emitted: bool,
     /// `--instrument` id assigned to this function in its prologue, consumed by
@@ -88,6 +167,14 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) heap_debug: bool,
     pcntl_async_signals: bool,
     pcntl_signal_handlers: bool,
+    /// True when this module still declares `__elephc_shutdown_run`, the nullary drain every
+    /// process-exit site calls to run the `register_shutdown_function()` queue.
+    ///
+    /// The call is a HARD REFERENCE to a symbol only the prelude defines, so it may only be
+    /// emitted when the declaration SURVIVED reachability pruning — read from the module's own
+    /// function list, exactly as `runtime_features::diag_user_handler` is. When false the exit
+    /// sites keep the shape they have always had, which is what makes the surface pay-for-use.
+    php_shutdown_drain: bool,
     pub(super) epilogue_label: Option<String>,
     block_labels: Vec<String>,
     /// Block order, compare fusion, and cold-path state for late machine layout.
@@ -155,24 +242,42 @@ impl<'a> FunctionContext<'a> {
         epilogue_label: Option<String>,
     ) -> Self {
         let callable_reachability = CallableReachabilityAnalysis::new(module, function);
-        let pcntl_async_signals = module_uses_pcntl_async_signals(module);
-        let pcntl_signal_handlers = module_uses_pcntl_signal_handlers(module);
-        let function_fragment = label_fragment(&function.name);
+        // The process entry is named `main` like a PHP `function main()` would be; both bodies are
+        // emitted, so the entry hashes php's own frame name instead and their labels stay apart.
+        let label_scope = body_label_scope(if is_main { "{main}" } else { &function.name });
+        // Both of these walk the WHOLE module, and this constructor runs once per body, so
+        // asking them directly is quadratic; `SharedCodegenState` answers each one once.
+        let pcntl_async_signals =
+            shared.pcntl_async_signals(|| module_uses_pcntl_async_signals(module));
+        let pcntl_signal_handlers =
+            shared.pcntl_signal_handlers(|| module_uses_pcntl_signal_handlers(module));
+        let php_shutdown_drain = shared.php_shutdown_drain(|| module_declares_shutdown_drain(module));
+        let function_fragment = capped_label_fragment(&function.name);
         // Indexed by raw block id, matching `Function::block()`'s positional lookup.
         // The platform-local prefix keeps every intra-function label out of the object's
         // symbol table: without it, profilers name frames after the nearest block label
         // (`_eir_hot_leaf_for_body_2`) instead of the PHP function DWARF describes.
         let local_prefix = emitter.target.platform.local_label_prefix();
+        // The block labels take the first ids of this body's own counter, and `next_label()`
+        // continues from there. Drawing them from the module-wide counter instead was the last
+        // thing tying a body's labels to how many labels other bodies had already emitted.
+        let mut label_counter = 0usize;
         let block_labels = function
             .blocks
             .iter()
             .map(|block| {
+                let id = label_counter;
+                label_counter += 1;
+                if crate::codegen_support::emit::compact_asm() {
+                    return format!("{}_{:x}_{}", local_prefix, label_scope, id);
+                }
                 format!(
-                    "{}_eir_{}_{}_{}",
+                    "{}_eir_{}_{}_{:012x}_{}",
                     local_prefix,
                     function_fragment,
                     label_fragment(&block.name),
-                    shared.next_label_id()
+                    label_scope,
+                    id
                 )
             })
             .collect();
@@ -191,7 +296,14 @@ impl<'a> FunctionContext<'a> {
             numeric_values: layout.numeric_values,
             ref_cell_state_offsets: layout.ref_cell_state_offsets,
             local_analysis: layout.local_analysis,
+            value_uses: std::cell::OnceCell::new(),
+            numeric_proof: std::cell::OnceCell::new(),
+            use_counts: std::cell::OnceCell::new(),
             callable_reachability,
+            label_scope,
+            adopt_mixed_box_source: false,
+            label_counter,
+            helper_scope: None,
             current_inst: None,
             current_inst_promoted_ref_cells: HashSet::new(),
             try_handler_offsets: layout.try_handler_offsets,
@@ -199,9 +311,11 @@ impl<'a> FunctionContext<'a> {
             frame_size: layout.frame_size,
             concat_base_offset: layout.concat_base_offset,
             exception_activation_offset: layout.exception_activation_offset,
+            include_frame_base: layout.include_frame_base,
             exception_cleanup_activation: layout.exception_cleanup_activation,
             unwinding_cleanup: false,
             backtrace_activation: layout.backtrace_activation,
+            backtrace_frame_reader: None,
             backtrace_enabled: super::frame::module_uses_backtrace(module),
             epilogue_emitted: false,
             instr_id: None,
@@ -211,6 +325,7 @@ impl<'a> FunctionContext<'a> {
             heap_debug,
             pcntl_async_signals,
             pcntl_signal_handlers,
+            php_shutdown_drain,
             epilogue_label,
             block_labels,
             machine_layout: MachineLayoutState::default(),
@@ -225,16 +340,88 @@ impl<'a> FunctionContext<'a> {
 
     /// Returns a module-unique local label carrying a readable but lossy prefix.
     ///
-    /// Uniqueness comes solely from the module-wide trailing id: `label_fragment()` collapses
-    /// every non-alphanumeric byte, so `a_b` and `aéb` share a readable prefix and only the id
-    /// keeps their labels apart.
+    /// Uniqueness comes from the trailing `<body hash>_<body counter>`: `label_fragment()`
+    /// collapses every non-alphanumeric byte, so `a_b` and `aéb` share a readable prefix and
+    /// only that pair keeps their labels apart. The hash identifies the emitting body and the
+    /// counter is private to this context, so a body's labels do not depend on how many labels
+    /// other bodies emitted first — which is what allows bodies to be emitted independently.
     pub(super) fn next_label(&mut self, prefix: &str) -> String {
+        if crate::codegen_support::emit::compact_asm() {
+            return format!(
+                "{}_{:x}_{}",
+                self.emitter.target.platform.local_label_prefix(),
+                self.label_scope,
+                {
+                    let id = self.label_counter;
+                    self.label_counter += 1;
+                    id
+                }
+            );
+        }
         format!(
             "{}_eir_{}_{}_{}",
             self.emitter.target.platform.local_label_prefix(),
-            label_fragment(&self.function.name),
+            self.label_owner_fragment(),
             label_fragment(prefix),
-            self.shared.next_label_id()
+            self.next_body_label_id()
+        )
+    }
+
+    /// Returns this body's next label id: its name hash and a counter private to the context.
+    fn next_body_label_id(&mut self) -> String {
+        let id = self.label_counter;
+        self.label_counter += 1;
+        format!("{:012x}_{}", self.label_scope, id)
+    }
+
+    /// Returns the readable part of a label: the helper's key when one is open, else the body.
+    fn label_owner_fragment(&self) -> String {
+        match self.helper_scope {
+            Some(_) => SHARED_HELPER_FRAGMENT.to_string(),
+            None => capped_label_fragment(&self.function.name),
+        }
+    }
+
+    /// Emits a shared helper whose labels depend only on `key`, and brackets it for the merge.
+    ///
+    /// A helper belongs to the module once, but any body may be the one that reaches it first.
+    /// Scoping its labels to the key instead of to the host makes every worker's copy spell the
+    /// same names, so a parallel emission pass can keep one copy and drop the duplicates instead
+    /// of giving up and re-emitting the whole body serially.
+    ///
+    /// The scope is saved and restored, so a helper emitted in the middle of a body leaves the
+    /// body's own label numbering untouched.
+    pub(super) fn emit_keyed_helper<R>(
+        &mut self,
+        key: &str,
+        emit: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let scope = body_label_scope(key);
+        let saved_scope = std::mem::replace(&mut self.label_scope, scope);
+        let saved_counter = std::mem::replace(&mut self.label_counter, 0);
+        let saved_helper = std::mem::replace(&mut self.helper_scope, Some(scope));
+        self.emitter
+            .comment(&format!("{}{:012x}", HELPER_MARKER_OPEN, scope));
+        let result = emit(self);
+        self.emitter.comment(HELPER_MARKER_CLOSE);
+        self.label_scope = saved_scope;
+        self.label_counter = saved_counter;
+        self.helper_scope = saved_helper;
+        result
+    }
+
+    /// Mints a shared helper's entry symbol from its cache key, emitting nothing.
+    ///
+    /// The entry symbol has to be identical in every worker that reaches this helper, because
+    /// bodies in other workers spell it to call it. It is the one label that must come from the
+    /// key rather than from whoever happened to emit the helper.
+    pub(super) fn keyed_global_label(&mut self, key: &str, prefix: &str) -> String {
+        let scope = body_label_scope(key);
+        format!(
+            "_eir_{}_{}_{:012x}_0",
+            SHARED_HELPER_FRAGMENT,
+            label_fragment(prefix),
+            scope
         )
     }
 
@@ -246,9 +433,9 @@ impl<'a> FunctionContext<'a> {
     pub(super) fn next_global_label(&mut self, prefix: &str) -> String {
         format!(
             "_eir_{}_{}_{}",
-            label_fragment(&self.function.name),
+            self.label_owner_fragment(),
             label_fragment(prefix),
-            self.shared.next_label_id()
+            self.next_body_label_id()
         )
     }
 
@@ -260,6 +447,11 @@ impl<'a> FunctionContext<'a> {
     /// Returns whether this module owns process-wide PCNTL handler registrations.
     pub(super) const fn uses_pcntl_signal_handlers(&self) -> bool {
         self.pcntl_signal_handlers
+    }
+
+    /// Returns whether a process-exit site may call the PHP shutdown-function drain.
+    pub(super) const fn runs_php_shutdown_functions(&self) -> bool {
+        self.php_shutdown_drain
     }
 
     /// Emits an unconditional target-aware branch to one local assembly label.
@@ -340,30 +532,46 @@ impl<'a> FunctionContext<'a> {
     /// Returns a module function by PHP name using PHP's case-insensitive lookup.
     pub(super) fn function_by_name(&self, name: &str) -> Option<&'a Function> {
         let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
-        self.module
-            .functions
-            .iter()
-            .chain(self.module.closures.iter())
-            .find(|function| {
-                crate::names::php_symbol_key(function.name.trim_start_matches('\\')) == key
-            })
+        // Indexed once per module: every direct call folded every function's name to find one.
+        self.module.function_or_closure_by_key(&key)
     }
 
     /// Returns true when an extern declaration exists for a PHP function name.
     pub(super) fn has_extern_function(&self, name: &str) -> bool {
         let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
-        self.module.extern_decls.iter().any(|function| {
-            crate::names::php_symbol_key(function.name.trim_start_matches('\\')) == key
-        })
+        self.module.extern_function_keys().contains(&key)
     }
 
     /// Returns the public include-variant group name matching a PHP function name.
     pub(super) fn function_variant_group_name(&self, name: &str) -> Option<String> {
         let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
-        super::function_variants::collect_dispatch_groups(self.module)
-            .into_iter()
-            .find(|group| crate::names::php_symbol_key(group.name.trim_start_matches('\\')) == key)
-            .map(|group| group.name)
+        // Built once per module: every function_exists()/callable check used to re-scan all of
+        // the module's data strings for variant labels.
+        let module = self.module;
+        module
+            .variant_group_names(|| {
+                let mut names = crate::fast_hash::FastMap::default();
+                for group in super::function_variants::collect_dispatch_groups(module) {
+                    names
+                        .entry(crate::names::php_symbol_key(group.name.trim_start_matches('\\')))
+                        .or_insert(group.name);
+                }
+                names
+            })
+            .get(&key)
+            .cloned()
+    }
+
+    /// Returns whether this module has interface metadata whose visibility is
+    /// selected by an explicit request-time activation event.
+    pub(super) fn module_has_interface_activation_events(&self) -> bool {
+        // Built once per module: the registry walks every instruction of every body.
+        let module = self.module;
+        module.interface_activation_events(|| {
+            !super::classlike_activation::collect_activation_registry_names(module)
+                .interfaces
+                .is_empty()
+        })
     }
 
     /// Returns the concrete function whose signature should be used for a PHP call target.
@@ -479,6 +687,15 @@ impl<'a> FunctionContext<'a> {
             .map(|local| local.id)
     }
 
+    /// Returns whether a slot can contain a runtime value that this frame must release.
+    ///
+    /// A slot written only by a typed runtime writeback -- never by an EIR store -- still holds a
+    /// value this frame owns, which is why this asks `local_slot_has_store` rather than the raw
+    /// analysis flag.
+    pub(super) fn local_slot_needs_lifetime_tracking(&self, slot: LocalSlotId) -> bool {
+        self.local_slot_has_store(slot) || self.local_analysis.has_load(slot)
+    }
+
     /// Returns whether this slot receives an EIR store or a typed runtime writeback.
     pub(super) fn local_slot_has_store(&self, slot: LocalSlotId) -> bool {
         self.local_analysis.has_store(slot)
@@ -591,6 +808,13 @@ impl<'a> FunctionContext<'a> {
             .map(|span| span.line)
             .filter(|line| *line > 0)?;
         Some((self.module.source_path.clone()?, line))
+    }
+
+    /// Returns the active EIR instruction's PHP source span when it has one.
+    pub(super) fn current_instruction_span(&self) -> Option<crate::span::Span> {
+        self.current_inst
+            .and_then(|inst| self.function.instruction(inst))
+            .and_then(|inst| inst.span)
     }
 
     /// Returns the frame flag that records whether this slot currently stores a cell pointer.
@@ -1090,16 +1314,28 @@ impl<'a> FunctionContext<'a> {
         slot: LocalSlotId,
         value: ValueId,
     ) -> Result<()> {
-        let source_ty = self.value_php_type(value)?;
-        let target_ty = self.local_php_type(slot)?;
-        if self.local_slot_representation(slot) == LocalSlotRepresentation::Raw
-            && matches!(target_ty, PhpType::Mixed | PhpType::Union(_))
-            && !matches!(source_ty, PhpType::Mixed | PhpType::Union(_))
-        {
+        if self.mutated_source_local_owner_is_boxed(slot, value)? {
+            let target_ty = self.local_php_type(slot)?;
             let offset = self.local_offset(slot)?;
             super::frame::emit_owned_local_cleanup(self, slot, offset, &target_ty);
         }
         Ok(())
+    }
+
+    /// Returns whether `release_mutated_source_local_owner` retires a Mixed box for this load.
+    ///
+    /// When it does, the slot is zeroed and the unboxed child the load retained is the only
+    /// reference left, so a consumer that rebuilds the value elsewhere must release it itself.
+    pub(super) fn mutated_source_local_owner_is_boxed(
+        &self,
+        slot: LocalSlotId,
+        value: ValueId,
+    ) -> Result<bool> {
+        let source_ty = self.value_php_type(value)?;
+        let target_ty = self.local_php_type(slot)?;
+        Ok(self.local_slot_representation(slot) == LocalSlotRepresentation::Raw
+            && matches!(target_ty, PhpType::Mixed | PhpType::Union(_))
+            && !matches!(source_ty, PhpType::Mixed | PhpType::Union(_)))
     }
 
     /// Stores an SSA value into a slot known to contain its raw frame representation.
@@ -1115,7 +1351,7 @@ impl<'a> FunctionContext<'a> {
         {
             // The declared type for a `?ptr<T>`, so address 0 boxes as PHP null.
             let box_ty = self.mixed_box_type(value)?;
-            if self.value_can_own_mixed_box_source(value)? {
+            if self.adopt_mixed_box_source || self.value_can_own_mixed_box_source(value)? {
                 emit_box_current_owned_value_as_mixed(self.emitter, &box_ty);
             } else {
                 emit_box_current_value_as_mixed(self.emitter, &box_ty);
@@ -1151,6 +1387,97 @@ impl<'a> FunctionContext<'a> {
         coerce_current_result_for_target_store(self.emitter, &source_ty, &target_ty)?;
         let offset = self.local_offset(slot)?;
         self.store_current_result_at_offset(&target_ty, offset);
+        Ok(())
+    }
+
+    /// Publishes a possibly relocated array/hash pointer after an in-place container mutation.
+    pub(super) fn store_mutated_container_to_local(
+        &mut self,
+        slot: LocalSlotId,
+        value: ValueId,
+    ) -> Result<()> {
+        match self.local_slot_representation(slot) {
+            LocalSlotRepresentation::Raw => {
+                self.store_mutated_container_to_raw_local(slot, value)
+            }
+            LocalSlotRepresentation::RefCell => {
+                self.store_mutated_container_to_ref_cell(slot, value)
+            }
+            LocalSlotRepresentation::Dynamic => {
+                let state_offset = self.dynamic_ref_cell_state_offset(slot)?;
+                let ref_cell = self.next_label("dynamic_mutated_container_ref_cell");
+                let done = self.next_label("dynamic_mutated_container_done");
+                let state_reg = abi::secondary_scratch_reg(self.emitter);
+                abi::load_at_offset(self.emitter, state_reg, state_offset);
+                match self.emitter.target.arch {
+                    Arch::AArch64 => self
+                        .emitter
+                        .instruction(&format!("cbnz {}, {}", state_reg, ref_cell)),
+                    Arch::X86_64 => {
+                        self.emitter
+                            .instruction(&format!("test {}, {}", state_reg, state_reg));
+                        self.emitter.instruction(&format!("jne {}", ref_cell));
+                    }
+                }
+                self.store_value_to_raw_local(slot, value)?;
+                self.emit_branch(&done);
+                self.emitter.label(&ref_cell);
+                self.store_mutated_container_to_ref_cell(slot, value)?;
+                self.emitter.label(&done);
+                Ok(())
+            }
+        }
+    }
+
+    /// Publishes a mutated container into raw local storage without consuming its SSA owner.
+    ///
+    /// A mutation result remains owned by the SSA value until its explicit EIR release. When a
+    /// gradual local needs a boxed cell, that cell must therefore RETAIN the container instead
+    /// of using the ordinary owned-value boxing path, which would transfer the same owner and
+    /// leave the later SSA release pointing at freed storage.
+    fn store_mutated_container_to_raw_local(
+        &mut self,
+        slot: LocalSlotId,
+        value: ValueId,
+    ) -> Result<()> {
+        let source_ty = self.value_php_type(value)?;
+        let target_ty = self.local_php_type(slot)?;
+        if target_ty.codegen_repr() == PhpType::Mixed
+            && source_ty.codegen_repr() != PhpType::Mixed
+        {
+            self.load_value_to_result(value)?;
+            emit_box_current_value_as_mixed(self.emitter, &source_ty);
+            coerce_current_result_for_target_store(self.emitter, &PhpType::Mixed, &target_ty)?;
+            let offset = self.local_offset(slot)?;
+            self.store_current_result_at_offset(&target_ty, offset);
+            return Ok(());
+        }
+        self.store_value_to_raw_local(slot, value)
+    }
+
+    /// Writes one relocated single-word container pointer through a local reference cell.
+    fn store_mutated_container_to_ref_cell(
+        &mut self,
+        slot: LocalSlotId,
+        value: ValueId,
+    ) -> Result<()> {
+        let source_ty = self.load_value_to_result(value)?.codegen_repr();
+        // A boxed container is one word too: `__rt_mixed_elem_ref_cell` hands back the box to
+        // store, having already released any box it replaced.
+        if !matches!(
+            source_ty,
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_)
+        ) {
+            return Err(CodegenIrError::unsupported(format!(
+                "mutated reference-cell container store for PHP type {:?}",
+                source_ty
+            )));
+        }
+        let offset = self.local_offset(slot)?;
+        let pointer_reg = abi::symbol_scratch_reg(self.emitter);
+        let result_reg = abi::int_result_reg(self.emitter).to_string();
+        abi::load_at_offset(self.emitter, pointer_reg, offset);
+        abi::emit_store_to_address(self.emitter, &result_reg, pointer_reg, 0);
         Ok(())
     }
 
@@ -1216,11 +1543,18 @@ impl<'a> FunctionContext<'a> {
             && self.value_is_released_later(value)
             && self.local_php_type(slot)?.codegen_repr() == PhpType::Mixed
             && self.value_php_type(value)?.codegen_repr() != PhpType::Mixed;
-        if self.needs_borrowed_container_lease(slot, value)? {
-            self.store_owned_container_to_raw_local(slot, value)?;
+        // The deferred retain below only balances a box that ADOPTED the load's owner. The
+        // general predicate refuses a value with a later EIR release, so without forcing it the
+        // box retained as well and every `usort` on a Mixed-widened local leaked its array.
+        let leased = self.needs_borrowed_container_lease(slot, value)?;
+        self.adopt_mixed_box_source = owed;
+        let stored = if leased {
+            self.store_owned_container_to_raw_local(slot, value)
         } else {
-            self.store_value_to_local(slot, value)?;
-        }
+            self.store_value_to_local(slot, value)
+        };
+        self.adopt_mixed_box_source = false;
+        stored?;
         Ok(owed)
     }
 
@@ -1255,17 +1589,47 @@ impl<'a> FunctionContext<'a> {
         self.release_mutated_source_local_owner(slot, value)
     }
 
+    /// Returns this body's release/store index, building it on first use.
+    /// How many instruction operands and terminators of this body use `value`.
+    pub(in crate::codegen) fn value_use_count(&self, value: ValueId) -> usize {
+        self.use_counts
+            .get_or_init(|| self.function.value_use_counts())
+            .get(&value)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Whether every one of `values` has a closed numeric origin, on this body's shared proof.
+    pub(in crate::codegen) fn proves_numeric(&self, values: &[ValueId]) -> bool {
+        #[cfg(test)]
+        NUMERIC_FALLBACK_QUERIES.with(|count| count.set(count.get() + 1));
+        self.numeric_proof
+            .get_or_init(|| {
+                std::cell::RefCell::new(crate::ir_passes::numeric_domain::NumericInputs::new(self.function))
+            })
+            .borrow_mut()
+            .prove(values)
+    }
+
+    pub(in crate::codegen) fn value_uses(&self) -> &value_uses::ValueUseIndex {
+        self.value_uses
+            .get_or_init(|| value_uses::ValueUseIndex::build(self.function))
+    }
+
+    /// Returns the current instruction's position, for the index's "after" queries.
+    fn current_position(&self) -> Option<u32> {
+        self.current_inst.map(|inst| inst.as_raw())
+    }
+
+    /// Returns whether the current instruction appends to an array literal still under
+    /// construction, whose storage is packed by construction.
+    pub(in crate::codegen) fn current_inst_is_fresh_literal_push(&self) -> bool {
+        self.value_uses().is_fresh_literal_push(self.current_position())
+    }
+
     /// Returns whether an instruction after the current one releases exactly `value`.
-    fn value_is_released_later(&self, value: ValueId) -> bool {
-        let start = self
-            .current_inst
-            .map(|inst| inst.as_raw() as usize + 1)
-            .unwrap_or(0);
-        self.function
-            .instructions
-            .iter()
-            .skip(start)
-            .any(|inst| inst.op == Op::Release && inst.operands == [value])
+    pub(in crate::codegen) fn value_is_released_later(&self, value: ValueId) -> bool {
+        self.value_uses().is_released_after(value, self.current_position())
     }
 
     /// Stores the current result register(s) directly into an addressable local slot.
@@ -1309,21 +1673,6 @@ impl<'a> FunctionContext<'a> {
                 Ok(())
             }
         }
-    }
-
-    /// Releases the value held by a string-producing by-reference output before overwriting it.
-    pub(super) fn release_local_before_string_writeback(
-        &mut self,
-        slot: LocalSlotId,
-    ) -> Result<()> {
-        let ty = self.local_php_type(slot)?.codegen_repr();
-        if !matches!(ty, PhpType::Str | PhpType::Mixed) {
-            return Err(CodegenIrError::unsupported(format!(
-                "string writeback into PHP type {:?}",
-                ty
-            )));
-        }
-        self.release_local_before_refcounted_writeback(slot)
     }
 
     /// Releases a refcounted or boxed local value before a runtime-owned output replaces it.
@@ -1402,13 +1751,13 @@ impl<'a> FunctionContext<'a> {
     /// and hash set/append lowerings already perform; without it a global array
     /// that grows past its initial capacity leaves the global symbol pointing at
     /// freed storage (corruption / crash). No-op unless `value` came from
-    /// `Op::LoadGlobal` or `Op::LoadStaticLocal`.
+    /// `Op::LoadGlobal`.
     ///
-    /// A function static is the same hazard behind a different symbol:
-    /// `static $a = [0]; $a[] = 1;` grew the array through `__rt_array_grow`, which
-    /// frees the old block, and the static kept pointing at it — `count($a)` answered
-    /// 2 after twenty appends, and the next allocation to reuse that block was
-    /// corrupted.
+    /// A function `static` is the OTHER program-lifetime place with this exact exposure — its
+    /// storage is a `.comm` symbol the frame does not own — so this also republishes to
+    /// `Op::LoadStaticLocal` sources, via [`Self::writeback_static_local_array_source`]. The
+    /// name says `global` for the sixteen call sites that predate that; read it as "publish a
+    /// relocated container back to whichever program-lifetime storage it was read from".
     pub(super) fn writeback_global_array_source(&mut self, value: ValueId) -> Result<()> {
         let Some(value_ref) = self.function.value(value) else {
             return Err(CodegenIrError::missing_entry("value", value.as_raw()));
@@ -1420,10 +1769,7 @@ impl<'a> FunctionContext<'a> {
             return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
         };
         if inst_ref.op == Op::LoadStaticLocal {
-            let Some(crate::ir::Immediate::LocalSlot(slot)) = inst_ref.immediate else {
-                return Ok(());
-            };
-            return self.writeback_static_local_array_source(value, slot);
+            return self.writeback_static_local_array_source(value);
         }
         if inst_ref.op != Op::LoadGlobal {
             return Ok(());
@@ -1434,39 +1780,143 @@ impl<'a> FunctionContext<'a> {
         let name = self.global_name_data(data)?.to_string();
         let symbol = crate::names::ir_global_symbol(&name);
         let ty = self.value_php_type(value)?;
+        if self.shared.uses_shared_ref_cell(self.module, &name) {
+            self.load_value_to_result(value)?;
+            return crate::codegen::lower_inst::lower_writeback_shared_global(
+                self,
+                &symbol,
+                &ty,
+            );
+        }
         self.data.add_comm(symbol.clone(), ty.codegen_repr().stack_size().max(8));
         self.load_value_to_result(value)?;
         abi::emit_store_result_to_symbol(self.emitter, &symbol, &ty, false);
         Ok(())
     }
 
-    /// Writes a mutated container back to the static-local symbol it was loaded from.
+    /// The function-`static` twin of [`Self::writeback_global_array_source`].
     ///
-    /// Only when the slot stores the container itself. A `mixed` static holds a box, and
-    /// the load unwrapped it, so the pointer in hand is not what the slot stores.
-    fn writeback_static_local_array_source(&mut self, value: ValueId, slot: LocalSlotId) -> Result<()> {
+    /// A `static` local lives in a `.comm` symbol, not a frame slot, so the ordinary
+    /// `store_value_to_local` write-back every array/hash mutation performs reaches the SSA
+    /// value's frame home and never the storage the next CALL will read. `Op::LoadStaticLocal`
+    /// is simply a third spelling of "a place this container can be published back to", and it
+    /// was missing from every resolver that names one — so `static $q = ['s']; $q[] = 'x';`
+    /// past the array's initial capacity left the symbol pointing at the pre-`__rt_array_grow`
+    /// allocation: the appended elements were unreachable and the pointer was freed storage.
+    ///
+    /// No refcount traffic. The slot already owns this container; only its ADDRESS changed, and
+    /// the relocating helper (`__rt_array_grow`'s realloc, `__rt_array_ensure_unique`'s split)
+    /// has already accounted for the old one. That is the same contract
+    /// `store_mutated_container_to_local` states for a frame slot, which is why this passes
+    /// `release_previous: false` rather than going through the ordinary static-local store.
+    ///
+    /// No-op unless `value` came from `Op::LoadStaticLocal`.
+    pub(super) fn writeback_static_local_array_source(&mut self, value: ValueId) -> Result<()> {
+        let Some(slot) = self.static_local_source_slot(value)? else {
+            return Ok(());
+        };
+        self.store_relocated_container_to_static_local(slot, value)
+    }
+
+    /// Resolves the static-local slot a value was loaded from, if it was loaded from one.
+    pub(super) fn static_local_source_slot(
+        &self,
+        value: ValueId,
+    ) -> Result<Option<LocalSlotId>> {
+        let Some(value_ref) = self.function.value(value) else {
+            return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+        };
+        let ValueDef::Instruction { inst, .. } = value_ref.def else {
+            return Ok(None);
+        };
+        let Some(inst_ref) = self.function.instruction(inst) else {
+            return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
+        };
+        if inst_ref.op != Op::LoadStaticLocal {
+            return Ok(None);
+        }
+        match inst_ref.immediate {
+            Some(crate::ir::Immediate::LocalSlot(slot)) => Ok(Some(slot)),
+            _ => Ok(None),
+        }
+    }
+
+    /// Publishes a relocated container pointer into a static local's symbol storage.
+    ///
+    /// See [`Self::writeback_static_local_array_source`] for why this does no refcount work.
+    pub(super) fn store_relocated_container_to_static_local(
+        &mut self,
+        slot: LocalSlotId,
+        value: ValueId,
+    ) -> Result<()> {
         let local = self
             .function
             .locals
             .get(slot.as_raw() as usize)
             .ok_or_else(|| CodegenIrError::missing_entry("local slot", slot.as_raw()))?;
         let Some(name) = local.name.clone() else {
-            return Ok(());
+            return Err(CodegenIrError::invalid_module(
+                "static local container write-back is missing a source name",
+            ));
         };
         let slot_ty = local.php_type.codegen_repr();
-        let ty = self.value_php_type(value)?.codegen_repr();
-        let same_storage = matches!(
-            (&slot_ty, &ty),
-            (PhpType::Array(_), PhpType::Array(_))
-                | (PhpType::AssocArray { .. }, PhpType::AssocArray { .. })
-        );
-        if !same_storage {
+        let symbol = crate::names::static_local_symbol(&self.function.name, &name);
+        self.data.add_comm(symbol.clone(), 16);
+        let source_ty = self.load_value_to_result(value)?.codegen_repr();
+        // A gradual slot holds a boxed Mixed cell whose identity the mutation preserved, so the
+        // concrete container pointer in the result register is NOT what belongs in the symbol.
+        // Writing it there would replace the cell with a raw array pointer and every later read
+        // would unbox garbage. The dynamic mutation paths publish through the cell themselves,
+        // but a typed one (`array_push` on the unboxed array of `static $t = null; $t = [];`)
+        // relocated the container behind the cell's back, and the next call read the old block:
+        // so a cell still holding an array or a hash gets the relocated pointer as its payload.
+        if slot_ty == PhpType::Mixed && source_ty != PhpType::Mixed {
+            if matches!(source_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+                self.emit_republish_container_in_static_cell(&symbol);
+            }
             return Ok(());
         }
-        let symbol = crate::names::static_local_symbol(&self.function.name, &name);
-        self.load_value_to_result(value)?;
         abi::emit_store_result_to_symbol(self.emitter, &symbol, &slot_ty, false);
         Ok(())
+    }
+
+    /// Writes the container pointer held in the integer result register into the payload word of
+    /// the boxed Mixed cell a static's `symbol` holds, when that cell holds an array (tag 4) or a
+    /// hash (tag 5). Leaves the result register untouched.
+    fn emit_republish_container_in_static_cell(&mut self, symbol: &str) {
+        let done = self.next_label("static_cell_republish_done");
+        let cell = abi::symbol_scratch_reg(self.emitter);
+        let tag = abi::secondary_scratch_reg(self.emitter);
+        let result = abi::int_result_reg(self.emitter);
+        abi::emit_symbol_address(self.emitter, cell, symbol);
+        match self.emitter.target.arch {
+            crate::codegen::platform::Arch::AArch64 => {
+                self.emitter.instruction(&format!("ldr {cell}, [{cell}]"));        // load the static's boxed Mixed cell
+                self.emitter.instruction(&format!("cbz {cell}, {done}"));          // a null slot has no cell to republish into
+                self.emitter.instruction(&format!("ldr {tag}, [{cell}]"));         // load the cell's runtime tag
+                self.emitter.instruction(&format!("cmp {tag}, #4"));               // does the cell hold an indexed array?
+                let store = self.next_label("static_cell_republish_store");
+                self.emitter.instruction(&format!("b.eq {store}"));                // republish the relocated array
+                self.emitter.instruction(&format!("cmp {tag}, #5"));               // does the cell hold a hash?
+                self.emitter.instruction(&format!("b.ne {done}"));                 // any other payload was not this container
+                self.emitter.label(&store);
+                self.emitter.instruction(&format!("str {result}, [{cell}, #8]"));  // the cell now points at the relocated container
+            }
+            crate::codegen::platform::Arch::X86_64 => {
+                self.emitter.instruction(&format!("mov {cell}, QWORD PTR [{cell}]")); // load the static's boxed Mixed cell
+                self.emitter.instruction(&format!("test {cell}, {cell}"));         // is the slot null?
+                self.emitter.instruction(&format!("jz {done}"));                   // a null slot has no cell to republish into
+                self.emitter.instruction(&format!("mov {tag}, QWORD PTR [{cell}]")); // load the cell's runtime tag
+                self.emitter.instruction(&format!("cmp {tag}, 4"));                // does the cell hold an indexed array?
+                let store = self.next_label("static_cell_republish_store");
+                self.emitter.instruction(&format!("je {store}"));                  // republish the relocated array
+                self.emitter.instruction(&format!("cmp {tag}, 5"));                // does the cell hold a hash?
+                self.emitter.instruction(&format!("jne {done}"));                  // any other payload was not this container
+                self.emitter.label(&store);
+                self.emitter.instruction(&format!("mov QWORD PTR [{cell} + 8], {result}")); // the cell now points at the relocated container
+            }
+        }
+        self.emitter.label(&done);
     }
 
     /// Stores an SSA value through a local ref-cell pointer slot.
@@ -1585,14 +2035,15 @@ impl<'a> FunctionContext<'a> {
 
     /// Returns true when Mixed boxing can consume the value's owned source reference.
     pub(super) fn value_can_own_mixed_box_source(&self, value: ValueId) -> Result<bool> {
-        if operand_owners::has_scoped_cleanup(self.function, value, self.current_inst) {
+        if self.value_uses().has_scoped_cleanup(value, self.current_position()) {
             return Ok(false);
         }
         let value_ty = self.value_php_type(value)?.codegen_repr();
         if value_ty == PhpType::Str {
-            if self.function.instructions.iter().any(|inst| {
-                inst.op == Op::Release && inst.operands.first().copied() == Some(value)
-            }) {
+            // A string the lowering still releases after this use (a rooted call operand) keeps
+            // its owner: absorbing it into the box freed the bytes the box then pointed at --
+            // `array_push($this->untyped, $key, $value)` pushed garbage for `$key`.
+            if self.value_uses().is_released(value) {
                 return Ok(false);
             }
             return self.value_is_heap_owned_string_for_mixed_box(value);
@@ -1610,10 +2061,19 @@ impl<'a> FunctionContext<'a> {
             .function
             .instruction(inst)
             .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+        if inst.op == Op::Acquire {
+            return Ok(!self.value_uses().is_released(value));
+        }
         if matches!(inst.op, Op::LoadLocal | Op::LoadStaticLocal) {
             let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
                 return Ok(false);
             };
+            // The unboxed load holds its own reference, which a box may absorb only when no EIR
+            // release will drop it again -- `array_push()` releases its receiver after the call,
+            // and absorbing there freed the array the local's new box still pointed at.
+            if self.value_uses().is_released(value) {
+                return Ok(false);
+            }
             let storage_ty = self.local_php_type(slot)?;
             return Ok(matches!(storage_ty, PhpType::Mixed | PhpType::Union(_))
                 && matches!(
@@ -1638,15 +2098,40 @@ impl<'a> FunctionContext<'a> {
         &self,
         value: ValueId,
     ) -> Result<bool> {
-        if self.value_ownership(value)? != Ownership::Owned {
+        let mut transfers_owned = self.value_ownership(value)? == Ownership::Owned;
+        let Some(value_ref) = self.function.value(value) else {
+            return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+        };
+        if let ValueDef::Instruction { inst, .. } = value_ref.def {
+            let defining_inst = self
+                .function
+                .instruction(inst)
+                .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+            // String Acquire persists the payload even when conservative EIR
+            // metadata says MaybeOwned. Its new owner may be transferred, but
+            // only if no explicit Release below still consumes that owner.
+            if defining_inst.op == Op::Acquire && self.value_php_type(value)? == PhpType::Str {
+                transfers_owned = true;
+            }
+            if defining_inst.op == Op::LoadLocal {
+                if let Some(Immediate::LocalSlot(slot)) = defining_inst.immediate {
+                    if self.local_kind(slot)? == LocalKind::OwnedTemp {
+                        let next_inst = self.function.instructions.get(inst.as_raw() as usize + 1);
+                        let moves_out_of_slot = next_inst.is_some_and(|next| {
+                            next.op == Op::UnsetLocal
+                                && next.immediate == Some(Immediate::LocalSlot(slot))
+                        });
+                        if !moves_out_of_slot {
+                            return Ok(false);
+                        }
+                    }
+                }
+            }
+        }
+        if self.value_uses().has_scoped_cleanup(value, self.current_position()) {
             return Ok(false);
         }
-        if operand_owners::has_scoped_cleanup(self.function, value, self.current_inst) {
-            return Ok(false);
-        }
-        Ok(!self.function.instructions.iter().any(|inst| {
-            inst.op == Op::Release && inst.operands.first().copied() == Some(value)
-        }))
+        Ok(transfers_owned && !self.value_uses().is_released(value))
     }
 
     /// Reports whether a string result can transfer its heap owner to a retaining consumer.
@@ -1654,10 +2139,8 @@ impl<'a> FunctionContext<'a> {
         &self,
         value: ValueId,
     ) -> Result<bool> {
-        if operand_owners::has_scoped_cleanup(self.function, value, self.current_inst)
-            || self.function.instructions.iter().any(|inst| {
-                inst.op == Op::Release && inst.operands.first().copied() == Some(value)
-            })
+        if self.value_uses().has_scoped_cleanup(value, self.current_position())
+            || self.value_uses().is_released(value)
         {
             return Ok(false);
         }
@@ -1693,6 +2176,13 @@ impl<'a> FunctionContext<'a> {
         let Some(value_ref) = self.function.value(value) else {
             return Err(CodegenIrError::missing_entry("value", value.as_raw()));
         };
+        let (block, index) = match value_ref.def {
+            ValueDef::Instruction { .. } => (None, 0),
+            ValueDef::BlockParam { block, index } => (Some(block), usize::from(index)),
+        };
+        if let Some(block) = block {
+            return Ok(self.block_param_is_heap_owned_string_for_mixed_box(block, index));
+        }
         let ValueDef::Instruction { inst, .. } = value_ref.def else {
             return Ok(false);
         };
@@ -1700,24 +2190,82 @@ impl<'a> FunctionContext<'a> {
             .function
             .instruction(inst)
             .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-        Ok(matches!(
-            inst.op,
-            Op::Acquire
-                | Op::StrPersist
-                | Op::Call
-                | Op::FunctionVariantCall
-                | Op::ExternCall
-                | Op::MethodCall
-                | Op::NullsafeMethodCall
-                | Op::StaticMethodCall
-                | Op::ClosureCall
-                | Op::CallableDescriptorInvoke
-                | Op::ExprCall
-                | Op::PipeCall
-                | Op::IteratorMethodCall
-                | Op::SplRuntimeCall
-                | Op::FiberRuntimeCall
-        ))
+        Ok(inst.op.yields_box_absorbable_string())
+    }
+
+    /// Returns true when every edge into a block hands the parameter a box-absorbable heap string.
+    ///
+    /// An inlined call joins its callee's returns through a continuation parameter. The lowering
+    /// decided against releasing the call's string because the Mixed box would take it over
+    /// (`Op::yields_box_absorbable_string`); once the call became a branch argument the producer is
+    /// the callee's own `str_persist`, so the same answer has to hold for the parameter or the
+    /// string is copied into the box and the original never freed. Any edge whose value is not an
+    /// absorbable producer, or that is released elsewhere, keeps the copying path.
+    fn block_param_is_heap_owned_string_for_mixed_box(&self, block: BlockId, index: usize) -> bool {
+        let released = |value: ValueId| {
+            self.value_uses().is_released(value)
+        };
+        let absorbable = |value: ValueId| -> bool {
+            if released(value) {
+                return false;
+            }
+            let Some(value_ref) = self.function.value(value) else {
+                return false;
+            };
+            let ValueDef::Instruction { inst, .. } = value_ref.def else {
+                return false;
+            };
+            self.function
+                .instruction(inst)
+                .is_some_and(|inst| inst.op.yields_box_absorbable_string())
+        };
+        // Only the inliner's continuation block qualifies: a call result became this parameter
+        // AFTER the lowering chose not to release it. Any other block parameter was already
+        // judged by the lowering as a non-absorbable value and released after the write.
+        if !self
+            .function
+            .blocks
+            .iter()
+            .any(|candidate| candidate.id == block && candidate.name.starts_with("inline_cont_"))
+        {
+            return false;
+        }
+        let mut incoming = 0usize;
+        for candidate in &self.function.blocks {
+            let edges: Vec<(BlockId, &[ValueId])> = match candidate.terminator.as_ref() {
+                Some(crate::ir::Terminator::Br { target, args }) => vec![(*target, args.as_slice())],
+                Some(crate::ir::Terminator::CondBr {
+                    then_target,
+                    then_args,
+                    else_target,
+                    else_args,
+                    ..
+                }) => vec![
+                    (*then_target, then_args.as_slice()),
+                    (*else_target, else_args.as_slice()),
+                ],
+                Some(crate::ir::Terminator::Switch { cases, default, default_args, .. }) => {
+                    let mut edges = vec![(*default, default_args.as_slice())];
+                    edges.extend(cases.iter().map(|case| (case.target, case.args.as_slice())));
+                    edges
+                }
+                Some(crate::ir::Terminator::GeneratorSuspend { resume, resume_args, .. }) => {
+                    vec![(*resume, resume_args.as_slice())]
+                }
+                _ => Vec::new(),
+            };
+            for (target, args) in edges {
+                if target != block {
+                    continue;
+                }
+                incoming += 1;
+                match args.get(index) {
+                    Some(arg) if absorbable(*arg) => {}
+                    _ => return false,
+                }
+            }
+        }
+        incoming > 0
     }
 
     /// Interns a module data-pool string into the assembly data section.
@@ -1740,7 +2288,15 @@ impl<'a> FunctionContext<'a> {
             .class_names
             .get(data_id.as_raw() as usize)
             .ok_or_else(|| CodegenIrError::missing_entry("class data", data_id.as_raw()))?;
-        Ok(self.data.add_string(value.as_bytes()))
+        // Through `literal_bytes`, exactly like `intern_string_data` above: a class name is a PHP
+        // BYTE string too. `symfony/cache` declares `class \xA9`, one non-ASCII byte, and
+        // `get_class()` on it must hand back that one byte -- `as_bytes()` emitted the Rust UTF-8
+        // of the byte marker instead, three bytes for one.
+        // Through `literal_bytes`, exactly like `intern_string_data` above: a class name is a PHP
+        // BYTE string too. `symfony/cache` declares `class \xA9`, one non-ASCII byte, and
+        // `get_class()` on it must hand back that one byte.
+        let bytes = crate::string_bytes::literal_bytes(value);
+        Ok(self.data.add_string(&bytes))
     }
 
     /// Returns a module data-pool function name.
@@ -1791,6 +2347,16 @@ impl<'a> FunctionContext<'a> {
             .ok_or_else(|| CodegenIrError::missing_entry("value slot", value.as_raw()))
     }
 
+    /// Returns the path of the included or autoloaded file a span's code came from, or `None`
+    /// for the entry file (and for a span with no source identity).
+    pub(crate) fn span_source_file(&self, span: Option<crate::span::Span>) -> Option<&str> {
+        let id = span?.source_id();
+        if id == 0 {
+            return None;
+        }
+        self.module.source_files.get(&id).map(String::as_str)
+    }
+
     /// Returns the frame offset assigned to an addressable EIR local.
     pub(super) fn local_offset(&self, slot: LocalSlotId) -> Result<usize> {
         self.local_offsets
@@ -1806,6 +2372,19 @@ impl<'a> FunctionContext<'a> {
             .copied()
             .ok_or_else(|| CodegenIrError::invalid_module(format!("missing try handler token {}", token)))
     }
+}
+
+/// Returns whether the module still declares the nullary shutdown drain.
+///
+/// A FUNCTION-LIST question, not an instruction one: `__elephc_shutdown_run` has no PHP caller
+/// off `--web`, so nothing in the instruction stream would show it. Its presence is decided
+/// earlier, by `error_handling_prelude::inject_if_used` plus the forced-group rule in
+/// `pipeline::compile`, and reading the surviving list here is how codegen learns the answer.
+fn module_declares_shutdown_drain(module: &Module) -> bool {
+    module
+        .functions
+        .iter()
+        .any(|function| function.name == crate::names::SHUTDOWN_RUN_FUNCTION)
 }
 
 /// Scans every emitted function-like body for `pcntl_async_signals()` state changes.
@@ -1844,6 +2423,18 @@ fn coerce_current_result_for_target_store(
         && matches!(source_ty.codegen_repr(), PhpType::Void | PhpType::Never)
     {
         abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
+        return Ok(());
+    }
+    // `unset($s)` keeps a string local's raw two-word slot and stores the null into it. The null
+    // lives in the integer result register, so storing the string pair wrote whatever the
+    // string registers last held: the just-released pointer went back into the slot, and the
+    // next assignment released it again (a double free once the block had been reused).
+    if target_ty.codegen_repr() == PhpType::Str
+        && matches!(source_ty.codegen_repr(), PhpType::Void | PhpType::Never)
+    {
+        let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+        abi::emit_load_int_immediate(emitter, ptr_reg, crate::codegen::sentinels::NULL_SENTINEL);
+        abi::emit_load_int_immediate(emitter, len_reg, 0);
         return Ok(());
     }
     if target_ty.codegen_repr() != PhpType::TaggedScalar {
@@ -1885,4 +2476,10 @@ fn emit_mixed_result_as_tagged_scalar(emitter: &mut Emitter) {
             emitter.instruction("mov rdx, r10");                                // place the unboxed Mixed tag into the tagged-scalar tag register
         }
     }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    /// Numeric questions codegen answered on a body's shared fallback proof.
+    pub(crate) static NUMERIC_FALLBACK_QUERIES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }

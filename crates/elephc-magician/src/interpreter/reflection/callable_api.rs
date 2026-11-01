@@ -56,6 +56,21 @@ pub(in crate::interpreter) fn eval_reflection_function_invoke_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if method_name.eq_ignore_ascii_case("getClosure") {
+        eval_reflection_bind_no_args(evaluated_args)?;
+        let target = context
+            .eval_reflection_function_closure_target(identity)
+            .cloned()
+            .or_else(|| {
+                context
+                    .eval_reflection_function_name(identity)
+                    .map(|name| EvalClosureObjectTarget::Named(name.to_ascii_lowercase()))
+            });
+        let Some(target) = target else {
+            return Ok(None);
+        };
+        return eval_closure_object_expr(target, context, values).map(Some);
+    }
     let is_invoke = method_name.eq_ignore_ascii_case("invoke");
     let is_invoke_args = method_name.eq_ignore_ascii_case("invokeArgs");
     if !is_invoke && !is_invoke_args {
@@ -70,13 +85,27 @@ pub(in crate::interpreter) fn eval_reflection_function_invoke_result(
     if is_invoke_args {
         let array = eval_reflection_function_invoke_args_array(evaluated_args)?;
         return with_eval_array_call_arguments(array, context, values, |arguments, context, values| {
+            if let Some(target) = context
+                .eval_reflection_function_closure_target(identity)
+                .cloned()
+            {
+                return eval_closure_object_invoke_result(target, arguments, context, values);
+            }
             eval_reflection_function_invoke_dispatch(&function_name, arguments, context, values)
-        }).map(Some);
+        })
+        .map(Some);
     }
     let function_args = evaluated_args
         .into_iter()
         .map(eval_reflection_method_forwarded_value_arg)
         .collect();
+    if let Some(target) = context
+        .eval_reflection_function_closure_target(identity)
+        .cloned()
+    {
+        return eval_closure_object_invoke_result(target, function_args, context, values)
+            .map(Some);
+    }
     if eval_builtin_uses_owned_arguments(&function_name) {
         return eval_builtin_callback_with_arguments(&function_name, function_args, false, context, values).map(Some);
     }
@@ -97,6 +126,15 @@ pub(in crate::interpreter) fn eval_reflection_function_method_metadata_result(
     };
     let method_key = method_name.to_ascii_lowercase();
     match method_key.as_str() {
+        "getname" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            match &target {
+                EvalReflectionFunctionMethodTarget::Function { name, .. }
+                | EvalReflectionFunctionMethodTarget::Method { name, .. } => {
+                    values.string(name).map(Some)
+                }
+            }
+        }
         "getshortname" => {
             eval_reflection_bind_no_args(evaluated_args)?;
             values
@@ -116,8 +154,19 @@ pub(in crate::interpreter) fn eval_reflection_function_method_metadata_result(
                 .map(Some)
         }
         "getfilename" | "getstartline" | "getendline" => {
+            if let EvalReflectionFunctionMethodTarget::Method {
+                declaring_class: Some(declaring_class),
+                ..
+            } = &target
+            {
+                if eval_reflection_class_like_attributes(declaring_class, context).is_none() {
+                    // Preserve the generated method's own declaration metadata, not the
+                    // global entry-file fallback carried by the AOT eval metadata adapter.
+                    return Ok(None);
+                }
+            }
             let (source_file, source_location) =
-                eval_reflection_function_method_source_location(&target);
+                eval_reflection_function_method_source_location(&target, context);
             eval_reflection_source_location_result(
                 method_key.as_str(),
                 source_file,

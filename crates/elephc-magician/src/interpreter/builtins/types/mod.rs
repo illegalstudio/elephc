@@ -10,7 +10,9 @@
 //!   PHP-visible direct/by-value wrappers.
 
 mod boolval;
+mod filter_var;
 mod floatval;
+mod get_debug_type;
 mod gettype;
 mod intval;
 mod is_array;
@@ -35,7 +37,9 @@ mod is_string;
 mod settype;
 mod strval;
 
+pub(in crate::interpreter) use get_debug_type::*;
 pub(in crate::interpreter) use gettype::*;
+pub(in crate::interpreter) use filter_var::*;
 pub(in crate::interpreter) use intval::*;
 pub(in crate::interpreter) use is_bool::*;
 pub(in crate::interpreter) use is_countable::*;

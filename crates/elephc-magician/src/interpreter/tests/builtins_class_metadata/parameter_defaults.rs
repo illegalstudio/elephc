@@ -14,10 +14,10 @@ use super::super::support::*;
 #[test]
 fn reflected_class_registered_default_error_keeps_no_temporary_owners() {
     let mut context = ElephcEvalContext::new();
-    assert!(context.define_class(EvalClass::new("Probe", vec![
+    assert!(context.define_class(std::sync::Arc::new(EvalClass::new("Probe", vec![
         EvalClassProperty::new("good", Some(EvalExpr::Const(EvalConst::String("ok".into())))),
         EvalClassProperty::new("bad", None),
-    ], Vec::new())));
+    ], Vec::new()))));
     assert!(context.define_native_property_default_error("Probe", "bad", "missing lexical parent".into()));
     context.register_eval_reflection_class(7, "Probe");
     let mut values = FakeOps::default();
@@ -36,10 +36,10 @@ fn reflected_class_registered_default_error_keeps_no_temporary_owners() {
 #[test]
 fn reflected_class_partial_default_map_keeps_no_temporary_owners() {
     let mut context = ElephcEvalContext::new();
-    assert!(context.define_class(EvalClass::new("Probe", vec![
+    assert!(context.define_class(std::sync::Arc::new(EvalClass::new("Probe", vec![
         EvalClassProperty::new("good", Some(EvalExpr::Const(EvalConst::String("ok".into())))),
         EvalClassProperty::new("second", Some(EvalExpr::Const(EvalConst::Int(7)))),
-    ], Vec::new())));
+    ], Vec::new()))));
     context.register_eval_reflection_class(7, "Probe");
     let mut values = FakeOps::default();
     for _ in 0..8 {

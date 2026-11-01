@@ -147,10 +147,10 @@ fn emit_take(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_hash_unset");
     abi::load_at_offset(emitter, result, 48);
     match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction("cbz x0, __rt_array_take_done"),   // pop leaves every surviving key unchanged
+        Arch::AArch64 => emitter.instruction("cbz x0, __rt_array_take_pop"),    // pop leaves every surviving key unchanged
         Arch::X86_64 => {
             emitter.instruction("test rax, rax");                               // inspect whether surviving numeric keys need rebuilding
-            emitter.instruction("jz __rt_array_take_done");                     // pop leaves every surviving key unchanged
+            emitter.instruction("jz __rt_array_take_pop");                      // pop leaves every surviving key unchanged
         }
     }
     // Hash spread into an empty destination preserves string keys and numbers
@@ -167,6 +167,9 @@ fn emit_take(emitter: &mut Emitter) {
     abi::emit_store_to_address(emitter, result, cell, 8);
     abi::load_at_offset(emitter, result, 16);
     abi::emit_call_label(emitter, "__rt_decref_hash");
+    abi::emit_jump(emitter, "__rt_array_take_done");
+    // The pop path already rewound the next automatic index before the unset above.
+    emitter.label("__rt_array_take_pop");
     abi::emit_jump(emitter, "__rt_array_take_done");
     emitter.label("__rt_array_take_empty");
     // mixed_from_value intentionally uses the legacy tag/result register on x86_64.
@@ -264,7 +267,7 @@ fn emit_hash_pop(emitter: &mut Emitter) {
     abi::load_at_offset(emitter, arg0, 8);
     abi::load_at_offset(emitter, arg1, 16);
     abi::load_at_offset(emitter, arg2, 24);
-    super::hash_next_index::rewind_after_pop(emitter, arg0, arg1, arg2, "__rt_hash_pop");
+    super::hash_next_index::rewind_after_pop(emitter, arg0, arg1, arg2, "__rt_hash_pop_boxed");
     abi::emit_call_label(emitter, "__rt_hash_unset");
     abi::emit_jump(emitter, "__rt_hash_pop_boxed_done");
 

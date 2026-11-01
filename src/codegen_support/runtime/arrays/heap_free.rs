@@ -13,6 +13,7 @@
 use super::heap_consolidate::HEAP_BIN_MAX;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::sentinels::{REFERENCE_CELL_CANARY_OFFSET, REFERENCE_CELL_HEAP_KIND};
 
 #[cfg(test)]
 #[path = "heap_free/tail_scan_tests.rs"]
@@ -44,6 +45,7 @@ pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) 
     }
 
     let double_free_msg = "Fatal error: heap debug detected double free\n";
+    let live_free_msg = "Fatal error: heap debug detected free of a still-referenced block\n";
 
     emitter.blank();
     emitter.comment("--- runtime: heap_free ---");
@@ -112,6 +114,21 @@ pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) 
     // -- compute header address and block end --
     emitter.instruction("sub x9, x0, #16");                                     // x9 = header address (block_size lives here)
     emitter.instruction("ldr w11, [x9]");                                       // x11 = block size (32-bit, zero-extends)
+    // -- heap-debug: a block with owners left must not be freed --
+    // Nothing else reads the refcount here: free clears it and moves on, so releasing a block
+    // another value still holds is silent, and the block comes back out of the free list to a
+    // second owner. Reading it first names the caller that got it wrong.
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x16", "_heap_debug_enabled");
+    emitter.instruction("ldr x16, [x16]");                                      // load the heap-debug enabled flag
+    emitter.instruction("cbz x16, __rt_heap_free_live_checked");                // skip the owner check outside heap-debug
+    emitter.instruction("ldr w16, [x9, #4]");                                   // load the refcount the caller is freeing through
+    emitter.instruction("and w16, w16, #0x7fffffff");                           // drop the destruction-in-progress flag a destructor leaves set
+    emitter.instruction("cmp w16, #1");                                         // does another owner still hold this block?
+    emitter.instruction("b.ls __rt_heap_free_live_checked");                    // 0 or 1 owner is the normal release
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_heap_dbg_live_free_msg");
+    emitter.instruction(&format!("mov x2, #{}", live_free_msg.len()));          // pass the exact live-free debug message length
+    emitter.instruction("b __rt_heap_debug_fail");                              // report the premature free and terminate immediately
+    emitter.label("__rt_heap_free_live_checked");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x16", "_heap_debug_enabled");
     emitter.instruction("ldr x16, [x16]");                                      // load the heap-debug enabled flag
     emitter.instruction("cbz x16, __rt_heap_free_poison_done");                 // skip freed-block poisoning when heap-debug mode is disabled
@@ -131,6 +148,11 @@ pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) 
     emitter.instruction("sub x14, x14, x12");                                   // subtract the freed block footprint from the live-byte total
     emitter.instruction("str x14, [x13]");                                      // store updated live bytes
     emitter.instruction("str wzr, [x9, #4]");                                   // mark the block header as not live while it is being freed
+    emitter.instruction("ldrb w16, [x9, #8]");                                  // read the heap kind before it is cleared
+    emitter.instruction(&format!("cmp w16, #{REFERENCE_CELL_HEAP_KIND}"));     // a managed reference cell carries an address canary
+    emitter.instruction("b.ne __rt_heap_free_canary_done");                     // other blocks have no canary to retire
+    emitter.instruction(&format!("str xzr, [x9, #{}]", 16 + REFERENCE_CELL_CANARY_OFFSET)); // stale storage must never prove a live cell again
+    emitter.label("__rt_heap_free_canary_done");
     emitter.instruction("str xzr, [x9, #8]");                                   // clear the heap kind while the block sits on the free list
     crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_heap_buf");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x13", "_heap_off");
@@ -358,6 +380,7 @@ pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) 
 /// Output: `rax` preserved through the free path; all other scratch registers are clobbered.
 fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) {
     let double_free_msg = "Fatal error: heap debug detected double free\n";
+    let live_free_msg = "Fatal error: heap debug detected free of a still-referenced block\n";
 
     emitter.blank();
     emitter.comment("--- runtime: heap_free ---");
@@ -431,6 +454,19 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool, mbstrin
     super::heap_live_bases::emit_update(emitter, false);
     emitter.instruction("lea r9, [rax - 16]");                                  // recover the internal block header address from the user payload pointer
     emitter.instruction("mov r11d, DWORD PTR [r9]");                            // load the block payload size from the uniform heap header before releasing it
+    // -- heap-debug: a block with owners left must not be freed (see the AArch64 arm) --
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_debug_enabled");
+    emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the heap-debug enabled flag
+    emitter.instruction("test r8, r8");                                         // is heap-debug mode active?
+    emitter.instruction("jz __rt_heap_free_live_checked");                      // skip the owner check outside heap-debug
+    emitter.instruction("mov esi, DWORD PTR [r9 + 4]");                         // load the refcount the caller is freeing through
+    emitter.instruction("and esi, 0x7fffffff");                                 // drop the destruction-in-progress flag a destructor leaves set
+    emitter.instruction("cmp esi, 1");                                          // does another owner still hold this block?
+    emitter.instruction("jbe __rt_heap_free_live_checked");                     // 0 or 1 owner is the normal release
+    crate::codegen_support::abi::emit_symbol_address(emitter, "rsi", "_heap_dbg_live_free_msg");
+    emitter.instruction(&format!("mov rdx, {}", live_free_msg.len()));          // pass the exact live-free debug message length
+    emitter.instruction("jmp __rt_heap_debug_fail");                            // report the premature free and terminate immediately
+    emitter.label("__rt_heap_free_live_checked");
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_debug_enabled");
     emitter.instruction("mov r8, QWORD PTR [r8]");                              // reload the heap-debug enabled flag before optional payload poisoning
     emitter.instruction("test r8, r8");                                         // should the x86_64 heap runtime poison freed payload bytes?
@@ -452,6 +488,10 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool, mbstrin
     emitter.instruction("sub rcx, r10");                                        // subtract this block's payload-plus-header footprint from the live-byte count
     emitter.instruction("mov QWORD PTR [r8], rcx");                             // store the updated live-byte count after freeing the block
     emitter.instruction("mov DWORD PTR [r9 + 4], 0");                           // clear the live refcount while this block sits on the free list or in a small bin
+    emitter.instruction(&format!("cmp BYTE PTR [r9 + 8], {REFERENCE_CELL_HEAP_KIND}")); // a managed reference cell carries an address canary
+    emitter.instruction("jne __rt_heap_free_canary_done");                      // other blocks have no canary to retire
+    emitter.instruction(&format!("mov QWORD PTR [r9 + {}], 0", 16 + REFERENCE_CELL_CANARY_OFFSET)); // stale storage must never prove a live cell again
+    emitter.label("__rt_heap_free_canary_done");
     emitter.instruction("mov QWORD PTR [r9 + 8], 0");                           // clear the heap kind so free blocks do not look like live typed payloads
     crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_off");

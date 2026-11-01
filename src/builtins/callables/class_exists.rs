@@ -5,8 +5,8 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - The check hook validates that the first argument is a string literal and the
-//!   optional autoload argument is a literal bool or int (AOT constraint).
+//! - The check hook accepts literal and runtime string names; literals may seed autoload
+//!   discovery while runtime names query the emitted closed-world class metadata.
 //! - Arguments are pre-inferred by the registry common path before the hook runs.
 
 

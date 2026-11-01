@@ -191,6 +191,20 @@ pub(super) fn emit_lazy_case_load_unguarded(
     abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), &slot, 0);
 }
 
+/// Returns the case slot symbol and, when the enum has a runtime class shape, the materializer to
+/// call before reading it. For sites that resolve symbols ahead of emission (descriptor invoker
+/// defaults) and then emit the same sequence as [`emit_lazy_case_load_unguarded`].
+pub(super) fn lazy_case_symbols(
+    module: &Module,
+    enum_name: &str,
+    case_name: &str,
+) -> (String, Option<String>) {
+    (
+        enum_case_symbol(enum_name, case_name),
+        materializer_symbol(module, enum_name, case_name),
+    )
+}
+
 /// Emits the materializer call that `from()`/`tryFrom()` needs before its scan.
 ///
 /// PHP materializes every case of a backed enum when `from()`/`tryFrom()` runs —

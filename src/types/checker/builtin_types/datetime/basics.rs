@@ -32,6 +32,9 @@ if ($timezone === null) {
         }
         $this->timestamp = $__ts;
     }
+    if ($this->microsecond === 0) {
+        $this->microsecond = DateTime::__elephc_now_micros($datetime, "");
+    }
     $this->timezone_name = date_default_timezone_get();
 } else {
     $tzname = $timezone->getName();
@@ -47,6 +50,9 @@ if ($timezone === null) {
         }
         $this->timestamp = $__ts;
         date_default_timezone_set($saved);
+    }
+    if ($this->microsecond === 0) {
+        $this->microsecond = DateTime::__elephc_now_micros($datetime, $tzname);
     }
     $this->timezone_name = $tzname;
 }

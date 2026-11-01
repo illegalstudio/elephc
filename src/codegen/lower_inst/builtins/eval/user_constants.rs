@@ -207,7 +207,7 @@ mod tests {
         let layout = frame::layout_for_function(&function, target, false, false, false);
         let mut emitter = Emitter::new(target);
         let mut data = DataSection::new();
-        let mut shared = SharedCodegenState::default();
+        let mut shared = SharedCodegenState::for_module(&module);
         {
             let mut ctx = FunctionContext::new(
                 &module,

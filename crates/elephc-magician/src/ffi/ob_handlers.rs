@@ -96,6 +96,20 @@ pub(crate) fn register_ob_handler(
     })
 }
 
+/// Forgets every registered output handler at a generated web request boundary.
+///
+/// PHP empties the output-buffering stack at the end of a request, so no handler legitimately
+/// spans two. Both fields here are raw addresses into state the boundary invalidates -- the
+/// callable lives in the arena `__rt_web_reset` wipes, and the context is one whose tables are
+/// emptied beside it -- so a surviving entry is a callback into freed storage, reachable from
+/// the generated runtime the moment the next request calls `ob_start()`.
+#[cfg(not(test))]
+pub(crate) fn reset_ob_handlers() {
+    if let Ok(mut handlers) = ob_handlers().lock() {
+        handlers.entries.clear();
+    }
+}
+
 /// Returns a failed start's retained owner after checking its original eval context.
 pub(crate) fn unregister_ob_handler(id: u64, context: *mut ElephcEvalContext) -> Option<RuntimeCellHandle> {
     let mut handlers = ob_handlers().lock().ok()?;

@@ -78,6 +78,14 @@ pub(super) fn construct() -> Vec<Stmt> {
                     s_prop_assign(e_this(), "timestamp", e_var("__ts")),
                 ]),
                 ),
+                s_if(
+                    e_binop(e_this_prop("microsecond"), BinOp::StrictEq, e_int(0)),
+                    vec![
+                        s_prop_assign(e_this(), "microsecond", e_static_call("DateTime", "__elephc_now_micros", vec![e_var("datetime"), e_str("")])),
+                    ],
+                    vec![],
+                    None,
+                ),
                 s_prop_assign(e_this(), "timezone_name", e_call("date_default_timezone_get", vec![])),
             ],
             vec![],
@@ -105,6 +113,14 @@ pub(super) fn construct() -> Vec<Stmt> {
                 s_prop_assign(e_this(), "timestamp", e_var("__ts")),
                 s_expr(e_call("date_default_timezone_set", vec![e_var("saved")])),
             ]),
+            ),
+            s_if(
+                e_binop(e_this_prop("microsecond"), BinOp::StrictEq, e_int(0)),
+                vec![
+                    s_prop_assign(e_this(), "microsecond", e_static_call("DateTime", "__elephc_now_micros", vec![e_var("datetime"), e_var("tzname")])),
+                ],
+                vec![],
+                None,
             ),
             s_prop_assign(e_this(), "timezone_name", e_var("tzname")),
         ]),
@@ -1221,6 +1237,59 @@ pub(super) fn extract_micros() -> Vec<Stmt> {
             None,
         ),
         s_return(e_int(0)),
+    ]
+}
+
+/// Reproduces `NOW_MICROS_SRC`.
+pub(super) fn now_micros() -> Vec<Stmt> {
+    vec![
+        s_assign("__mt", e_call("explode", vec![e_str(" "), e_call("microtime", vec![e_bool(false)])])),
+        s_assign("__us", e_call("intval", vec![e_call("substr", vec![e_index(e_var("__mt"), e_int(0)), e_int(2), e_int(6)])])),
+        s_assign("__b", e_call("intval", vec![e_index(e_var("__mt"), e_int(1))])),
+        s_assign("__r", e_int(0)),
+        s_assign("__n", e_call("strtolower", vec![e_call("trim", vec![e_var("s")])])),
+        s_if(
+            e_binop(e_var("__n"), BinOp::StrictEq, e_str("now")),
+            vec![
+                s_assign("__r", e_var("__us")),
+            ],
+            vec![],
+            None,
+        ),
+        s_if(
+            e_binop(e_binop(e_binop(e_var("__n"), BinOp::StrictNotEq, e_str("now")), BinOp::And, e_binop(e_call("strpos", vec![e_var("s"), e_str(":")]), BinOp::StrictEq, e_bool(false))), BinOp::And, e_binop(e_call("substr", vec![e_var("s"), e_int(0), e_int(1)]), BinOp::StrictNotEq, e_str("@"))),
+            vec![
+                s_assign("__saved", e_call("date_default_timezone_get", vec![])),
+                s_if(
+                    e_binop(e_var("tz"), BinOp::StrictNotEq, e_str("")),
+                    vec![
+                        s_expr(e_call("date_default_timezone_set", vec![e_var("tz")])),
+                    ],
+                    vec![],
+                    None,
+                ),
+                s_assign("__t1", e_call("strtotime", vec![e_var("s"), e_var("__b")])),
+                s_if(
+                    e_binop(e_binop(e_var("__t1"), BinOp::StrictNotEq, e_bool(false)), BinOp::And, e_binop(e_call("strtotime", vec![e_var("s"), e_binop(e_var("__b"), BinOp::Add, e_int(1))]), BinOp::StrictEq, e_binop(e_var("__t1"), BinOp::Add, e_int(1)))),
+                    vec![
+                        s_assign("__r", e_var("__us")),
+                    ],
+                    vec![],
+                    None,
+                ),
+                s_if(
+                    e_binop(e_var("tz"), BinOp::StrictNotEq, e_str("")),
+                    vec![
+                        s_expr(e_call("date_default_timezone_set", vec![e_var("__saved")])),
+                    ],
+                    vec![],
+                    None,
+                ),
+            ],
+            vec![],
+            None,
+        ),
+        s_return(e_var("__r")),
     ]
 }
 

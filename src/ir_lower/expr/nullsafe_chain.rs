@@ -18,10 +18,10 @@ use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
 use super::{
-    branch_to, lower_array_access_from_value, lower_boxed_null,
-    lower_dynamic_property_fetch_from_value, lower_expr, lower_expr_call_from_value,
-    lower_method_call_with_receiver, lower_property_get_from_value,
-    lower_property_probe_from_value, property_can_be_uninitialized,
+    branch_to, callable_receiver_nullability, lower_array_access_from_value, lower_boxed_null,
+    lower_dynamic_property_fetch_from_value, lower_expr,
+    lower_expr_call_from_value, lower_method_call_with_receiver, lower_property_get_from_value,
+    property_can_be_uninitialized,
     property_probe_needs_runtime_name_form_for_type, store_value_into_temp, take_owned_temp,
     value_is_definitely_null, value_is_nullable,
     refine_member_receiver,
@@ -298,7 +298,15 @@ fn lower_nullsafe_postfix_segment(
                     &ctx.builder.value_php_type(current.value),
                 )
             {
-                return Some(lower_property_probe_from_value(ctx, current, property, expr));
+                // A chain segment's value is read on (the next link) or is the `??` answer, so
+                // the fetch is `??`'s: `__isset` and then `__get`.
+                return Some(super::property_access::lower_property_fetch_mode_from_value(
+                    ctx,
+                    current,
+                    property,
+                    PropertyFetchMode::Coalesce,
+                    expr,
+                ));
             }
             Some(lower_property_get_from_value(
                 ctx,
@@ -320,7 +328,7 @@ fn lower_nullsafe_postfix_segment(
             let mode = if warn_on_missing {
                 PropertyFetchMode::Read
             } else {
-                PropertyFetchMode::Probe
+                PropertyFetchMode::Coalesce
             };
             Some(lower_dynamic_property_fetch_from_value(
                 ctx, current, property, mode, expr,
@@ -338,6 +346,25 @@ fn lower_nullsafe_postfix_segment(
                 }
             } else if !guard_regular_method_receiver(ctx, current, method, expr) {
                 return None;
+            }
+            // `$this->disabled?->__invoke()` reaches here as a chain segment: the null guard has
+            // already run, so what is left is the closure call itself, which has no instance
+            // dispatch to go through.
+            if method == "__invoke"
+                && callable_receiver_nullability(&ctx.builder.value_php_type(current.value))
+                    .is_some()
+            {
+                return Some(lower_expr_call_from_value(ctx, current, args, expr));
+            }
+            // The null arm is split off above, so a nullable receiver is non-null here and the
+            // call takes the class-id ladder a plain `->` call on it takes (see
+            // `lower_nullable_regular_method_call`).
+            if let Some(object_ty) =
+                super::override_arity::nullable_receiver_ladder_type(ctx, current, method, args)
+            {
+                return Some(super::lower_call_on_unboxed_receiver(
+                    ctx, current, object_ty, method, args, expr,
+                ));
             }
             Some(lower_method_call_with_receiver(
                 ctx,
@@ -442,7 +469,20 @@ fn guard_nullsafe_chain_receiver(
         branch_to(ctx, null_block);
         return false;
     }
-    if !value_is_nullable(ctx, current.value) {
+    // An object or callable is a POINTER, and a pointer holds null whatever the static type says.
+    // `$typed[0] ?? null` over an `array<Foo>` comes out typed `Foo` -- the merge folds the null
+    // default into the object representation -- and trusting that type deleted the very test the
+    // `?->` was written for. MEASURED against php 8.5.10:
+    //     $arr = [new U()]; array_pop($arr); ($arr[0] ?? null)?->foo();
+    //     php NULL     elephc Error: Call to a member function foo() on null
+    // Symfony's console reads every command's `#[AsCommand]` as
+    // `($r->getAttributes(AsCommand::class)[0] ?? null)?->newInstance()`, and every command
+    // without the attribute failed that way. The test costs one comparison, and only on `?->`.
+    let pointer_may_be_null = matches!(
+        ctx.builder.value_php_type(current.value).codegen_repr(),
+        PhpType::Object(_) | PhpType::Callable
+    );
+    if !value_is_nullable(ctx, current.value) && !pointer_may_be_null {
         return true;
     }
     let is_null = ctx.emit_value(

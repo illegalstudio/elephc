@@ -364,7 +364,12 @@ pub(super) fn add_reflection_member_flag_methods(
         methods.push(builtin_reflection_property_is_lazy_method());
         methods.push(builtin_reflection_property_skip_lazy_initialization_method());
         methods.push(builtin_reflection_property_get_value_method());
+        methods.push(builtin_reflection_property_get_raw_value_method());
         methods.push(builtin_reflection_property_set_value_method());
+        methods.push(builtin_reflection_property_set_raw_value_method());
+        methods.push(
+            builtin_reflection_property_set_raw_value_without_lazy_initialization_method(),
+        );
         methods.push(builtin_reflection_property_is_initialized_method());
         methods.push(builtin_reflection_property_modifier_mask_method(
             "isProtectedSet",

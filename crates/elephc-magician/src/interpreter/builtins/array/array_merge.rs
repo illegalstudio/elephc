@@ -31,40 +31,49 @@ pub(in crate::interpreter) fn eval_array_merge_declared_values_result(
     _context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [left, right] = evaluated_args else { return Err(EvalStatus::RuntimeFatal); };
-    eval_array_merge_result(*left, *right, values)
+    eval_array_merge_all(evaluated_args, values)
 }
 
-/// Evaluates PHP `array_merge()` over two array expressions.
+/// Evaluates PHP `array_merge()` over any number of array expressions.
 pub(in crate::interpreter) fn eval_builtin_array_merge(
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [left, right] = args else {
-        return Err(EvalStatus::RuntimeFatal);
-    };
-    let left = eval_expr(left, context, scope, values)?;
-    let right = eval_expr(right, context, scope, values)?;
-    eval_array_merge_result(left, right, values)
+    let mut operands = Vec::with_capacity(args.len());
+    for arg in args {
+        operands.push(eval_expr(arg, context, scope, values)?);
+    }
+    eval_array_merge_all(&operands, values)
 }
 
 /// Builds an `array_merge()` result with PHP numeric reindexing and string-key overwrites.
-pub(in crate::interpreter) fn eval_array_merge_result(
-    left: RuntimeCellHandle,
-    right: RuntimeCellHandle,
+///
+/// `array_merge()` is VARIADIC -- `array_merge(...$arrays)` -- and both entry points used to
+/// destructure exactly `[left, right]`, so a third argument failed the pattern and the call
+/// surfaced as `unsupported NamespacedCall array_merge()` with no further explanation. MEASURED
+/// against php 8.5.10 inside `eval()`: two arguments matched, three did not. Symfony's
+/// `TwigEnvironmentPass` writes `array_merge($a, $b, $currentMethodCalls)`, and that one line
+/// stopped the console's container build.
+///
+/// No arguments is `[]` in php 8, which falls out of the empty fold.
+pub(in crate::interpreter) fn eval_array_merge_all(
+    operands: &[RuntimeCellHandle],
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let left_len = values.array_len(left)?;
-    let right_len = values.array_len(right)?;
-    let capacity = left_len
-        .checked_add(right_len)
-        .ok_or(EvalStatus::RuntimeFatal)?;
+    let mut capacity: usize = 0;
+    for operand in operands {
+        capacity = capacity
+            .checked_add(values.array_len(*operand)?)
+            .ok_or(EvalStatus::RuntimeFatal)?;
+    }
     let mut result = values.assoc_new(capacity)?;
     let mut next_numeric_key = 0_i64;
-    result = eval_array_merge_append_operand(result, left, &mut next_numeric_key, values)?;
-    eval_array_merge_append_operand(result, right, &mut next_numeric_key, values)
+    for operand in operands {
+        result = eval_array_merge_append_operand(result, *operand, &mut next_numeric_key, values)?;
+    }
+    Ok(result)
 }
 
 /// Appends one source array to an `array_merge()` result using PHP key handling.

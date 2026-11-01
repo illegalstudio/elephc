@@ -15,7 +15,9 @@ pub(super) fn parameter_default_is_deferred(expression: &EvalExpr) -> bool {
     match expression {
         EvalExpr::DeferredDefaultError(_) => true,
         EvalExpr::Array(entries) => entries.iter().any(|entry| match entry {
-            EvalArrayElement::Value(value) | EvalArrayElement::Reference(value) =>
+            EvalArrayElement::Value(value)
+            | EvalArrayElement::Reference(value)
+            | EvalArrayElement::Spread(value) =>
                 parameter_default_is_deferred(value),
             EvalArrayElement::KeyValue { key, value }
             | EvalArrayElement::KeyReference { key, value } =>

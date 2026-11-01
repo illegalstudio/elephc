@@ -12,7 +12,7 @@
 //!   skipped whole, so a repeated by-reference foreach cannot restamp a live reference set.
 //! - The owned-box entry point is shared so `__rt_hash_set` can reuse it when writing a
 //!   non-boxed replacement through an existing reference cell.
-//! - A tag-13 entry (a raw `?ptr<T>` word) boxes as PHP null for 0 and an integer otherwise. The
+//! - A tag-14 entry (a raw `?ptr<T>` word) boxes as PHP null for 0 and an integer otherwise. The
 //!   owned-box helper is unchanged, so an integer 0 written through `__rt_hash_set` stays one.
 
 use crate::codegen_support::emit::Emitter;

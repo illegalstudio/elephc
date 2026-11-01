@@ -40,9 +40,10 @@ pub(crate) fn classify(source: &str) -> Input {
     let simple_assignment = tokens.first().is_some_and(|token| matches!(token.kind(), TokenKind::DollarIdent(_)))
         && tokens.get(1).is_some_and(|token| assignment_op(token.kind()).is_some());
     let mut parser = Parser::new(tokens, source.len());
-    match parser.parse_program() {
+    match parser.parse_program_in_place() {
         Ok(program) => ready(source.to_string(), &program, simple_assignment),
-        Err(error) => {
+        Err(diagnostic) => {
+            let error = diagnostic.error();
             let at_eof = matches!(parser.current(), TokenKind::Eof);
             // Permit the omitted final semicolon only if it completes the entire grammar.
             // Do not repair syntax before the failure cursor or execute a valid prefix.

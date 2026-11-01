@@ -51,14 +51,13 @@ echo 'done';
         assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
         assert_eq!(out.stdout, "done");
     }
-    // The pre-existing metadata retention (#1352) includes the parameter and its declaring
-    // function. Their independently owned public names add two legitimate payloads to the
-    // legacy 23-block graph. Removing both names isolates those additions from orphaned
-    // temporaries without treating the whole retained graph as a new public-name leak.
-    assert_eq!(eval_operand_owner_live_blocks(&runs[1].stderr), 23, "{}", runs[1].stderr);
-    assert_eq!(
-        eval_operand_owner_live_blocks(&runs[0].stderr),
-        eval_operand_owner_live_blocks(&runs[1].stderr) + 2,
+    // The retained public names of the parameter and its declaring function add at most two
+    // owners over the control run that removes both names. Eval's metadata blocks and boxed
+    // array owners are released by the exit sweep, so the legacy absolute count (23) is not
+    // asserted; a public-name string kept after the object is unset would exceed the bound.
+    assert!(
+        eval_operand_owner_live_blocks(&runs[0].stderr)
+            <= eval_operand_owner_live_blocks(&runs[1].stderr) + 2,
         "only the two public metadata names may add retained owners: normal={}\ncontrol={}",
         runs[0].stderr, runs[1].stderr,
     );
@@ -641,4 +640,52 @@ echo $caught;
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "5", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Reflection objects an eval-dispatched call returns with a static class or array type are freed
+/// with their last compiled reference.
+///
+/// The bridge returns a fresh Mixed cell; the typed conversion took its own reference to the
+/// payload but never released the cell, so every `getMethods()`/`getMethod()` on a dynamically
+/// named class kept the whole object graph. Symfony's opcache preloader walks every service
+/// class that way and exhausted the heap at startup. The retained count must not grow with the
+/// number of walks.
+#[test]
+fn test_eval_typed_reflection_results_do_not_accumulate() {
+    let program = |walks: usize| {
+        format!(
+            r#"<?php
+interface Shape {{ public function area(): float; }}
+class Def {{
+    public function setA(int $a): static {{ return $this; }}
+    public function setB(Shape $s, ?string $x = null): static {{ return $this; }}
+}}
+function walk(string $class): int {{
+    $r = new \ReflectionClass($class);
+    $sink = strlen($r->getMethod('setA')->getName());
+    foreach ($r->getMethods() as $m) {{
+        foreach ($m->getParameters() as $p) {{ $sink += $p->getType() === null ? 0 : 1; }}
+    }}
+    return $sink;
+}}
+$class = $argc > 9 ? 'Shape' : 'Def';
+$total = 0;
+for ($i = 0; $i < {walks}; $i++) {{ $total += walk($class); }}
+echo $total;
+eval('$unused = 1;');
+"#
+        )
+    };
+    let once = compile_and_run_with_heap_debug(&program(1));
+    assert!(once.success, "stdout={:?}\nstderr={}", once.stdout, once.stderr);
+    assert_eq!(once.stdout, "7");
+    let six = compile_and_run_with_heap_debug(&program(6));
+    assert!(six.success, "stdout={:?}\nstderr={}", six.stdout, six.stderr);
+    assert_eq!(six.stdout, "42");
+    assert_eq!(
+        eval_operand_owner_live_blocks(&six.stderr),
+        eval_operand_owner_live_blocks(&once.stderr),
+        "reflection walks must not retain blocks: {}",
+        six.stderr,
+    );
 }

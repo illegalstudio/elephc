@@ -77,7 +77,9 @@ fn emit_isset_missing_result(ctx: &mut FunctionContext<'_>, value: ValueId) -> R
             Op::ArrayGet | Op::ArrayGetSilent => {
                 return emit_isset_array_offset_missing_result(ctx, &inst)
             }
-            Op::HashGet => return emit_isset_hash_offset_missing_result(ctx, &inst),
+            Op::HashGet | Op::HashGetSilent => {
+                return emit_isset_hash_offset_missing_result(ctx, &inst)
+            }
             _ => {}
         }
     }
@@ -106,6 +108,10 @@ fn emit_loaded_isset_missing_result(ctx: &mut FunctionContext<'_>, value: ValueI
             Ok(())
         }
         PhpType::Int | PhpType::Bool => emit_scalar_value_is_null_sentinel(ctx, value),
+        // An object-typed slot may still hold null (an untyped property declared `= null`).
+        PhpType::Object(_) | PhpType::Callable | PhpType::Iterable => {
+            super::super::comparisons::emit_object_null_compare(ctx, value, true)
+        }
         _ => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
             Ok(())
@@ -254,8 +260,15 @@ fn emit_isset_hash_offset_missing_result(
 ) -> Result<()> {
     let hash = expect_operand(inst, 0)?;
     let key = expect_operand(inst, 1)?;
+    // The BUCKET shape, not the declared element type: a `TaggedScalar` element is stored as a
+    // boxed Mixed cell (a bucket has nowhere to put the tag register), so reading the element
+    // type literally here made the null check compare the bucket's tag against 8 while the
+    // bucket actually holds tag 7 and the null lives inside the cell — `isset($m['a'])` answered
+    // `set` for a `?int` null where php answers `unset`.
     let value_ty = match ctx.value_php_type(hash)? {
-        PhpType::AssocArray { value, .. } => value.codegen_repr(),
+        PhpType::AssocArray { value, .. } => {
+            super::super::hashes::hash_bucket_value_type(&value)
+        }
         _ => return emit_loaded_isset_missing_result(ctx, expect_operand(inst, 0)?),
     };
     let missing = ctx.next_label("isset_hash_missing");

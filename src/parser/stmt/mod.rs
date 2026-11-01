@@ -12,7 +12,6 @@ mod assign;
 mod blocks;
 mod declare;
 mod ffi;
-mod goto_unsupported;
 mod names;
 mod namespace_use;
 mod oop;
@@ -30,22 +29,62 @@ use crate::span::Span;
 
 pub use ffi::parse_extern_stmts;
 pub use blocks::{parse_block, parse_body};
+pub(crate) use blocks::parse_executable_block;
 pub(crate) use oop::parse_anonymous_class;
 pub(crate) use params::{
-    looks_like_typed_param, parse_inherited_name, parse_inherited_name_at, parse_type_arguments_only,
-    parse_type_expr,
-    type_arguments_end,
+    implicitly_nullable_type, looks_like_typed_param, parse_inherited_name, parse_inherited_name_at,
+    parse_type_arguments_only, parse_type_expr, type_arguments_end,
 };
 pub(crate) use assign::{
-    assignment_target_store_stmt, lower_nested_append_assignment,
-    can_replay_assignment_target, lower_postfix_incdec_assignment,
+    assignment_target_append_stmt, assignment_target_store_stmt, lower_nested_append_assignment,
+    can_replay_assignment_target,
+    is_valid_reference_source,
+    lower_postfix_incdec_assignment,
     update_dimension_base_is_snapshotted, update_index_needs_snapshot,
 };
 pub(crate) use blocks::{expect_semicolon, expect_token};
 pub(crate) use names::{name_part_from_token, name_starts_at, parse_name, parse_unqualified_name};
-pub(crate) use assign::{parse_destructuring_pattern_unpack, starts_destructuring_pattern};
+pub(crate) use assign::{
+    lower_destructuring_assignment_expression,
+    parse_destructuring_pattern_unpack,
+    starts_destructuring_pattern,
+    try_parse_destructuring_assignment_expression_pattern,
+};
 pub(crate) use namespace_use::token_as_import_name;
 pub(crate) use recovery::recover_to_statement_boundary;
+pub(in crate::parser) use simple::try_parse_value_include;
+
+/// Doc comments of interface, trait and enum declarations, keyed by declaration span and SHORT
+/// name.
+///
+/// `ClassDecl` keeps its `/** ... */` block in the node; the other class-like kinds have no slot
+/// for one, and giving them one touches every construction and pattern of those nodes. Without it
+/// `ReflectionClass::getDocComment()` answered `false` for every interface, and Symfony's
+/// `debug:autowiring` describes each service interface from exactly that comment. The short name
+/// survives namespace resolution; with the span it is unique across the files one build parses.
+/// A mutex rather than a thread-local: included files can be parsed on worker threads.
+static CLASSLIKE_DOC_COMMENTS: std::sync::Mutex<
+    Option<std::collections::HashMap<(crate::span::Span, String), String>>,
+> = std::sync::Mutex::new(None);
+
+/// Records the doc comment written before one interface, trait or enum declaration.
+fn record_classlike_doc_comment(span: crate::span::Span, name: &str, doc_comment: String) {
+    let short = name.rsplit('\\').next().unwrap_or(name).to_ascii_lowercase();
+    if let Ok(mut table) = CLASSLIKE_DOC_COMMENTS.lock() {
+        table.get_or_insert_with(Default::default).insert((span, short), doc_comment);
+    }
+}
+
+/// Returns the doc comment recorded for a declaration, given its span and (qualified) name.
+pub(crate) fn classlike_doc_comment(span: crate::span::Span, name: &str) -> Option<String> {
+    let short = name.rsplit('\\').next().unwrap_or(name).to_ascii_lowercase();
+    CLASSLIKE_DOC_COMMENTS
+        .lock()
+        .ok()?
+        .as_ref()?
+        .get(&(span, short))
+        .cloned()
+}
 
 /// Appends one parsed statement to a file or namespace statement list.
 ///
@@ -81,6 +120,13 @@ pub(crate) fn parse_file_or_namespace_scope_item(
 
 /// Parses a single PHP statement, including optional PHP 8 attribute groups.
 pub fn parse_stmt(tokens: &[SpannedToken], pos: &mut usize) -> Result<Stmt, CompileError> {
+    let doc_comment = match tokens.get(*pos).map(|(token, _)| token) {
+        Some(Token::DocComment(doc_comment)) => {
+            *pos += 1;
+            Some(doc_comment.clone())
+        }
+        _ => None,
+    };
     // PHP attribute groups (`#[...]`) may decorate any statement-level
     // declaration. We capture them here and attach the result to the parsed
     // statement; non-declaration kinds reject non-empty attribute lists below.
@@ -97,8 +143,19 @@ pub fn parse_stmt(tokens: &[SpannedToken], pos: &mut usize) -> Result<Stmt, Comp
 
     // Counts statement nesting, so a namespace declaration can tell it is not at the top level.
     let _nesting = crate::parser::enter_statement();
-    let stmt = parse_stmt_dispatch(tokens, pos, span)?;
-    attach_attributes_to_stmt(stmt, attributes, span)
+    let mut stmt = attach_attributes_to_stmt(parse_stmt_dispatch(tokens, pos, span)?, attributes, span)?;
+    match &mut stmt.kind {
+        StmtKind::ClassDecl { doc_comment: slot, .. } => *slot = doc_comment,
+        StmtKind::InterfaceDecl { name, .. }
+        | StmtKind::TraitDecl { name, .. }
+        | StmtKind::EnumDecl { name, .. } => {
+            if let Some(doc_comment) = doc_comment {
+                record_classlike_doc_comment(stmt.span, name, doc_comment);
+            }
+        }
+        _ => {}
+    }
+    Ok(stmt)
 }
 
 /// Attaches parsed attribute groups to a statement, validating that the statement kind supports attributes.
@@ -138,6 +195,10 @@ fn stmt_kind_supports_attributes(kind: &StmtKind) -> bool {
             | StmtKind::EnumDecl { .. }
             | StmtKind::FunctionDecl { .. }
             | StmtKind::PackedClassDecl { .. }
+            // php 8.5 accepts attributes on global constants (`#[\Deprecated] const X = 1;`,
+            // symfony/polyfill-uuid's `bootstrap85.php`). They are kept on the statement; the
+            // deprecation such an attribute raises on read is not modelled yet.
+            | StmtKind::ConstDecl { .. }
     )
 }
 
@@ -162,6 +223,12 @@ fn parse_stmt_dispatch(
         // whose result is discarded. Without an arm here the leading keyword reached the
         // catch-all below and a standalone clone was a parse error rather than a no-op copy.
         Token::Clone => simple::parse_expr_stmt(tokens, pos, span),
+        // `!isset($x['port']) || throw new E(...);` -- a guard whose only effect is the `throw`
+        // on the right of a short-circuit operator. The leading unary operator is an ordinary
+        // expression start, exactly like the parenthesized spelling already accepted.
+        Token::Bang | Token::Tilde | Token::Minus | Token::Plus => {
+            simple::parse_expr_stmt(tokens, pos, span)
+        }
         Token::At => simple::parse_error_suppressed_stmt(tokens, pos, span),
         Token::Variable(_) => assign::parse_variable_stmt(tokens, pos, span),
         Token::This => simple::parse_this_stmt(tokens, pos, span),
@@ -238,9 +305,12 @@ fn parse_stmt_dispatch(
                 keyword, span,
             ))
         }
-        Token::Goto => Err(goto_unsupported::reject_goto_statement(span)),
-        Token::Identifier(label) if goto_unsupported::starts_goto_label(tokens, *pos) => {
-            Err(goto_unsupported::reject_goto_label(label, span))
+        // A bare `{ ... }` block. PHP gives it no scope of its own, so its statements simply run
+        // in place.
+        Token::LBrace => Ok(Stmt::new(StmtKind::Synthetic(blocks::parse_block(tokens, pos)?), span)),
+        Token::Goto => crate::parser::terminal_goto::parse_goto(tokens, pos, span),
+        Token::Identifier(_) if crate::parser::terminal_goto::starts_label(tokens, *pos) => {
+            crate::parser::terminal_goto::parse_label(tokens, pos, span)
         }
         Token::Static => {
             if *pos + 1 < tokens.len() && tokens[*pos + 1].0 == Token::DoubleColon {
@@ -264,6 +334,26 @@ fn parse_stmt_dispatch(
         }
         Token::Identifier(_)
         | Token::Enum
+        | Token::StringLiteral(_)
+        | Token::IntLiteral(_)
+        | Token::FloatLiteral(_)
+        | Token::True
+        | Token::False
+        | Token::Null
+        | Token::Inf
+        | Token::Nan
+        | Token::PhpIntMax
+        | Token::PhpIntMin
+        | Token::PhpFloatMax
+        | Token::PhpFloatMin
+        | Token::PhpFloatEpsilon
+        | Token::MPi
+        | Token::ME
+        | Token::MSqrt2
+        | Token::MPi2
+        | Token::MPi4
+        | Token::MLog2e
+        | Token::MLog10e
         | Token::Self_
         | Token::Parent
         | Token::Backslash
@@ -292,6 +382,9 @@ fn parse_stmt_dispatch(
             let levels = parse_loop_exit_level("continue", tokens, pos)?;
             expect_semicolon(tokens, pos)?;
             Ok(Stmt::new(StmtKind::Continue(levels), span))
+        }
+        Token::Dollar => {
+            crate::parser::variable_variables::parse_assignment_statement(tokens, pos, span)
         }
         other => Err(CompileError::new(
             span,

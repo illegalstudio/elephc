@@ -11,6 +11,35 @@
 
 use super::*;
 
+/// Emits `__elephc_eval_publish_native_call_site(descriptor, line)`: the interpreter's current
+/// file descriptor (`{ptr, len}`) and line, stored where a compiled call site stores its own,
+/// so the compiled callee's prologue records them as its frame's `file` and `line`.
+pub(super) fn emit_publish_native_call_site(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_publish_native_call_site");
+    emit_publish_eval_site(emitter);
+    emitter.instruction("ret");                                                 // both words published
+}
+
+/// Writes the interpreter's `(descriptor, line)` arguments into `_php_site_eval` and publishes it
+/// as the current `_php_site` record.
+fn emit_publish_eval_site(emitter: &mut Emitter) {
+    let descriptor = abi::int_arg_reg_name(emitter.target, 0);
+    let line = abi::int_arg_reg_name(emitter.target, 1);
+    let scratch = if emitter.target.arch == Arch::AArch64 { "x10" } else { "r10" };
+    abi::emit_symbol_address(emitter, scratch, "_php_site_eval");
+    abi::emit_store_to_address(emitter, descriptor, scratch, 0);
+    abi::emit_store_to_address(emitter, line, scratch, 8);
+    abi::emit_store_reg_to_symbol(emitter, scratch, "_php_site", 0);
+}
+
+/// Emits `__elephc_eval_publish_diagnostic_site(descriptor, line)`: the interpreter's current
+/// file and line, stored where a compiled raise site publishes the location a warning names.
+pub(super) fn emit_publish_diagnostic_site(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_publish_diagnostic_site");
+    emit_publish_eval_site(emitter);
+    emitter.instruction("ret");                                                 // the next warning names this location
+}
+
 /// Walks visible native activations and invokes the indexed reader through its C ABI.
 pub(super) fn emit_backtrace_entry_wrapper(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_backtrace_entry");

@@ -367,3 +367,43 @@ foreach (g() as $k => $v) { echo "$k=$v "; }
     );
     assert_eq!(out, "p=1 q=2 0=3 ");
 }
+
+/// Verifies an `iterable` boundary and a concrete `IteratorAggregate` both use PHP's ordinary
+/// Traversable protocol while preserving delegated keys and yielding a null expression result.
+#[test]
+fn test_generator_yield_from_non_generator_iterables() {
+    let out = compile_and_run(
+        r#"<?php
+class YieldFromAggregate implements IteratorAggregate {
+    public function getIterator(): Traversable {
+        return new ArrayIterator(['object' => 3]);
+    }
+}
+function relay(iterable $items): Generator {
+    $result = yield from $items;
+    echo $result === null ? 'null' : 'bad';
+}
+foreach (relay(['array' => 2]) as $key => $value) {
+    echo $key, '=', $value, ';';
+}
+echo '|';
+foreach (relay(new YieldFromAggregate()) as $key => $value) {
+    echo $key, '=', $value, ';';
+}
+"#,
+    );
+    assert_eq!(out, "array=2;null|object=3;null");
+}
+
+/// Verifies a source crossing a `mixed` boundary uses dynamic iterable dispatch.
+#[test]
+fn test_generator_yield_from_mixed_array_source() {
+    let out = compile_and_run(
+        r#"<?php
+function dynamic_rows(): mixed { return ["first" => 7, "second" => 8]; }
+function relay_dynamic(): Generator { yield from dynamic_rows(); }
+foreach (relay_dynamic() as $key => $value) { echo $key, "=", $value, ";"; }
+"#,
+    );
+    assert_eq!(out, "first=7;second=8;");
+}

@@ -1,6 +1,6 @@
 //! Purpose:
-//! Heap-debug coverage for mutating array builtins whose by-reference argument is a property,
-//! static property, or container element. Those calls are lowered as
+//! Heap-debug coverage for calls whose by-reference argument needs a caller-visible temporary,
+//! including property/static/container places and gradual scalar locals. Those calls lower as
 //! `$tmp = <place>; f($tmp, ...); <place> = $tmp;`, which adds a synthetic local, a
 //! copy-on-write separation, and a write-back that releases the property's previous occupant.
 //! Every one of those steps has to stay balanced.
@@ -10,7 +10,9 @@
 //!
 //! Key details:
 //! - Each fixture runs under `--heap-debug` and asserts `leak summary: clean`, so an
-//!   unreleased separated copy or an unreleased synthetic local shows up as a leak.
+//!   unreleased separated copy or an unreleased synthetic local shows up as a leak. That holds
+//!   for the static-property fixtures too: static storage is released when the process exits,
+//!   so a value written back into a static property ends clean like any other.
 //! - The aliased fixtures also assert PHP's copy-on-write result, because an over-release of
 //!   the pre-sort array would surface as a use-after-free in the alias rather than as a leak.
 //! - Expected stdout values are real `LC_ALL=C php` 8.4 output for the same fixtures.
@@ -108,8 +110,10 @@ echo implode(",", $b->items), "|", implode(",", $copy);
 
 /// A static-property load is a borrowed pointer, so the synthetic local has to retain it
 /// before the sort separates a copy; otherwise the write-back frees the aliased original.
+/// The sorted array stays live in the property until static storage is released at exit, so a
+/// write-back that left the property pointing at freed storage shows up as a double release.
 #[test]
-fn test_sort_on_aliased_static_property_leaves_clean_heap() {
+fn test_sort_on_aliased_static_property_keeps_the_sorted_array_live() {
     let out = compile_and_run_with_heap_debug(
         r#"<?php
 class B { public static $items = [3,1,2]; }
@@ -152,4 +156,92 @@ echo implode(",", $b->items);
 "#,
     );
     assert_clean(out, "0,1,1,2,2,3,3,4");
+}
+
+/// User functions, instance methods, and static methods share the same non-local l-value
+/// semantics. Each call must write the separated array back while preserving pre-call aliases;
+/// a side-effectful element index must also be evaluated exactly once.
+#[test]
+fn test_declared_calls_write_back_non_local_array_arguments() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function append_value(array &$values, int $value): void { $values[] = $value; }
+function next_key(): string { echo "K"; return "slot"; }
+
+class Mutator {
+    public function append(array &$values, int $value): void { $values[] = $value; }
+    public static function appendStatic(array &$values, int $value): void { $values[] = $value; }
+}
+class Box {
+    public array $items = [1];
+    public static array $shared = [4];
+}
+
+$box = new Box();
+$mutator = new Mutator();
+$itemsCopy = $box->items;
+$sharedCopy = Box::$shared;
+$map = ["slot" => [7]];
+append_value($box->items, 2);
+$mutator->append($box->items, 3);
+Mutator::appendStatic(Box::$shared, 5);
+$mutator->append($map[next_key()], 8);
+echo "|", implode(",", $box->items), "|", implode(",", $itemsCopy);
+echo "|", implode(",", Box::$shared), "|", implode(",", $sharedCopy);
+echo "|", implode(",", $map["slot"]);
+"#,
+    );
+    assert_clean(out, "K|1,2,3|1|4,5|4|7,8");
+}
+
+/// Declared reference parameters adapt gradual caller storage in both directions: a boxed value
+/// is checked before a concrete parameter receives its address, while a nullable parameter can
+/// widen a previously concrete caller variable and publish null back into its boxed frame slot.
+#[test]
+fn test_declared_scalar_refs_adapt_gradual_caller_storage() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function runtime_value(): mixed { return 4; }
+class RefMutator {
+    public static function increment(int &$value): void { $value++; }
+    public function clear(?int &$value): void { $value = null; }
+}
+
+$value = runtime_value();
+RefMutator::increment($value);
+$number = 7;
+$mutator = new RefMutator();
+$mutator->clear($number);
+echo $value, "|", $number === null ? "null" : "value";
+"#,
+    );
+    assert_clean(out, "5|null");
+}
+
+/// An uninitialized local used as an output destination starts as null instead of inheriting
+/// unrelated frame bytes, and the object used after that call remains alive.
+#[test]
+fn test_uninitialized_output_local_is_zero_initialized() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Cursor {
+    private int $offset = 0;
+
+    public function read(string $input): string {
+        preg_match('/([A-Z_]+)/A', $input, $output, 0, $this->offset);
+        $this->offset += strlen($output[0]);
+        return $output[1] . ':' . $this->offset;
+    }
+}
+
+echo (new Cursor())->read('APP_ENV=value');
+"#,
+    );
+    assert!(out.success, "stderr: {}", out.stderr);
+    assert_eq!(out.stdout, "APP_ENV:7", "stderr: {}", out.stderr);
+    assert!(
+        !out.stderr.contains("heap debug detected"),
+        "unexpected heap corruption: {}",
+        out.stderr
+    );
 }

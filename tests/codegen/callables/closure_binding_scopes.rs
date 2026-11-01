@@ -220,3 +220,30 @@ echo "done\n";
     assert_eq!(out.stdout, "kept|scope|".repeat(5) + "done\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A class-name string scope that only exists at run time selects the same private scope as the
+/// literal name does. Expected output verified against php 8.5 (`php -n`).
+#[test]
+fn test_closure_bind_scope_given_as_a_runtime_class_name_string() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class RuntimeScopeVault { private string $code = "open"; }
+class RuntimeScopeOther { private string $code = "other"; }
+function scope_name(int $n): string { return $n > 1 ? "RuntimeScopeVault" : "RuntimeScopeOther"; }
+function bind_by_name(callable $reader, object $target, string $name): callable {
+    return Closure::bind($reader, $target, $name);
+}
+function bind_to_by_name(callable $reader, object $target, string $name): callable {
+    return $reader->bindTo($target, $name);
+}
+$reader = function () { return $this->code; };
+$name = scope_name($argc + 1);
+echo bind_by_name($reader, new RuntimeScopeVault(), $name)(), "\n";
+echo bind_to_by_name($reader, new RuntimeScopeOther(), scope_name(1))(), "\n";
+echo Closure::bind($reader, new RuntimeScopeVault(), $name)(), "\n";
+$mixed = $argc > 5 ? 1 : $name;
+echo Closure::bind($reader, new RuntimeScopeVault(), $mixed)(), "\n";
+"#);
+    assert!(out.success, "{}\n{}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "open\nother\nopen\nopen\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

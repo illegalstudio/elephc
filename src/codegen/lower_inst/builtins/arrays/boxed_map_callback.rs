@@ -53,7 +53,7 @@ pub(super) fn lower_array_map_mixed_callback(
     abi::emit_symbol_address(ctx.emitter, callback_arg, &wrapper);
     ctx.load_value_to_reg(array, array_arg)?;
     abi::emit_temporary_stack_address(ctx.emitter, env_arg, 48);
-    emit_array_map_runtime_call(ctx, &callback_elem_ty, env_bytes, target)?;
+    emit_array_map_runtime_call(ctx, elem_ty, &callback_elem_ty, env_bytes, target)?;
     finish_array_map_result(ctx, inst, target, &callback_elem_ty, &result_elem_ty)?;
     abi::emit_pop_call_operand_owner(ctx.emitter);
 

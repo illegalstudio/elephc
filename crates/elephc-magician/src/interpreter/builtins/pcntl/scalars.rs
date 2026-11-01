@@ -61,6 +61,11 @@ pub(super) fn eval_pcntl_scalar_result(
             values.int(i64::from(elephc_pcntl::elephc_pcntl_get_last_error()))?
         }
         "pcntl_getpriority" => eval_pcntl_getpriority(args, context, values)?,
+        "posix_kill" => {
+            let process_id = eval_int_value(eval_pcntl_required_arg(args, 0)?.value, values)?;
+            let signal = eval_int_value(eval_pcntl_required_arg(args, 1)?.value, values)?;
+            values.bool_value(elephc_pcntl::elephc_posix_kill(process_id, signal) != 0)?
+        }
         "posix_setpgid" => {
             let process_id = eval_int_value(eval_pcntl_required_arg(args, 0)?.value, values)?;
             let process_group_id =

@@ -18,6 +18,8 @@ mod curl_ffi;
 pub mod errors;
 pub mod eval_ir;
 mod eval_php_profile;
+mod eval_trace;
+mod extract_policy;
 mod ffi;
 pub mod interpreter;
 mod json_validate;
@@ -25,6 +27,7 @@ mod lexer;
 pub mod lower;
 mod parse_cache;
 pub mod parser;
+mod realpath_cache;
 mod regex_provider;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod repl;

@@ -95,7 +95,21 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Older token variant indexes must not be decoded as this layout.
 /// BUMPED TO 23 because `EvalExpr` gained the assignment-expression variant; older
 /// variant indexes must not be decoded as this layout.
-pub(crate) const FORMAT_VERSION: u32 = 23;
+///
+/// The closed-world Symfony branch ran its own version line (12 to 16) in parallel with the
+/// numbers above, so no version below 24 identifies a layout that carries both histories:
+///
+/// - its merge of main's eval IR (seven of the fingerprinted `eval_ir` files differed);
+/// - `EvalAttributeArg` gained its `Expr` variant: an attribute argument the parser cannot
+///   fold to a literal is kept as an expression for reflection to evaluate;
+/// - an included file's parse started carrying `EvalStmt::SourceLine` markers. No
+///   fingerprinted file moved (the change is in `parser::parse_tokens`), but an entry
+///   written before it is a program WITHOUT the markers: decoded today it would run with
+///   every line stuck at its function's entry line.
+///
+/// BUMPED TO 24 when the branch was rebased onto main's 23: both lines changed the serialized
+/// eval IR, so neither side's published entries may be read as the combined shape.
+pub(crate) const FORMAT_VERSION: u32 = 25;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///

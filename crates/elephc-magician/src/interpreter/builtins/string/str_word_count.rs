@@ -141,11 +141,5 @@ fn eval_str_word_count_format_error<T>(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
-    let exception = values.new_object("ValueError")?;
-    let message =
-        values.string("str_word_count(): Argument #2 ($format) must be a valid format value")?;
-    let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
+    eval_throw_builtin_exception_with_code("ValueError", "str_word_count(): Argument #2 ($format) must be a valid format value", 0, context, values)
 }

@@ -118,7 +118,7 @@ fn spl_pulls_in_every_exception(spl_surface_registered: bool) -> bool {
 /// because the always-set is exactly the set of classes such a helper can name, and a test pins
 /// it against the codegen list.
 ///
-/// THREE THINGS REGISTER EVERYTHING, and each names its class somewhere no static walk can read.
+/// FOUR THINGS REGISTER EVERYTHING, and each names its class somewhere no static walk can read.
 /// A runtime-sourced or unparsable `eval` resolves names at runtime, and
 /// `codegen::eval_constructor_helpers::BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES` emits a
 /// constructor bridge for all twenty-five for exactly that reason; a parsable literal fragment
@@ -130,6 +130,15 @@ fn spl_pulls_in_every_exception(spl_surface_registered: bool) -> bool {
 /// of these. It widens even when a literal assigned the variable earlier, because at the `new`
 /// site the name is a variable and nothing connects it back to that assignment.
 ///
+/// The fourth is an `include`/`require` WHOSE PATH IS NOT A LITERAL. It is the same case as
+/// `eval` and was missing: the file is chosen at run time, its text is executed by the same
+/// interpreter, and `throw new RuntimeException(...)` inside it names a class this walk never
+/// sees. Missing it is the one failure this gate promises cannot happen — a runtime helper
+/// materializing a class whose metadata was never emitted — because the eval bridge IS such a
+/// helper and its `__rt_new_by_name` lookup answers null, which the interpreter can only report
+/// as a fatal. Measured: `throw new RuntimeException("boom")` in a runtime-included file printed
+/// `Fatal error: eval() runtime failed` where `php -n` 8.5.6 caught it.
+///
 /// The date/time gate next door has no equivalent case: no `Date*` class is in that dynamic-new
 /// list, so `new $c` cannot conjure one.
 pub(crate) fn throwables_to_register(
@@ -137,13 +146,17 @@ pub(crate) fn throwables_to_register(
     spl_surface_registered: bool,
     reflection_registered: bool,
 ) -> HashSet<String> {
-    let usage = crate::prelude_prune::usage::collect(program);
+    let usage = crate::prelude_prune::usage::collect_shared(program);
     let mut wanted: HashSet<String> = ALWAYS_REGISTERED_THROWABLES
         .iter()
         .map(|name| (*name).to_string())
         .collect();
 
-    if usage.introspects || usage.constructs_dynamic_class || usage.references("unserialize") {
+    if usage.introspects
+        || usage.constructs_dynamic_class
+        || usage.includes_runtime_php
+        || usage.references("unserialize")
+    {
         wanted.extend(every_builtin_throwable().map(str::to_string));
         return wanted;
     }
@@ -193,6 +206,17 @@ fn program_names(usage: &Usage, class_name: &str) -> bool {
 /// and `Generator` is absent from `dynamic_new::supported_dynamic_new_builtin_class_names`, so
 /// `new $c` cannot conjure one either.
 ///
+/// `usage.includes_runtime_php` covers the route the doc comment above used to miss: an
+/// `include`/`require` whose path is not a literal hands the included file to the interpreter at
+/// run time, and that file can contain a `yield` no static walk of THIS program ever sees.
+/// `Kernel::doInitializeBundles()`'s `foreach ($this->registerBundles() as $bundle)` is exactly
+/// this shape in Symfony -- `registerBundles()` is a generator method that lives in a file
+/// reached only through the autoloader's dynamic include, so `uses_yield` and the name scan both
+/// come back empty for the compiled entry point even though the program can and does build a
+/// `Generator` at run time. Without this, `new_object("Generator")` returned null (no class
+/// registered), which `eval_generator_new` turned into a bare `RuntimeFatal` with no message, and
+/// the enclosing `Call`/`MethodCall` picked up the generic "unsupported X expression" label.
+///
 /// A declared `Generator` return type does NOT make a function a generator — the `yield` token
 /// is the whole rule, and a function that merely forwards someone else's generator declares that
 /// type while holding none (issue #1086). It is still covered here, because declaring the type
@@ -201,8 +225,11 @@ fn program_names(usage: &Usage, class_name: &str) -> bool {
 /// When absent, `_generator_class_id` is emitted as `u64::MAX`, a value no object header carries,
 /// so the runtime comparisons simply never match.
 pub(crate) fn program_may_reference_generator(program: &[Stmt]) -> bool {
-    let usage = crate::prelude_prune::usage::collect(program);
-    usage.introspects || usage.uses_yield || program_names(&usage, "Generator")
+    let usage = crate::prelude_prune::usage::collect_shared(program);
+    usage.introspects
+        || usage.uses_yield
+        || usage.includes_runtime_php
+        || program_names(&usage, "Generator")
 }
 
 /// Returns whether `program` can reach the builtin `Fiber` and `FiberError` classes.
@@ -213,7 +240,7 @@ pub(crate) fn program_may_reference_generator(program: &[Stmt]) -> bool {
 /// `FiberError` follows `Fiber` rather than being asked about separately: the fiber runtime
 /// raises it, and `codegen_support::emitted_classes` already seeds it on the same condition.
 pub(crate) fn program_may_reference_fiber(program: &[Stmt]) -> bool {
-    let usage = crate::prelude_prune::usage::collect(program);
+    let usage = crate::prelude_prune::usage::collect_shared(program);
     usage.introspects
         || usage.constructs_dynamic_class
         || program_names(&usage, "Fiber")
@@ -227,10 +254,59 @@ pub(crate) fn program_may_reference_fiber(program: &[Stmt]) -> bool {
 /// class reachable, and a program that calls it without extending the base is already broken in a
 /// way this gate should not be the first to report.
 pub(crate) fn program_may_reference_user_filter(program: &[Stmt]) -> bool {
-    let usage = crate::prelude_prune::usage::collect(program);
+    let usage = crate::prelude_prune::usage::collect_shared(program);
     usage.introspects
         || program_names(&usage, "php_user_filter")
         || usage.references("stream_filter_register")
+}
+
+/// Returns whether `program` can register a userspace stream filter at all.
+///
+/// Only `stream_filter_register()` turns a class into a filter; extending `php_user_filter`, or
+/// naming it in a string (Symfony's `TentativeTypes` table does), does not. Without a registrar a
+/// method named `filter`, `onCreate` or `onClose` is an ordinary method, so it must not keep the
+/// filter contract's raw-argument ABI.
+pub(crate) fn program_may_register_user_filter(program: &[Stmt]) -> bool {
+    crate::prelude_prune::usage::collect_shared(program).references("stream_filter_register")
+}
+
+/// The classes `stream_filter_register()` names literally (`'Up'`, `Up::class`), case-folded, or
+/// `None` when one call names its class at run time, so any class could be the filter.
+///
+/// php instantiates whatever class the call names and calls its `filter()`; a class need not extend
+/// `php_user_filter`. Knowing the names keeps every OTHER method named `filter` an ordinary method:
+/// phpoption's `Some::filter($callable)` kept the filter contract's raw `int` seed in Laravel's
+/// world, which registers a filter, and `$callable($this->value)` was refused.
+pub(crate) fn user_filter_registered_classes(program: &[Stmt]) -> Option<HashSet<String>> {
+    use crate::parser::ast::visit::{walk_nodes, Node};
+    use crate::parser::ast::{ExprKind, StaticReceiver};
+    let mut names = HashSet::new();
+    let mut dynamic = false;
+    walk_nodes(program, &mut |node| {
+        let Node::Expr(expr) = node else {
+            return;
+        };
+        let ExprKind::FunctionCall { name, args } = &expr.kind else {
+            return;
+        };
+        if !name.as_str().trim_start_matches('\\').eq_ignore_ascii_case("stream_filter_register") {
+            return;
+        }
+        let class = args.get(1).map(|arg| match &arg.kind {
+            ExprKind::NamedArg { value, .. } => value.as_ref(),
+            _ => arg,
+        });
+        match class.map(|arg| &arg.kind) {
+            Some(ExprKind::StringLiteral(class)) => {
+                names.insert(php_symbol_key(class.trim_start_matches('\\')));
+            }
+            Some(ExprKind::ClassConstant { receiver: StaticReceiver::Named(class) }) => {
+                names.insert(php_symbol_key(class.as_str().trim_start_matches('\\')));
+            }
+            _ => dynamic = true,
+        }
+    });
+    (!dynamic).then_some(names)
 }
 
 /// Adds `name` and every ancestor of it, so `catch (BadMethodCallException $e)` does not leave
@@ -284,6 +360,23 @@ mod tests {
         ] {
             assert!(!wanted.contains(name), "{name} should have been gated out");
         }
+    }
+
+    /// An include whose path is decided at run time reaches every builtin throwable, because the
+    /// interpreter runs the chosen file's text and `throw new RuntimeException(...)` inside it is
+    /// a name no walk over THIS program can see. A literal path is a file the compiler resolves
+    /// and inlines, so it stays narrow.
+    #[test]
+    fn a_runtime_include_registers_every_builtin_throwable() {
+        let wanted = registered("<?php $path = $argv[1]; include $path;");
+        for name in every_builtin_throwable() {
+            assert!(wanted.contains(name), "{name} is reachable through the include");
+        }
+        assert!(registered("<?php $x = require $argv[1];").contains("ReflectionException"));
+
+        let literal = registered("<?php include 'lib.php';");
+        assert_eq!(literal.len(), ALWAYS_REGISTERED_THROWABLES.len());
+        assert!(!literal.contains("RuntimeException"), "a literal path is resolved and inlined");
     }
 
     /// Naming `RuntimeException` alone must register it without dragging in the SPL surface.
@@ -460,6 +553,23 @@ mod tests {
         )));
     }
 
+    /// An include whose path is decided at run time can execute a file whose `yield` no static
+    /// walk of THIS program ever sees -- `Kernel::doInitializeBundles()`'s
+    /// `foreach ($this->registerBundles() as $bundle)` over a generator method reached only
+    /// through the autoloader's dynamic include is exactly this shape. A literal path is a file
+    /// the compiler resolves and inlines, so it stays narrow, mirroring
+    /// `a_runtime_include_registers_every_builtin_throwable`.
+    #[test]
+    fn a_runtime_include_registers_generator() {
+        assert!(program_may_reference_generator(&parse(
+            "<?php $path = $argv[1]; include $path;"
+        )));
+        assert!(program_may_reference_generator(&parse(
+            "<?php function load($p) { require $p; } load($argv[1]);"
+        )));
+        assert!(!program_may_reference_generator(&parse("<?php include 'lib.php';")));
+    }
+
     /// Fiber and FiberError are both in the dynamic-new list, so `new $c` widens here too.
     #[test]
     fn fiber_registers_on_a_name_or_a_dynamic_new() {
@@ -490,6 +600,21 @@ mod tests {
         assert!(!program_may_reference_user_filter(&parse("<?php echo 1;")));
         assert!(!program_may_reference_user_filter(&parse(
             "<?php $h = fopen('php://memory', 'r+'); fwrite($h, 'x');"
+        )));
+    }
+
+    /// Only the registrar makes a filter; the base class's name alone, in a string or an
+    /// `extends`, does not.
+    #[test]
+    fn only_the_registrar_can_register_a_user_filter() {
+        assert!(program_may_register_user_filter(&parse(
+            "<?php stream_filter_register('up', 'Up');"
+        )));
+        assert!(!program_may_register_user_filter(&parse(
+            "<?php $types = ['php_user_filter' => ['filter' => 'int']];"
+        )));
+        assert!(!program_may_register_user_filter(&parse(
+            "<?php class Up extends php_user_filter {}"
         )));
     }
 

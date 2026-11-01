@@ -25,6 +25,7 @@ use crate::types::PhpType;
 pub fn type_spec_to_php(ty: &TypeSpec) -> PhpType {
     match ty {
         TypeSpec::Int => PhpType::Int,
+        TypeSpec::NullableInt => PhpType::TaggedScalar,
         TypeSpec::Float => PhpType::Float,
         TypeSpec::Str => PhpType::Str,
         TypeSpec::Bool => PhpType::Bool,
@@ -107,6 +108,10 @@ mod tests {
     #[test]
     fn scalar_type_spec_converts() {
         assert_eq!(type_spec_to_php(&TypeSpec::Int), PhpType::Int);
+        assert_eq!(
+            type_spec_to_php(&TypeSpec::NullableInt),
+            PhpType::TaggedScalar
+        );
         assert_eq!(type_spec_to_php(&TypeSpec::Str), PhpType::Str);
     }
 

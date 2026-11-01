@@ -76,8 +76,18 @@ pub fn emit_array_column_mixed(emitter: &mut Emitter) {
 
     // -- load inner associative row and look up the requested key --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload outer indexed-array pointer
+    emitter.instruction("ldr x11, [x0, #-8]");                                 // load outer array metadata to distinguish typed and boxed rows
+    emitter.instruction("ubfx x11, x11, #8, #7");                              // extract the outer element runtime type
     emitter.instruction("add x0, x0, #24");                                     // advance to the outer array payload base
     emitter.instruction("ldr x0, [x0, x9, lsl #3]");                            // load current inner associative-array hash pointer
+    emitter.instruction("cmp x11, #7");                                        // are outer slots boxed Mixed row cells?
+    emitter.instruction("b.ne __rt_acm_row_ready");                            // typed associative rows already contain hash pointers
+    emitter.instruction("cbz x0, __rt_acm_next");                              // skip an absent boxed row
+    emitter.instruction("ldr x11, [x0]");                                      // load the boxed row runtime tag
+    emitter.instruction("cmp x11, #5");                                        // tag 5 = associative array row
+    emitter.instruction("b.ne __rt_acm_next");                                 // PHP ignores scalar and non-associative rows
+    emitter.instruction("ldr x0, [x0, #8]");                                   // unbox the borrowed associative hash payload
+    emitter.label("__rt_acm_row_ready");
     emitter.instruction("ldp x1, x2, [sp, #8]");                                // reload requested column key pointer and length
     emitter.instruction("bl __rt_hash_get");                                    // look up row value, returning found plus tag and payload words
     emitter.instruction("cbz x0, __rt_acm_next");                               // skip rows that do not contain the requested column key
@@ -146,7 +156,18 @@ fn emit_array_column_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, QWORD PTR [rbp - 32]");                       // compare index against saved outer row count
     emitter.instruction("jae __rt_acm_done");                                   // finish once all rows have been examined
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload outer indexed-array pointer
-    emitter.instruction("mov rdi, QWORD PTR [r11 + r10 * 8 + 24]");             // load current inner associative-array with tag and payload
+    emitter.instruction("mov rax, QWORD PTR [r11 - 8]");                        // load outer array metadata to distinguish typed and boxed rows
+    emitter.instruction("shr rax, 8");                                          // move the outer element runtime type to the low bits
+    emitter.instruction("and rax, 0x7f");                                       // isolate the seven-bit element runtime type
+    emitter.instruction("mov rdi, QWORD PTR [r11 + r10 * 8 + 24]");             // load the current typed hash pointer or boxed row cell
+    emitter.instruction("cmp rax, 7");                                          // are outer slots boxed Mixed row cells?
+    emitter.instruction("jne __rt_acm_row_ready");                              // typed associative rows already contain hash pointers
+    emitter.instruction("test rdi, rdi");                                       // is the boxed row slot absent?
+    emitter.instruction("jz __rt_acm_next");                                    // skip absent boxed rows
+    emitter.instruction("cmp QWORD PTR [rdi], 5");                              // tag 5 = associative array row
+    emitter.instruction("jne __rt_acm_next");                                   // PHP ignores scalar and non-associative rows
+    emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");                        // unbox the borrowed associative hash payload
+    emitter.label("__rt_acm_row_ready");
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload requested column key pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload requested column key length
     emitter.instruction("call __rt_hash_get");                                  // look up row value, returning found plus tag and payload words

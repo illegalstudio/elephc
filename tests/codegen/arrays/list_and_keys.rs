@@ -287,3 +287,61 @@ for ($i = 0; $i < 3; $i++) { try { array_first(make()); } catch (TypeError $e) {
     );
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Verifies php 8.5's array_first()/array_last() in compiled code and in eval().
+///
+/// Neither existed, and a Symfony container generated on php 8.5 calls
+/// `\array_first(\array_intersect_key(...))` while it is interpreted: every request of the
+/// Symfony demo died on "eval() fragment uses an unsupported construct". Expected output is
+/// php 8.5.10's.
+#[test]
+fn test_array_first_and_array_last_match_php() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ['host' => 'localhost', 'other' => 1, 'x' => [2]];
+var_dump(array_first(array_intersect_key($a, ['host' => 0])));
+var_dump(array_last($a));
+var_dump(array_first([]), array_last([]));
+$list = [3 => 'c', 1 => 'a'];
+echo array_first($list), array_last($list), "\n";
+eval('
+$b = ["h" => "localhost", "other" => 1];
+var_dump(\array_first(\array_intersect_key($b, ["h" => 0])));
+var_dump(\array_last($b), \array_first([]));
+');
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(9) \"localhost\"\narray(1) {\n  [0]=>\n  int(2)\n}\nNULL\nNULL\nca\n\
+         string(9) \"localhost\"\nint(1)\nNULL\n"
+    );
+}
+
+/// Verifies `array_change_key_case()` in compiled code and in eval().
+///
+/// The function did not exist, so `symfony/http-foundation`'s `AcceptHeader` and
+/// `RedirectResponse` died on it (Laravel answered every 404 and every redirect with the
+/// fatal). Expected output is php 8.5's: string keys are case-mapped, integer keys are kept, a
+/// collision keeps the first position with the later value, and any non-zero `$case` is upper.
+#[test]
+fn test_array_change_key_case_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+echo json_encode(array_change_key_case(['Foo' => 1, 'BAR' => 2, 5 => 'x'])), "\n";
+echo json_encode(array_change_key_case(['Foo' => 1, 'foo' => 2, 7 => 3], CASE_UPPER)), "\n";
+echo json_encode(array_change_key_case([])), "\n";
+echo json_encode(array_change_key_case(['a' => 'A', 'A' => 'B'])), "\n";
+$k = 'AbC';
+echo json_encode(array_change_key_case([$k => 1], 1)), "\n";
+$code = 'echo json_encode(array_change_key_case(["Foo" => 1, "BAR" => 2, 5 => "x"])), "\n";
+echo json_encode(array_change_key_case(["Foo" => 1, "foo" => 2], CASE_UPPER)), "\n";';
+eval($code);
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"foo\":1,\"bar\":2,\"5\":\"x\"}\n{\"FOO\":2,\"7\":3}\n[]\n{\"a\":\"B\"}\n{\"ABC\":1}\n\
+         {\"foo\":1,\"bar\":2,\"5\":\"x\"}\n{\"FOO\":2}\n"
+    );
+}

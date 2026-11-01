@@ -631,7 +631,7 @@ fn test_error_extern_callable_requires_literal_function_name() {
     // Verifies that passing a variable string as an extern callback is rejected because it is not a callable descriptor.
     expect_error(
         "<?php extern function signal(int $sig, callable $handler): ptr; function on_signal($sig) {} $fn = \"on_signal\"; signal(15, $fn);",
-        "expects a string literal naming a user function or a callable value",
+        "Extern callable value uses unsupported C callback types; only int, float, bool, ptr, and void are supported",
     );
 }
 
@@ -1429,6 +1429,24 @@ fn test_covariant_parameter_rejected_in_a_writable_public_property() {
          } \
          $b = new Box<int>(); echo $b->get();",
         "appears in a position that is both read and written in property $value",
+    );
+}
+
+/// A retype inside a generic METHOD body is one binding decision per instantiation, never a
+/// collision with the template: the template is not lowered, so it is not a site. Symfony's
+/// `ErrorListener::getInheritedAttribute()` re-binds its `string $class` to a `ReflectionClass`.
+#[test]
+fn test_retype_inside_a_generic_method_does_not_collide_with_its_template() {
+    expect_no_error(
+        "<?php \
+         class L { \
+           public function one(): string { return get_class($this->g<object>(\"ArrayObject\")); } \
+           private function g<T>(string $class): object { \
+             $class = new ReflectionClass($class); \
+             return $class->newInstance(); \
+           } \
+         } \
+         echo (new L())->one();",
     );
 }
 

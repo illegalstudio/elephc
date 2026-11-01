@@ -18,9 +18,32 @@ impl FakeOps {
         Ok(self.alloc(FakeValue::InvokerRefCell(slot)))
     }
 
-    /// Records fake releases without freeing handles needed for assertions.
+    /// Gives one reference back, recording the release and failing an over-release when counted.
+    ///
+    /// The handle is not freed, because tests read released cells to assert what they held.
     pub(super) fn runtime_release(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus> {
         self.releases.push(value);
+        let count_after = self.adjust_refcount(value, -1);
+        if count_after < 0 {
+            let handle = value.as_ptr() as usize;
+            let held = self
+                .values
+                .get(&handle)
+                .map_or_else(|| "<unallocated>".to_string(), |value| format!("{value:?}"));
+            self.over_releases.push(FakeOverRelease {
+                handle,
+                count_after,
+                value: held.clone(),
+            });
+            assert!(
+                !self.counting_enforced(),
+                "released a fake cell nobody owned: handle {handle} reached count {count_after} \
+                 holding {held}. Something gave back a reference it never took -- find the \
+                 releasing site in the backtrace below and either stop releasing there or retain \
+                 first.\n{}",
+                std::backtrace::Backtrace::force_capture()
+            );
+        }
         if let Some(owners) = self.cell_owners.get_mut(&(value.as_ptr() as usize)) {
             *owners = owners.saturating_sub(1);
         }
@@ -29,11 +52,13 @@ impl FakeOps {
         }
         Ok(())
     }
-    /// Records a retained lease while preserving fake cell identity.
+    /// Takes one more reference to a fake cell and returns the same handle.
+    /// Records the retained lease in `retains` and `cell_owners`.
     pub(super) fn runtime_retain(
         &mut self,
         value: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.adjust_refcount(value, 1);
         self.retains.push(value);
         *self.cell_owners.entry(value.as_ptr() as usize).or_default() += 1;
         Ok(value.owned())

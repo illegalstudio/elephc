@@ -35,6 +35,7 @@ echo str_repeat(...boxedSpreadRepeat());
         let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
         assert!(assembly.contains("Unknown named parameter in unpacked call"), "{name}");
-        assert!(assembly.contains("Named parameter overwrites previous argument"), "{name}");
+        // The message names the parameter (`Named parameter $times overwrites ...`), as php does.
+        assert!(assembly.contains("Named parameter $times overwrites previous argument"), "{name}");
     }
 }

@@ -68,8 +68,10 @@
 //!   leaf helpers (`__rt_vd_seen_*`, `__rt_vd_obj_desc`, `__rt_vd_obj_count`)
 //!   make no calls at all and touch caller-saved scratch only.
 
+use crate::codegen_support::sentinels::emit_deref_reference_property_slot;
 use super::super::objects::emit_load_dump_dyn_hash;
 use crate::codegen_support::abi;
+use crate::codegen_support::sentinels::emit_branch_if_null_container;
 use crate::codegen_support::sentinels::emit_resolve_tagged_scalar_property_tag;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
@@ -303,6 +305,17 @@ pub fn emit_vd_obj_count(emitter: &mut Emitter) {
     emitter.comment("--- runtime: vd_obj_count ---");
     emitter.label_global("__rt_vd_obj_count");
 
+    // A stdClass declares nothing: its properties live in the hash at obj+8 (see
+    // `runtime::objects::stdclass`), so its count is that hash's entry count.
+    // x11, not x9: the symbol load below materializes its address in x9.
+    emitter.instruction("ldr x11, [x0]");                                       // load the runtime class id from the object header
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_stdclass_class_id", 0);      // load the compile-time stdClass class id
+    emitter.instruction("cmp x11, x10");                                        // is this a stdClass instance?
+    emitter.instruction("b.ne __rt_vd_obj_count_declared");                     // declared classes tally their slots
+    emitter.instruction("ldr x0, [x0, #8]");                                    // load the dynamic-property hash
+    emit_branch_if_null_container(emitter, "x0", "x10", "__rt_vd_obj_count_none");
+    emitter.instruction("b __rt_hash_count");                                   // tail-call: the hash entry count is the property count
+    emitter.label("__rt_vd_obj_count_declared");
     emitter.instruction("mov x1, x0");                                          // keep the object pointer for slot addressing
     emitter.instruction("ldr x9, [x0]");                                        // load the runtime class id from the object header
     emitter.instruction("cmn x9, #2");                                          // class id -2 marks an incomplete object
@@ -367,6 +380,14 @@ fn emit_vd_obj_count_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_vd_obj_count");
 
     emitter.instruction("mov r9, QWORD PTR [rdi]");                             // load the runtime class id from the object header
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_stdclass_class_id", 0);      // load the compile-time stdClass class id
+    emitter.instruction("cmp r9, r10");                                         // is this a stdClass instance?
+    emitter.instruction("jne __rt_vd_obj_count_declared_x86");                  // declared classes tally their slots
+    emitter.instruction("mov rax, QWORD PTR [rdi + 8]");                        // load the dynamic-property hash
+    emit_branch_if_null_container(emitter, "rax", "r10", "__rt_vd_obj_count_none_x86");
+    emitter.instruction("mov rdi, rax");                                        // hash pointer → hash_count argument
+    emitter.instruction("jmp __rt_hash_count");                                 // tail-call: the hash entry count is the property count
+    emitter.label("__rt_vd_obj_count_declared_x86");
     emitter.instruction("cmp r9, -2");                                          // class id -2 marks an incomplete object
     emitter.instruction("je __rt_vd_obj_count_incomplete_x86");                 // count the synthetic name plus opaque properties
     abi::emit_local_symbol_address(emitter, "r10", "_class_gc_desc_count");           // resolve the class-id table extent
@@ -821,6 +842,22 @@ pub fn emit_var_dump_object(emitter: &mut Emitter) {
     emitter.label("__rt_vd_obj_after_dyn_first");
 
     emitter.instruction("ldr x0, [sp, #0]");                                    // restore the object pointer after the dynamic walk
+    // A stdClass's properties are the entries of its hash at obj+8; they render exactly as a
+    // hash body does (`["name"]=>` then the value). They used to be skipped: the declared-slot
+    // walk below finds none, and every stdClass dumped as `object(stdClass)#n (0) {}`.
+    // x11, not x9: the symbol load below materializes its address in x9.
+    emitter.instruction("ldr x11, [x0]");                                       // load the runtime class id from the object header
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_stdclass_class_id", 0);      // load the compile-time stdClass class id
+    emitter.instruction("cmp x11, x10");                                        // is this a stdClass instance?
+    emitter.instruction("b.ne __rt_vd_obj_declared");                           // declared classes walk their descriptor
+    emitter.instruction("ldr x0, [x0, #8]");                                    // load the dynamic-property hash
+    // Straight to the exit: the hash rendered here IS the dynamic-property hash the shared
+    // append after the declared walk would render a second time.
+    emit_branch_if_null_container(emitter, "x0", "x10", "__rt_vd_obj_exit");
+    emitter.instruction("bl __rt_var_dump_hash");                               // render every dynamic property
+    emitter.instruction("b __rt_vd_obj_exit");                                  // nothing is declared, and the hash is already shown
+    emitter.label("__rt_vd_obj_declared");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
     emitter.instruction("bl __rt_vd_obj_desc");                                 // x0 = this class's var_dump descriptor
     emitter.instruction("str x0, [sp, #8]");                                    // save the descriptor pointer
     emitter.instruction("ldr x9, [x0]");                                        // load the declared property count
@@ -873,6 +910,7 @@ pub fn emit_var_dump_object(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [x11, #24]");                                  // property value tag → value renderer
     emitter.instruction("ldr x1, [x13]");                                       // slot low word → value renderer
     emitter.instruction("ldr x2, [x13, #8]");                                   // slot high word → value renderer
+    emit_deref_reference_property_slot(emitter, "x0", "x1", "x2", "x9");
     emit_resolve_tagged_scalar_property_tag(emitter, "x0", "x2");
     emitter.instruction("bl __rt_var_dump_value");                              // emit `<indent>TYPE(VAL)\n` (recursing when needed)
 
@@ -942,6 +980,17 @@ fn emit_var_dump_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_vd_obj_after_dyn_first_x86");
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // restore the object pointer after the dynamic walk
+    emitter.instruction("mov r9, QWORD PTR [rdi]");                             // load the runtime class id from the object header
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_stdclass_class_id", 0);      // load the compile-time stdClass class id
+    emitter.instruction("cmp r9, r10");                                         // is this a stdClass instance?
+    emitter.instruction("jne __rt_vd_obj_declared_x86");                        // declared classes walk their descriptor
+    emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");                        // load the dynamic-property hash
+    // Straight to the exit, as on AArch64: the dynamic append would render this hash again.
+    emit_branch_if_null_container(emitter, "rdi", "r10", "__rt_vd_obj_exit_x86");
+    emitter.instruction("call __rt_var_dump_hash");                             // render every dynamic property
+    emitter.instruction("jmp __rt_vd_obj_exit_x86");                            // nothing is declared, and the hash is already shown
+    emitter.label("__rt_vd_obj_declared_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
     emitter.instruction("call __rt_vd_obj_desc");                               // rax = this class's var_dump descriptor
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the descriptor pointer
     emitter.instruction("mov r9, QWORD PTR [rax]");                             // load the declared property count
@@ -986,6 +1035,7 @@ fn emit_var_dump_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");                       // property value tag → value renderer
     emitter.instruction("mov rsi, QWORD PTR [r10]");                            // slot low word → value renderer
     emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // slot high word → value renderer
+    emit_deref_reference_property_slot(emitter, "rdi", "rsi", "rdx", "r8");
     emit_resolve_tagged_scalar_property_tag(emitter, "rdi", "rdx");
     emitter.instruction("call __rt_var_dump_value");                            // emit `<indent>TYPE(VAL)\n` (recursing when needed)
 

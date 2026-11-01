@@ -101,13 +101,15 @@ std::thread_local! {
     /// The physical file each source identity was lexed from, for diagnostics.
     /// Per thread like `NEXT_SOURCE_ID`, so parallel compilations name their own files.
     /// The pipeline registers the entry file under identity 0 before frontend processing.
+    /// Codegen reads the map from the module (`Module::source_files`, built from
+    /// [`Span::source_paths_snapshot`]), never from here, because it may run on worker threads.
     ///
     /// A checker error carries only a span; without this a diagnostic from an included or
     /// autoloaded file printed `error[line:col]` with no way to tell which of thousands of files
     /// it came from. Entries are overwritten when an identity is handed out again after
     /// [`Span::reset_source_ids`], so a lookup always names the latest file lexed with that id.
-    static SOURCE_PATHS: std::cell::RefCell<std::collections::HashMap<u32, String>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
+    static SOURCE_PATHS: std::cell::RefCell<std::collections::BTreeMap<u32, String>> =
+        const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
 }
 
 /// The thread-local source-ID counters at one moment; see [`Span::counters_checkpoint`].
@@ -203,8 +205,17 @@ impl Span {
     ///
     /// Only the root resolver resets the counter. Autoloaded files and their includes continue
     /// allocating fresh identities, so span-keyed checker results cannot leak between files.
+    ///
+    /// The path map forgets every included file of an earlier compile on this thread but keeps
+    /// identity 0: the pipeline registers the entry file there before the resolver rewinds.
     pub fn reset_source_ids() {
         NEXT_SOURCE_ID.with(|next| next.set(1));
+        SOURCE_PATHS.with(|paths| paths.borrow_mut().retain(|id, _| *id == 0));
+    }
+
+    /// Returns every file path recorded on this thread since the last reset, by source identity.
+    pub fn source_paths_snapshot() -> std::collections::BTreeMap<u32, String> {
+        SOURCE_PATHS.with(|paths| paths.borrow().clone())
     }
 
     /// Captures thread-local include and synthetic source IDs for discarded work.
@@ -331,6 +342,18 @@ impl Span {
     /// half of them.
     pub fn is_from_source(self) -> bool {
         self.line != 0 && self.line < SYNTHETIC_LINE_BASE
+    }
+
+    /// The line a running program may report for this span: its source line, or 0 for a node
+    /// the compiler built. A synthetic line (1 000 000 and up) names no place in the program, and
+    /// it is numbered in an order that changes from run to run, so publishing it made two builds
+    /// of one program differ.
+    pub fn source_line(self) -> u32 {
+        if self.is_from_source() {
+            self.line
+        } else {
+            0
+        }
     }
 
     /// Can this span single out ONE node?

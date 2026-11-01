@@ -2,7 +2,7 @@
 title: "gmp_random_seed()"
 description: "Seeds PHP's GMP random generator."
 sidebar:
-  order: 627
+  order: 640
 ---
 
 ## gmp_random_seed()

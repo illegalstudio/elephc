@@ -63,17 +63,25 @@ unset($words, $alias, $floats, $mixed);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// Declared arrays retain the existing explicit restriction against non-scalar Mixed sorting.
+/// Declared arrays of non-scalar values sort like php: elements compare as arrays, element by
+/// element. The compiler once refused this (`sorting Mixed arrays containing non-scalar values is
+/// not supported`), a restriction php does not have; php 8.5 prints `[[1],[2]]` for `sort` and
+/// `[[2],[1]]` for `rsort` of `[[2], [1]]`.
 #[test]
 fn test_boxed_array_sort_keeps_non_scalar_guard() {
-    for name in ["sort", "rsort"] {
-        let error = compile_and_run_expect_failure(&format!(r#"<?php
-function guardedSort(array &$values): void {{ {name}($values); }}
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function guardedSort(array &$values): void { sort($values); }
+function guardedRsort(array &$values): void { rsort($values); }
 $values = [[2], [1]];
 guardedSort($values);
-"#));
-        assert!(error.contains("sorting Mixed arrays containing non-scalar values is not supported"), "{error}");
-    }
+echo json_encode($values), "|";
+$values = [[2], [1]];
+guardedRsort($values);
+echo json_encode($values), "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[[1],[2]]|[[2],[1]]\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
 /// A reindexing hash sort on a Mixed-widened local publishes its receiver ONCE and keeps the heap clean.

@@ -153,6 +153,12 @@ macro_rules! impl_fake_numeric_string_ops {
     fn echo(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus> {
         self.runtime_echo(value)
     }
+    /// Captures `error_log()`'s stderr-channel bytes instead of writing real fd 2, so a test can
+    /// assert on exactly what was written.
+    fn error_log_write_stderr(&mut self, bytes: &[u8]) -> Result<(), EvalStatus> {
+        self.error_log_stderr_writes.push(bytes.to_vec());
+        Ok(())
+    }
     /// Casts one fake runtime cell to bytes for nested eval parsing.
     fn string_bytes(&mut self, value: RuntimeCellHandle) -> Result<Vec<u8>, EvalStatus> {
         self.runtime_string_bytes(value)

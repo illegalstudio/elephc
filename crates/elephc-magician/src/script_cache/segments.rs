@@ -76,7 +76,7 @@ impl ScriptSegment {
 pub(crate) fn segment_script(bytes: &[u8], mode: ParseMode) -> Vec<ScriptSegment> {
     let parsed = match mode {
         ParseMode::Fresh => parse_script(bytes).map(Arc::new),
-        ParseMode::Memoized => parse_script_cached(bytes),
+        ParseMode::Memoized => parse_script_cached(bytes).map_err(|diagnostic| diagnostic.error()),
     };
     vec![match parsed {
         Ok(program) => ScriptSegment::Code(program),
@@ -145,7 +145,10 @@ impl ScriptPiece<'_> {
 /// swallows. Empty HTML runs are not pieces.
 fn split_script(bytes: &[u8]) -> Vec<ScriptPiece<'_>> {
     let mut pieces = Vec::new();
-    let mut cursor = 0;
+    // The CLI drops a leading `#!` line from every file it compiles, as `parse_source_file`
+    // does. This cache path kept it, so a console entry that Symfony Runtime re-requires through
+    // `$_SERVER['SCRIPT_FILENAME']` printed its shebang once OPcache was enabled.
+    let mut cursor = crate::parser::leading_shebang_end(bytes);
     while let Some(tag) = find_open_tag(bytes, cursor) {
         push_html(&mut pieces, bytes, cursor, tag.start);
         let close = find_php_close_tag(bytes, tag.code_start);

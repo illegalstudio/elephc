@@ -23,6 +23,16 @@ fn test_core_symbols_enum_interface_misuse() {
     expect_error("<?php enum Bad implements UnitEnum { case One; }", "cannot explicitly implement");
 }
 
+/// A promoted parameter's `#[SensitiveParameter]` marks the parameter only: php does not hand a
+/// built-in attribute that cannot target a property to the promoted property, so this is not
+/// "cannot target property" (Symfony's security tokens promote `#[\SensitiveParameter]` secrets).
+#[test]
+fn test_core_symbols_promoted_sensitive_parameter_is_accepted() {
+    check_source("<?php class Token { public function __construct(#[\\SensitiveParameter] private string $secret) {} }")
+        .unwrap();
+    expect_error("<?php class Bad { #[SensitiveParameter] public string $secret = ''; }", "cannot target property");
+}
+
 /// Core internal attributes validate declaration targets and repeatability.
 #[test]
 fn test_core_symbols_attribute_target_errors() {

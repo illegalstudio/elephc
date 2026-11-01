@@ -8,7 +8,8 @@
 //! - The golden signature is `first_param_ref(fixed(["array"]))`: exactly 1 argument,
 //!   the `array` param is by-reference. The `ref` marker is mandatory — it is what makes
 //!   by-reference mutation lower correctly (ir_lower reads `ref_params` from the registry sig).
-//! - Concrete and declared PHP arrays are accepted; boxed sorting retains the scalar-only guard.
+//! - `check` accepts gradual array-compatible values and returns PHP's boolean success result.
+//!   Concrete and declared PHP arrays are accepted; boxed sorting retains the scalar-only guard.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
@@ -24,11 +25,11 @@ builtin! {
 
 /// Validates the argument type for a `sort` call.
 ///
-/// Accepts concrete and declared PHP arrays. Arity (exactly 1) is
+/// Accepts indexed, associative and declared PHP arrays, and gradual sources. Arity (exactly 1) is
 /// pre-validated by the registry. Returns `Ok(PhpType::Bool)` on success.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) && !ty.is_php_array() {
+    if !crate::types::checker::builtins::arrays::array_arg_is_gradually_acceptable(&ty) && !ty.is_php_array() {
         return Err(CompileError::new(cx.span, &format!("{}() argument must be array", cx.name)));
     }
     Ok(PhpType::Bool)

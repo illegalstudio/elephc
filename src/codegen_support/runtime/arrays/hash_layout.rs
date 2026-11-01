@@ -12,7 +12,7 @@
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub(crate) const HEADER_SIZE: usize = 64;
 pub(crate) const ENTRIES_OFFSET: usize = 40;

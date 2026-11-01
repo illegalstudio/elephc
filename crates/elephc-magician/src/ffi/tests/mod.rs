@@ -115,6 +115,9 @@ fn native_member_attribute_push_arg(record: &mut Vec<u8>, arg: &EvalAttributeArg
             record.extend_from_slice(&(value.len() as u32).to_le_bytes());
             record.extend_from_slice(value);
         }
+        EvalAttributeArg::Expr(_) => {
+            panic!("native attribute test ABI does not encode unfolded constant expressions")
+        }
         EvalAttributeArg::Named { name, value } => {
             record.push(4);
             native_member_attribute_push_string(record, name);

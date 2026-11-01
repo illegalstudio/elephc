@@ -38,6 +38,19 @@ pub fn emit_hash_ensure_unique(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, x9");                                          // does the hash carry the in-band null-container sentinel?
     emitter.instruction("b.eq __rt_hash_ensure_unique_done");                   // sentinel-null hashes from missed reads have no header to split
 
+    // -- heap-debug: the table must still describe itself before anyone mutates or clones it --
+    //
+    // Every hash write funnels through here, so this is the earliest point that sees a table
+    // whose insertion order has left it. Without it the damage only surfaces later, inside
+    // `__rt_hash_clone_shallow`, hashing a foreign heap header as a key.
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_debug_enabled");
+    emitter.instruction("ldr x9, [x9]");                                        // load the heap-debug enabled flag
+    emitter.instruction("cbz x9, __rt_hash_ensure_unique_chain_checked");       // skip the walk outside heap-debug
+    emitter.instruction("str x30, [sp, #-16]!");                                // preserve the return address across the validator call
+    emitter.instruction("bl __rt_hash_debug_validate_chain");                   // walk the insertion order; aborts if it left the table
+    emitter.instruction("ldr x30, [sp], #16");                                  // restore the return address
+    emitter.label("__rt_hash_ensure_unique_chain_checked");
+
     // -- only shared hashes need to be cloned --
     emitter.instruction("ldr w9, [x0, #-12]");                                  // load the current hash refcount from the uniform header
     emitter.instruction(&format!("ldr x10, [x0, #{PINS_OFFSET}]"));             // count the internal roots that do not own a PHP value

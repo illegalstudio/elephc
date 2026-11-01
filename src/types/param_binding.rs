@@ -1,8 +1,8 @@
 //! Purpose:
 //! Owns the PHP parameter-binding rules that let a declared parameter accept an argument
-//! of a different type: coercive scalar binding (`string $s` accepting `42`), callable-name
-//! strings (`callable $f` accepting `"strtoupper"`), and the `declare(strict_types=1)` mode
-//! that switches every one of those conversions off.
+//! of a different type: coercive scalar binding (`string $s` accepting `42`), weak
+//! `Stringable` object conversion, callable-name strings (`callable $f` accepting
+//! `"strtoupper"`), and the `declare(strict_types=1)` mode that switches those conversions off.
 //!
 //! Called from:
 //! - `crate::types::checker::functions::resolution` (acceptance + diagnostics)
@@ -38,6 +38,148 @@ pub(crate) use union::{
     runtime_int_binding_needs_diagnostics, runtime_scalar_param_binding,
     runtime_strict_param_acceptance, runtime_weak_int_param_acceptance,
 };
+
+/// Extracts the one named object class a value of type `actual` could still be at this boundary.
+///
+/// A union naming SEVERAL object classes has no single class for the runtime guard to test, so
+/// [`nominal_object_boundary_target`] turns it away. The value crossing the boundary narrows it,
+/// though: a class unrelated to the argument's own static class can never be what arrives, and
+/// PHP's single inheritance makes "unrelated" decidable. Symfony's
+/// `ViewEvent::__construct(ControllerArgumentsMetadata|ControllerArgumentsEvent|null)` is called
+/// with a `?ControllerMetadata`, and only `ControllerArgumentsMetadata` descends from it — so the
+/// existing one-class guard is exactly the check PHP performs there.
+///
+/// `related` answers whether two class names are the same or one descends from the other. Returns
+/// `None` unless exactly one member survives, leaving every genuinely ambiguous union refused.
+pub(crate) fn nominal_object_boundary_target_for_source(
+    expected: &PhpType,
+    actual: &PhpType,
+    related: &dyn Fn(&str, &str) -> bool,
+) -> Option<String> {
+    let actual_class = single_named_object_class(actual)?;
+    let PhpType::Union(members) = expected else {
+        return None;
+    };
+    let mut surviving = None;
+    for member in members {
+        match member {
+            PhpType::Void | PhpType::Never => {}
+            PhpType::Object(name) if !name.trim_start_matches('\\').is_empty() => {
+                if !related(name.trim_start_matches('\\'), &actual_class) {
+                    continue;
+                }
+                if surviving.is_some() {
+                    return None;
+                }
+                surviving = Some(name.clone());
+            }
+            _ => return None,
+        }
+    }
+    surviving
+}
+
+/// Returns the one named object class a type describes, seeing through a nullable union.
+fn single_named_object_class(ty: &PhpType) -> Option<String> {
+    match ty {
+        PhpType::Object(name) if !name.trim_start_matches('\\').is_empty() => {
+            Some(name.trim_start_matches('\\').to_string())
+        }
+        PhpType::Union(members) => {
+            let mut found = None;
+            for member in members {
+                match member {
+                    PhpType::Void | PhpType::Never => {}
+                    PhpType::Object(name) if !name.trim_start_matches('\\').is_empty() => {
+                        if found.is_some() {
+                            return None;
+                        }
+                        found = Some(name.trim_start_matches('\\').to_string());
+                    }
+                    _ => return None,
+                }
+            }
+            found
+        }
+        _ => None,
+    }
+}
+
+/// Extracts the sole named object accepted by a nominal object boundary.
+///
+/// Nullable object unions are supported because PHP preserves null while checking every object
+/// value against the named class or interface. Any union with another value category is left to
+/// the ordinary compatibility and gradual-boundary rules.
+pub(crate) fn nominal_object_boundary_target(expected: &PhpType) -> Option<String> {
+    match expected {
+        PhpType::Object(name) if !name.trim_start_matches('\\').is_empty() => Some(name.clone()),
+        PhpType::Union(members) => {
+            let mut target = None;
+            for member in members {
+                match member {
+                    PhpType::Void | PhpType::Never => {}
+                    PhpType::Object(name) if !name.trim_start_matches('\\').is_empty() => {
+                        if target.as_ref().is_some_and(|existing| existing != name) {
+                            return None;
+                        }
+                        target = Some(name.clone());
+                    }
+                    _ => return None,
+                }
+            }
+            target
+        }
+        _ => None,
+    }
+}
+
+/// Returns whether a known object can cross `expected` only after a runtime nominal check.
+pub(crate) fn object_requires_runtime_nominal_guard(
+    expected: &PhpType,
+    actual: &PhpType,
+) -> bool {
+    matches!(actual.codegen_repr(), PhpType::Object(_))
+        && nominal_object_boundary_target(expected).is_some()
+}
+
+/// Returns whether a gradual value needs a runtime object-or-null return-boundary check.
+///
+/// This is deliberately separate from parameter binding: a union such as `Object|false` is
+/// represented as boxed Mixed at runtime, so a declared nullable-object return must validate its
+/// active tag and class at either a parameter or return boundary.
+pub(crate) fn gradual_object_requires_runtime_nominal_guard(
+    expected: &PhpType,
+    actual: &PhpType,
+) -> bool {
+    matches!(actual.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        && nominal_object_boundary_target(expected).is_some()
+}
+
+/// Returns whether a nullable integer must be checked before crossing an `int` parameter.
+///
+/// PHP accepts the program and throws `TypeError` only if the runtime value is null. Elephc's
+/// compact `TaggedScalar` representation carries exactly the payload and null tag needed to make
+/// that decision at the call boundary.
+pub(crate) fn nullable_int_requires_runtime_param_guard(
+    expected: &PhpType,
+    actual: &PhpType,
+) -> bool {
+    expected.codegen_repr() == PhpType::Int
+        && actual.codegen_repr() == PhpType::TaggedScalar
+}
+
+/// Returns whether `ty` is php's `?int` (`int|null`), whatever storage the target gives it.
+pub(crate) fn is_nullable_int(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Union(members) => {
+            members.iter().any(|member| *member == PhpType::Int)
+                && members
+                    .iter()
+                    .all(|member| matches!(member, PhpType::Int | PhpType::Void))
+        }
+        _ => false,
+    }
+}
 
 /// How a declared parameter binds an argument whose type does not already match.
 #[derive(Debug, Clone, PartialEq)]
@@ -158,6 +300,9 @@ pub(crate) fn classify_param_binding(
             }
         }
     }
+    if weak_binding_selects_string_for_all_variants(expected, actual) {
+        return ParamBinding::Cast(CastType::String);
+    }
     match (expected.codegen_repr(), actual.codegen_repr()) {
         // `string $s` accepts every other scalar. `(string)` is total for int, float and
         // bool, produces no PHP notice, and elephc's cast already matches PHP byte for byte
@@ -173,6 +318,89 @@ pub(crate) fn classify_param_binding(
         (PhpType::Int, PhpType::Float | PhpType::Str)
         | (PhpType::Float, PhpType::Str) => classify_numeric_binding(expected, arg),
         _ => ParamBinding::Rejected,
+    }
+}
+
+/// Returns whether a boxed gradual argument needs an active-tag check for a declared union.
+///
+/// The supported union members map directly to stable Mixed runtime tags, so the guard can
+/// preserve the boxed ABI value unchanged after validation. Nominal objects, callables,
+/// iterables, resources, and the literal `false` subtype need richer checks and deliberately
+/// stay on their existing paths.
+pub(crate) fn gradual_union_requires_runtime_param_guard(
+    expected: &PhpType,
+    actual: &PhpType,
+) -> bool {
+    if expected == actual
+        || expected.codegen_repr() != PhpType::Mixed
+        || actual.codegen_repr() != PhpType::Mixed
+    {
+        return false;
+    }
+    let PhpType::Union(members) = expected else {
+        return false;
+    };
+    !members.is_empty()
+        && members.iter().all(|member| {
+            matches!(
+                member,
+                PhpType::Int
+                    | PhpType::Float
+                    | PhpType::Str
+                    | PhpType::Bool
+                    | PhpType::Void
+                    | PhpType::Array(_)
+                    | PhpType::AssocArray { .. }
+            )
+        })
+}
+
+/// Returns whether weak PHP binding selects `string` for every possible source variant.
+///
+/// Exact scalar arms and PHP's numeric-preference rules take precedence over string coercion.
+/// Restricting this fallback to unions without `int`, `float`, or `bool` therefore covers total
+/// scalar conversion without guessing about lossy numeric union selection. A nullable source is
+/// accepted only when the target is nullable too; lowering then preserves null and casts only the
+/// non-null scalar branch.
+fn weak_binding_selects_string_for_all_variants(
+    expected: &PhpType,
+    actual: &PhpType,
+) -> bool {
+    let (target_accepts_string, target_accepts_null) = match expected {
+        PhpType::Str => (true, false),
+        PhpType::Union(members) => {
+            let mut has_string = false;
+            let mut has_null = false;
+            for member in members {
+                match member {
+                    PhpType::Str => has_string = true,
+                    PhpType::Void => has_null = true,
+                    PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False => {
+                        return false;
+                    }
+                    _ => {}
+                }
+            }
+            (has_string, has_null)
+        }
+        _ => (false, false),
+    };
+    if !target_accepts_string {
+        return false;
+    }
+    match actual {
+        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False => true,
+        PhpType::Union(members) => !members.is_empty()
+            && members.iter().all(|member| match member {
+                PhpType::Str
+                | PhpType::Int
+                | PhpType::Float
+                | PhpType::Bool
+                | PhpType::False => true,
+                PhpType::Void => target_accepts_null,
+                _ => false,
+            }),
+        _ => false,
     }
 }
 
@@ -454,19 +682,69 @@ fn literal_php_type(kind: &ExprKind) -> Option<PhpType> {
     }
 }
 
-/// Returns the explicit cast that implements a *value-level* scalar parameter binding.
+/// Returns the explicit cast that implements a *value-level* parameter binding.
 ///
 /// `actual` is the lowered argument's codegen type, so this fires for runtime values as well
-/// as literals. Returns `None` when no total scalar coercion applies.
+/// as literals. Returns `None` when no total scalar coercion applies. An object conversion is
+/// returned only for a declared string arm; the checker has already proven the concrete object
+/// implements `Stringable` before lowering consumes this helper.
 ///
 /// The classifier is shared with the checker so the two cannot disagree; the placeholder
 /// argument is inert because only the value-independent `ParamBinding::Cast` outcome is kept,
 /// and every expression-sensitive outcome maps to `None` here.
 pub(crate) fn scalar_param_cast(expected: &PhpType, actual: &PhpType) -> Option<CastType> {
+    if matches!(actual.codegen_repr(), PhpType::Object(_))
+        && param_accepts_weak_string_coercion(expected)
+        && !union_admits_object_as_is(expected, actual)
+    {
+        // The checker only admits this path after proving that the concrete object implements
+        // `Stringable`. Lowering deliberately consumes that proof instead of duplicating class
+        // metadata, which is not available at this stage.
+        return Some(CastType::String);
+    }
     let placeholder = Expr::new(ExprKind::Null, crate::span::Span::dummy());
     match classify_param_binding(expected, actual, &placeholder) {
         ParamBinding::Cast(target) => Some(target),
         _ => None,
+    }
+}
+
+/// Whether a union holds the object unchanged, so PHP never reaches its `string` arm.
+///
+/// PHP coerces an argument only when no member accepts it as it is. Doctrine's
+/// `ParameterTypeInferer::inferType(): ParameterType|ArrayParameterType|int|string` returns
+/// `ArrayParameterType::INTEGER`; the `string` member made every return a string cast, and the
+/// enum case died with `could not be converted to string` on every symfony/demo query with an
+/// `IN (:ids)` list.
+fn union_admits_object_as_is(expected: &PhpType, actual: &PhpType) -> bool {
+    let PhpType::Object(actual_class) = actual.codegen_repr() else {
+        return false;
+    };
+    let actual_class = actual_class.trim_start_matches('\\');
+    let PhpType::Union(members) = expected else {
+        return false;
+    };
+    members.iter().any(|member| match member {
+        PhpType::Mixed => true,
+        PhpType::Object(name) => {
+            let name = name.trim_start_matches('\\');
+            name.eq_ignore_ascii_case(actual_class) || name.eq_ignore_ascii_case("object")
+        }
+        _ => false,
+    })
+}
+
+/// Returns whether a declared parameter contains a `string` arm that PHP may select through
+/// weak object-to-string parameter coercion.
+///
+/// This inspects the source declaration rather than `codegen_repr()`: union storage collapses
+/// to `Mixed`, but PHP still selects its `string` member when a `Stringable` object is passed
+/// from a non-strict call site.
+pub(crate) fn param_accepts_weak_string_coercion(expected: &PhpType) -> bool {
+    match expected {
+        PhpType::Str => true,
+        PhpType::Union(members) => members.iter().any(param_accepts_weak_string_coercion),
+        _ => false,
     }
 }
 
@@ -677,5 +955,48 @@ mod tests {
             classify_param_binding(&PhpType::Bool, &PhpType::Str, &string_arg("a")),
             ParamBinding::Cast(CastType::Bool)
         );
+    }
+
+    /// Verifies a union with `string` as its only scalar arm performs total weak conversion.
+    #[test]
+    fn scalar_to_sole_string_union_binding_uses_the_cast() {
+        let expected = PhpType::Union(vec![
+            PhpType::Str,
+            PhpType::Array(Box::new(PhpType::Mixed)),
+            PhpType::Void,
+        ]);
+        let arg = Expr::new(ExprKind::IntLiteral(42), crate::span::Span::dummy());
+        assert_eq!(
+            classify_param_binding(&expected, &PhpType::Int, &arg),
+            ParamBinding::Cast(CastType::String)
+        );
+        let numeric_union = PhpType::Union(vec![PhpType::Int, PhpType::Str]);
+        assert_eq!(
+            classify_param_binding(&numeric_union, &PhpType::Bool, &arg),
+            ParamBinding::Rejected
+        );
+        let nullable_scalar = PhpType::Union(vec![PhpType::Int, PhpType::Void]);
+        assert_eq!(
+            classify_param_binding(&expected, &nullable_scalar, &arg),
+            ParamBinding::Cast(CastType::String)
+        );
+        assert_eq!(
+            classify_param_binding(&PhpType::Str, &nullable_scalar, &arg),
+            ParamBinding::Rejected
+        );
+    }
+
+    /// Verifies lowering retains the declared union shape when selecting its weakly coercive
+    /// `string` member for an object already proven `Stringable` by the checker.
+    #[test]
+    fn stringable_object_binding_selects_string_union_member() {
+        let expected = PhpType::Union(vec![PhpType::Str, PhpType::Iterable]);
+        let actual = PhpType::Object("Label".to_string());
+        assert!(param_accepts_weak_string_coercion(&expected));
+        assert_eq!(
+            scalar_param_cast(&expected, &actual),
+            Some(CastType::String)
+        );
+        assert!(!param_accepts_weak_string_coercion(&PhpType::Iterable));
     }
 }

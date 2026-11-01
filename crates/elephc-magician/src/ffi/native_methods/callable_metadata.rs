@@ -176,6 +176,22 @@ pub(in crate::ffi) fn native_callable_type_from_abi(
     native_callable_type_from_spec(&type_spec, position)
 }
 
+/// Decodes one generated PARAMETER type-spec string, for readers outside the FFI layer.
+///
+/// A callable descriptor's signature record carries the same spec per declared parameter, so the
+/// reflection of a compiled closure or first-class callable reports the declared type -- a union,
+/// an intersection, a class -- instead of the representation tag its ABI slot needs.
+pub(crate) fn native_callable_param_type_from_abi(
+    type_spec_ptr: *const u8,
+    type_spec_len: u64,
+) -> Option<EvalParameterType> {
+    native_callable_type_from_abi(
+        type_spec_ptr,
+        type_spec_len,
+        NativeCallableTypePosition::Parameter,
+    )
+}
+
 /// Parses the compact generated type syntax used by native signature registration.
 fn native_callable_type_from_spec(
     type_spec: &str,
@@ -232,8 +248,14 @@ fn native_callable_type_variant(
         "array" => EvalParameterTypeVariant::Array,
         "bool" => EvalParameterTypeVariant::Bool,
         "callable" => EvalParameterTypeVariant::Callable,
+        // PHP 8.2 value types, mapped exactly as the eval parser maps them
+        // (`parser::statements::parameters_types::type_variant_from_name`: `false` is a generic
+        // atom, `true` its own variant). The two sides compare variants directly when an eval
+        // class implements an AOT interface, so a name spelled one way here and another way there
+        // makes an identical signature look incompatible — which is what stopped
+        // `ControllerResolver::getController(): callable|false` from declaring.
         "false" => EvalParameterTypeVariant::Generic(elephc_generics::Type::atom("false")),
-        "true" => EvalParameterTypeVariant::Generic(elephc_generics::Type::atom("true")),
+        "true" => EvalParameterTypeVariant::True,
         "float" => EvalParameterTypeVariant::Float,
         "int" => EvalParameterTypeVariant::Int,
         "iterable" => EvalParameterTypeVariant::Iterable,

@@ -26,6 +26,13 @@ pub(crate) fn capture_check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, Compile
 /// Identifies the capture output at its source position using the shared contract's parameter name.
 pub(crate) fn is_capture_output_argument(name: &str, arg: &crate::parser::ast::Expr, position: usize) -> bool {
     use elephc_builtin_contract::RuntimeBuiltinId;
+    // Only these three builtins have a capture output. The checker asks this for every argument
+    // of every call, and the generic path below resolves the runtime id by scanning every
+    // runtime builtin (a visible share of type checking on a Symfony build).
+    let bare = name.trim_start_matches('\\');
+    if !["mb_ereg", "mb_eregi", "mb_parse_str"].iter().any(|capture| bare.eq_ignore_ascii_case(capture)) {
+        return false;
+    }
     let Some(definition) = super::registry::lookup(name) else { return false; };
     if !matches!(definition.spec.runtime_builtin_id(), Some(RuntimeBuiltinId::MbEreg | RuntimeBuiltinId::MbEregi | RuntimeBuiltinId::MbParseStr)) {
         return false;

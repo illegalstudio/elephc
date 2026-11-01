@@ -158,6 +158,11 @@ pub(super) fn object_type() -> TypeExpr {
     TypeExpr::Named(Name::unqualified("object"))
 }
 
+/// Returns the standard class-target type accepted as either a class string or object instance.
+pub(super) fn class_string_or_object_type() -> TypeExpr {
+    TypeExpr::Union(vec![TypeExpr::Str, object_type()])
+}
+
 /// Returns a `TypeExpr` for the unqualified name `mixed`.
 pub(super) fn mixed_type() -> TypeExpr {
     TypeExpr::Named(crate::names::Name::unqualified("mixed"))
@@ -171,4 +176,9 @@ pub(super) fn bool_type() -> TypeExpr {
 /// Returns a `TypeExpr` for Reflection APIs whose PHP return is `string|false`.
 pub(super) fn string_or_bool_type() -> TypeExpr {
     TypeExpr::Union(vec![TypeExpr::Str, TypeExpr::Bool])
+}
+
+/// Returns a `TypeExpr` for Reflection APIs whose PHP return is `int|false`.
+pub(super) fn int_or_bool_type() -> TypeExpr {
+    TypeExpr::Union(vec![TypeExpr::Int, TypeExpr::Bool])
 }

@@ -9,6 +9,53 @@
 
 use super::*;
 
+/// Verifies a method call on a union of two INTERFACES resolves through the classes that implement
+/// them, even when neither interface declares the method. A union of interfaces describes a
+/// runtime object that may carry members none of them names, and codegen already dispatches such a
+/// receiver on the runtime class id — but the checker refused the call outright with "Nullsafe
+/// method call requires a single nullable object type". Symfony's `Router` declares
+/// `protected UrlMatcherInterface|RequestMatcherInterface $matcher;` and calls
+/// `addExpressionLanguageProvider()` on it behind a `method_exists()` guard.
+/// PHP outputs "add:x;u:/p;ok".
+#[test]
+fn test_method_call_on_a_union_of_two_interfaces() {
+    let out = compile_and_run(
+        r#"<?php
+interface UrlMatcher { public function match(string $path): string; }
+interface RequestMatcher { public function matchRequest(string $path): string; }
+
+class Compiled implements UrlMatcher, RequestMatcher {
+    public function match(string $path): string { return "u:$path"; }
+    public function matchRequest(string $path): string { return "r:$path"; }
+    public function addProvider(string $p): void { echo "add:$p;"; }
+}
+
+class Router {
+    protected UrlMatcher|RequestMatcher $matcher;
+
+    public function getMatcher(): UrlMatcher|RequestMatcher {
+        if (isset($this->matcher)) {
+            return $this->matcher;
+        }
+
+        $this->matcher = new Compiled();
+        if (method_exists($this->matcher, 'addProvider')) {
+            $this->matcher->addProvider('x');
+        }
+
+        return $this->matcher;
+    }
+}
+
+$router = new Router();
+$matcher = $router->getMatcher();
+echo $matcher->match('/p'), '|';
+echo $matcher instanceof UrlMatcher ? 'ok' : 'bad';
+"#,
+    );
+    assert_eq!(out, "add:x;u:/p|ok");
+}
+
 /// Verifies that gettype() reflects the narrowest runtime type of a union-typed local,
 /// and that reassignment to an alternate union member updates the reported type.
 /// Fixture: `int|string $value = 1` → gettype returns "integer", then `$value = "two"` → gettype returns "string".
@@ -50,6 +97,54 @@ demo();
 "#,
     );
     assert_eq!(out, "411");
+}
+
+/// Verifies a coalesce between compatible object classes retains their common interface, so a
+/// chained method call uses the interface's declared string return type on either runtime arm.
+#[test]
+fn test_compatible_object_null_coalesce_preserves_interface_method_type() {
+    let out = compile_and_run(
+        r#"<?php
+interface NamedPath {
+    public function name(): string;
+}
+
+class RootPath implements NamedPath {
+    public function name(): string { return "root"; }
+}
+
+class ChildPath implements NamedPath {
+    public function __construct(private ?NamedPath $parent = null) {}
+    public function name(): string { return "child"; }
+    public function selectedName(): string {
+        return ($this->parent ?? $this)->name();
+    }
+}
+
+echo (new ChildPath())->selectedName();
+echo ":";
+echo (new ChildPath(new RootPath()))->selectedName();
+"#,
+    );
+    assert_eq!(out, "child:root");
+}
+
+/// Verifies every array member of a flow union satisfies an `iterable` parameter, including the
+/// empty-array arm retained after a conditional append.
+#[test]
+fn test_array_flow_union_binds_to_iterable_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+class FlowItem {}
+function countFlowItems(iterable $items): int { return count($items); }
+$items = [];
+if ($argc > 1) {
+    $items[] = new FlowItem();
+}
+echo countFlowItems($items);
+"#,
+    );
+    assert_eq!(out, "0");
 }
 
 /// Verifies truthiness dispatch for a union-typed local: string "0" is falsy, int 7 is truthy.
@@ -226,6 +321,42 @@ echo "|", $b->count;
 "#,
     );
     assert_eq!(out, "F|7|1.5|42");
+}
+
+/// Verifies a narrowed nullable integer remains loadable after its slot joins null and int paths.
+#[test]
+fn test_narrowed_nullable_int_local_loads_as_int() {
+    let out = compile_and_run(
+        r#"<?php
+function advance(?int $candidate): int {
+    $offset = 0;
+    for ($i = 0; $i < 2; ++$i) {
+        if (null !== $candidate) {
+            $offset = $candidate;
+        }
+        $candidate = $offset;
+    }
+    return $offset;
+}
+echo advance(7), "|", advance(null);
+"#,
+    );
+    assert_eq!(out, "7|0");
+}
+
+/// Verifies a gradual array read can populate an inline nullable-integer return value.
+#[test]
+fn test_mixed_array_read_returns_nullable_int() {
+    let out = compile_and_run(
+        r#"<?php
+function selected(array $values): ?int {
+    return $values["selected"] ?? null;
+}
+echo selected(["selected" => 9]), "|";
+var_dump(selected([]));
+"#,
+    );
+    assert_eq!(out, "9|NULL\n");
 }
 
 /// Verifies an ARRAY literal default in a `mixed`/union slot, instance and static.

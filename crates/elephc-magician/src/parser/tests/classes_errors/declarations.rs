@@ -16,12 +16,50 @@ fn parse_fragment_accepts_empty_class_declaration_source() {
     let program = parse_fragment(b"class DynEvalClass {};").expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::ClassDecl(EvalClass::new(
+        &[EvalStmt::class_decl(EvalClass::new(
             "DynEvalClass",
             Vec::new(),
             Vec::new()
         ))]
     );
+}
+
+/// Verifies a class doc comment is retained verbatim for reflection metadata.
+#[test]
+fn parse_fragment_retains_class_doc_comment() {
+    let program = parse_fragment(b"/** Dynamic class docs */ class DynEvalDocumentedClass {}")
+        .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::class_decl(
+            EvalClass::new("DynEvalDocumentedClass", Vec::new(), Vec::new())
+                .with_doc_comment_option(Some("/** Dynamic class docs */".to_string()))
+        )]
+    );
+}
+
+/// Verifies member doc comments remain non-semantic parser trivia while class docs are retained.
+#[test]
+fn parse_fragment_accepts_documented_class_members() {
+    let program = parse_fragment(
+        b"/** Class docs */ class DynEvalDocumentedMembers { /** Method docs */ public function run() {} }",
+    )
+    .expect("fragment should parse");
+    let EvalStmt::ClassDecl(class) = &program.statements()[0] else {
+        panic!("expected class declaration");
+    };
+    assert_eq!(class.doc_comment(), Some("/** Class docs */"));
+    assert_eq!(class.methods().len(), 1);
+}
+
+/// Verifies documentation on trait, interface, and enum members remains valid eval syntax.
+#[test]
+fn parse_fragment_accepts_documented_non_class_members() {
+    let program = parse_fragment(
+        b"trait DynEvalDocumentedTrait { /** Method docs */ private function run() {} }\ninterface DynEvalDocumentedInterface { /** Method docs */ public function run(): void; }\nenum DynEvalDocumentedEnum { /** Case docs */ case Ready; }",
+    )
+    .expect("fragment should parse");
+    assert_eq!(program.statements().len(), 3);
 }
 /// Verifies class relation clauses lower into dynamic class metadata.
 #[test]
@@ -32,7 +70,7 @@ fn parse_fragment_accepts_class_extends_and_implements_source() {
     .expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::ClassDecl(EvalClass::with_relations(
+        &[EvalStmt::class_decl(EvalClass::with_relations(
             "DynEvalChild",
             Some("DynEvalBase".to_string()),
             vec!["DynEvalIface".to_string(), "Root\\Iface".to_string()],
@@ -123,7 +161,7 @@ fn parse_fragment_rejects_invalid_type_atom_forms() {
         b"class DynEvalBadStaticPromoted { public function __construct(public static $value) {} }",
     ] {
         assert_eq!(
-            parse_fragment(source),
+            parse_fragment_error(source),
             Err(EvalParseError::UnsupportedConstruct)
         );
     }
@@ -139,7 +177,7 @@ fn parse_fragment_rejects_reserved_class_constant_name() {
         b"enum DynEvalBadEnumConstName { const class = 1; }",
     ] {
         assert_eq!(
-            parse_fragment(source),
+            parse_fragment_error(source),
             Err(EvalParseError::UnsupportedConstruct)
         );
     }
@@ -157,7 +195,7 @@ fn parse_fragment_rejects_reserved_class_like_declaration_names() {
         b"enum bool { case Ready; }",
     ] {
         assert_eq!(
-            parse_fragment(source),
+            parse_fragment_error(source),
             Err(EvalParseError::UnsupportedConstruct)
         );
     }
@@ -209,7 +247,7 @@ fn parse_fragment_rejects_reserved_unqualified_class_like_reference_names() {
         b"try {} catch (match $e) {}",
     ] {
         assert_eq!(
-            parse_fragment(source),
+            parse_fragment_error(source),
             Err(EvalParseError::UnsupportedConstruct)
         );
     }

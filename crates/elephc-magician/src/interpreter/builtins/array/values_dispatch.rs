@@ -19,6 +19,11 @@ pub(in crate::interpreter) fn eval_array_declared_values_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match name {
         "array_sum" => super::array_sum::eval_array_sum_declared_values_result(evaluated_args, context, values),
+        "array_is_list" => super::array_is_list::eval_array_is_list_declared_values_result(evaluated_args, context, values),
+        "array_key_first" => super::array_key_first::eval_array_key_first_declared_values_result(evaluated_args, context, values),
+        "array_first" => super::array_first::eval_array_edge_declared_values_result(super::array_first::ArrayEdge::First, evaluated_args, context, values),
+        "array_last" => super::array_first::eval_array_edge_declared_values_result(super::array_first::ArrayEdge::Last, evaluated_args, context, values),
+        "array_key_last" => super::array_key_last::eval_array_key_last_declared_values_result(evaluated_args, context, values),
         "array_product" => super::array_product::eval_array_product_declared_values_result(evaluated_args, context, values),
         "array_chunk" => super::array_chunk::eval_array_chunk_declared_values_result(evaluated_args, context, values),
         "array_column" => super::array_column::eval_array_column_declared_values_result(evaluated_args, context, values),
@@ -28,11 +33,18 @@ pub(in crate::interpreter) fn eval_array_declared_values_result(
         "array_diff_key" => super::array_diff_key::eval_array_diff_key_declared_values_result(evaluated_args, context, values),
         "array_fill" => super::array_fill::eval_array_fill_declared_values_result(evaluated_args, context, values),
         "array_fill_keys" => super::array_fill_keys::eval_array_fill_keys_declared_values_result(evaluated_args, context, values),
+        "array_replace_recursive" => super::array_recursive::eval_array_recursive_declared_values_result(super::array_recursive::ArrayRecursiveCombine::Replace, evaluated_args, context, values),
+        "array_merge_recursive" => super::array_recursive::eval_array_recursive_declared_values_result(super::array_recursive::ArrayRecursiveCombine::Merge, evaluated_args, context, values),
+        "array_find" => super::array_find::eval_array_predicate_walk_declared_values_result(super::array_find::ArrayPredicateWalk::FindValue, evaluated_args, context, values),
+        "array_find_key" => super::array_find::eval_array_predicate_walk_declared_values_result(super::array_find::ArrayPredicateWalk::FindKey, evaluated_args, context, values),
+        "array_any" => super::array_find::eval_array_predicate_walk_declared_values_result(super::array_find::ArrayPredicateWalk::Any, evaluated_args, context, values),
+        "array_all" => super::array_find::eval_array_predicate_walk_declared_values_result(super::array_find::ArrayPredicateWalk::All, evaluated_args, context, values),
         "array_filter" => super::array_filter::eval_array_filter_declared_values_result(evaluated_args, lexical_scope, context, values),
         "array_intersect" => super::array_intersect::eval_array_intersect_declared_values_result(evaluated_args, context, values),
         "array_intersect_key" => super::array_intersect_key::eval_array_intersect_key_declared_values_result(evaluated_args, context, values),
         "array_map" => super::array_map::eval_array_map_declared_values_result(evaluated_args, lexical_scope, context, values),
         "array_merge" => super::array_merge::eval_array_merge_declared_values_result(evaluated_args, context, values),
+        "array_replace" => super::array_replace::eval_array_replace_declared_values_result(evaluated_args, context, values),
         "array_reduce" => super::array_reduce::eval_array_reduce_declared_values_result(evaluated_args, lexical_scope, context, values),
         "iterator_apply" => super::iterator_apply::eval_iterator_apply_declared_values_result(evaluated_args, context, values),
         "iterator_count" => super::iterator_count::eval_iterator_count_declared_values_result(evaluated_args, context, values),
@@ -52,6 +64,9 @@ pub(in crate::interpreter) fn eval_array_declared_values_result(
         "key" => super::key::eval_key_declared_values_result(evaluated_args, context, values),
         "range" => super::range::eval_range_declared_values_result(evaluated_args, context, values),
         "array_walk" => super::array_walk::eval_array_walk_declared_values_result(evaluated_args, context, values),
+        "array_walk_recursive" => {
+            super::array_walk_recursive::eval_array_walk_recursive_declared_values_result(evaluated_args, context, values)
+        }
         "array_pop" => super::array_pop::eval_array_pop_declared_values_result(evaluated_args, context, values),
         "array_shift" => super::array_shift::eval_array_shift_declared_values_result(evaluated_args, context, values),
         "array_push" => super::array_push::eval_array_push_declared_values_result(evaluated_args, context, values),
@@ -73,6 +88,9 @@ pub(in crate::interpreter) fn eval_array_declared_values_result(
         "uasort" => super::uasort::eval_uasort_declared_values_result(evaluated_args, context, values),
         "uksort" => super::uksort::eval_uksort_declared_values_result(evaluated_args, context, values),
         "usort" => super::usort::eval_usort_declared_values_result(evaluated_args, context, values),
+        name if super::array_ucompare::is_array_ucompare_builtin(name) => {
+            super::array_ucompare::eval_array_ucompare_declared_values_result(name, evaluated_args, context, values)
+        }
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }

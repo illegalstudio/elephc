@@ -35,6 +35,9 @@ use crate::names::php_symbol_key;
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
+use super::arrays::{
+    emit_box_loaded_invoker_ref_cell_value_as_mixed, emit_branch_if_invoker_ref_cell_tag,
+};
 use super::{
     direct_call_stack_pad_bytes, emit_direct_resolved_method_call, expect_local_slot,
     expect_operand, resolve_method_call_target, store_if_result,
@@ -84,6 +87,7 @@ const BOOL_VALUE_TAG: u8 = 3;
 
 enum IteratorSourceKind {
     Indexed { elem: PhpType },
+    #[allow(dead_code)]
     Hash,
     DynamicIterable,
     DynamicMixed,
@@ -338,8 +342,13 @@ pub(super) fn lower_iter_current_value(
                 Arch::AArch64 => load_current_array_value_aarch64(ctx, offset, &elem)?,
                 Arch::X86_64 => load_current_array_value_x86_64(ctx, offset, &elem)?,
             }
-            retain_current_indexed_value_if_unboxed(&mut ctx.emitter, &elem, &result_ty);
-            box_current_indexed_value_if_needed(ctx, &elem, &result_ty)?;
+            if indexed_iter_value_needs_detached_cell(&elem, &result_ty) {
+                let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+                super::arrays::emit_mixed_array_get_deref_invoker_ref_cell(ctx, &result_reg);
+            } else {
+                retain_current_indexed_value_if_unboxed(&mut ctx.emitter, &elem, &result_ty);
+                box_current_indexed_value_if_needed(ctx, &elem, &result_ty)?;
+            }
         }
         IteratorSourceKind::Hash => load_current_hash_call_value_as_mixed(ctx, offset, preserve_reference, promote_reference),
         IteratorSourceKind::DynamicIterable | IteratorSourceKind::DynamicMixed => {
@@ -380,6 +389,25 @@ fn retain_current_indexed_value_if_unboxed(
     if elem.codegen_repr() == result_ty.codegen_repr() {
         abi::emit_incref_if_refcounted(emitter, &elem.codegen_repr());
     }
+}
+
+/// Returns whether a by-value binding over this element must receive a DETACHED cell.
+///
+/// A `Mixed` element slot stores a boxed cell, and handing that same cell to the loop body makes
+/// the binding an alias of the array's own slot: `foreach ($x as $row) { $row[0] = ...; }` then
+/// wrote straight into `$x`, which `php -n` does not. The indexed read `$row = $x[0]` already
+/// detaches through `emit_mixed_array_get_deref_invoker_ref_cell` — unbox and re-box into a fresh
+/// cell whose payload is retained, which raises the container's refcount so the element write
+/// separates it — and a by-value `foreach` owes exactly the same copy.
+///
+/// Every other element type is already a value the loader materializes rather than a shared cell,
+/// so only the `Mixed` slot needs this.
+fn indexed_iter_value_needs_detached_cell(elem: &PhpType, result_ty: &PhpType) -> bool {
+    elem.codegen_repr() == PhpType::Mixed
+        && matches!(
+            result_ty.codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        )
 }
 
 /// Boxes an indexed iterator element only when the EIR result expects `Mixed`.
@@ -1435,6 +1463,33 @@ fn resolve_dynamic_object_iterator_source(
     offset: usize,
     owner: Option<LocalSlotId>,
 ) -> Result<()> {
+    if ctx.module.required_runtime_features.eval_bridge {
+        // An object an eval context built wraps the generic native header, so neither dispatch
+        // below finds its `getIterator()`/`rewind()`, and the loop ran zero times: every
+        // interpreted Doctrine collection a compiled Twig helper iterated looked empty. The
+        // bridge drains such an object into a compiled ArrayIterator (0 for any other object),
+        // which the Iterator dispatch below then drives like any compiled iterator.
+        let keep_source = ctx.next_label("iter_dynamic_eval_keep_source");
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        let object_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+        abi::load_at_offset(ctx.emitter, object_arg, offset - ITER_SOURCE_OFFSET_DELTA);
+        let symbol = ctx
+            .emitter
+            .target
+            .extern_symbol("__elephc_eval_native_iterator_for_object");
+        abi::emit_call_label(ctx.emitter, &symbol);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cbz {}, {}", result_reg, keep_source)); // not an eval-owned iterable: keep the original object
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("test {}, {}", result_reg, result_reg)); // did the bridge produce a compiled iterator?
+                ctx.emitter.instruction(&format!("je {}", keep_source));        // not an eval-owned iterable: keep the original object
+            }
+        }
+        abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_SOURCE_OFFSET_DELTA);
+        ctx.emitter.label(&keep_source);
+    }
     if owner.is_none() || !ctx.module.interface_infos.contains_key("IteratorAggregate") {
         return Ok(());
     }
@@ -1802,8 +1857,14 @@ fn box_iterator_method_result_if_needed(
     };
     let result_ty = ctx.value_php_type(result)?;
     if result_ty == PhpType::Mixed && return_ty.codegen_repr() != PhpType::Mixed {
-        // A `?ptr<T>` result keeps its union, so address 0 is PHP null.
-        emit_box_current_value_as_mixed(ctx.emitter, &crate::types::mixed_box_php_type(return_ty));
+        // `current()`/`key()` hand back an owned result, and the box takes its own reference:
+        // the borrowing boxer left one object per iteration alive (every `foreach` over a user
+        // `Iterator` whose `current()` builds its value). A `?ptr<T>` result keeps its union, so
+        // address 0 is PHP null.
+        emit_box_current_owned_value_as_mixed(
+            ctx.emitter,
+            &crate::types::mixed_box_php_type(return_ty),
+        );
     }
     Ok(())
 }
@@ -1962,12 +2023,50 @@ fn emit_generator_interface_fast_path(
     done
 }
 
+/// What a receiver whose class implements no matching interface table falls back to.
+#[derive(Clone, Copy)]
+pub(super) enum InterfaceDispatchMiss {
+    /// Answer zero, the long-standing defensive fallback for invalid interface metadata.
+    ZeroResult,
+    /// Re-run the string coercion through the RUNTIME resolver for this receiver value.
+    ///
+    /// An object the INTERPRETER built carries the `stdClass` class id whatever class declared
+    /// it, so the scan below cannot find the interface it really implements. Answering zero there
+    /// hands the caller a null string pointer, which the next runtime helper then reads a length
+    /// out of -- Symfony's `RouteCollection::addResource()` casting an eval-declared resource
+    /// surfaced it as an 8 GiB allocation rather than as anything diagnosable.
+    DynamicToString(ValueId),
+    /// Raise php's "Cannot use object of type X as array" Error for the receiver.
+    ///
+    /// A boxed `$mixed[$k] = $v` whose object does not implement `ArrayAccess` used to fall
+    /// through the zero answer and drop the write silently. The unboxed receiver is still in the
+    /// first argument register when the scan gives up, which is what the thrower reads.
+    ObjectNotArray,
+}
+
 /// Emits the interface table scan and calls the resolved method slot.
 pub(super) fn emit_interface_dispatch_call(
     ctx: &mut FunctionContext<'_>,
     interface_name: &str,
     method_key: &str,
     external_done: Option<&str>,
+) -> Result<PhpType> {
+    emit_interface_dispatch_call_with_miss(
+        ctx,
+        interface_name,
+        method_key,
+        external_done,
+        InterfaceDispatchMiss::ZeroResult,
+    )
+}
+
+/// Emits the interface table scan with a chosen answer for a receiver no table matches.
+pub(super) fn emit_interface_dispatch_call_with_miss(
+    ctx: &mut FunctionContext<'_>,
+    interface_name: &str,
+    method_key: &str,
+    external_done: Option<&str>,
+    miss: InterfaceDispatchMiss,
 ) -> Result<PhpType> {
     let normalized = interface_name.trim_start_matches('\\');
     let interface_info = ctx
@@ -1984,6 +2083,18 @@ pub(super) fn emit_interface_dispatch_call(
         .get(method_key)
         .map(|sig| sig.return_type.clone())
         .unwrap_or(PhpType::Mixed);
+    // An eval-created object carries the generic `stdClass` header, so the scan below never finds
+    // the interfaces its declaring class implements. An eval subclass of a compiled abstract class
+    // carries that ancestor's header instead: the scan matches, but the slot the subclass fills is
+    // null. Both ask the bridge before answering zero. Only a
+    // method without parameters qualifies: the arguments of the others are already in the ABI
+    // argument registers, which the bridge call does not forward.
+    let eval_miss = ctx.module.required_runtime_features.eval_bridge
+        && matches!(miss, InterfaceDispatchMiss::ZeroResult)
+        && interface_info
+            .methods
+            .get(method_key)
+            .is_some_and(|sig| sig.params.is_empty());
     let scan_loop = ctx.next_label("interface_dispatch_scan");
     let found = ctx.next_label("interface_dispatch_found");
     let missing = ctx.next_label("interface_dispatch_missing");
@@ -2015,10 +2126,22 @@ pub(super) fn emit_interface_dispatch_call(
                     &format!("ldr x11, [x11, #{}]", slot * 8)
                 );
             }
+            if eval_miss {
+                ctx.emitter.instruction(&format!("cbz x11, {}", missing));      // an abstract slot means an eval subclass owns the body
+            }
             ctx.emitter.instruction("blr x11");                                 // call resolved interface method implementation
             ctx.emitter.instruction(&format!("b {}", local_done));              // skip defensive missing-interface fallback
             ctx.emitter.label(&missing);
-            ctx.emitter.instruction("mov x0, #0");                              // defensive fallback for invalid interface metadata
+            if eval_miss {
+                emit_eval_interface_dispatch_miss(ctx, normalized, method_key, &return_ty, &local_done)?;
+            }
+            if let InterfaceDispatchMiss::DynamicToString(value) = miss {
+                super::output_values::emit_value_dynamic_object_to_string(ctx, value)?;
+            } else if matches!(miss, InterfaceDispatchMiss::ObjectNotArray) {
+                ctx.emitter.instruction("bl __rt_throw_object_not_array");      // the receiver is not ArrayAccess: raise php's Error, never returns
+            } else {
+                ctx.emitter.instruction("mov x0, #0");                          // defensive fallback for invalid interface metadata
+            }
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov r10, QWORD PTR [rdi]");                // load receiver class id for interface metadata lookup
@@ -2045,16 +2168,54 @@ pub(super) fn emit_interface_dispatch_call(
                     &format!("mov r11, QWORD PTR [r11 + {}]", slot * 8)
                 );
             }
+            if eval_miss {
+                ctx.emitter.instruction("test r11, r11");                       // an abstract slot means an eval subclass owns the body
+                ctx.emitter.instruction(&format!("je {}", missing));            // ask the eval bridge instead of calling null
+            }
             ctx.emitter.instruction("call r11");                                // call resolved interface method implementation
             ctx.emitter.instruction(&format!("jmp {}", local_done));            // skip defensive missing-interface fallback
             ctx.emitter.label(&missing);
-            ctx.emitter.instruction("xor eax, eax");                            // defensive fallback for invalid interface metadata
+            if eval_miss {
+                emit_eval_interface_dispatch_miss(ctx, normalized, method_key, &return_ty, &local_done)?;
+            }
+            if let InterfaceDispatchMiss::DynamicToString(value) = miss {
+                super::output_values::emit_value_dynamic_object_to_string(ctx, value)?;
+            } else if matches!(miss, InterfaceDispatchMiss::ObjectNotArray) {
+                ctx.emitter.instruction("call __rt_throw_object_not_array");    // the receiver is not ArrayAccess: raise php's Error, never returns
+            } else {
+                ctx.emitter.instruction("xor eax, eax");                        // defensive fallback for invalid interface metadata
+            }
         }
     }
     if external_done.is_none() {
         ctx.emitter.label(&local_done);
     }
     Ok(return_ty)
+}
+
+/// Calls the interface method through the eval bridge for an eval-owned receiver, jumping to
+/// `done` with the result; any other receiver falls through to the native zero answer.
+///
+/// `foreach` over an eval-declared `Iterator` used to see `valid()` answer zero and iterate
+/// nothing, and an eval-declared `IteratorAggregate` kept its own object as the iterator.
+fn emit_eval_interface_dispatch_miss(
+    ctx: &mut FunctionContext<'_>,
+    interface_name: &str,
+    method_key: &str,
+    return_ty: &PhpType,
+    done: &str,
+) -> Result<()> {
+    let native_zero = ctx.next_label("interface_dispatch_native_zero");
+    super::builtins::eval::emit_eval_interface_method_on_miss(
+        ctx,
+        interface_name,
+        method_key,
+        return_ty,
+        &native_zero,
+    )?;
+    abi::emit_jump(ctx.emitter, done);
+    ctx.emitter.label(&native_zero);
+    Ok(())
 }
 
 /// Returns the PHP type produced by a `Generator` iterator runtime helper.
@@ -2090,6 +2251,41 @@ fn emit_generator_iterator_runtime_call(
     let receiver_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     abi::load_at_offset(ctx.emitter, receiver_arg, offset - ITER_SOURCE_OFFSET_DELTA);
     abi::emit_call_label(ctx.emitter, helper);
+}
+
+/// Frame offsets of every iterator state whose walk retains successor-key anchors.
+///
+/// Only a by-reference walk that names an origin captures them (see [`emit_capture_successor_keys`]),
+/// so an ordinary `foreach` is not listed and pays nothing at function exit.
+pub(in crate::codegen) fn anchored_iterator_state_offsets(ctx: &FunctionContext<'_>) -> Vec<usize> {
+    let mut offsets = Vec::new();
+    for inst in &ctx.function.instructions {
+        if inst.op != Op::IterStart {
+            continue;
+        }
+        let Some(Immediate::IterStart(metadata)) = inst.immediate.as_ref() else {
+            continue;
+        };
+        if !metadata.is_by_ref() || metadata.origin().is_none() {
+            continue;
+        }
+        if let Ok(offset) = ctx.local_offset(metadata.state()) {
+            if !offsets.contains(&offset) {
+                offsets.push(offset);
+            }
+        }
+    }
+    offsets
+}
+
+/// Parks one state's anchors as "nothing retained", before any walk can have written them.
+pub(in crate::codegen) fn emit_clear_iterator_anchors(ctx: &mut FunctionContext<'_>, offset: usize) {
+    emit_clear_successor_keys(ctx, offset);
+}
+
+/// Releases the anchors a walk abandoned (a throw or an early return skips `iter_end`).
+pub(in crate::codegen) fn emit_release_iterator_anchors(ctx: &mut FunctionContext<'_>, offset: usize) {
+    emit_release_successor_keys(ctx, offset);
 }
 
 /// Lowers iterator cleanup for owned relocation anchors in the stack-resident state.
@@ -2437,13 +2633,21 @@ fn load_current_hash_value_as_mixed_x86_64(ctx: &mut FunctionContext<'_>, offset
 /// Boxes or retains an AArch64 hash payload as an owned `Mixed` value.
 fn box_hash_payload_as_mixed_aarch64(ctx: &mut FunctionContext<'_>) {
     let inspect_tagged_box = ctx.next_label("iter_hash_value_inspect_box");
+    let ref_marker = ctx.next_label("iter_hash_value_ref_marker");
+    let after_tagged_box = ctx.next_label("iter_hash_value_after_tagged_box");
     let done = ctx.next_label("iter_hash_value_boxed");
     ctx.emitter.instruction("cmp x5, #7");                                      // does the hash entry use the Mixed-or-iterable runtime tag?
     ctx.emitter.instruction(&format!("b.eq {}", inspect_tagged_box));           // inspect tag-7 payloads because iterable hashes also use that tag
     emit_box_runtime_payload_as_mixed(ctx.emitter, "x5", "x3", "x4");
     ctx.emitter.instruction(&format!("b {}", done));                            // skip tag-7 inspection after boxing a concrete payload
     ctx.emitter.label(&inspect_tagged_box);
+    ctx.emitter.instruction("ldr x9, [x3]");                                    // inspect boxed hash entries for array-reference markers
+    emit_branch_if_invoker_ref_cell_tag(ctx, "x9", &ref_marker);
     box_tagged_hash_payload_as_mixed_aarch64(ctx);
+    abi::emit_jump(ctx.emitter, &after_tagged_box);
+    ctx.emitter.label(&ref_marker);
+    emit_box_loaded_invoker_ref_cell_value_as_mixed(ctx, "x3");
+    ctx.emitter.label(&after_tagged_box);
     ctx.emitter.label(&done);
 }
 
@@ -2460,21 +2664,29 @@ fn box_tagged_hash_payload_as_mixed_aarch64(ctx: &mut FunctionContext<'_>) {
     emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Iterable);
     ctx.emitter.instruction(&format!("b {}", done));                            // skip the existing Mixed retention path
     ctx.emitter.label(&reuse_box);
-    ctx.emitter.instruction("ldr x0, [sp], #16");                               // restore the existing Mixed box before retaining it
-    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    ctx.emitter.instruction("ldr x0, [sp], #16");                               // restore the existing Mixed box before detaching it
+    emit_detach_hash_value_box(ctx);
     ctx.emitter.label(&done);
 }
 
 /// Boxes or retains an x86_64 hash payload as an owned `Mixed` value.
 fn box_hash_payload_as_mixed_x86_64(ctx: &mut FunctionContext<'_>) {
     let inspect_tagged_box = ctx.next_label("iter_hash_value_inspect_box");
+    let ref_marker = ctx.next_label("iter_hash_value_ref_marker");
+    let after_tagged_box = ctx.next_label("iter_hash_value_after_tagged_box");
     let done = ctx.next_label("iter_hash_value_boxed");
     ctx.emitter.instruction("cmp r9, 7");                                       // does the hash entry use the Mixed-or-iterable runtime tag?
     ctx.emitter.instruction(&format!("je {}", inspect_tagged_box));             // inspect tag-7 payloads because iterable hashes also use that tag
     emit_box_runtime_payload_as_mixed(ctx.emitter, "r9", "rcx", "r8");
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip tag-7 inspection after boxing a concrete payload
     ctx.emitter.label(&inspect_tagged_box);
+    ctx.emitter.instruction("mov r11, QWORD PTR [rcx]");                        // inspect boxed hash entries for array-reference markers
+    emit_branch_if_invoker_ref_cell_tag(ctx, "r11", &ref_marker);
     box_tagged_hash_payload_as_mixed_x86_64(ctx);
+    abi::emit_jump(ctx.emitter, &after_tagged_box);
+    ctx.emitter.label(&ref_marker);
+    emit_box_loaded_invoker_ref_cell_value_as_mixed(ctx, "rcx");
+    ctx.emitter.label(&after_tagged_box);
     ctx.emitter.label(&done);
 }
 
@@ -2492,8 +2704,24 @@ fn box_tagged_hash_payload_as_mixed_x86_64(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the existing Mixed retention path
     ctx.emitter.label(&reuse_box);
     abi::emit_pop_reg(ctx.emitter, "rax");
-    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    emit_detach_hash_value_box(ctx);
     ctx.emitter.label(&done);
+}
+
+/// Re-boxes the hash slot's own Mixed cell (in the result register) into a fresh cell.
+///
+/// Retaining the slot's cell made the by-value binding an ALIAS of it: `foreach ($all as $tags)
+/// { $tags[0] = 'W'; }` wrote into `$all`, and so did every nested write through `$tags`.
+/// Symfony's `CachePoolPass` iterates `findTaggedServiceIds()` exactly like that and unsets tag
+/// attributes on its copy, which emptied the definitions' own tags. A fresh cell retains the
+/// payload, so the payload is visibly shared and the first write separates it -- the detach the
+/// indexed path already does (`indexed_iter_value_needs_detached_cell`).
+fn emit_detach_hash_value_box(ctx: &mut FunctionContext<'_>) {
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rsi, rdx");                                // adapt the unboxed high payload word to the boxing helper ABI
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
 }
 
 /// Loads a runtime-typed AArch64 indexed-array element and returns it as an owned `Mixed` box.
@@ -2503,7 +2731,9 @@ fn load_current_dynamic_indexed_value_as_mixed_aarch64(
 ) {
     let string_case = ctx.next_label("iter_dynamic_indexed_string");
     let loaded = ctx.next_label("iter_dynamic_indexed_loaded");
+    let box_value = ctx.next_label("iter_dynamic_indexed_box");
     let reuse_box = ctx.next_label("iter_dynamic_indexed_reuse_box");
+    let ref_marker = ctx.next_label("iter_dynamic_indexed_ref_marker");
     let done = ctx.next_label("iter_dynamic_indexed_done");
     abi::load_at_offset_scratch(ctx.emitter, "x11", offset - ITER_SOURCE_OFFSET_DELTA, "x9");
     abi::load_at_offset(ctx.emitter, "x0", offset - ITER_CURSOR_OFFSET_DELTA);
@@ -2526,12 +2756,23 @@ fn load_current_dynamic_indexed_value_as_mixed_aarch64(
 
     ctx.emitter.label(&loaded);
     ctx.emitter.instruction("cmp x5, #7");                                      // does the slot already hold a boxed Mixed value?
-    ctx.emitter.instruction(&format!("b.eq {}", reuse_box));                    // retain existing Mixed boxes instead of nesting them
+    ctx.emitter.instruction(&format!("b.ne {}", box_value));                    // concrete slots need ordinary boxing
+    ctx.emitter.instruction("ldr x9, [x3]");                                    // inspect a boxed value for an array-reference marker
+    emit_branch_if_invoker_ref_cell_tag(ctx, "x9", &ref_marker);
+    abi::emit_jump(ctx.emitter, &reuse_box);                                     // detach ordinary boxed Mixed values into the binding's own cell
+
+    ctx.emitter.label(&box_value);
     emit_box_runtime_payload_as_mixed(ctx.emitter, "x5", "x3", "x4");
     ctx.emitter.instruction(&format!("b {}", done));                            // skip the existing-box retention path
+
+    ctx.emitter.label(&ref_marker);
+    emit_box_loaded_invoker_ref_cell_value_as_mixed(ctx, "x3");
+    ctx.emitter.instruction(&format!("b {}", done));                            // expose the referenced PHP value, not its internal marker
+
     ctx.emitter.label(&reuse_box);
-    ctx.emitter.instruction("mov x0, x3");                                      // pass the existing Mixed box to the retain helper
-    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    ctx.emitter.instruction("mov x0, x3");                                      // pass the array's own boxed cell to the detaching pair
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");                      // expose the tag and payload words the re-box consumes
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");                 // a by-value binding gets its OWN cell, never the array's
     ctx.emitter.label(&done);
 }
 
@@ -2542,7 +2783,9 @@ fn load_current_dynamic_indexed_value_as_mixed_x86_64(
 ) {
     let string_case = ctx.next_label("iter_dynamic_indexed_string");
     let loaded = ctx.next_label("iter_dynamic_indexed_loaded");
+    let box_value = ctx.next_label("iter_dynamic_indexed_box");
     let reuse_box = ctx.next_label("iter_dynamic_indexed_reuse_box");
+    let ref_marker = ctx.next_label("iter_dynamic_indexed_ref_marker");
     let done = ctx.next_label("iter_dynamic_indexed_done");
     abi::load_at_offset(ctx.emitter, "r11", offset - ITER_SOURCE_OFFSET_DELTA);
     abi::load_at_offset(ctx.emitter, "r10", offset - ITER_CURSOR_OFFSET_DELTA);
@@ -2565,12 +2808,24 @@ fn load_current_dynamic_indexed_value_as_mixed_x86_64(
 
     ctx.emitter.label(&loaded);
     ctx.emitter.instruction("cmp r9, 7");                                       // does the slot already hold a boxed Mixed value?
-    ctx.emitter.instruction(&format!("je {}", reuse_box));                      // retain existing Mixed boxes instead of nesting them
+    ctx.emitter.instruction(&format!("jne {}", box_value));                     // concrete slots need ordinary boxing
+    ctx.emitter.instruction("mov r11, QWORD PTR [rcx]");                        // inspect a boxed value for an array-reference marker
+    emit_branch_if_invoker_ref_cell_tag(ctx, "r11", &ref_marker);
+    abi::emit_jump(ctx.emitter, &reuse_box);                                     // detach ordinary boxed Mixed values into the binding's own cell
+
+    ctx.emitter.label(&box_value);
     emit_box_runtime_payload_as_mixed(ctx.emitter, "r9", "rcx", "r8");
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the existing-box retention path
+
+    ctx.emitter.label(&ref_marker);
+    emit_box_loaded_invoker_ref_cell_value_as_mixed(ctx, "rcx");
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // expose the referenced PHP value, not its internal marker
+
     ctx.emitter.label(&reuse_box);
-    ctx.emitter.instruction("mov rax, rcx");                                    // pass the existing Mixed box to the retain helper
-    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    ctx.emitter.instruction("mov rax, rcx");                                    // pass the array's own boxed cell to the detaching pair
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");                      // expose the tag and payload words the re-box consumes
+    ctx.emitter.instruction("mov rsi, rdx");                                    // adapt the unboxed high payload word to the boxing helper ABI
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");                 // a by-value binding gets its OWN cell, never the array's
     ctx.emitter.label(&done);
 }
 
@@ -2805,7 +3060,11 @@ fn iterator_source_kind_from_type(
                 Ok(IteratorSourceKind::Indexed { elem: elem_repr })
             }
         }
-        PhpType::AssocArray { .. } => Ok(IteratorSourceKind::Hash),
+        // Array-producing APIs can preserve an associative checker shape while returning a
+        // compact indexed array at runtime (for example `array_unique()` followed by `sort()`).
+        // Dispatch on the actual heap kind so a stale shape never treats an indexed data pointer
+        // as a hash insertion-order slot.
+        PhpType::AssocArray { .. } => Ok(IteratorSourceKind::DynamicIterable),
         PhpType::Iterable => Ok(IteratorSourceKind::DynamicIterable),
         PhpType::Mixed | PhpType::Union(_) => Ok(IteratorSourceKind::DynamicMixed),
         PhpType::Object(class_name) => {
@@ -2837,6 +3096,13 @@ fn object_iterator_source(
     ctx: &FunctionContext<'_>,
     class_name: &str,
 ) -> IteratorSourceKind {
+    let normalized = class_name.trim_start_matches('\\');
+    if normalized.eq_ignore_ascii_case("Traversable")
+        || (interface_extends_interface(ctx, normalized, "Traversable")
+            && !interface_extends_interface(ctx, normalized, "Iterator"))
+    {
+        return IteratorSourceKind::DynamicIterable;
+    }
     if ctx.module.interface_infos.contains_key(class_name) {
         if class_name == "Iterator" || interface_extends_interface(ctx, class_name, "Iterator") {
             return IteratorSourceKind::Interface {
@@ -2972,3 +3238,4 @@ mod tests {
         assert_eq!(require_get_iterator_owner(Some(slot)).unwrap(), slot);
     }
 }
+

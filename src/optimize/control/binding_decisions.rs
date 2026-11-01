@@ -94,7 +94,7 @@ fn stmt_carries_decision(stmt: &Stmt) -> bool {
         StmtKind::Include { path, once: _, required: _ } => expr_carries_decision(path),
         StmtKind::Synthetic(body)
         | StmtKind::NamespaceBlock { name: _, body }
-        | StmtKind::IncludeOnceGuard { label: _, body } => stmts_carry_decision(body),
+        | StmtKind::IncludeOnceGuard { body, .. } => stmts_carry_decision(body),
         StmtKind::While { condition, body } | StmtKind::DoWhile { body, condition } => {
             expr_carries_decision(condition) || stmts_carry_decision(body)
         }
@@ -135,12 +135,29 @@ fn stmt_carries_decision(stmt: &Stmt) -> bool {
                 })
                 || finally_body.as_ref().is_some_and(|body| stmts_carry_decision(body))
         }
+        StmtKind::PropertyRefAssign { object, property: _, source } => {
+            expr_carries_decision(object) || expr_carries_decision(source)
+        }
+        StmtKind::StaticPropertyElementRefAssign { receiver: _, property: _, index, source } => {
+            expr_carries_decision(index) || expr_carries_decision(source)
+        }
+        StmtKind::DynamicStaticPropertyWrite {
+            receiver: _,
+            property,
+            index,
+            append: _,
+            value,
+        } => {
+            expr_carries_decision(property)
+                || index.as_ref().is_some_and(expr_carries_decision)
+                || expr_carries_decision(value)
+        }
         StmtKind::FunctionVariantGroup { name: _, variants: _ }
         | StmtKind::FunctionVariantMark { name: _, variant: _ }
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
         | StmtKind::Global { vars: _ }
-        | StmtKind::IncludeOnceMark { label: _ }
+        | StmtKind::IncludeOnceMark { .. }
         | StmtKind::NamespaceDecl { name: _ }
         | StmtKind::UseDecl { imports: _ }
         | StmtKind::FunctionDecl { .. }
@@ -151,6 +168,7 @@ fn stmt_carries_decision(stmt: &Stmt) -> bool {
         | StmtKind::TraitDecl { .. }
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ClassLikeActivate { .. }
         | StmtKind::ExternGlobalDecl { .. } => false,
     }
 }
@@ -291,6 +309,13 @@ fn expr_carries_decision(expr: &Expr) -> bool {
             CallableTarget::Method { object, method: _ } => expr_carries_decision(object),
             _ => false,
         },
+        ExprKind::ArrayReference(inner) => expr_carries_decision(inner),
+        ExprKind::DynamicStaticPropertyAccess { receiver: _, property } => {
+            expr_carries_decision(property)
+        }
+        ExprKind::DynamicScopedConstantAccess { receiver, name: _ } => {
+            expr_carries_decision(receiver)
+        }
         ExprKind::Variable(_)
         | ExprKind::PreIncrement(_)
         | ExprKind::PostIncrement(_)

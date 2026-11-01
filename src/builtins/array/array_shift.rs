@@ -46,6 +46,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     match ty {
         PhpType::Array(elem) => Ok(crate::types::pointer_element_read_type(*elem)),
         PhpType::AssocArray { value, .. } => Ok(crate::types::pointer_element_read_type(*value)),
+        PhpType::Mixed | PhpType::Union(_) => Ok(PhpType::Mixed),
         ty if ty.is_php_array() => Ok(PhpType::Mixed),
         _ => Err(CompileError::new(cx.span, "array_shift() argument must be array")),
     }

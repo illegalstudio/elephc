@@ -2,7 +2,7 @@
 title: "random_bytes() - internals"
 description: "Compiler internals for random_bytes(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 660
+  order: 673
 ---
 
 ## `random_bytes()` - internals

@@ -44,3 +44,5 @@ mod nested_arrays;
 mod nullable_dispatch;
 #[path = "objects/mixed_sourced_typed_param_limitation.rs"]
 mod mixed_sourced_typed_param_limitation;
+#[path = "objects/private_property_shadowing.rs"]
+mod private_property_shadowing;

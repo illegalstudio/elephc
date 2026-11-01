@@ -466,6 +466,29 @@ Known divergences:
 - **Inside `eval()`**, `hash_init()` still returns a resource: the eval interpreter has
   its own hashing implementation that has not been moved to the object model.
 
+### Password hashing
+
+`password_hash()`, `password_verify()`, `password_needs_rehash()`,
+`password_get_info()` and `password_algos()` are available in compiled code, with
+`PASSWORD_DEFAULT`, `PASSWORD_BCRYPT` (both `"2y"`) and
+`PASSWORD_BCRYPT_DEFAULT_COST` (`12`, php 8.4's default). They are declared by a
+prelude over the pure-Rust `elephc-crypto` bridge and injected only when a program
+names them.
+
+```php
+<?php
+$hash = password_hash("kitten", PASSWORD_DEFAULT);   // "$2y$12$..."
+var_dump(password_verify("kitten", $hash));          // bool(true)
+var_dump(password_get_info($hash)["algoName"]);      // string(6) "bcrypt"
+```
+
+- The algorithm is **bcrypt only**. Hashes php produced (`$2y$`, and the
+  `$2a$`/`$2b$`/`$2x$` spellings) verify; an Argon2 hash verifies as `false`, and
+  `PASSWORD_ARGON2I`/`PASSWORD_ARGON2ID` are undefined, which is how php reports a
+  build without libargon2. Asking `password_hash()` for another algorithm throws
+  php's `ValueError`, as does a bcrypt cost outside 4–31.
+- Not yet available inside `eval()` or to classes the runtime interprets.
+
 ### Symmetric encryption (OpenSSL-compatible)
 
 elephc implements `openssl_encrypt()`, `openssl_decrypt()`,

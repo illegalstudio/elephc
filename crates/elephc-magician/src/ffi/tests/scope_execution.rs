@@ -111,6 +111,30 @@ fn scope_set_get_round_trips_cell_and_flags() {
     assert_eq!(out_flags & SCOPE_FLAG_OWNED, SCOPE_FLAG_OWNED);
 }
 
+#[test]
+fn scope_native_binding_flags_roundtrip_and_plain_replacement_clears_them() {
+    use crate::abi::{SCOPE_FLAG_NATIVE_GLOBAL, SCOPE_FLAG_NATIVE_REF};
+    let scope = __elephc_eval_scope_new();
+    let name = b"x";
+    let cell = 1usize as *mut RuntimeCell;
+    let mut thrown = std::ptr::null_mut();
+    for binding in [SCOPE_FLAG_NATIVE_REF, SCOPE_FLAG_NATIVE_GLOBAL, 0] {
+        let mut actual = std::ptr::null_mut();
+        let mut flags = 0;
+        unsafe {
+            assert_eq!(crate::ffi::scope::__elephc_eval_scope_bind_native(scope, name.as_ptr(), 1, cell, binding, &mut thrown), EvalStatus::Ok.code());
+            assert_eq!(__elephc_eval_scope_get(scope, name.as_ptr(), 1, &mut actual, &mut flags), EvalStatus::Ok.code());
+        }
+        assert_eq!(actual, cell);
+        assert_eq!(flags & (SCOPE_FLAG_NATIVE_REF | SCOPE_FLAG_NATIVE_GLOBAL), binding);
+    }
+    unsafe {
+        assert_eq!(__elephc_eval_scope_set(scope, name.as_ptr(), 1, cell,
+            SCOPE_FLAG_NATIVE_REF | SCOPE_FLAG_NATIVE_GLOBAL, &mut thrown), EvalStatus::RuntimeFatal.code());
+        __elephc_eval_scope_free(scope);
+    }
+}
+
 /// Verifies the alias ABI maps a local eval variable to a global name.
 #[test]
 fn scope_mark_global_alias_records_target_name() {

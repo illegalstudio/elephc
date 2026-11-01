@@ -9,7 +9,14 @@
 //! - EIR is the compiler's codegen contract for emitted user assembly.
 //! - `crate::codegen_support` owns shared target, runtime, ABI, and metadata helpers.
 
+mod aarch64_relax;
+mod user_assembly;
+pub use user_assembly::UserAssembly;
 mod block_emit;
+pub(crate) use block_emit::static_property_owner_body;
+pub use block_emit::print_op_stats;
+mod classlike_activation;
+mod source_units;
 mod block_layout;
 pub use block_emit::generic_body_sharing_oracle;
 pub(crate) mod callable_reachability;
@@ -17,9 +24,13 @@ mod callable_signatures;
 mod const_default_values;
 mod constant_materialization;
 pub(crate) mod context;
+#[cfg(test)]
+pub(crate) use context::NUMERIC_FALLBACK_QUERIES;
 mod enum_singletons;
+mod eval_boxed_callable_helper;
 mod eval_callable_helpers;
 mod eval_class_constant_helpers;
+mod class_id_dispatch;
 mod eval_argument_helpers;
 mod eval_constructor_helpers;
 mod eval_error_handler_helpers;
@@ -41,6 +52,8 @@ mod literal_method_index;
 mod local_analysis;
 mod mbstring_configuration;
 pub(crate) mod lower_inst;
+#[cfg(test)]
+pub(crate) use lower_inst::callables::INSTANCE_TARGET_BUILDS;
 mod lower_term;
 mod machine_peephole;
 mod parallel_moves;
@@ -51,7 +64,13 @@ mod runtime_metadata;
 mod return_ownership;
 mod shared_count_guard;
 mod shared_helper;
+mod shared_mixed_callable;
 mod shared_mixed_string;
+mod shared_null_method_trace;
+mod shared_static_throw;
+mod shared_type_error_given;
+mod shared_eval_status;
+mod shared_reflection;
 mod shared_mbstring_callable;
 mod shared_state;
 pub(crate) mod stack_guard;
@@ -103,6 +122,8 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::exports::ExportedFunction;
 use crate::ir::Module;
+use crate::names::php_symbol_key;
+use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 /// Which PHP functions carry `--instrument` hooks.
@@ -217,13 +238,58 @@ impl WebIsolation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodegenIrError {
     message: String,
+    /// Optional source location attached by the block walker.
+    location: Option<String>,
+    /// Set only by the codegen worker's deferral watch: not a fault, a request to re-emit this
+    /// body on the serial pass. It survives `at()` because the abort happens inside a block.
+    deferred: bool,
+    /// Every body the backend inventory could not lower, by EIR function name. Empty unless the
+    /// inventory ran (`ELEPHC_BACKEND_INVENTORY=1` or [`collect_backend_refusals`]).
+    failed_bodies: Vec<(String, String)>,
+    /// The deferrable unit this refusal belongs to when it is not the body being emitted.
+    ///
+    /// Static-property defaults are written by the entry program's prologue, so a refused
+    /// initializer surfaced as a `main` failure, which no runtime autoloader can supply, and the
+    /// whole build stopped. Naming the property (`Class::$prop`) lets the inventory record the
+    /// refusal against the declaring class's file, which the deferral round hands back.
+    owner_body: Option<String>,
+}
+
+/// Whether the backend scans every body and reports all refusals together, set by the pipeline
+/// when refused bodies can be handed to the runtime (see `pipeline::backend`).
+static COLLECT_BACKEND_REFUSALS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Makes the backend collect every refused body instead of stopping at the first one.
+pub(crate) fn collect_backend_refusals(enabled: bool) {
+    COLLECT_BACKEND_REFUSALS.store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Returns whether the pipeline asked the backend to collect every refused body.
+pub(crate) fn collects_backend_refusals() -> bool {
+    COLLECT_BACKEND_REFUSALS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 impl CodegenIrError {
+    /// Creates an error for a failed file operation of the code generator itself.
+    fn io(context: &str, error: std::io::Error) -> Self {
+        Self {
+            message: format!("{context}: {error}"),
+            location: None,
+            deferred: false,
+            failed_bodies: Vec::new(),
+            owner_body: None,
+        }
+    }
+
     /// Creates an error for an EIR shape that is malformed or missing required metadata.
     pub(super) fn invalid_module(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            location: None,
+            deferred: false,
+            failed_bodies: Vec::new(),
+            owner_body: None,
         }
     }
 
@@ -231,6 +297,10 @@ impl CodegenIrError {
     pub(super) fn unsupported(message: impl Into<String>) -> Self {
         Self {
             message: format!("unsupported EIR backend feature: {}", message.into()),
+            location: None,
+            deferred: false,
+            failed_bodies: Vec::new(),
+            owner_body: None,
         }
     }
 
@@ -238,14 +308,73 @@ impl CodegenIrError {
     pub(super) fn missing_entry(kind: &str, raw: u32) -> Self {
         Self {
             message: format!("EIR backend missing {} with id {}", kind, raw),
+            location: None,
+            deferred: false,
+            failed_bodies: Vec::new(),
+            owner_body: None,
         }
+    }
+
+    /// Attaches the innermost known source location to this backend error.
+    pub(super) fn at(mut self, location: impl Into<String>) -> Self {
+        self.location.get_or_insert_with(|| location.into());
+        self
+    }
+
+    /// Returns the location-free cause used to group inventory failures.
+    pub(super) fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// Stops a body a codegen worker is going to discard anyway.
+    ///
+    /// A worker cannot emit a body that reaches a shared cache, because the helper behind that
+    /// cache belongs to the module once and the worker cannot know whether another worker is
+    /// emitting it too. That was discovered by emitting the WHOLE body and then rolling it back:
+    /// on the Symfony module, 2 101 439 143 of 2 398 603 000 bytes — 87.6% — were emitted twice,
+    /// once into a worker that threw them away and once into the serial pass. Stopping at the
+    /// instruction that touched the cache leaves the same set of bodies deferred and throws away
+    /// a prefix instead of a body.
+    pub(super) fn deferred_body() -> Self {
+        Self {
+            message: "codegen body deferred to the serial pass".to_string(),
+            location: None,
+            deferred: true,
+            failed_bodies: Vec::new(),
+            owner_body: None,
+        }
+    }
+
+    /// Returns whether this is the deferral signal rather than a backend fault.
+    pub(super) fn is_deferred_body(&self) -> bool {
+        self.deferred
+    }
+
+    /// Attributes this refusal to a deferrable unit other than the body being emitted.
+    pub(super) fn owned_by(mut self, owner_body: impl Into<String>) -> Self {
+        self.owner_body.get_or_insert_with(|| owner_body.into());
+        self
+    }
+
+    /// Returns the unit the inventory records this refusal against, when not the emitted body.
+    pub(super) fn owner_body(&self) -> Option<&str> {
+        self.owner_body.as_deref()
+    }
+
+    /// Returns the EIR function names the backend inventory could not lower.
+    pub(crate) fn failed_bodies(&self) -> &[(String, String)] {
+        &self.failed_bodies
     }
 }
 
 impl fmt::Display for CodegenIrError {
     /// Formats the backend error for CLI diagnostics.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.message)
+        formatter.write_str(&self.message)?;
+        match &self.location {
+            Some(location) => write!(formatter, " ({})", location),
+            None => Ok(()),
+        }
     }
 }
 
@@ -278,7 +407,9 @@ pub fn generate_user_asm_from_ir(
         true,
         false,
         WebIsolation::Worker,
+        None,
     )
+    .map(UserAssembly::into_string)
 }
 
 /// Generates user-code assembly from EIR using the same artifact options as the CLI pipeline.
@@ -304,7 +435,8 @@ pub fn generate_user_asm_from_ir_with_options(
     regalloc_linear: bool,
     web: bool,
     web_isolation: WebIsolation,
-) -> Result<String> {
+    spill_path: Option<&std::path::Path>,
+) -> Result<UserAssembly> {
     generate_user_asm_from_ir_with_options_and_features(
         module,
         gc_stats,
@@ -318,14 +450,15 @@ pub fn generate_user_asm_from_ir_with_options(
         regalloc_linear,
         web,
         web_isolation,
+        spill_path,
     )
     .map(|output| output.asm)
 }
 
 /// User assembly together with runtime dependencies introduced by synthetic codegen wrappers.
 pub struct GeneratedUserAsm {
-    /// Complete target assembly for the user object.
-    pub asm: String,
+    /// Complete target assembly for the user object (possibly spilled to disk while emitting).
+    pub asm: UserAssembly,
     /// Whether generated wrappers reference native error or exception handler state.
     pub handler_state: bool,
     /// Whether generated wrappers reference the native boxed object clone adapter.
@@ -347,6 +480,7 @@ pub fn generate_user_asm_from_ir_with_options_and_features(
     regalloc_linear: bool,
     web: bool,
     web_isolation: WebIsolation,
+    spill_path: Option<&std::path::Path>,
 ) -> Result<GeneratedUserAsm> {
     let mut emitter = match emit {
         Emit::Cdylib | Emit::Phpext => Emitter::new_cdylib(module.target),
@@ -356,6 +490,11 @@ pub fn generate_user_asm_from_ir_with_options_and_features(
         Emit::Staticlib => Emitter::new_staticlib(module.target),
         Emit::Executable => Emitter::new(module.target),
     };
+    if let Some(path) = spill_path {
+        emitter
+            .enable_spill(path)
+            .map_err(|error| CodegenIrError::io("cannot create the assembly spill file", error))?;
+    }
     // User bodies can contain host-boundary notifications in addition to the separately
     // generated runtime object, so they need the output profile before EIR lowering begins.
     emitter.phpext_output = emit == Emit::Phpext;
@@ -406,13 +545,7 @@ fn finalize_user_asm(
     let emit_eval_reflection_metadata =
         eval_bridge || module.required_runtime_features.eval_scope;
     if eval_bridge {
-        eval_property_helpers::emit_eval_property_helpers(module, &mut emitter, &mut data);
         eval_static_property_helpers::emit_eval_static_property_helpers(
-            module,
-            &mut emitter,
-            &mut data,
-        );
-        eval_class_constant_helpers::emit_eval_class_constant_helpers(
             module,
             &mut emitter,
             &mut data,
@@ -432,6 +565,7 @@ fn finalize_user_asm(
             regalloc_linear,
         )?;
     }
+    eval_class_constant_helpers::emit_eval_class_constant_helpers(module, &mut emitter, &mut data);
     let eval_callable_support_needed =
         eval_bridge && eval_callable_helpers::module_needs_eval_callable_descriptor_support(module);
     let eval_callable_support = eval_callable_helpers::emit_eval_callable_descriptor_support(
@@ -439,8 +573,18 @@ fn finalize_user_asm(
         &mut emitter,
         &mut data,
         eval_callable_support_needed,
+        eval_bridge,
     );
     if eval_bridge {
+        eval_boxed_callable_helper::emit_eval_boxed_callable_descriptor_helper(&mut emitter, &mut data);
+        // After the callable support: a `\Closure`-typed property slot converts the boxed eval
+        // callback into a descriptor with the same cast a `callable` parameter uses.
+        eval_property_helpers::emit_eval_property_helpers(
+            module,
+            &mut emitter,
+            &mut data,
+            &eval_callable_support,
+        );
         eval_error_handler_helpers::emit_eval_error_handler_helpers(
             module,
             &mut emitter,
@@ -485,9 +629,13 @@ fn finalize_user_asm(
     let user_functions = runtime_user_function_sigs(module);
     let function_variant_groups = runtime_function_variant_groups(module);
     let mut allowed_class_names = runtime_referenced_class_names(module);
+    // `get_class_methods()` resolves a class NAME through `__rt_class_id_by_name`, which scans
+    // `_classes_by_name`; a class the program only names there (`get_class_methods(C::class)`)
+    // is otherwise trimmed from that table and the call answered php's TypeError.
     if module_uses_dynamic_callable_lookup(module)
         || module_uses_unserialize(module)
         || module.required_runtime_features.eval_bridge
+        || module.required_runtime_features.class_methods_introspection
     {
         allowed_class_names.extend(module.class_infos.keys().cloned());
     }
@@ -536,6 +684,7 @@ fn finalize_user_asm(
         &module.trait_table.names,
         &module.declared_trait_uses,
         &module.declared_trait_source_lines,
+        &module.declared_class_source_files,
         &runtime_classes,
         &module.enum_infos,
         &property_initializer_ids,
@@ -552,14 +701,95 @@ fn finalize_user_asm(
     )
     .map_err(CodegenIrError::invalid_module)?;
 
+    let activation_names = classlike_activation::collect_activation_registry_names(module);
+    if module.required_runtime_features.class_introspection {
+        for name in &activation_names.interfaces {
+            data.add_comm(
+                crate::names::classlike_activation_symbol(
+                    crate::parser::ast::ClassLikeKind::Interface,
+                    name,
+                ),
+                8,
+            );
+        }
+    }
+
     let data_output = data.emit(module.target);
-    let mut user_asm = emitter.output();
+    // The emitted text is the whole program (1.5 GB on the Symfony build). Everything below is
+    // appended to a separate, small tail: pushing it onto the text reallocated that buffer, and
+    // the realloc briefly held two copies of it.
+    let (spilled, text) = emitter
+        .finish()
+        .map_err(|error| CodegenIrError::io("cannot spill the user assembly to disk", error))?;
+    let mut user_asm = String::new();
     if !data_output.is_empty() {
         user_asm.push('\n');
         user_asm.push_str(&data_output);
     }
     user_asm.push('\n');
     user_asm.push_str(&user_data);
+    if module.required_runtime_features.const_introspection {
+        let const_registry = scalar_const_registry(module);
+        let mut enum_names: Vec<String> = module
+            .enum_infos
+            .keys()
+            .map(|name| name.trim_start_matches('\\').to_string())
+            .collect();
+        enum_names.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+        let error_class_id = runtime_classes
+            .get("Error")
+            .map(|info| info.class_id)
+            .unwrap_or(u64::MAX);
+        user_asm.push('\n');
+        user_asm.push_str(&runtime::emit_const_registry_data(
+            &const_registry,
+            &enum_names,
+            error_class_id,
+        ));
+    }
+    if module.required_runtime_features.class_introspection {
+        let class_names = sorted_lowercased_registry_names(
+            module
+                .class_infos
+                .keys()
+                .filter(|name| !is_internal_synthetic_class_name(name)),
+        );
+        let interface_names = sorted_lowercased_registry_names(module.interface_infos.keys());
+        let trait_names = sorted_lowercased_registry_names(module.trait_table.names.iter());
+        user_asm.push('\n');
+        user_asm.push_str(&runtime::emit_class_registry_data(
+            &class_names,
+            &interface_names,
+            &trait_names,
+            &activation_names.interfaces,
+        ));
+    } else if module.required_runtime_features.eval_bridge {
+        // Eval-owned interface declarations are visible through the same
+        // request-active registry as AOT declarations. The eval bridge can
+        // call its interface lookup helper without an AOT class-introspection
+        // expression; emit only the two tables that helper needs.
+        let interface_names = sorted_lowercased_registry_names(module.interface_infos.keys());
+        user_asm.push('\n');
+        user_asm.push_str(&runtime::emit_interface_registry_data(
+            &interface_names,
+            &activation_names.interfaces,
+        ));
+    }
+    if module.required_runtime_features.class_relation_introspection {
+        user_asm.push('\n');
+        user_asm.push_str(&runtime::emit_class_relation_registry_data(module));
+    }
+    if module.required_runtime_features.class_methods_introspection {
+        user_asm.push('\n');
+        user_asm.push_str(&runtime::emit_class_methods_registry_data(module));
+        user_asm.push('\n');
+        user_asm.push_str(&runtime::emit_member_exists_registry_data(module));
+    }
+    // The late passes read the spilled prefix through a clean, file-backed mapping.
+    let prefix = user_assembly::PrefixView::open(spilled.as_ref())
+        .map_err(|error| CodegenIrError::io("cannot read the spilled user assembly", error))?;
+    let edits =
+        aarch64_relax::conditional_branch_relaxations(&[prefix.as_str(), &text], module.target);
     let mut exported: HashSet<String> = exported_functions
         .values()
         .map(|export| module.target.extern_symbol(&export.c_name))
@@ -595,13 +825,17 @@ fn finalize_user_asm(
         &[]
     };
     let generated_runtime_features = shared.generated_runtime_features();
+    let footer = crate::codegen::visibility::hidden_directives_suffix(
+        &[prefix.as_str(), &text, &user_asm],
+        &exported,
+        module.target.platform,
+        additional_internal,
+    );
+    drop(prefix);
+    let mut suffix = user_asm;
+    suffix.push_str(&footer);
     Ok(GeneratedUserAsm {
-        asm: crate::codegen::visibility::append_hidden_directives_with_extras(
-            &user_asm,
-            &exported,
-            module.target.platform,
-            additional_internal,
-        ),
+        asm: UserAssembly::new(spilled, text, edits, suffix),
         handler_state: generated_runtime_features.handler_state,
         object_clone: generated_runtime_features.object_clone,
     })
@@ -651,4 +885,39 @@ mod instrumentation_tests {
         assert!(Instrumentation::All.is_on());
         assert!(Instrumentation::Only(vec!["a".to_string()]).is_on());
     }
+}
+
+/// Builds the deterministic scalar subset used by runtime constant lookup.
+fn scalar_const_registry(module: &Module) -> Vec<(String, crate::ir::ConstScalar)> {
+    let mut registry = module
+        .global_constants
+        .iter()
+        .filter_map(|(name, (value, _))| {
+            let scalar = match value {
+                ExprKind::IntLiteral(value) => crate::ir::ConstScalar::Int(*value),
+                ExprKind::FloatLiteral(value) => crate::ir::ConstScalar::Float(*value),
+                ExprKind::BoolLiteral(value) => crate::ir::ConstScalar::Bool(*value),
+                ExprKind::StringLiteral(value) => crate::ir::ConstScalar::Str(value.clone()),
+                ExprKind::Null => crate::ir::ConstScalar::Null,
+                _ => return None,
+            };
+            Some((name.trim_start_matches('\\').to_string(), scalar))
+        })
+        .collect::<Vec<_>>();
+    registry.sort_by(|(left, _), (right, _)| left.as_bytes().cmp(right.as_bytes()));
+    registry
+}
+
+/// Normalizes registry names to the lowercased sorted runtime-search representation.
+fn sorted_lowercased_registry_names<'a>(names: impl Iterator<Item = &'a String>) -> Vec<String> {
+    let mut normalized = names
+        .map(|name| php_symbol_key(name.trim_start_matches('\\')))
+        .collect::<Vec<_>>();
+    normalized.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+    normalized
+}
+
+/// Returns true for compiler-internal classes hidden from PHP class lookup.
+fn is_internal_synthetic_class_name(name: &str) -> bool {
+    php_symbol_key(name).starts_with("__elephc")
 }

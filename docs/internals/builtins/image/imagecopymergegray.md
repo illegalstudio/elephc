@@ -2,7 +2,7 @@
 title: "imagecopymergegray() - internals"
 description: "Compiler internals for imagecopymergegray(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 492
+  order: 505
 ---
 
 ## `imagecopymergegray()` - internals

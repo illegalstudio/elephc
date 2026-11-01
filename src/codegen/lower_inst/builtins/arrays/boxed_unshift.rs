@@ -161,9 +161,11 @@ fn validate_receiver(ctx: &mut FunctionContext<'_>, array: ValueId) -> Result<()
             ctx.emitter.instruction(&format!("jbe {valid}"));                   // both array layouts use the checked merge path
         }
     }
-    crate::codegen::lower_inst::exceptions::emit_type_error(
-        ctx, "array_unshift(): Argument #1 ($array) must be of type array",
-    );
+    // php names what it was given: "..., ArrayIterator given" for an `iterable` holding one.
+    let wrong_tag = ctx.next_label("array_unshift_boxed_wrong_tag");
+    super::union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(ctx, &wrong_tag, &|given| {
+        format!("array_unshift(): Argument #1 ($array) must be of type array, {given} given")
+    });
     ctx.emitter.label(&valid);
     Ok(())
 }

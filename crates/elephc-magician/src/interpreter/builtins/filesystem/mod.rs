@@ -77,6 +77,11 @@ mod pathinfo;
 mod pclose;
 mod pfsockopen;
 mod popen;
+mod proc_close;
+mod proc_get_status;
+mod proc_nice;
+mod proc_open;
+mod proc_terminate;
 mod readdir;
 mod readfile;
 mod readline;
@@ -165,6 +170,7 @@ pub(in crate::interpreter) use user_wrapper_streams::*;
 pub(in crate::interpreter) use direct_dispatch::eval_builtin_filesystem_call;
 pub(in crate::interpreter) use values_dispatch::eval_filesystem_values_result;
 pub(in crate::interpreter) use flock::{eval_builtin_flock, eval_flock_result};
+pub(in crate::interpreter) use proc_open::eval_builtin_proc_open_call;
 pub(in crate::interpreter) use fsockopen::{
     eval_builtin_fsockopen_call, eval_fsockopen_with_error_result,
 };
@@ -174,6 +180,7 @@ pub(in crate::interpreter) use stream_select::{
 pub(in crate::interpreter) use stream_socket_accept::{
     eval_builtin_stream_socket_accept_call, eval_stream_socket_accept_with_peer_result,
 };
+pub(in crate::interpreter) use stream_socket_client::eval_builtin_stream_socket_client_call;
 pub(in crate::interpreter) use stream_socket_recvfrom::{
     eval_builtin_stream_socket_recvfrom_call, eval_stream_socket_recvfrom_with_address_result,
 };

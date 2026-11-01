@@ -226,6 +226,7 @@ fn expr_refs_pdo(expr: &Expr) -> bool {
             expr_refs_pdo(value) || instanceof_target_refs_pdo(target)
         }
         ExprKind::Negate(inner)
+        | ExprKind::ArrayReference(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
@@ -322,6 +323,9 @@ fn expr_refs_pdo(expr: &Expr) -> bool {
             expr_refs_pdo(object) || expr_refs_pdo(property)
         }
         ExprKind::StaticPropertyAccess { receiver, .. } => receiver_refs_pdo(receiver),
+        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+            receiver_refs_pdo(receiver) || expr_refs_pdo(property)
+        }
         ExprKind::MethodCall { object, args, .. }
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
             expr_refs_pdo(object) || args.iter().any(expr_refs_pdo)
@@ -341,6 +345,7 @@ fn expr_refs_pdo(expr: &Expr) -> bool {
         ExprKind::ClassConstant { receiver }
         | ExprKind::ScopedConstantAccess { receiver, .. } => receiver_refs_pdo(receiver),
         ExprKind::ObjectClassName { object } => expr_refs_pdo(object),
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => expr_refs_pdo(receiver),
         ExprKind::NewScopedObject { receiver, args } => {
             receiver_refs_pdo(receiver) || args.iter().any(expr_refs_pdo)
         }
@@ -367,6 +372,7 @@ fn stmt_refs_pdo(stmt: &Stmt) -> bool {
         | StmtKind::Global { .. }
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ClassLikeActivate { .. }
         | StmtKind::ExternGlobalDecl { .. } => false,
 
         // An aliased import (`use PDO as Db;`) names PDO only here; the later
@@ -526,6 +532,9 @@ fn stmt_refs_pdo(stmt: &Stmt) -> bool {
         StmtKind::PropertyAssign { object, value, .. } => {
             expr_refs_pdo(object) || expr_refs_pdo(value)
         }
+        StmtKind::PropertyRefAssign { object, source, .. } => {
+            expr_refs_pdo(object) || expr_refs_pdo(source)
+        }
         StmtKind::StaticPropertyAssign {
             receiver, value, ..
         }
@@ -538,6 +547,24 @@ fn stmt_refs_pdo(stmt: &Stmt) -> bool {
             value,
             ..
         } => receiver_refs_pdo(receiver) || expr_refs_pdo(index) || expr_refs_pdo(value),
+        StmtKind::StaticPropertyElementRefAssign {
+            receiver,
+            index,
+            source,
+            ..
+        } => receiver_refs_pdo(receiver) || expr_refs_pdo(index) || expr_refs_pdo(source),
+        StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property,
+            index,
+            value,
+            ..
+        } => {
+            receiver_refs_pdo(receiver)
+                || expr_refs_pdo(property)
+                || index.as_ref().is_some_and(expr_refs_pdo)
+                || expr_refs_pdo(value)
+        }
         StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_refs_pdo(object) || expr_refs_pdo(value)
         }

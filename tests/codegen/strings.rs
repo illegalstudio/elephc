@@ -30,6 +30,8 @@ mod mbstring_exception;
 
 #[path = "strings/search.rs"]
 mod search;
+#[path = "strings/highlight.rs"]
+mod highlight;
 #[path = "strings/transform.rs"]
 mod transform;
 #[path = "strings/implode_boxed.rs"]
@@ -40,6 +42,8 @@ mod encoding;
 mod inet;
 #[path = "strings/iconv.rs"]
 mod iconv;
+#[path = "strings/mb_case.rs"]
+mod mb_case;
 #[path = "strings/formatting.rs"]
 mod formatting;
 #[path = "strings/interpolation_and_hashes.rs"]
@@ -50,8 +54,14 @@ mod misc;
 mod transient_string_ownership;
 #[path = "strings/openssl.rs"]
 mod openssl;
+#[path = "strings/sodium.rs"]
+mod sodium;
+#[path = "strings/password.rs"]
+mod password;
 #[path = "strings/parse_url.rs"]
 mod parse_url;
+#[path = "strings/implode_conversions.rs"]
+mod implode_conversions;
 #[path = "strings/offset_warnings.rs"]
 mod offset_warnings;
 #[path = "strings/offset_writes.rs"]
@@ -95,6 +105,23 @@ mod mbstring_info;
 
 #[path = "strings/mbstring_http_input.rs"]
 mod mbstring_http_input;
+
+/// Verifies a gradual encoding value narrowed away from literal `false` reaches the ordinary
+/// runtime string-coercion path instead of being rejected solely for its static `mixed` type.
+#[test]
+fn test_mb_strlen_accepts_gradual_encoding_after_false_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function detectedEncoding(): mixed { return "UTF-8"; }
+if (false === $encoding = detectedEncoding()) {
+    echo "missing";
+} else {
+    echo mb_strlen("héllo", $encoding);
+}
+"#,
+    );
+    assert_eq!(out, "5");
+}
 
 #[path = "strings/mbstring_startup.rs"]
 mod mbstring_startup;

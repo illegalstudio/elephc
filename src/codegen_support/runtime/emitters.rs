@@ -12,8 +12,8 @@ mod managed;
 mod platform;
 
 use super::{
-    bcmath, callables, curl, diagnostics, exceptions, generators, numeric, round_mode, strings,
-    system,
+    bcmath, callables, curl, diagnostics, exceptions, filter, generators, numeric, round_mode,
+    strings, system,
 };
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::RuntimeFeatures;
@@ -40,12 +40,15 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_itoa_into(emitter);
     strings::emit_resource_to_string(emitter);
     strings::emit_resource_type_name(emitter);
+    strings::emit_resource_debug_type_name(emitter);
     strings::emit_resource_write_stdout(emitter);
     strings::emit_php_num_scan(emitter);
     strings::emit_ftoa(emitter);
     strings::emit_ftoa_repr(emitter);
     strings::emit_concat(emitter);
     strings::emit_str_append(emitter, features.mbstring || features.eval_bridge);
+    strings::emit_str_bitwise(emitter);
+    strings::emit_str_set_offset(emitter);
     strings::emit_atoi(emitter);
     strings::emit_str_eq(emitter);
     strings::emit_str_to_number(emitter);
@@ -60,6 +63,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_number_format(emitter);
     strings::emit_strcopy(emitter);
     strings::emit_str_persist(emitter, features.mbstring || features.eval_bridge);
+    strings::emit_str_persist_owned(emitter);
     strings::emit_str_inc_dec(emitter);
     strings::emit_mixed_inc_dec(emitter);
     strings::emit_strtolower(emitter, features.mbstring || features.eval_bridge);
@@ -71,18 +75,23 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_strrpos(emitter);
     strings::emit_stripos(emitter);
     strings::emit_strripos(emitter);
+    strings::emit_strcspn(emitter);
+    strings::emit_strspn(emitter);
     strings::emit_str_repeat(emitter);
     strings::emit_strrev(emitter);
     strings::emit_grapheme_strrev(emitter);
     strings::emit_chr(emitter);
     strings::emit_strcmp(emitter);
     strings::emit_strcasecmp(emitter);
+    strings::emit_name_list_find_ci(emitter);
+    strings::emit_name_list_entry(emitter);
     strings::emit_strnatcmp(emitter);
     strings::emit_strncmp(emitter);
     strings::emit_strncasecmp(emitter);
     strings::emit_str_starts_with(emitter);
     strings::emit_str_ends_with(emitter);
     strings::emit_str_replace(emitter);
+    strings::emit_str_replace_array(emitter);
     strings::emit_explode(emitter);
     strings::emit_implode(emitter);
     strings::emit_implode_int(emitter);
@@ -93,12 +102,14 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_substr_replace(emitter);
     strings::emit_str_offset_set(emitter);
     strings::emit_substr_count(emitter);
+    strings::emit_substr_compare(emitter);
     strings::emit_str_pad(emitter);
     strings::emit_str_split(emitter);
     strings::emit_addslashes(emitter);
     strings::emit_stripslashes(emitter);
     strings::emit_nl2br(emitter);
     strings::emit_chunk_split(emitter);
+    strings::emit_preg_quote(emitter);
     strings::emit_quotemeta(emitter);
     strings::emit_quoted_printable_encode(emitter);
     strings::emit_str_word_count(emitter);
@@ -141,6 +152,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     curl::emit_curl(emitter);
     strings::emit_openssl_methods(emitter);
     strings::emit_openssl_cipher(emitter);
+    strings::emit_sodium_box(emitter);
     strings::emit_digest_to_string(emitter);
     strings::emit_base64_encode(emitter);
     strings::emit_base64_decode(emitter);
@@ -158,11 +170,18 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     callables::emit_is_callable_runtime(emitter);
     callables::emit_function_exists_lookup(emitter);
     callables::emit_callable_descriptor_release(emitter);
+    callables::emit_callable_descriptor_method_name(emitter);
+    callables::emit_mixed_spread_array(emitter);
+    callables::emit_invoker_ref_cell_to_mixed(emitter);
+    callables::emit_callable_lookup(emitter);
     callables::emit_callable_invoke_owned_args(emitter);
     callables::emit_throw_named_parameter_overwrite(emitter);
     callables::emit_throw_unknown_named_parameter(emitter);
     callables::emit_throw_positional_after_named(emitter);
+    callables::emit_invoker_param_name_index(emitter);
+    callables::emit_invoker_lookup_param(emitter);
     callables::emit_closure_bind(emitter);
+    callables::emit_closure_set_scope(emitter);
 
     // System runtime functions
     system::emit_build_argv(emitter);
@@ -177,6 +196,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     super::objects::emit_weak_map(emitter);
     system::emit_getenv(emitter);
     system::emit_getenv_all(emitter);
+    system::emit_error_log(emitter);
+
     system::emit_shell_exec(emitter, features.web);
     system::emit_date(emitter);
     system::emit_date_default_timezone(emitter);
@@ -192,10 +213,10 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     system::emit_json_encode_bool(emitter);
     system::emit_json_encode_null(emitter);
     system::emit_json_encode_str(emitter);
-    system::emit_json_encode_mixed(emitter);
+    system::emit_json_encode_mixed(emitter, features.eval_bridge);
     system::emit_json_encode_float(emitter);
     system::emit_json_ftoa(emitter);
-    system::emit_json_encode_object(emitter);
+    system::emit_json_encode_object(emitter, features.eval_bridge);
     system::emit_json_pretty_helpers(emitter);
     system::emit_json_throw_error(emitter);
     system::emit_json_depth_enter(emitter);
@@ -210,10 +231,13 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     system::emit_json_last_error_msg(emitter);
     system::emit_json_validate(emitter);
     system::emit_serialize(emitter);
+    system::emit_unpack_integer_sequence(emitter);
     system::emit_unserialize(emitter);
     if features.regex {
         system::emit_preg_strip(emitter);
         system::emit_pcre_to_posix(emitter);
+        system::emit_pcre2_exec_at(emitter);
+        system::emit_preg_compile_warning(emitter);
         system::emit_preg_match(emitter);
         system::emit_preg_match_all(emitter);
         system::emit_preg_replace(emitter);
@@ -223,22 +247,57 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     system::emit_match_unhandled(emitter);
     system::emit_stack_limit_init(emitter);
     system::emit_stack_overflow(emitter);
+    // Reflection shell methods always reference the shared sorted-name search.
+    system::emit_rt_sorted_name_search(emitter);
+    if features.const_introspection {
+        system::emit_rt_defined(emitter);
+        system::emit_rt_enum_exists(emitter);
+        system::emit_rt_constant(emitter);
+    }
+    if features.class_introspection {
+        system::emit_rt_class_exists(emitter);
+        system::emit_rt_trait_exists(emitter);
+    }
+    // The eval bridge forwards interface_exists() to the shared runtime
+    // helper so request-local interface declarations participate in lookup.
+    // A program can use that bridge without statically requiring class
+    // introspection, so the helper must follow either capability.
+    if features.class_introspection || features.eval_bridge {
+        system::emit_rt_interface_exists(emitter);
+    }
+    if features.class_relation_introspection {
+        system::emit_rt_class_relation_probe(emitter);
+        system::emit_rt_class_relation_lookup(emitter);
+        system::emit_rt_hash_from_name_list(emitter);
+    }
+    if features.class_methods_introspection {
+        system::emit_rt_class_method_names(emitter);
+        system::emit_rt_member_exists(emitter);
+    }
 
     // Exception runtime functions
     exceptions::emit_exception_cleanup_frames(emitter);
     exceptions::emit_class_implements_interface(emitter);
     exceptions::emit_dynamic_instanceof(emitter);
+    exceptions::emit_class_name_is_a(emitter);
     exceptions::emit_exception_matches(emitter);
     exceptions::emit_location(emitter);
     exceptions::emit_report_uncaught_exception(emitter);
     exceptions::emit_throw_current(emitter);
     exceptions::emit_rethrow_current(emitter);
+    exceptions::emit_throwable_capture_trace(emitter);
     exceptions::emit_throwable_previous(emitter);
     exceptions::emit_throwable_initialize(emitter);
     exceptions::emit_exception_chain(emitter);
     exceptions::emit_cleanup_invoke(emitter);
     exceptions::emit_cleanup_preserve_exception(emitter);
+    exceptions::emit_release_slot_run(emitter);
+    exceptions::emit_release_slot_table(emitter);
+    exceptions::emit_release_slot_table_preserving(emitter);
+    exceptions::emit_retire_slot(emitter);
+    exceptions::emit_php_frame_publish(emitter);
     exceptions::emit_cleanup_call_operand_owner(emitter);
+    exceptions::emit_call_operand_records(emitter);
     exceptions::emit_local_ref_cell_release(emitter);
     exceptions::emit_throwable_boxed_owners(emitter);
     exceptions::emit_destructor_throw(emitter);
@@ -248,6 +307,13 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
 
     managed::emit_managed_runtime(emitter, features);
     platform::emit_platform_runtime(emitter, features);
+    filter::emit_filter_trim_ws(emitter);
+    filter::emit_filter_int_range(emitter);
+    filter::emit_filter_validate_int(emitter);
+    filter::emit_filter_validate_float(emitter);
+    filter::emit_filter_validate_bool_str(emitter);
+    filter::emit_filter_validate_ip4(emitter);
+    filter::emit_filter_validate_ip6(emitter);
 }
 
 #[cfg(test)]

@@ -6,8 +6,9 @@
 //! - `crate::autoload::registry::Registry::build()`
 //!
 //! Key details:
-//! - Matching unregister calls remove earlier rules, and consumed loader sources are stripped from the program.
+//! - Matching unregister calls remove earlier rules from the compile-time discovery chain.
 //! - `spl_autoload_*` builtin names are matched case-insensitively before name resolution runs.
+//! - Static extraction preserves runtime registration and callback execution.
 
 use std::collections::{HashMap, HashSet};
 
@@ -39,10 +40,9 @@ impl PartialEq for AutoloadRule {
     }
 }
 
-/// Walk the program's top-level statements, extract every conforming
-/// `spl_autoload_register` / `spl_autoload_unregister` call into a rule
-/// chain, and return both the cleaned program (with consumed sources
-/// stripped) and the final rule list.
+/// Extract compile-time rules from statically analyzable
+/// `spl_autoload_register` / `spl_autoload_unregister` calls while preserving
+/// the original program for runtime execution.
 ///
 /// Rules are returned in PHP-equivalent chain order: append by default,
 /// prepend when the third argument folds to true. `unregister` removes
@@ -61,7 +61,7 @@ pub fn collect_register_calls(
 
     // -- Pass 1: index top-level functions whose bodies look like autoload rules.
     let mut function_rules: HashMap<String, FunctionSource> = HashMap::new();
-    for (idx, stmt) in program.iter().enumerate() {
+    for stmt in &program {
         if let StmtKind::FunctionDecl {
             name,
             params,
@@ -73,10 +73,7 @@ pub fn collect_register_calls(
             if let Ok(rule) = build_rule(params, variadic.as_deref(), body) {
                 function_rules.insert(
                     name.clone(),
-                    FunctionSource {
-                        rule,
-                        decl_idx: idx,
-                    },
+                    FunctionSource { rule },
                 );
             }
         }
@@ -85,66 +82,29 @@ pub fn collect_register_calls(
     // -- Pass 2: walk in source order, threading variable bindings.
     let mut chain: Vec<AutoloadRule> = Vec::new();
     let mut current_var_bindings: HashMap<String, VarBinding> = HashMap::new();
-    let mut consumed: HashSet<usize> = HashSet::new();
-    let mut consumed_function_names: HashSet<String> = HashSet::new();
-    let mut consumed_var_names: HashSet<String> = HashSet::new();
-    let mut warnings: Vec<CompileWarning> = Vec::new();
 
     let mut current_namespace: Option<String> = None;
-    for (idx, stmt) in program.iter().enumerate() {
+    for stmt in &program {
         if let StmtKind::NamespaceDecl { name } = &stmt.kind {
             current_namespace = name.as_ref().map(|name| name.as_str().to_string());
             continue;
         }
         if classify_and_process(
             stmt,
-            idx,
             current_namespace.as_deref(),
             &current_var_bindings,
             &function_rules,
             &local_functions,
             &mut chain,
-            &mut consumed,
-            &mut consumed_function_names,
-            &mut consumed_var_names,
-            &mut warnings,
         ) {
             continue;
         }
-        update_var_bindings(stmt, idx, &mut current_var_bindings);
+        update_var_bindings(stmt, &mut current_var_bindings);
     }
 
-    // -- Pass 3: also strip the FunctionDecl / Assign statements that fed
-    //    consumed rules. The closure or function body might contain
-    //    `require_once $name . '.php'` style code that the type checker
-    //    would reject if left in the program.
-    for (name, src) in &function_rules {
-        if consumed_function_names.contains(name) {
-            consumed.insert(src.decl_idx);
-        }
-    }
-    for (idx, stmt) in program.iter().enumerate() {
-        if let StmtKind::Assign { name, value } = &stmt.kind {
-            if consumed_var_names.contains(name) && is_closure_literal(value) {
-                consumed.insert(idx);
-            }
-        }
-    }
-
-    // -- Pass 4: rebuild cleaned program.
-    let cleaned: Program = program
-        .into_iter()
-        .enumerate()
-        .filter_map(|(idx, stmt)| {
-            if consumed.contains(&idx) {
-                None
-            } else {
-                Some(stmt)
-            }
-        })
-        .collect();
-
-    (cleaned, chain, warnings)
+    // Static rules accelerate compile-time discovery only. PHP still executes the original
+    // registration and callback at runtime, including for dynamic class names.
+    (program, chain, Vec::new())
 }
 
 #[derive(Clone)]
@@ -152,7 +112,6 @@ pub fn collect_register_calls(
 /// along with the statement index of the declaration itself.
 struct FunctionSource {
     rule: AutoloadRule,
-    decl_idx: usize,
 }
 
 #[derive(Clone)]
@@ -162,52 +121,28 @@ struct VarBinding {
     rule: AutoloadRule,
 }
 
-/// Result of classifying a `spl_autoload_register` or `spl_autoload_unregister`
-/// call. Carries the extracted rule (if any), whether to prepend or append
-/// in `Register` variants, and source-tracking info to strip the definition.
+/// Result of classifying a statically analyzable autoload call.
 enum CallKind {
     /// A conforming `spl_autoload_register` call. `prepend` controls chain order.
     Register {
         rule: AutoloadRule,
         prepend: bool,
-        consumes: ConsumesSource,
     },
     /// A `spl_autoload_unregister` call. Removes the first chain entry whose
     /// body equals the rule's body.
     Unregister {
         rule: AutoloadRule,
-        consumes: ConsumesSource,
     },
-    /// First argument is a closure literal that failed rule constraints
-    /// (captures, multi-param, etc.). The call is stripped and a compile-time
-    /// warning is emitted, but no rule is added to the chain.
-    StripUnmatchedClosure { reason: &'static str },
 }
 
-#[derive(Clone, Default)]
-/// Tracks which source (function name or variable name) provided the
-/// closure for an autoload rule so that the definition can be stripped
-/// from the program along with the call.
-struct ConsumesSource {
-    function_name: Option<String>,
-    var_name: Option<String>,
-}
-
-/// Classify a statement as an autoload register/unregister call and
-/// update the chain accordingly. Returns true if the statement was consumed.
-#[allow(clippy::too_many_arguments)]
+/// Classify a statement as an autoload call and update compile-time discovery state.
 fn classify_and_process(
     stmt: &Stmt,
-    idx: usize,
     current_namespace: Option<&str>,
     var_bindings: &HashMap<String, VarBinding>,
     function_rules: &HashMap<String, FunctionSource>,
     local_functions: &HashSet<String>,
     chain: &mut Vec<AutoloadRule>,
-    consumed: &mut HashSet<usize>,
-    consumed_functions: &mut HashSet<String>,
-    consumed_vars: &mut HashSet<String>,
-    warnings: &mut Vec<CompileWarning>,
 ) -> bool {
     let Some(call) = classify_call(
         stmt,
@@ -222,51 +157,20 @@ fn classify_and_process(
         CallKind::Register {
             rule,
             prepend,
-            consumes,
         } => {
             if prepend {
                 chain.insert(0, rule);
             } else {
                 chain.push(rule);
             }
-            consumed.insert(idx);
-            mark_consumed(consumes, consumed_functions, consumed_vars);
         }
-        CallKind::Unregister { rule, consumes } => {
+        CallKind::Unregister { rule } => {
             if let Some(pos) = chain.iter().position(|r| r == &rule) {
                 chain.remove(pos);
             }
-            consumed.insert(idx);
-            mark_consumed(consumes, consumed_functions, consumed_vars);
-        }
-        CallKind::StripUnmatchedClosure { reason } => {
-            warnings.push(CompileWarning::new(
-                stmt.span,
-                &format!(
-                    "spl_autoload_register: closure rejected ({}); the call \
-                     compiles as a no-op and contributes no autoload rule",
-                    reason
-                ),
-            ));
-            consumed.insert(idx);
         }
     }
     true
-}
-
-/// Records which source (function or variable) the autoload rule came from
-/// so its definition can be removed from the program alongside the call.
-fn mark_consumed(
-    consumes: ConsumesSource,
-    consumed_functions: &mut HashSet<String>,
-    consumed_vars: &mut HashSet<String>,
-) {
-    if let Some(name) = consumes.function_name {
-        consumed_functions.insert(name);
-    }
-    if let Some(name) = consumes.var_name {
-        consumed_vars.insert(name);
-    }
 }
 
 /// Classifies a statement as a `spl_autoload_register` or
@@ -293,15 +197,15 @@ fn classify_call(
     ) {
         let first = args.first()?;
         match resolve_callable(first, var_bindings, function_rules) {
-            Resolved::Rule { rule, consumes } => {
+            Resolved::Rule(rule) => {
                 let prepend = args.get(2).is_some_and(|arg| literal_bool(&arg.kind));
-                Some(CallKind::Register {
-                    rule,
-                    prepend,
-                    consumes,
-                })
+                Some(CallKind::Register { rule, prepend })
             }
-            Resolved::StripUnmatched(reason) => Some(CallKind::StripUnmatchedClosure { reason }),
+            // Static rule extraction is only an optimization. If the callback needs runtime
+            // execution (for example it branches before requiring a file), leave the original
+            // registration and closure in the program so the ordinary SPL implementation can
+            // preserve PHP's behavior.
+            Resolved::StripUnmatched => None,
             Resolved::Unknown => None,
         }
     } else if is_builtin_autoload_call(
@@ -312,8 +216,8 @@ fn classify_call(
     ) {
         let first = args.first()?;
         match resolve_callable(first, var_bindings, function_rules) {
-            Resolved::Rule { rule, consumes } => Some(CallKind::Unregister { rule, consumes }),
-            Resolved::StripUnmatched(reason) => Some(CallKind::StripUnmatchedClosure { reason }),
+            Resolved::Rule(rule) => Some(CallKind::Unregister { rule }),
+            Resolved::StripUnmatched => None,
             Resolved::Unknown => None,
         }
     } else {
@@ -388,19 +292,14 @@ fn collect_declared_function_keys_in(
 /// stripped because the closure didn't conform, or the call should be
 /// left for the runtime stub.
 enum Resolved {
-    /// Successfully resolved to an autoload rule, with source-tracking
-    /// for stripping.
-    Rule {
-        rule: AutoloadRule,
-        consumes: ConsumesSource,
-    },
-    /// First arg is a closure literal that failed rule constraints
-    /// (captures, multi-param, etc.). The call is stripped; the static
-    /// string reason is surfaced as a compile-time warning.
-    StripUnmatched(&'static str),
+    /// Successfully resolved to an autoload rule.
+    Rule(AutoloadRule),
+    /// First arg is a closure literal that cannot be represented as a static rule.
+    /// Keep the original call for ordinary runtime SPL behavior.
+    StripUnmatched,
     /// First arg is something that cannot be resolved at compile time
     /// (method callable, complex expression, etc.). Leave the call for
-    /// the runtime stub.
+    /// the runtime implementation.
     Unknown,
 }
 
@@ -415,32 +314,17 @@ fn resolve_callable(
 ) -> Resolved {
     match &arg.kind {
         ExprKind::Closure { .. } => match extract_closure_rule(arg) {
-            Ok(rule) => Resolved::Rule {
-                rule,
-                consumes: ConsumesSource::default(),
-            },
-            Err(reason) => Resolved::StripUnmatched(reason),
+            Ok(rule) => Resolved::Rule(rule),
+            Err(_) => Resolved::StripUnmatched,
         },
         ExprKind::Variable(name) => match var_bindings.get(name) {
-            Some(binding) => Resolved::Rule {
-                rule: binding.rule.clone(),
-                consumes: ConsumesSource {
-                    var_name: Some(name.clone()),
-                    ..Default::default()
-                },
-            },
+            Some(binding) => Resolved::Rule(binding.rule.clone()),
             None => Resolved::Unknown,
         },
         ExprKind::StringLiteral(func_name) => {
             let cleaned = func_name.trim_start_matches('\\');
             match function_rules.get(cleaned) {
-                Some(src) => Resolved::Rule {
-                    rule: src.rule.clone(),
-                    consumes: ConsumesSource {
-                        function_name: Some(cleaned.to_string()),
-                        ..Default::default()
-                    },
-                },
+                Some(src) => Resolved::Rule(src.rule.clone()),
                 None => Resolved::Unknown,
             }
         }
@@ -451,7 +335,7 @@ fn resolve_callable(
 /// Inspects `stmt` and, if it is an assignment of a conforming closure to
 /// a variable, updates `bindings` to record the rule. Non-conforming or
 /// non-closure assignments remove any earlier binding for that variable.
-fn update_var_bindings(stmt: &Stmt, _idx: usize, bindings: &mut HashMap<String, VarBinding>) {
+fn update_var_bindings(stmt: &Stmt, bindings: &mut HashMap<String, VarBinding>) {
     let StmtKind::Assign { name, value } = &stmt.kind else {
         return;
     };
@@ -465,11 +349,6 @@ fn update_var_bindings(stmt: &Stmt, _idx: usize, bindings: &mut HashMap<String, 
             bindings.remove(name);
         }
     }
-}
-
-/// Returns `true` if `expr` is a `Closure` expression node.
-fn is_closure_literal(expr: &Expr) -> bool {
-    matches!(expr.kind, ExprKind::Closure { .. })
 }
 
 /// Extract an AutoloadRule from a closure expression, or an error string on failure.

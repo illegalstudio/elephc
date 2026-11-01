@@ -14,7 +14,10 @@
 //!   argument-frame fixture also covers the compiler-internal count and collector slots eval has
 //!   to materialize on top of the PHP-visible signature.
 
-use crate::support::{compile_and_run, compile_and_run_capture};
+use crate::support::{
+    compile_and_run, compile_and_run_capture, compile_and_run_with_heap_debug_per_argv,
+    ProgramOutput,
+};
 
 /// Verifies AOT constructor by-reference args write back to eval lvalue targets.
 #[test]
@@ -376,6 +379,36 @@ echo "bad";');
     }
 }
 
+/// Verifies an eval-side `new` of an AOT class allocates its object-owned reference cells.
+///
+/// The interpreter has no layout of its own: `new C()` inside eval allocates through
+/// `__rt_new_by_name`, which picks the layout from a class id known only at run time. A property
+/// with a reference taken to it holds a POINTER to an object-owned cell rather than a value, and
+/// the property-default thunk that allocator calls stores THROUGH that pointer — so a missing
+/// cell is a null store inside compiled code, a SIGSEGV with no catchable error and no eval
+/// diagnostic. This is the shape a compiled framework container hits: the factory is interpreted,
+/// the class it constructs is compiled.
+#[test]
+fn test_eval_new_allocates_owned_reference_property_cells() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalRefDefaults {
+    private bool $first = true;
+    private bool $second = false;
+    public function bind(): void { $r = &$this->second; $r = true; }
+    public function show(): string {
+        return ($this->first ? "T" : "F") . ($this->second ? "T" : "F");
+    }
+}
+$object = eval('return new EvalRefDefaults();');
+echo $object->show() . "|";
+$object->bind();
+echo $object->show();
+"#,
+    );
+    assert_eq!(out, "TF|TT");
+}
+
 /// Verifies eval-declared constructor by-reference args write back to lvalue targets.
 #[test]
 fn test_eval_declared_constructor_by_ref_writes_back_to_lvalue_targets() {
@@ -463,6 +496,65 @@ return gettype($box->value) . ":" . $box->value;');
         out,
         "Exception:eval-ctor-lvalue:integer:12|Exception:eval-ctor-lvalue:integer:16"
     );
+}
+
+/// Verifies an eval child may replace an AOT array property with either PHP array shape.
+#[test]
+fn test_eval_child_constructor_reassigns_aot_array_property_shape() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalArrayShapeAotParent {
+    protected $items = [];
+
+    public function selected(): string {
+        return $this->items["selected"] ? "yes" : "no";
+    }
+}
+
+echo eval('class EvalArrayShapeRuntimeChild extends EvalArrayShapeAotParent {
+    public function __construct() {
+        $this->items = ["selected" => true];
+    }
+}
+
+$child = new EvalArrayShapeRuntimeChild();
+return $child->selected();');
+"#,
+    );
+
+    assert_eq!(out, "yes");
+}
+
+/// Verifies an eval child preserves the storage shape expected by later AOT property writes.
+#[test]
+fn test_eval_child_empty_array_property_accepts_aot_string_key_write() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalArrayShapeWriteAotParent {
+    protected array $items = [];
+
+    public function put(string $key, object $value): void {
+        $this->items[$key] = $value;
+    }
+
+    public function has(string $key): bool {
+        return isset($this->items[$key]);
+    }
+}
+
+$child = eval('class EvalArrayShapeWriteRuntimeChild extends EvalArrayShapeWriteAotParent {
+    public function __construct() {
+        $this->items = [];
+    }
+}
+
+return new EvalArrayShapeWriteRuntimeChild();');
+$child->put("service", new stdClass());
+echo $child->has("service") ? "yes" : "no";
+"#,
+    );
+
+    assert_eq!(out, "yes");
 }
 
 /// An eval `new` into an AOT constructor reports the frame the PHP source declares.
@@ -558,7 +650,12 @@ try { throw new EvalThrownRuntimeException('direct'); } catch (Exception $error)
     assert_eq!(out, "expression|local|direct");
 }
 
+/// PHP still raises a catchable `Error` if eval has widened a non-object throw operand to Mixed.
 /// Invalid Mixed throws raise PHP Error with distinct non-object and non-Throwable diagnostics.
+///
+/// php -n 8.5 names the two failures differently and raises `Error`, not `TypeError`: a scalar
+/// gives "Can only throw objects", an ordinary object "Cannot throw objects that do not implement
+/// Throwable".
 #[test]
 fn test_aot_throw_runtime_checks_eval_mixed_values_are_throwable() {
     let out = compile_and_run(r#"<?php
@@ -632,4 +729,83 @@ try {
 }
 "#);
     assert_eq!(out, "inner:inner|outer:outer|bubbled:bubble");
+}
+
+/// Live heap blocks the heap-debug summary reports at exit; `clean` is zero.
+fn eval_bridge_live_blocks(out: &ProgramOutput) -> usize {
+    if out.stderr.contains("HEAP DEBUG: leak summary: clean") {
+        return 0;
+    }
+    let marker = "HEAP DEBUG: leak summary: live_blocks=";
+    let start = out
+        .stderr
+        .find(marker)
+        .unwrap_or_else(|| panic!("no leak summary in: {}", out.stderr))
+        + marker.len();
+    out.stderr[start..]
+        .split(|c: char| !c.is_ascii_digit())
+        .next()
+        .and_then(|digits| digits.parse().ok())
+        .unwrap_or_else(|| panic!("unreadable leak summary in: {}", out.stderr))
+}
+
+/// A `callable` argument eval hands to a compiled constructor, method or static method is
+/// released once the call returns.
+///
+/// The bridges cast the eval value into a descriptor the callee only borrows: a runtime adapter
+/// that retains the eval closure (or the boxed string), or a bound descriptor for
+/// `[$obj, 'm']`. Nothing released it, so every `new C(fn …)` from eval leaked five blocks and
+/// every `new C('is_int')` three, whether or not the callee kept the callable (Symfony's
+/// `CallbackFilterIterator` and `Holder(Iterator, callable)` shapes). The `[$obj, 'm']` cast
+/// also dropped the index and element boxes it read the array through. Measured as a SLOPE:
+/// the live blocks after one iteration must equal those after six. Expected stdout is
+/// `php -n` 8.5's.
+#[test]
+fn test_eval_callable_arguments_to_compiled_calls_are_released() {
+    let source = r#"<?php
+class EvalCallableArgHolder {
+    public $c;
+    public function __construct(callable $c) { $this->c = $c; }
+    public function run($v) { return ($this->c)($v); }
+}
+class EvalCallableArgDrop { public function __construct(callable $c) {} }
+class EvalCallableArgSvc {
+    public function call(callable $c) { return $c(3); }
+    public static function apply(callable $c, $v) { return $c($v); }
+}
+class EvalCallableArgTwice { public function m($v) { return $v * 2; } }
+$keep = new EvalCallableArgHolder(fn($v) => $v);
+new EvalCallableArgDrop('is_int');
+echo $keep->run(1), (new EvalCallableArgSvc())->call('abs'), EvalCallableArgSvc::apply('abs', -2), "\n";
+eval('$n = (int) $argv[1];
+$s = new EvalCallableArgSvc();
+$t = new EvalCallableArgTwice();
+$out = "";
+for ($i = 0; $i < $n; $i++) {
+    $out = "";
+    $h = new EvalCallableArgHolder(fn($v) => $v + 1); $out .= $h->run(1) . ",";
+    $h = new EvalCallableArgHolder("strtoupper"); $out .= $h->run("a") . ",";
+    $h = new EvalCallableArgHolder([$t, "m"]);
+    new EvalCallableArgDrop(fn($v) => $v > 1);
+    new EvalCallableArgDrop("is_int");
+    $out .= $s->call(fn($v) => $v * 10) . ",";
+    $out .= $s->call("strrev") . ",";
+    $out .= EvalCallableArgSvc::apply(fn($v) => $v . "!", "x") . ",";
+    $out .= EvalCallableArgSvc::apply("strrev", "ab") . ",";
+    unset($h);
+}
+echo $out, "\n";');
+"#;
+    let outs = compile_and_run_with_heap_debug_per_argv(source, &[&["1"], &["6"]]);
+    for out in &outs {
+        assert!(out.success, "stdout={:?} stderr={}", out.stdout, out.stderr);
+        assert_eq!(out.stdout, "132\n2,A,30,3,x!,ba,\n", "{}", out.stderr);
+    }
+    assert_eq!(
+        eval_bridge_live_blocks(&outs[0]),
+        eval_bridge_live_blocks(&outs[1]),
+        "live blocks grew with the iteration count\nonce: {}\nsix times: {}",
+        outs[0].stderr,
+        outs[1].stderr
+    );
 }

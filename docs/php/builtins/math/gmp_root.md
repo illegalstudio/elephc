@@ -2,7 +2,7 @@
 title: "gmp_root()"
 description: "Integer nth root."
 sidebar:
-  order: 628
+  order: 641
 ---
 
 ## gmp_root()

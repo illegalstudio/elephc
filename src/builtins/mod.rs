@@ -30,6 +30,9 @@ pub(crate) mod gmp;
 mod spl;
 mod pointers;
 mod system;
+pub(crate) use array::array_column::rows_need_generic_helper as array_column_rows_need_generic_helper;
+pub(crate) use array::array_merge::indexed_operands_result_type as array_merge_indexed_result_type;
+pub(crate) use system::constant::literal_class_constant_expr;
 mod types;
 pub(crate) mod xml;
 #[cfg(test)]

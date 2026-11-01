@@ -48,9 +48,11 @@ function discard_pending(array $value): int {
                 true,
                 false,
                 WebIsolation::Worker,
+                None,
             )
             .unwrap()
             .asm
+            .into_string()
         };
         let hosted = emit(Emit::Phpext);
         let begin = hosted
@@ -128,9 +130,11 @@ function catch_replacement(array $value): void {
                 true,
                 false,
                 WebIsolation::Worker,
+                None,
             )
             .unwrap()
             .asm
+            .into_string()
         };
         let hosted = emit(Emit::Phpext);
         let callback = hosted
@@ -198,9 +202,11 @@ function chain_pending(array $value): void {
                 true,
                 false,
                 WebIsolation::Worker,
+                None,
             )
             .unwrap()
             .asm
+            .into_string()
         };
         let hosted = emit(Emit::Phpext);
         let callback = hosted

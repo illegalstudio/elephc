@@ -105,6 +105,8 @@ pub(super) fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_object_clone_shallow_boxed_retain");         // retained object slots need an extra owner reference
     emitter.instruction("cmp x14, #7");                                         // does the slot hold a retained boxed Mixed payload?
     emitter.instruction("b.eq __rt_object_clone_shallow_boxed_retain");         // retained Mixed slots need an extra owner reference
+    emitter.instruction("cmp x14, #10");                                        // does the slot hold a callable descriptor (a Closure)?
+    emitter.instruction("b.eq __rt_object_clone_shallow_boxed_retain");         // teardown releases it, so the clone needs its own share
     emitter.instruction("b __rt_object_clone_shallow_boxed_next");              // scalar slots are copied without ownership changes
     emitter.label("__rt_object_clone_shallow_boxed_reference");
     emitter.instruction("str x12, [sp, #32]");                                  // preserve the property index across reference-cell cloning
@@ -119,6 +121,12 @@ pub(super) fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("b __rt_object_clone_shallow_boxed_next");              // continue after reference-aware slot cloning
 
     emitter.label("__rt_object_clone_shallow_boxed_string");
+    // An uninitialized typed property carries the sentinel in its length word: there is no
+    // string to duplicate, and the verbatim copy above already gave the clone the same marker.
+    emitter.instruction("ldr x16, [x9, x10]");                                  // load the source string slot length word
+    abi::emit_load_int_immediate(emitter, "x17", crate::codegen_support::sentinels::UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+    emitter.instruction("cmp x16, x17");                                        // is the property still uninitialized?
+    emitter.instruction("b.eq __rt_object_clone_shallow_boxed_next");           // keep the copied sentinel and move on
     emitter.instruction("str x12, [sp, #32]");                                  // preserve property index across string persistence
     emitter.instruction("str x10, [sp, #40]");                                  // preserve the high-word slot offset across the helper
     emitter.instruction("mov x1, x15");                                         // pass the source string pointer to the persistence helper

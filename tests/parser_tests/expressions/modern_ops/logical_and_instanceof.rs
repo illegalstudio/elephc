@@ -120,7 +120,9 @@ fn test_parse_dynamic_instanceof_variable_target() {
 /// Inputs: `echo $a instanceof $holder->className;` and `echo $a instanceof $names[0];`
 #[test]
 fn test_parse_dynamic_instanceof_property_and_array_targets() {
-    let stmts = parse_source("<?php echo $a instanceof $holder->className; echo $a instanceof $names[0];");
+    let stmts = parse_source(
+        "<?php echo $a instanceof $holder->className; echo $a instanceof $names[0]; echo $a instanceof $this->className;",
+    );
     let property_target = Expr::new(
         ExprKind::PropertyAccess {
             object: Box::new(Expr::var("holder")),
@@ -135,11 +137,25 @@ fn test_parse_dynamic_instanceof_property_and_array_targets() {
         },
         elephc::span::Span::dummy(),
     );
+    let this_property_target = Expr::new(
+        ExprKind::PropertyAccess {
+            object: Box::new(Expr::new(
+                ExprKind::This,
+                elephc::span::Span::dummy(),
+            )),
+            property: "className".to_string(),
+        },
+        elephc::span::Span::dummy(),
+    );
     assert_eq!(
         stmts,
         vec![
             Stmt::echo(Expr::dynamic_instance_of(Expr::var("a"), property_target)),
             Stmt::echo(Expr::dynamic_instance_of(Expr::var("a"), array_target)),
+            Stmt::echo(Expr::dynamic_instance_of(
+                Expr::var("a"),
+                this_property_target,
+            )),
         ]
     );
 }

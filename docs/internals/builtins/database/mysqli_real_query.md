@@ -2,7 +2,7 @@
 title: "mysqli_real_query() - internals"
 description: "Compiler internals for mysqli_real_query(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 153
+  order: 164
 ---
 
 ## `mysqli_real_query()` - internals

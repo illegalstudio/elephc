@@ -1,7 +1,7 @@
 //! Purpose:
-//! End-to-end coverage for PHP's coercive parameter binding on declared user-defined
-//! parameters: scalars widening into `string`/`bool` parameters, and compile-time-constant
-//! numeric arguments binding to `int`/`float` parameters.
+//! End-to-end coverage for PHP's coercive parameter and return binding on declared user-defined
+//! boundaries: scalars widening into `string`/`bool` parameters, `Stringable` objects selecting
+//! string declarations, and compile-time-constant numeric arguments binding to `int`/`float`.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -15,6 +15,89 @@
 //!   `tests/error_tests/type_system.rs`.
 
 use crate::support::*;
+
+/// Verifies a parameter union naming TWO object classes still admits an argument whose own class
+/// relates to exactly one of them, and rejects at run time the way PHP does. A multi-class union
+/// gives the runtime nominal guard no single class to test, so the boundary was refused outright —
+/// but the argument narrows it: PHP's single inheritance means a class unrelated to the argument's
+/// own can never be what arrives. Symfony's
+/// `ViewEvent::__construct(ControllerArgumentsMetadata|ControllerArgumentsEvent|null)` is called
+/// with a `?ControllerMetadata`, and only the first descends from it.
+/// PHP outputs "t|none|TypeError".
+#[test]
+fn test_two_class_union_parameter_narrows_to_one_runtime_guard() {
+    let out = compile_and_run(
+        r#"<?php
+class Meta { public function __construct(public string $tag) {} }
+class ArgsMeta extends Meta {
+    public function __construct(string $tag, public int $count) { parent::__construct($tag); }
+}
+class ArgsEvent { public function __construct(public string $name) {} }
+
+class ViewEvent {
+    public function __construct(public ArgsMeta|ArgsEvent|null $controllerMetadata = null) {}
+}
+
+function build(?Meta $meta): string {
+    $event = new ViewEvent($meta);
+    $stored = $event->controllerMetadata;
+
+    return $stored instanceof Meta ? $stored->tag : 'none';
+}
+
+echo build(new ArgsMeta('t', 2)), '|', build(null), '|';
+try {
+    echo build(new Meta('plain'));
+} catch (\TypeError $e) {
+    echo 'TypeError';
+}
+"#,
+    );
+    assert_eq!(out, "t|none|TypeError");
+}
+
+/// Verifies a gradual union argument reaching a declared `?string` parameter through an
+/// INTERFACE-dispatched call. PHP checks such a value at the call, not at compile time, and the
+/// coercive path already deferred it; the interface path consulted only two of the four runtime
+/// guards and refused it. Symfony's `Kernel::initializeContainer()` passes
+/// `$this->container->getParameter('kernel.build_dir')` — declared
+/// `array|bool|string|int|float|UnitEnum|null` — into `WarmableInterface::warmUp()`'s
+/// `?string $buildDir`. PHP outputs "/cache//build".
+#[test]
+fn test_gradual_union_argument_binds_a_nullable_string_through_an_interface() {
+    let out = compile_and_run(
+        r#"<?php
+interface Warmable {
+    public function warmUp(string $cacheDir, ?string $buildDir = null): string;
+}
+
+class Params {
+    public function __construct(private array $values) {}
+
+    public function getParameter(string $name): array|bool|string|int|float|null {
+        return $this->values[$name] ?? null;
+    }
+}
+
+class Kernel implements Warmable {
+    public function warmUp(string $cacheDir, ?string $buildDir = null): string {
+        return $cacheDir . '/' . ($buildDir ?? 'none');
+    }
+}
+
+function boot(Warmable $warmer, Params $container): string {
+    $buildDir = $container->getParameter('kernel.build_dir');
+    $cacheDir = $container->getParameter('kernel.cache_dir');
+
+    return $warmer->warmUp($cacheDir, $buildDir);
+}
+
+$container = new Params(['kernel.cache_dir' => '/cache', 'kernel.build_dir' => '/build']);
+echo boot(new Kernel(), $container);
+"#,
+    );
+    assert_eq!(out, "/cache//build");
+}
 
 /// Verifies the parameter-typing audit repro: a float and a numeric string binding to `int`,
 /// and an int binding to `string`.
@@ -114,4 +197,67 @@ fn test_coercive_binding_applies_to_named_arguments() {
         "#,
     );
     assert_eq!(out, "4.5|7");
+}
+
+/// Verifies a weak call converts a `Stringable` object into both a direct `string` parameter
+/// and the `string` member of a union, including reordered and fresh owning arguments.
+#[test]
+fn test_stringable_objects_bind_to_string_parameter_members() {
+    let out = compile_and_run(
+        r#"<?php
+        class Label {
+            public function __construct(public string $text) {}
+            public function __toString(): string { return $this->text; }
+        }
+        function direct(string $value): string { return $value; }
+        function either(string|iterable $value): string {
+            return is_string($value) ? $value : "iterable";
+        }
+        function many(string ...$values): string { return implode(",", $values); }
+        $label = new Label("local");
+        echo direct($label), "|", either($label), "|", either(value: new Label("fresh")),
+            "|", many($label, new Label("tail"));
+        "#,
+    );
+    assert_eq!(out, "local|local|fresh|local,tail");
+}
+
+/// Verifies coercive methods convert a returned `Stringable` object at a declared `string`
+/// boundary, including the owning temporary returned by the method call chain.
+#[test]
+fn test_stringable_object_binds_to_coercive_string_return() {
+    let out = compile_and_run(
+        r#"<?php
+class ReturnLabel {
+    public function __construct(public string $text) {}
+    public function __toString(): string { return $this->text; }
+}
+class ReturnFormatter {
+    public static function format(string $text): string {
+        return new ReturnLabel($text);
+    }
+}
+echo ReturnFormatter::format("ready");
+"#,
+    );
+    assert_eq!(out, "ready");
+}
+
+/// Verifies union identity wins over weak coercion: an object satisfying `iterable` remains an
+/// iterable for `string|iterable`, even when that same object is also `Stringable`.
+#[test]
+fn test_stringable_iterable_object_keeps_iterable_union_member() {
+    let out = compile_and_run(
+        r#"<?php
+        class Labels implements Stringable, IteratorAggregate {
+            public function __toString(): string { return "string"; }
+            public function getIterator(): Traversable { yield "item"; }
+        }
+        function either(string|iterable $value): string {
+            return is_string($value) ? $value : "iterable";
+        }
+        echo either(new Labels());
+        "#,
+    );
+    assert_eq!(out, "iterable");
 }

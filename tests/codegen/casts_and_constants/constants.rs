@@ -76,3 +76,36 @@ var_dump(\constant('Demo\PHP_EOL'));
         )
     );
 }
+
+/// Verifies a runtime-named class constant lookup does not leak per call once the eval bridge is
+/// linked (a `call_user_func([static::class, <dynamic>])` site links it): the interpreter used to
+/// retain the already-owned box the native bridge returned, stranding a box and its string.
+#[test]
+fn test_constant_of_runtime_class_name_does_not_leak_with_eval_bridge() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class A {
+    const FOO = 'foo-a';
+    public static function shouldOverflowYears(): bool { return true; }
+    public function check(string $unit): bool {
+        $u = ucfirst($unit) . 's';
+        return call_user_func([static::class, 'shouldOverflow' . $u]);
+    }
+    public function greet(): string { return constant(static::class . '::' . 'FOO'); }
+}
+class B extends A { const FOO = 'foo-b'; }
+$n = $argc > 1 ? 1 : 200;
+for ($i = 0; $i < $n; $i++) {
+    $g = (new B)->greet();
+}
+echo $g, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "foo-b\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "constant() of a runtime class name leaked: {}",
+        out.stderr
+    );
+}

@@ -28,7 +28,7 @@
 //!   handler. Without interception it would `longjmp` over SQLite's VDBE and this
 //!   Rust/bridge frame — leaving the bridge mutex locked (deadlock), running
 //!   `Drop` across a `longjmp` (UB), or terminating the process. So the adapter
-//!   pushes its own `setjmp` handler record (identical 240-byte layout to the EIR
+//!   pushes its own `setjmp` handler record (identical shared-size layout to the EIR
 //!   try/catch slot) around the invoke: on a normal return it pops the handler and
 //!   returns the comparator sign; on a `longjmp` it pops the handler, swallows the
 //!   pending exception, releases the owned Throwable, and returns `i64::MIN`.
@@ -51,7 +51,10 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 // at runtime.
 const _: () = assert!(TRY_HANDLER_DIAG_DEPTH_OFFSET == 16);
 const _: () = assert!(TRY_HANDLER_JMP_BUF_OFFSET == 24);
-const _: () = assert!(TRY_HANDLER_SLOT_SIZE == 224);
+const HANDLER_AREA_SIZE: usize = TRY_HANDLER_SLOT_SIZE + 16;
+const AARCH64_FRAME_SIZE: usize = HANDLER_AREA_SIZE + 96;
+const X86_HANDLER_BASE: usize = HANDLER_AREA_SIZE + 72;
+const X86_FRAME_SIZE: usize = HANDLER_AREA_SIZE + 80;
 
 /// Emits `__rt_pdo_call_collation(descriptor, a_ptr, a_len, b_ptr, b_len) -> sign`.
 ///
@@ -68,23 +71,23 @@ pub fn emit_pdo_call_collation(emitter: &mut Emitter) {
     emitter.comment("--- runtime: pdo_call_collation ---");
     emitter.label_global("__rt_pdo_call_collation");
 
-    // Stack frame (336 bytes):
-    //   [sp, #0]   = handler area (224-byte record + 16-byte pad): next@0, survivor@8, diag@16,
+    // Stack frame (AARCH64_FRAME_SIZE bytes):
+    //   [sp, #0]   = handler area (shared-size record + 16-byte pad): next@0, survivor@8, diag@16,
     //                jmp_buf@24.
-    //   [sp, #240] = descriptor      [sp, #248] = a_ptr      [sp, #256] = a_len
-    //   [sp, #264] = b_ptr           [sp, #272] = b_len
-    //   [sp, #280] = args array ptr  [sp, #288] = boxed args cell
-    //   [sp, #296] = boxed return    [sp, #304] = comparator sign
-    //   [sp, #320] = saved x29       [sp, #328] = saved x30
-    emitter.instruction("sub sp, sp, #336");                                    // allocate the collation-adapter frame
-    emitter.instruction("stp x29, x30, [sp, #320]");                            // save frame pointer and return address
-    emitter.instruction("add x29, sp, #320");                                   // establish the adapter frame pointer
+    //   [sp, HANDLER_AREA_SIZE] = descriptor      [sp, HANDLER_AREA_SIZE + 8] = a_ptr      [sp, HANDLER_AREA_SIZE + 16] = a_len
+    //   [sp, HANDLER_AREA_SIZE + 24] = b_ptr           [sp, HANDLER_AREA_SIZE + 32] = b_len
+    //   [sp, HANDLER_AREA_SIZE + 40] = args array ptr  [sp, HANDLER_AREA_SIZE + 48] = boxed args cell
+    //   [sp, HANDLER_AREA_SIZE + 56] = boxed return    [sp, HANDLER_AREA_SIZE + 64] = comparator sign
+    //   [sp, HANDLER_AREA_SIZE + 80] = saved x29       [sp, HANDLER_AREA_SIZE + 88] = saved x30
+    emitter.instruction(&format!("sub sp, sp, #{}", AARCH64_FRAME_SIZE));       // allocate the collation-adapter frame
+    emitter.instruction(&format!("stp x29, x30, [sp, #{}]", HANDLER_AREA_SIZE + 80)); // save frame pointer and return address
+    emitter.instruction(&format!("add x29, sp, #{}", HANDLER_AREA_SIZE + 80));  // establish the adapter frame pointer
 
-    emitter.instruction("str x0, [sp, #240]");                                  // save descriptor pointer
-    emitter.instruction("str x1, [sp, #248]");                                  // save a_ptr
-    emitter.instruction("str x2, [sp, #256]");                                  // save a_len
-    emitter.instruction("str x3, [sp, #264]");                                  // save b_ptr
-    emitter.instruction("str x4, [sp, #272]");                                  // save b_len
+    emitter.instruction(&format!("str x0, [sp, #{}]", HANDLER_AREA_SIZE));      // save descriptor pointer
+    emitter.instruction(&format!("str x1, [sp, #{}]", HANDLER_AREA_SIZE + 8));  // save a_ptr
+    emitter.instruction(&format!("str x2, [sp, #{}]", HANDLER_AREA_SIZE + 16)); // save a_len
+    emitter.instruction(&format!("str x3, [sp, #{}]", HANDLER_AREA_SIZE + 24)); // save b_ptr
+    emitter.instruction(&format!("str x4, [sp, #{}]", HANDLER_AREA_SIZE + 32)); // save b_len
 
     // -- fast path: a descriptor without a uniform invoker compares as equal --
     emitter.instruction(&format!("ldr x9, [x0, #{}]", CALLABLE_DESC_INVOKER_OFFSET)); // load the invoker slot
@@ -101,34 +104,34 @@ pub fn emit_pdo_call_collation(emitter: &mut Emitter) {
     emitter.instruction("lsl x11, x11, #8");                                    // move the tag into the packed kind-word byte lane
     emitter.instruction("orr x10, x10, x11");                                   // combine the heap kind with the value_type tag
     emitter.instruction("str x10, [x0, #-8]");                                  // persist the stamped kind word (never re-stamped: no push_int)
-    emitter.instruction("str x0, [sp, #280]");                                  // save the args array pointer
+    emitter.instruction(&format!("str x0, [sp, #{}]", HANDLER_AREA_SIZE + 40)); // save the args array pointer
 
     // -- slot 0: string a (from_value tag 1 persists the bytes into an owned copy) --
     emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
-    emitter.instruction("ldr x1, [sp, #248]");                                  // value_lo = a_ptr
-    emitter.instruction("ldr x2, [sp, #256]");                                  // value_hi = a_len
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", HANDLER_AREA_SIZE + 8));  // value_lo = a_ptr
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", HANDLER_AREA_SIZE + 16)); // value_hi = a_len
     emitter.instruction("bl __rt_mixed_from_value");                            // x0 = boxed Mixed(string) a
-    emitter.instruction("ldr x9, [sp, #280]");                                  // reload the args array pointer
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", HANDLER_AREA_SIZE + 40)); // reload the args array pointer
     emitter.instruction("str x0, [x9, #24]");                                   // store boxed a into slot 0 (data region + 0)
     emitter.instruction("mov x10, #1");                                         // running element count = 1
     emitter.instruction("str x10, [x9]");                                       // update the array length field
 
     // -- slot 1: string b --
     emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
-    emitter.instruction("ldr x1, [sp, #264]");                                  // value_lo = b_ptr
-    emitter.instruction("ldr x2, [sp, #272]");                                  // value_hi = b_len
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", HANDLER_AREA_SIZE + 24)); // value_lo = b_ptr
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", HANDLER_AREA_SIZE + 32)); // value_hi = b_len
     emitter.instruction("bl __rt_mixed_from_value");                            // x0 = boxed Mixed(string) b
-    emitter.instruction("ldr x9, [sp, #280]");                                  // reload the args array pointer
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", HANDLER_AREA_SIZE + 40)); // reload the args array pointer
     emitter.instruction("str x0, [x9, #32]");                                   // store boxed b into slot 1 (data region + 8)
     emitter.instruction("mov x10, #2");                                         // running element count = 2
     emitter.instruction("str x10, [x9]");                                       // update the array length field
 
     // -- box the indexed array as a Mixed cell (tag 4 increfs the array) --
-    emitter.instruction("ldr x1, [sp, #280]");                                  // raw args array pointer → payload lo
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", HANDLER_AREA_SIZE + 40)); // raw args array pointer → payload lo
     emitter.instruction("mov x2, #0");                                          // payload hi unused for an array
     emitter.instruction("mov x0, #4");                                          // runtime tag 4 = indexed array
     emitter.instruction("bl __rt_mixed_from_value");                            // x0 = boxed Mixed argument cell
-    emitter.instruction("str x0, [sp, #288]");                                  // save the boxed Mixed argument cell
+    emitter.instruction(&format!("str x0, [sp, #{}]", HANDLER_AREA_SIZE + 48)); // save the boxed Mixed argument cell
 
     // -- push a setjmp firewall handler around the invoke --
     // record.next = _exc_handler_top
@@ -149,11 +152,11 @@ pub fn emit_pdo_call_collation(emitter: &mut Emitter) {
     emitter.instruction("cbnz x0, __rt_pdo_call_collation_threw");              // nonzero → arrived via longjmp
 
     // -- normal path: invoke the comparator through its descriptor (offset 56) --
-    emitter.instruction("ldr x0, [sp, #240]");                                  // arg0 = descriptor pointer
-    emitter.instruction("ldr x1, [sp, #288]");                                  // arg1 = boxed Mixed argument cell
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", HANDLER_AREA_SIZE));      // arg0 = descriptor pointer
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", HANDLER_AREA_SIZE + 48)); // arg1 = boxed Mixed argument cell
     emitter.instruction(&format!("ldr x9, [x0, #{}]", CALLABLE_DESC_INVOKER_OFFSET)); // load the uniform invoker pointer
     emitter.instruction("blr x9");                                              // invoke comparator($a, $b) → OWNED boxed Mixed return in x0
-    emitter.instruction("str x0, [sp, #296]");                                  // save the boxed return for later release
+    emitter.instruction(&format!("str x0, [sp, #{}]", HANDLER_AREA_SIZE + 56)); // save the boxed return for later release
 
     // pop the firewall handler before any further runtime calls
     emitter.instruction("ldr x10, [sp, #0]");                                   // record.next
@@ -162,10 +165,10 @@ pub fn emit_pdo_call_collation(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0); // restore it
 
     // extract the comparator sign (borrows), then release the owned return
-    emitter.instruction("ldr x0, [sp, #296]");                                  // boxed return
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", HANDLER_AREA_SIZE + 56)); // boxed return
     emitter.instruction("bl __rt_mixed_cast_int");                              // x0 = raw i64 comparator sign (PHP (int) rules)
-    emitter.instruction("str x0, [sp, #304]");                                  // save the sign
-    emitter.instruction("ldr x0, [sp, #296]");                                  // boxed return
+    emitter.instruction(&format!("str x0, [sp, #{}]", HANDLER_AREA_SIZE + 64)); // save the sign
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", HANDLER_AREA_SIZE + 56)); // boxed return
     emitter.instruction("bl __rt_decref_mixed");                                // release the invoker's owned return
     emitter.instruction("b __rt_pdo_call_collation_cleanup");                   // join the shared container-release path
 
@@ -182,24 +185,24 @@ pub fn emit_pdo_call_collation(emitter: &mut Emitter) {
     emitter.label("__rt_pdo_call_collation_threw_released");
     emitter.instruction("mov x10, #1");                                         // materialize the callback-error sentinel high bit
     emitter.instruction("lsl x10, x10, #63");                                   // i64::MIN tells the bridge to interrupt SQLite
-    emitter.instruction("str x10, [sp, #304]");                                 // preserve the callback-error sentinel through cleanup
+    emitter.instruction(&format!("str x10, [sp, #{}]", HANDLER_AREA_SIZE + 64)); // preserve the callback-error sentinel through cleanup
 
     // -- shared cleanup: release the argument container --
     emitter.label("__rt_pdo_call_collation_cleanup");
-    emitter.instruction("ldr x0, [sp, #288]");                                  // boxed Mixed argument cell
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", HANDLER_AREA_SIZE + 48)); // boxed Mixed argument cell
     emitter.instruction("bl __rt_decref_mixed");                                // release the cell (drops the array ref boxing took)
-    emitter.instruction("ldr x0, [sp, #280]");                                  // raw args array pointer
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", HANDLER_AREA_SIZE + 40)); // raw args array pointer
     emitter.instruction("bl __rt_decref_any");                                  // release the array and deep-free its two boxed strings
-    emitter.instruction("ldr x0, [sp, #304]");                                  // load the comparator sign into the result register
-    emitter.instruction("ldp x29, x30, [sp, #320]");                            // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #336");                                    // release the adapter frame
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", HANDLER_AREA_SIZE + 64)); // load the comparator sign into the result register
+    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", HANDLER_AREA_SIZE + 80)); // restore frame pointer and return address
+    emitter.instruction(&format!("add sp, sp, #{}", AARCH64_FRAME_SIZE));       // release the adapter frame
     emitter.instruction("ret");                                                 // return the comparison sign to the bridge dispatcher
 
     // -- fast path: no uniform invoker → equal, with nothing allocated to release --
     emitter.label("__rt_pdo_call_collation_ret_zero");
     emitter.instruction("mov x0, #0");                                          // comparator sign = 0 (treat as equal)
-    emitter.instruction("ldp x29, x30, [sp, #320]");                            // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #336");                                    // release the adapter frame
+    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", HANDLER_AREA_SIZE + 80)); // restore frame pointer and return address
+    emitter.instruction(&format!("add sp, sp, #{}", AARCH64_FRAME_SIZE));       // release the adapter frame
     emitter.instruction("ret");                                                 // return to the bridge dispatcher
 }
 
@@ -209,17 +212,17 @@ fn emit_pdo_call_collation_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: pdo_call_collation ---");
     emitter.label_global("__rt_pdo_call_collation");
 
-    // Frame (320 bytes below rbp):
+    // Frame (X86_FRAME_SIZE bytes below rbp):
     //   [rbp-8]   descriptor   [rbp-16] a_ptr    [rbp-24] a_len
     //   [rbp-32]  b_ptr        [rbp-40] b_len
     //   [rbp-48]  args array   [rbp-56] boxed args cell
     //   [rbp-64]  boxed return [rbp-72] comparator sign
-    //   [rbp-312] handler area (224-byte record + 16-byte pad): next@0, survivor@8, diag@16,
+    //   [rbp-X86_HANDLER_BASE+0] handler area (shared-size record + 16-byte pad): next@0, survivor@8, diag@16,
     //             jmp_buf@24.
-    //   push rbp + sub rsp,320 keeps rsp 16-aligned for the nested calls.
+    //   push rbp + sub rsp,X86_FRAME_SIZE keeps rsp 16-aligned for the nested calls.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the adapter frame pointer
-    emitter.instruction("sub rsp, 320");                                        // reserve slots, the 224-byte handler record, and padding
+    emitter.instruction(&format!("sub rsp, {}", X86_FRAME_SIZE));               // reserve slots, the 224-byte handler record, and padding
 
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save descriptor pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save a_ptr
@@ -272,14 +275,14 @@ fn emit_pdo_call_collation_linux_x86_64(emitter: &mut Emitter) {
 
     // -- push a setjmp firewall handler around the invoke --
     abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0); // previous handler-stack top
-    emitter.instruction("mov QWORD PTR [rbp - 312], r10");                      // handler record: record.next
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", X86_HANDLER_BASE)); // handler record: record.next
     abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0); // live activation-frame top
-    emitter.instruction("mov QWORD PTR [rbp - 304], r10");                      // handler record: survivor frame (cleanup stops here)
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", X86_HANDLER_BASE - 8)); // handler record: survivor frame (cleanup stops here)
     abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0); // current diagnostic-suppression depth
-    emitter.instruction("mov QWORD PTR [rbp - 296], r10");                      // handler record: saved diagnostic depth
-    emitter.instruction("lea r10, [rbp - 312]");                                // r10 = address of this handler record
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", X86_HANDLER_BASE - 16)); // handler record: saved diagnostic depth
+    emitter.instruction(&format!("lea r10, [rbp - {}]", X86_HANDLER_BASE));     // r10 = address of this handler record
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // link the record as the active handler
-    emitter.instruction("lea rdi, [rbp - 288]");                                // rdi = &jmp_buf inside the handler record (record + 24)
+    emitter.instruction(&format!("lea rdi, [rbp - {}]", X86_HANDLER_BASE - 24)); // rdi = &jmp_buf inside the handler record (record + 24)
     emitter.save_exception_handler();                                           // returns 0 on first pass, 1 when a throw longjmps back
     emitter.instruction("test rax, rax");                                       // did control arrive via longjmp?
     emitter.instruction("jne __rt_pdo_call_collation_threw_x86");               // nonzero → arrived via longjmp
@@ -292,9 +295,9 @@ fn emit_pdo_call_collation_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save the boxed return for later release
 
     // pop the firewall handler before any further runtime calls
-    emitter.instruction("mov r10, QWORD PTR [rbp - 312]");                      // record.next
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", X86_HANDLER_BASE)); // record.next
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // unlink the handler record
-    emitter.instruction("mov r10, QWORD PTR [rbp - 296]");                      // saved diagnostic-suppression depth
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", X86_HANDLER_BASE - 16)); // saved diagnostic-suppression depth
     abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0); // restore it
 
     // extract the comparator sign (borrows), then release the owned return
@@ -307,9 +310,9 @@ fn emit_pdo_call_collation_linux_x86_64(emitter: &mut Emitter) {
 
     // -- longjmp path: a throw crossed the invoke --
     emitter.label("__rt_pdo_call_collation_threw_x86");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 312]");                      // record.next
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", X86_HANDLER_BASE)); // record.next
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // unlink the handler record
-    emitter.instruction("mov r10, QWORD PTR [rbp - 296]");                      // saved diagnostic-suppression depth
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", X86_HANDLER_BASE - 16)); // saved diagnostic-suppression depth
     abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0); // restore it
     abi::emit_load_symbol_to_reg(emitter, "rax", "_exc_value", 0); // take ownership of the pending Throwable
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0); // clear the slot before releasing the caught Throwable
@@ -327,14 +330,14 @@ fn emit_pdo_call_collation_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // raw args array pointer
     emitter.instruction("call __rt_decref_any");                                // release the array and deep-free its two boxed strings
     emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // load the comparator sign into the result register
-    emitter.instruction("add rsp, 320");                                        // release the adapter frame
+    emitter.instruction(&format!("add rsp, {}", X86_FRAME_SIZE));               // release the adapter frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the comparison sign to the bridge dispatcher
 
     // -- fast path: no uniform invoker → equal, with nothing allocated to release --
     emitter.label("__rt_pdo_call_collation_ret_zero_x86");
     emitter.instruction("xor eax, eax");                                        // comparator sign = 0 (treat as equal)
-    emitter.instruction("add rsp, 320");                                        // release the adapter frame
+    emitter.instruction(&format!("add rsp, {}", X86_FRAME_SIZE));               // release the adapter frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to the bridge dispatcher
 }

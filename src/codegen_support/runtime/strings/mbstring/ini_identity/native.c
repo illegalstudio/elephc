@@ -17,6 +17,10 @@ typedef uint64_t (*lookup_fn)(uint64_t, uint64_t);
 typedef int32_t (*two_fn)(uint64_t, uint64_t);
 typedef int32_t (*reset_fn)(void);
 static void *const *functions;
+/* The emitted hooks gate on the registry's live entry count; the fixture mirrors the real Rust
+   counter (handed over as callback 13) after every call that can change it. */
+uint64_t ELEPHC_MBSTRING_NATIVE_ENTRIES;
+#define SYNC() (ELEPHC_MBSTRING_NATIVE_ENTRIES = *(const uint64_t *)functions[13])
 static uint64_t copies, frees;
 
 HIDDEN _Alignas(16) unsigned char heap[16384] __asm__("_heap_buf");
@@ -36,6 +40,8 @@ HIDDEN void *array_reference_retire __asm__("_elephc_eval_array_reference_retire
 HIDDEN uint64_t active __asm__("_mbstring_ini_native_active");
 HIDDEN _Alignas(16) unsigned char snapshots[2][672] __asm__("_ini_register_snapshots");
 HIDDEN const char double_free[] __asm__("_heap_dbg_double_free_msg") = "unexpected double free";
+HIDDEN const char live_free[] __asm__("_heap_dbg_live_free_msg") = "unexpected live free";
+HIDDEN uint64_t discard_frees __asm__("_heap_discard_frees");
 extern void mb_test_registers(void *, uint64_t, uint64_t);
 extern void mb_test_bind(void *, uint64_t, uint64_t);
 extern void mb_test_literal(const void *, uint64_t);
@@ -48,8 +54,10 @@ extern struct cell *__elephc_eval_value_string_literal(const void *, uint64_t);
 
 /* Allocates from an independent bounded bump arena with the real runtime's uniform header. */
 void *mb_test_allocate(uint64_t size) {
-    size = (size + 7) & ~UINT64_C(7);
-    if (size < 8) { size = 8; }
+    /* Payloads start on 16-byte boundaries like the real arena's: `__rt_heap_free` rejects any
+       other address as an interior pointer. */
+    size = (size + 15) & ~UINT64_C(15);
+    if (size < 16) { size = 16; }
     if (size + 16 > sizeof(heap) - offset) { abort(); }
     unsigned char *header = heap + offset;
     *(uint32_t *)header = (uint32_t)size;
@@ -79,6 +87,7 @@ struct cell *__elephc_eval_value_string(const void *bytes, uint64_t length) {
 /* Forwards emitted calls to the actual Rust identity registry supplied by the integration harness. */
 int32_t elephc_mbstring_native_string_bind_v1(uint64_t owner, uint64_t length, uint64_t identity) {
     int32_t result = ((three_fn)functions[4])(owner, length, identity);
+    SYNC();
 #if defined(__x86_64__)
     __asm__ volatile("pxor %%xmm0, %%xmm0; pxor %%xmm15, %%xmm15; xor %%r8d, %%r8d; xor %%r11d, %%r11d"
         : : : "xmm0", "xmm15", "r8", "r11", "cc");
@@ -92,33 +101,50 @@ int32_t elephc_mbstring_native_string_bind_v1(uint64_t owner, uint64_t length, u
 /* Counts complete persistence copies while preserving the real registry's ownership behavior. */
 int32_t elephc_mbstring_native_string_copy_v1(uint64_t destination, uint64_t source, uint64_t length) {
     copies++;
-    return ((three_fn)functions[5])(destination, source, length);
+    int32_t status = ((three_fn)functions[5])(destination, source, length);
+    SYNC();
+    return status;
 }
 
 /* Records origins without reading foreign or scratch storage into the engine. */
 int32_t elephc_mbstring_native_string_fresh_v1(uint64_t owner, uint64_t length) {
-    return ((two_fn)functions[9])(owner, length);
+    int32_t status = ((two_fn)functions[9])(owner, length);
+    SYNC();
+    return status;
 }
 
 /* Distinguishes explicit PHP literals from other non-heap input buffers. */
 int32_t elephc_mbstring_native_string_literal_v1(uint64_t owner, uint64_t length) {
-    return ((two_fn)functions[10])(owner, length);
+    int32_t status = ((two_fn)functions[10])(owner, length);
+    SYNC();
+    return status;
 }
 
-/* Tracks ordinary persistence before the first INI call without retaining its source allocation. */
+/* Shares a tracked source's origin with its persisted copy; an untracked source stays untracked. */
 int32_t elephc_mbstring_native_string_persist_v1(uint64_t destination, uint64_t source, uint64_t length) {
     copies++;
-    return ((three_fn)functions[11])(destination, source, length);
+    int32_t status = ((three_fn)functions[11])(destination, source, length);
+    SYNC();
+    return status;
 }
 
 /* Observes metadata retirement before the actual allocator makes a block reusable. */
 int32_t elephc_mbstring_native_string_forget_v1(uint64_t owner) {
     frees++;
-    return ((one_fn)functions[7])(owner);
+    int32_t status = ((one_fn)functions[7])(owner);
+    SYNC();
+    return status;
 }
 
 /* Clears only native metadata leases; external result ownership remains independent. */
-int32_t elephc_mbstring_native_string_reset_v1(void) { return ((reset_fn)functions[8])(); }
+int32_t elephc_mbstring_native_string_reset_v1(void) { int32_t status = ((reset_fn)functions[8])(); SYNC(); return status; }
+
+/* Resolves an INI identity the way `__rt_mbstring_ini_input` does, giving an untracked string a fresh origin. */
+static uint64_t resolve(void *owner, uint64_t length) {
+    uint64_t identity = ((lookup_fn)functions[12])((uintptr_t)owner, length);
+    SYNC();
+    return identity;
+}
 
 /* Provides the complete protected host table for diagnostic-free string imports. */
 static int32_t diagnostic(void *context, uint32_t level, const unsigned char *bytes, uint64_t length) {
@@ -139,9 +165,11 @@ static struct result import(const unsigned char *bytes, uint64_t length) {
 int mb_test_native(void *const *callbacks) {
     functions = callbacks;
     CHECK(((reset_fn)functions[8])() == 0);
+    SYNC();
     void *source = mb_test_persist("ASCII", 5);
-    CHECK(copies == 1 && frees == 0 && active == 1);
-    copies = 0;
+    /* Before any INI input the registry is dormant: persistence records nothing. */
+    CHECK(copies == 0 && frees == 0 && active == 0);
+    CHECK(((lookup_fn)functions[6])((uintptr_t)source, 5) == 0);
     struct result result = import((const unsigned char *)"ASCII", 5);
     uint64_t identity = (uint64_t)result.value;
     mb_test_registers(source, 5, identity);
@@ -174,26 +202,33 @@ int mb_test_native(void *const *callbacks) {
     mb_test_literal(literal, 5);
     source = mb_test_persist(literal, 5);
     void *early = mb_test_persist(literal, 5);
-    identity = ((lookup_fn)functions[12])((uintptr_t)source, 5);
-    CHECK(identity != 0 && ((lookup_fn)functions[12])((uintptr_t)early, 5) == identity);
+    /* Literals are not interned: each persisted copy resolves to its own fresh value. */
+    identity = resolve((void *)source, 5);
+    uint64_t other = resolve((void *)early, 5);
+    CHECK(identity != 0 && other != 0 && other != identity);
     mb_test_free(early);
     mb_test_free(source);
     mb_test_reset();
     CHECK(live == 0 && offset == 0 && ((one_fn)functions[2])(identity) == 1);
+    CHECK(((one_fn)functions[2])(other) == 1);
     char input[] = "ASCII";
     struct cell *first = __elephc_eval_value_string_literal(input, 5);
     struct cell *second = __elephc_eval_value_string_literal(input, 5);
     memset(input, 'X', 5);
-    identity = ((lookup_fn)functions[12])((uintptr_t)first->bytes, first->length);
+    identity = resolve((void *)first->bytes, first->length);
     CHECK(identity != 0 && memcmp(first->bytes, literal, 5) == 0);
-    CHECK(((lookup_fn)functions[12])((uintptr_t)second->bytes, second->length) == identity);
+    other = resolve((void *)second->bytes, second->length);
+    CHECK(other != 0 && other != identity);
     source = second->bytes;
     mb_test_free(second);
     mb_test_free(source);
     source = first->bytes;
     mb_test_free(first);
     mb_test_free(source);
-    CHECK(live == 0 && offset == 0 && ((one_fn)functions[2])(identity) == 1);
+    CHECK(live == 0);
+    CHECK(offset == 0);
+    CHECK(((one_fn)functions[2])(identity) == 1);
+    CHECK(((one_fn)functions[2])(other) == 1);
     source = mb_test_allocate(5);
     memcpy(source, "ASCII", 5);
 #if defined(__x86_64__)
@@ -203,21 +238,21 @@ int mb_test_native(void *const *callbacks) {
 #endif
     CHECK(mb_test_persist(source, 5) == source);
     CHECK(((lookup_fn)functions[6])((uintptr_t)source, 5) == 0);
-    identity = ((lookup_fn)functions[12])((uintptr_t)source, 5);
+    identity = resolve((void *)source, 5);
     CHECK(identity != 0);
     mb_test_free(source);
     CHECK(live == 0 && offset == 0 && ((one_fn)functions[2])(identity) == 1);
     source = mb_test_persist("ASCII", 5);
-    identity = ((lookup_fn)functions[12])((uintptr_t)source, 5);
+    identity = resolve((void *)source, 5);
     void *unchanged = mb_test_upper(source, 5);
     void *changed = mb_test_lower(source, 5);
     CHECK(unchanged != source && memcmp(unchanged, "ASCII", 5) == 0);
     CHECK(changed != source && memcmp(changed, "ascii", 5) == 0);
-    CHECK(((lookup_fn)functions[12])((uintptr_t)unchanged, 5) == identity);
-    uint64_t converted_identity = ((lookup_fn)functions[12])((uintptr_t)changed, 5);
+    CHECK(resolve((void *)unchanged, 5) == identity);
+    uint64_t converted_identity = resolve((void *)changed, 5);
     CHECK(converted_identity != 0 && converted_identity != identity);
     early = mb_test_upper(changed, 5);
-    uint64_t roundtrip_identity = ((lookup_fn)functions[12])((uintptr_t)early, 5);
+    uint64_t roundtrip_identity = resolve((void *)early, 5);
     CHECK(memcmp(early, "ASCII", 5) == 0 && memcmp(source, "ASCII", 5) == 0);
     CHECK(roundtrip_identity != 0 && roundtrip_identity != identity && roundtrip_identity != converted_identity);
     mb_test_free(early);
@@ -228,9 +263,9 @@ int mb_test_native(void *const *callbacks) {
     CHECK(((one_fn)functions[2])(identity) == 1 && ((one_fn)functions[2])(converted_identity) == 1);
     CHECK(((one_fn)functions[2])(roundtrip_identity) == 1);
     source = mb_test_persist("", 0);
-    identity = ((lookup_fn)functions[12])((uintptr_t)source, 0);
+    identity = resolve((void *)source, 0);
     unchanged = mb_test_lower(source, 0);
-    CHECK(identity != 0 && unchanged != source && ((lookup_fn)functions[12])((uintptr_t)unchanged, 0) == identity);
+    CHECK(identity != 0 && unchanged != source && resolve((void *)unchanged, 0) == identity);
     mb_test_free(unchanged);
     mb_test_free(source);
     CHECK(live == 0 && offset == 0 && ((one_fn)functions[2])(identity) == 1);
@@ -238,7 +273,7 @@ int mb_test_native(void *const *callbacks) {
     early = mb_test_persist(source, 5);
     CHECK(((lookup_fn)functions[6])((uintptr_t)early, 5) == 0);
     mb_test_free(source);
-    identity = ((lookup_fn)functions[12])((uintptr_t)early, 5);
+    identity = resolve((void *)early, 5);
     CHECK(identity != 0 && ((lookup_fn)functions[6])((uintptr_t)source, 5) == 0);
     mb_test_free(early);
     mb_test_reset();

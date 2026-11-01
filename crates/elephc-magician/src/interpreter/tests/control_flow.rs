@@ -122,6 +122,21 @@ fn execute_program_for_continue_runs_update_clause() {
     assert_eq!(values.output, "done");
     assert_eq!(values.get(i), FakeValue::Int(0));
 }
+
+/// Verifies `continue 2` skips the rest of the outer loop body and runs its update clause.
+#[test]
+fn execute_program_multilevel_continue_propagates_to_outer_loop() {
+    let program = parse_fragment(
+        br#"for ($outer = 2; $outer; $outer = $outer - 1) { for ($inner = 2; $inner; $inner = $inner - 1) { echo $outer . $inner; continue 2; } echo "unreachable"; }"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "2212");
+}
 /// Verifies comparison operators return boolean cells usable by echo and branches.
 #[test]
 fn execute_program_comparisons_return_bool_cells() {
@@ -236,17 +251,76 @@ fn execute_program_match_skips_unselected_results() {
 
     assert_eq!(values.get(result), FakeValue::String("two".to_string()));
 }
-/// Verifies match expressions without a matching arm or default fail at runtime.
+/// Verifies a match with no matching arm raises PHP's catchable `\UnhandledMatchError`.
+///
+/// `php -n` 8.5.6 prints `UnhandledMatchError:Unhandled match case 3`. This used to be a bare
+/// `RuntimeFatal`, which is a different thing entirely: PHP's error is an `\Error` subclass a
+/// program can catch, so a fatal in its place turns a handled branch into a dead process.
 #[test]
-fn execute_program_match_without_default_fails_on_miss() {
-    let program = parse_fragment(br#"return match (3) { 1 => "one", 2 => "two" };"#)
-        .expect("parse eval fragment");
+fn execute_program_match_without_default_raises_unhandled_match_error() {
+    let program = parse_fragment(
+        br#"try { $x = match (3) { 1 => "one", 2 => "two" }; }
+catch (\UnhandledMatchError $e) { echo get_class($e); echo ":"; echo $e->getMessage(); }
+return true;"#,
+    )
+    .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
-    let result = execute_program(&program, &mut scope, &mut values);
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(result, Err(EvalStatus::RuntimeFatal));
+    assert_eq!(values.output, "UnhandledMatchError:Unhandled match case 3");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies the unmatched subject is named the way PHP names it in the message.
+///
+/// `php -n` 8.5.6 prints, for each subject in turn:
+/// `'x'` · `'exactly16chars!...'` · `9` · `1.0` · `true` · `false` · `NULL` · `of type array`.
+/// A readable literal is spelled out, a string is single-quoted and cut to 15 characters, and a
+/// value with no literal is named by type instead.
+///
+/// The float rule is PHP's `(string)` conversion plus the `.0` that conversion drops, so
+/// `1.0` prints as `1.0` while `1.0E+20` is already spelled with a dot and stays as it is. Only
+/// `1.0` is exercised here: the fake runtime renders `-0.0` as `0` and `0.1 + 0.2` as
+/// `0.30000000000000004`, where PHP's precision-14 conversion gives `-0` and `0.3`, so those two
+/// would pin the harness's float formatting rather than this message.
+#[test]
+fn execute_program_match_error_names_the_subject_the_way_php_does() {
+    let program = parse_fragment(
+        br#"function miss($v) {
+    try { $x = match ($v) { 'zzz' => 1 }; }
+    catch (\UnhandledMatchError $e) { echo $e->getMessage(); echo ";"; }
+}
+miss("x");
+miss("exactly16chars!!");
+miss(9);
+miss(1.0);
+miss(true);
+miss(false);
+miss(null);
+miss([1, 2]);
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        concat!(
+            "Unhandled match case 'x';",
+            "Unhandled match case 'exactly16chars!...';",
+            "Unhandled match case 9;",
+            "Unhandled match case 1.0;",
+            "Unhandled match case true;",
+            "Unhandled match case false;",
+            "Unhandled match case NULL;",
+            "Unhandled match case of type array;",
+        )
+    );
 }
 /// Verifies PHP keyword logical operators use PHP precedence and short-circuiting.
 #[test]
@@ -410,6 +484,63 @@ fn execute_program_foreach_iterates_assoc_values_only() {
 
     assert_eq!(values.output, "12");
 }
+/// Verifies foreach references write through source array elements and nested alias targets.
+#[test]
+fn execute_program_foreach_references_preserve_array_element_aliases() {
+    let program = parse_fragment(
+        br#"$items = [1, 2];
+foreach ($items as $key => &$item) {
+    $item = $item + $key + 10;
+}
+$aliases = [];
+foreach ($items as $key => &$item) {
+    $aliases["nested"][$key] =& $item;
+}
+$aliases["nested"][0] = 99;
+echo $items[0] . ":" . $items[1] . ":" . $item;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "99:13:13");
+}
+
+/// Verifies a short-array destructuring condition returns its RHS and assigns null on misses.
+#[test]
+fn execute_program_array_destructure_assignment_condition_handles_null() {
+    let program = parse_fragment(
+        br#"$scopes = ["property" => ["declaring", "real"]];
+if ([$scope, $name] = $scopes["property"] ?? null) { echo $scope . ":" . $name; }
+if ([$scope, $name] = $scopes["missing"] ?? null) { echo "unexpected"; }
+echo ":" . (is_null($scope) ? "null" : $scope);"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "declaring:real:null");
+}
+
+/// Verifies goto propagates through a loop and resumes at an outer function-local label.
+#[test]
+fn execute_program_goto_exits_nested_loop_to_outer_label() {
+    let program = parse_fragment(
+        br#"foreach ([1, 2] as $item) { if ($item) { goto done; } } echo "skip"; done: echo "ok";"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "ok");
+}
+
 /// Verifies break and continue control foreach execution inside eval.
 #[test]
 fn execute_program_foreach_honors_break_and_continue() {
@@ -459,5 +590,53 @@ foreach (new EvalForeachAggregate() as $item) {
     assert_eq!(
         values.output,
         "rewind:valid0:current0:key0:k0=v0:next0:valid1:current1:key1:k1=v1:|agg:rewind:valid0:current0:v0:next0:valid1:current1:v1:next1:valid2:"
+    );
+}
+
+/// Verifies the other three shapes `getIterator()` is allowed to return.
+///
+/// `php -n` 8.5.6 prints `A:0=g0,1=g1,|B:k0=v0,k1=v1,|D:k0=v0,k1=v1,k0=v0,k1=v1,|end`. The
+/// generator is the common Symfony shape; the NESTED aggregate is the one worth pinning, because
+/// PHP asks `getIterator()` again rather than refusing, and this arm used to answer with a fatal;
+/// and iterating the same aggregate twice must build a fresh iterator each time.
+#[test]
+fn execute_program_foreach_accepts_every_get_iterator_shape() {
+    let program = parse_fragment(
+        br#"class It2 implements Iterator {
+    private int $i = 0;
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < 2; }
+    public function current(): mixed { return "v" . $this->i; }
+    public function key(): mixed { return "k" . $this->i; }
+    public function next(): void { $this->i = $this->i + 1; }
+}
+class AggGen implements IteratorAggregate {
+    public function getIterator(): Traversable { yield 'g0'; yield 'g1'; }
+}
+class AggInner implements IteratorAggregate {
+    public function getIterator(): Traversable { return new It2(); }
+}
+class AggNested implements IteratorAggregate {
+    public function getIterator(): Traversable { return new AggInner(); }
+}
+echo "A:";
+foreach (new AggGen() as $k => $v) { echo $k; echo "="; echo $v; echo ","; }
+echo "|B:";
+foreach (new AggNested() as $k => $v) { echo $k; echo "="; echo $v; echo ","; }
+echo "|D:";
+$again = new AggInner();
+foreach ($again as $k => $v) { echo $k; echo "="; echo $v; echo ","; }
+foreach ($again as $k => $v) { echo $k; echo "="; echo $v; echo ","; }
+echo "|end";"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "A:0=g0,1=g1,|B:k0=v0,k1=v1,|D:k0=v0,k1=v1,k0=v0,k1=v1,|end"
     );
 }

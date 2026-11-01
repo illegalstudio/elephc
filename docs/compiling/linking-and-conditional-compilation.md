@@ -162,6 +162,12 @@ runtime calls. Statically visible `pcntl_*` calls auto-link it. See
 [PCNTL](../php/pcntl.md) for target availability, fork/signal semantics, and
 documented limits.
 
+`--with-proc` force-links the `proc_open()` bridge. The `proc_*` family is a
+prelude over that bridge, injected whenever a program names `proc_open`,
+`proc_close`, `proc_get_status`, `proc_terminate`, or `proc_nice`, so the flag is
+only needed to keep the archive when the names are reached indirectly. See
+[Streams](../php/streams.md) for the supported descriptor specs and limits.
+
 `--with-eval` force-links `elephc_magician`; it does not enable new syntax or
 change which fragments are eligible for AOT lowering. Normal eval usage is
 detected automatically. See [Eval](../php/eval.md) for language semantics and

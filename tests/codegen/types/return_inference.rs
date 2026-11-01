@@ -169,6 +169,35 @@ echo $r, "|", gettype($r);
     assert_eq!(out, "9.2233720368548E+18|double");
 }
 
+/// A DECLARED `int` return receiving a compact NULLABLE int is PHP's run-time check, not a static
+/// one: the program runs, and raises only when the value really is null. Symfony's `KernelEvent`
+/// stores `private ?int $requestType` and returns it from `getRequestType(): int`, which the
+/// compiler used to refuse outright with "return type expects Int, got Union([Int, Void])".
+/// PHP outputs "7|TypeError:Ev::get(): Return value must be of type int, null returned".
+#[test]
+fn test_declared_int_return_accepts_a_nullable_int_and_checks_it_at_run_time() {
+    let out = compile_and_run(
+        r#"<?php
+class Ev {
+    public function __construct(private ?int $t) {}
+
+    public function get(): int { return $this->t; }
+}
+
+echo (new Ev(7))->get(), "|";
+try {
+    echo (new Ev(null))->get();
+} catch (TypeError $e) {
+    echo get_class($e), ":", $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "7|TypeError:Ev::get(): Return value must be of type int, null returned"
+    );
+}
+
 /// A DECLARED `int` return receiving an overflow-promoted float throws PHP's TypeError
 /// instead of silently wrapping to PHP_INT_MIN: the declared boundary runs coercive-mode
 /// verification, and a float outside the int range is not coercible.

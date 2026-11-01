@@ -66,13 +66,15 @@ fn parse_fragment_accepts_dynamic_static_property_name_writes() {
     assert_eq!(
         program.statements(),
         &[
-            EvalStmt::DynamicStaticPropertyNameSet {
-                class_name: EvalExpr::ClassNameFetch {
-                    class_name: "EvalStaticBox".to_string(),
-                },
-                property: EvalExpr::LoadVar("property".to_string()),
-                value: EvalExpr::Const(EvalConst::Int(2)),
-            },
+            EvalStmt::Expr(EvalExpr::Assign {
+                target: Box::new(EvalExpr::DynamicStaticPropertyNameGet {
+                    class_name: Box::new(EvalExpr::ClassNameFetch {
+                        class_name: "EvalStaticBox".to_string(),
+                    }),
+                    property: Box::new(EvalExpr::LoadVar("property".to_string())),
+                }),
+                value: Box::new(EvalExpr::Const(EvalConst::Int(2))),
+            }),
             EvalStmt::DynamicStaticPropertyNameIncDec {
                 class_name: EvalExpr::LoadVar("class".to_string()),
                 property: name_expr_call(),

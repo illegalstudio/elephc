@@ -54,9 +54,23 @@ pub(super) fn lower_dynamic_membership(
             ctx.emitter.instruction(&format!("jns {valid}"));                   // preserve the helper's boolean result
         }
     }
-    crate::codegen::lower_inst::exceptions::emit_type_error(
-        ctx, "in_array(): Argument #2 ($haystack) must be of type array",
-    );
+    if matches!(ctx.value_php_type(array)?.codegen_repr(), PhpType::Mixed) {
+        // php names the haystack's type: `..., false given`. The boxed haystack still holds it,
+        // so unbox the tag and let the shared dispatch spell the type.
+        ctx.load_value_to_result(array)?;
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        let wrong = ctx.next_label("in_array_boxed_wrong_type");
+        abi::emit_jump(ctx.emitter, &wrong);
+        super::union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(
+            ctx,
+            &wrong,
+            &|given| format!("in_array(): Argument #2 ($haystack) must be of type array, {given} given"),
+        );
+    } else {
+        crate::codegen::lower_inst::exceptions::emit_type_error(
+            ctx, "in_array(): Argument #2 ($haystack) must be of type array",
+        );
+    }
     ctx.emitter.label(&valid);
     Ok(())
 }

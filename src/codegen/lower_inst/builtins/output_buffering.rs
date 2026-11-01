@@ -26,7 +26,7 @@ use crate::codegen_support::runtime::{
     OB_CLOSURE_INVOKE_NAME, OB_DEFAULT_HANDLER_NAME, OB_NTC_CREATE_FAIL,
     OB_WARN_BAD_CALLBACK_GENERIC, OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX,
 };
-use crate::ir::{Instruction, ValueId};
+use crate::ir::{Immediate, Instruction, Op, ValueDef, ValueId};
 use crate::types::PhpType;
 
 use super::super::callables::runtime_string_descriptor_cases;
@@ -600,7 +600,181 @@ fn resolve_integer_arg_to_result(
     Ok(())
 }
 
+/// Lowers `headers_sent()` and writes its optional filename and line outputs.
+pub(crate) fn lower_headers_sent(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count_between(inst, "headers_sent", 0, 2)?;
+    abi::emit_call_label(ctx.emitter, "__rt_headers_sent");
+    let file_slot = match inst.operands.first().copied() {
+        Some(value) => source_load_local_slot(ctx, value)?,
+        None => None,
+    };
+    let line_slot = match inst.operands.get(1).copied() {
+        Some(value) => source_load_local_slot(ctx, value)?,
+        None => None,
+    };
+    if file_slot.is_none() && line_slot.is_none() {
+        return store_if_result(ctx, inst);
+    }
+
+    let (empty_symbol, _) = ctx.data.add_string(b"");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(ctx.emitter, "x0");
+            if let Some(slot) = file_slot {
+                abi::emit_symbol_address(ctx.emitter, "x9", &empty_symbol);
+                store_string_output_to_local(ctx, slot, "x9", "xzr")?;
+            }
+            if let Some(slot) = line_slot {
+                store_int_output_to_local(ctx, slot, "xzr")?;
+            }
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg(ctx.emitter, "rax");
+            if let Some(slot) = file_slot {
+                abi::emit_symbol_address(ctx.emitter, "r9", &empty_symbol);
+                ctx.emitter.instruction("xor r10, r10");
+                store_string_output_to_local(ctx, slot, "r9", "r10")?;
+            }
+            if let Some(slot) = line_slot {
+                ctx.emitter.instruction("xor r10, r10");
+                store_int_output_to_local(ctx, slot, "r10")?;
+            }
+            abi::emit_pop_reg(ctx.emitter, "rax");
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Stores a string output into a by-reference local slot, boxing gradual storage when required.
+fn store_string_output_to_local(
+    ctx: &mut FunctionContext<'_>,
+    slot: crate::ir::LocalSlotId,
+    pointer_register: &str,
+    length_register: &str,
+) -> Result<()> {
+    let offset = ctx.local_offset(slot)?;
+    if ctx.local_php_type(slot)?.codegen_repr() == PhpType::Mixed {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter
+                    .instruction(&format!("mov x1, {pointer_register}"));
+                ctx.emitter
+                    .instruction(&format!("mov x2, {length_register}"));
+            }
+            Arch::X86_64 => {
+                ctx.emitter
+                    .instruction(&format!("mov rax, {pointer_register}"));
+                ctx.emitter
+                    .instruction(&format!("mov rdx, {length_register}"));
+            }
+        }
+        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+        abi::store_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+        return Ok(());
+    }
+    abi::store_at_offset_scratch(ctx.emitter, pointer_register, offset, "x13");
+    abi::store_at_offset_scratch(ctx.emitter, length_register, offset - 8, "x13");
+    Ok(())
+}
+
+/// Stores an integer output into a by-reference local slot, boxing gradual storage when required.
+fn store_int_output_to_local(
+    ctx: &mut FunctionContext<'_>,
+    slot: crate::ir::LocalSlotId,
+    value_register: &str,
+) -> Result<()> {
+    let offset = ctx.local_offset(slot)?;
+    if ctx.local_php_type(slot)?.codegen_repr() == PhpType::Mixed {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx
+                .emitter
+                .instruction(&format!("mov x0, {value_register}")),
+            Arch::X86_64 => ctx
+                .emitter
+                .instruction(&format!("mov rax, {value_register}")),
+        }
+        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+        abi::store_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+        return Ok(());
+    }
+    abi::store_at_offset_scratch(ctx.emitter, value_register, offset, "x13");
+    Ok(())
+}
+
+/// Resolves the local slot loaded by a by-reference output operand.
+fn source_load_local_slot(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Result<Option<crate::ir::LocalSlotId>> {
+    let Some(value_ref) = ctx.function.value(value) else {
+        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+    };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(None);
+    };
+    let Some(inst_ref) = ctx.function.instruction(inst) else {
+        return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
+    };
+    if inst_ref.op == Op::LoadLocal {
+        if let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate {
+            return Ok(Some(slot));
+        }
+    }
+    Ok(None)
+}
+
 /// Verifies that the builtin call has between the expected lowered operand counts.
+/// Lowers `header_remove()` into the web-gated response-state runtime bridge.
+pub(crate) fn lower_header_remove(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count_between(inst, "header_remove", 0, 1)?;
+    match inst.operands.first().copied() {
+        Some(name) => {
+            let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+            super::strings::load_value_as_string_to_regs(
+                ctx,
+                name,
+                "header_remove name",
+                ptr_reg,
+                len_reg,
+            )?;
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("mov x0, x1");                      // forward name pointer through the first C ABI argument
+                    ctx.emitter.instruction("mov x1, x2");                      // forward the byte length through the second argument
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("mov rdi, rax");                    // forward name pointer through the first C ABI argument
+                    ctx.emitter.instruction("mov rsi, rdx");                    // forward the byte length through the second argument
+                }
+            }
+        }
+        None => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 0);
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), -1);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_header_remove");
+    super::store_if_result(ctx, inst)
+}
+
+/// Lowers `headers_list()` into the web-gated runtime helper that builds the owned line array.
+pub(crate) fn lower_headers_list(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count_between(inst, "headers_list", 0, 0)?;
+    abi::emit_call_label(ctx.emitter, "__rt_headers_list");
+    super::store_if_result(ctx, inst)
+}
+
+/// Validates that a lowered builtin call carries an inclusive number of operands.
 fn ensure_arg_count_between(inst: &Instruction, name: &str, min: usize, max: usize) -> Result<()> {
     if (min..=max).contains(&inst.operands.len()) {
         return Ok(());

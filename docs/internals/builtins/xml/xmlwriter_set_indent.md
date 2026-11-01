@@ -2,7 +2,7 @@
 title: "xmlwriter_set_indent() - internals"
 description: "Compiler internals for xmlwriter_set_indent(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1120
+  order: 1180
 ---
 
 ## `xmlwriter_set_indent()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/xml_prelude/build/writer.rs`:983](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs#L983) (`xmlwriter_set_indent`)
+- **Lowering**: [`src/xml_prelude/build/writer.rs`:993](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs#L993) (`xmlwriter_set_indent`)
 - **Function symbol**: `xmlwriter_set_indent()`
 
 

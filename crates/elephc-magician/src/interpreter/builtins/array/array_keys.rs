@@ -42,6 +42,10 @@ pub(in crate::interpreter) fn eval_array_keys_result(
         let key = values.array_iter_key(array, position)?;
         let index = values.int(position as i64)?;
         result = values.array_set(result, index, key)?;
+        // `array_set` retains the stored key; the index and the key read are released here,
+        // where three cells per string key used to leak.
+        values.release(index)?;
+        values.release(key)?;
     }
     Ok(result)
 }

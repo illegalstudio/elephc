@@ -267,12 +267,11 @@ try { var_dump(XMLWriter::toUri("/nonexistent-elephc-dir/x.xml")); } catch (Valu
     );
 }
 
-/// `openUri()` supports plain paths plus `php://output` / `php://stdout` / `php://stderr`
-/// only: a `file://` URI and `php://memory` answer `false` (and `toUri()` throws the
-/// `ValueError` for them), where PHP opens both; `php://stdout` behaves like PHP's.
+/// `openUri()` / `toUri()` open plain paths, `file://` URIs, `php://memory` and
+/// `php://output` / `php://stdout` / `php://stderr`, as PHP does.
 #[test]
-fn test_xmlwriter_open_uri_rejects_file_and_memory_schemes() {
-    if skip_without_xml_native("test_xmlwriter_open_uri_rejects_file_and_memory_schemes") {
+fn test_xmlwriter_open_uri_accepts_file_and_memory_schemes() {
+    if skip_without_xml_native("test_xmlwriter_open_uri_accepts_file_and_memory_schemes") {
         return;
     }
     let out = compile_and_run_capture(
@@ -298,19 +297,12 @@ $w->writeElement("out"); var_dump($w->flush());
 "#,
     );
     assert!(out.success, "program failed: stdout={:?} stderr={}", out.stdout, out.stderr);
-    // PHP 8.5.10:
-    //   "bool(true)\nstring(4) \"<f/>\"\nbool(true)\nbool(true)\nint(4)\nbool(true)\n
-    //    bool(true)\nbool(true)\n<out/>int(6)\n"
+    // PHP 8.5.10 prints the same.
     assert_eq!(
         out.stdout,
-        "bool(false)\nbool(false)\nbool(false)\nValueError: XMLWriter::toUri(): Argument #1 ($uri) must resolve to a valid file path\nValueError: XMLWriter::toUri(): Argument #1 ($uri) must resolve to a valid file path\nbool(true)\n<out/>int(6)\n"
+        "bool(true)\nstring(4) \"<f/>\"\nbool(true)\nbool(true)\nint(4)\nbool(true)\nbool(true)\nbool(true)\n<out/>int(6)\n"
     );
-    assert_eq!(
-        out.stderr.matches("Warning: fopen(): Failed to open stream").count(),
-        4,
-        "the two schemes fail through the stream layer, once per open: {}",
-        out.stderr
-    );
+    assert!(out.stderr.is_empty(), "no stream warning is expected: {}", out.stderr);
 }
 
 /// `XMLWriter::toStream()` does not detect a closed resource: it hands back a writer that

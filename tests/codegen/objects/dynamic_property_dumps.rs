@@ -384,3 +384,29 @@ for ($i = 0; $i < 25; $i++) {
     assert_eq!(out.stdout, "525 123", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A literal-name write through a Mixed receiver reaches every kind of class: a declared slot,
+/// an `#[AllowDynamicProperties]` hash (through the shared `_class_dyn_hash_rows` table rather than
+/// one inline arm per class), and `stdClass`. A second write to the same name is a plain update.
+#[test]
+fn test_mixed_receiver_literal_property_write_reaches_hash_slot_and_stdclass() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+#[AllowDynamicProperties]
+class Open {}
+class Declared { public $k = 0; }
+function pick(int $i): mixed {
+    return match ($i) { 0 => new Open(), 1 => new Declared(), default => new stdClass() };
+}
+for ($i = 0; $i < 3; $i++) {
+    $o = pick($i);
+    $o->k = $i + 10;
+    $o->k = $i + 20;
+    echo get_class($o), ':', $o->k, '|';
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "Open:20|Declared:21|stdClass:22|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

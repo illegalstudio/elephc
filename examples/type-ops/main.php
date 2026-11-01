@@ -8,6 +8,10 @@ echo "(float)42 = " . (float)42 . "\n";
 echo "(string)100 = " . (string)100 . "\n";
 echo "(bool)0 = " . (bool)0 . "\n";
 echo "(bool)1 = " . (bool)1 . "\n";
+$source = ["name" => "array"];
+$object = (object) $source;
+$object->name = "object";
+echo "(object)array = " . $source["name"] . "/" . $object->name . "\n";
 
 // gettype
 echo "\n--- gettype ---\n";

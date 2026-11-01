@@ -1475,7 +1475,9 @@ unset($items);
 echo "after\n";
 "#,
     );
-    assert_clean(out, "old|caught|new|after\n");
+    // php 8.5 keeps the replacement alive past `unset($items)`: the caught exception's trace
+    // still holds the by-reference argument, so `new|` prints at shutdown, after `after`.
+    assert_clean(out, "old|caught|after\nnew|");
 }
 
 /// Promoted typed reference properties preserve the uninitialized marker in their cell payload.
@@ -1542,4 +1544,81 @@ echo $holder->items[0], "\n";
 "#,
     );
     assert_clean(out, "new|caught|reentrant\n");
+}
+
+/// An ordinary (non-reference) declared property publishes its replacement before releasing
+/// the old value, so a destructor that the release runs reads the new value, not a freed one.
+#[test]
+fn plain_property_replacement_publishes_before_the_old_value_destructs() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class PlainReplacedPropertyElement {
+    public function __destruct() {
+        global $holder;
+        echo $holder->items[0], "|";
+        $holder->items = ["reentrant"];
+        throw new Exception("old property value");
+    }
+}
+class PlainReplacedPropertyHolder {
+    public array $items = [];
+}
+$holder = new PlainReplacedPropertyHolder();
+$holder->items = [new PlainReplacedPropertyElement(), "tail"];
+krsort($holder->items);
+try {
+    $holder->items = ["new"];
+} catch (Exception $error) {
+    echo "caught|";
+}
+echo $holder->items[0], "\n";
+"#,
+    );
+    assert_clean(out, "new|caught|reentrant\n");
+}
+
+/// A nested by-reference loop leaves every inner element alone, and closures built inside one keep
+/// each iteration's own element.
+///
+/// The inner loop's value variable is set up once per OUTER iteration, and from the second one on
+/// it still referenced the previous inner array's last element: the setup's null store went
+/// through that reference, so every inner array but the final one lost its last value. Symfony's
+/// `EventDispatcher::optimizeListeners()` iterates `$this->listeners[$name]` that way and wraps
+/// each lazy listener in a closure capturing `&$listener`.
+#[test]
+fn nested_by_ref_foreach_keeps_inner_elements_and_per_iteration_captures() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function nested(): void {
+    $a = ['k1' => ['a', 'c'], 'k2' => ['b']];
+    foreach ($a as &$inner) {
+        foreach ($inner as &$v) { $v .= '!'; }
+    }
+    unset($v, $inner);
+    echo json_encode($a), "\n";
+}
+function captured(): void {
+    $a = [10 => [['a', 'x']], 5 => [['b', 'y']], 0 => ['plain'], -1 => [['c', 'z']]];
+    $out = [];
+    foreach ($a as &$listeners) {
+        foreach ($listeners as &$listener) {
+            $out[] = static function () use (&$listener) {
+                if (is_array($listener)) { $listener[0] = $listener[0] . '!'; return implode(',', $listener); }
+                return 'scalar ' . $listener;
+            };
+        }
+    }
+    unset($listener, $listeners);
+    foreach ($out as $f) { echo $f(), ' '; }
+    echo json_encode($a), "\n";
+}
+nested();
+captured();
+"#,
+    );
+    assert_clean(
+        out,
+        "{\"k1\":[\"a!\",\"c!\"],\"k2\":[\"b!\"]}\n\
+         a!,x b!,y scalar plain c!,z {\"10\":[[\"a!\",\"x\"]],\"5\":[[\"b!\",\"y\"]],\"0\":[\"plain\"],\"-1\":[[\"c!\",\"z\"]]}\n",
+    );
 }

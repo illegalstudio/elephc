@@ -6,12 +6,9 @@
 //!   `crate::builtins::registry`.
 //!
 //! Key details:
-//! - No `check` hook: `mkdir` is a pure-data builtin whose `Bool` return type is
-//!   fully determined by its declaration. Unlike `unlink`, `mkdir` has no PHAR
-//!   side effect, so no library-linking check hook is required. The registry
-//!   common path infers the argument and enforces the exactly-1-argument arity
-//!   before falling back to `returns`.
-
+//! - The declaration exposes PHP's optional permissions, recursive, and stream
+//!   context arguments while the runtime semantic target remains shared by
+//!   direct calls and first-class callable consumers.
 
 builtin! {
     contract: "mkdir",

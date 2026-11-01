@@ -9,13 +9,12 @@
 
 use super::*;
 
-/// Tests that `&=` compound assignment rejects a string left-hand operand.
-/// The error message is "Bitwise operators require integer operands".
+/// Tests that `&=` compound assignment rejects an array left-hand operand.
 #[test]
 fn test_error_bitwise_compound_assignment_requires_ints() {
     expect_error(
-        "<?php $x = \"flags\"; $x &= 1;",
-        "Bitwise operators require integer operands",
+        "<?php $x = []; $x &= 1;",
+        "Bitwise operators require integer or string operands",
     );
 }
 
@@ -73,6 +72,21 @@ fn test_error_declare_strict_types_must_be_first() {
     );
 }
 
+/// Tests that a doc comment before `declare(strict_types=1)` is not a statement: php accepts
+/// `<?php /** License */ declare(strict_types=1);`, which is how `league/uri` opens every file,
+/// while a doc comment followed by a real statement still keeps the directive from being first.
+#[test]
+fn test_declare_strict_types_may_follow_a_doc_comment() {
+    assert!(
+        check_source("<?php\n/**\n * License\n */\n\ndeclare(strict_types=1);\n\necho 1;").is_ok(),
+        "a doc comment before strict_types must be accepted",
+    );
+    expect_error(
+        "<?php /** doc */ echo 1; declare(strict_types=1);",
+        "strict_types declaration must be the very first statement in the script",
+    );
+}
+
 /// Tests that strict_types cannot control a braced body.
 #[test]
 fn test_error_declare_strict_types_rejects_block_mode() {
@@ -107,6 +121,17 @@ fn test_error_reference_assignment_rejects_computed_source() {
     expect_error(
         "<?php $a = 1; $b =& $a + 1;",
         "Reference assignment source must be a variable",
+    );
+}
+
+/// Tests that an array element bound by reference to a static property is refused by name: a local
+/// alias borrows the static's storage, but an element would have to own a share of it (bead
+/// elephc-a03.1). A declared property may hold it (`$this->cache = &self::$htmlCache;`).
+#[test]
+fn test_error_element_reference_to_static_property_is_refused() {
+    expect_error(
+        "<?php class C { private static array $s = []; public array $c = []; public function __construct() { $this->c['k'] = &self::$s; } } new C();",
+        "bound by reference to a static property is not supported",
     );
 }
 
@@ -162,13 +187,12 @@ fn test_error_settype_wrong_args() {
     expect_error("<?php settype(42);", "settype() takes exactly 2 arguments");
 }
 
-/// Tests that `&` with a string left-hand operand rejects it with the
-/// "Bitwise operators require integer operands" error.
+/// Tests that `&` with an array operand rejects it as neither integer nor string.
 #[test]
-fn test_error_bitwise_and_string() {
+fn test_error_bitwise_and_array() {
     expect_error(
-        r#"<?php echo "hello" & 1;"#,
-        "Bitwise operators require integer operands",
+        r#"<?php echo [] & 1;"#,
+        "Bitwise operators require integer or string operands",
     );
 }
 
@@ -248,28 +272,18 @@ fn test_error_nullable_typed_local_rejects_invalid_reassignment() {
     );
 }
 
-/// Tests that `require` with a variable as the path produces a
-/// "compile-time-constant string" error.
+/// `require` with a variable path is resolved at run time, as in php (a failed include is a run-time
+/// warning), so the include resolver accepts it.
 #[test]
-fn test_include_path_with_variable_errors() {
-    let err = resolver_error("<?php $path = 'x'; require $path;");
-    assert!(
-        err.message.contains("compile-time-constant string"),
-        "message did not mention compile-time-constant: {}",
-        err.message
-    );
+fn test_include_path_with_variable_is_deferred_to_runtime() {
+    resolver_ok("<?php $path = 'x'; require $path;");
 }
 
-/// Tests that `require` with a function call as the path produces a
-/// "compile-time-constant string" error.
+/// `require` with a function-call path is resolved at run time, as in php (a failed include is a
+/// run-time warning), so the include resolver accepts it.
 #[test]
-fn test_include_path_with_function_call_errors() {
-    let err = resolver_error("<?php require getenv('PATH');");
-    assert!(
-        err.message.contains("compile-time-constant string"),
-        "message did not mention compile-time-constant: {}",
-        err.message
-    );
+fn test_include_path_with_function_call_is_deferred_to_runtime() {
+    resolver_ok("<?php require getenv('PATH');");
 }
 
 // --- Static closures ---

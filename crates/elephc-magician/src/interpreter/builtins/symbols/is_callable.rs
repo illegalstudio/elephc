@@ -130,6 +130,22 @@ pub(in crate::interpreter) fn eval_is_callable_value(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
+    // A compiled closure arrives as a callable DESCRIPTOR, which the normalization below cannot
+    // classify: it is neither an object cell nor an array nor a name, so it fell through to the
+    // string lookup and answered `false` for something PHP always calls callable.
+    if values.type_tag(value)? == super::super::super::runtime_ops::EVAL_TAG_CALLABLE {
+        return Ok(true);
+    }
+    // An interpreted Closure is callable from any scope: a first-class callable of a protected
+    // method settled its access where it was created, and probing its target from the caller's
+    // scope refused `array_map($this->prot(...), …)` called from outside the class.
+    if values.type_tag(value)? == super::super::super::runtime_ops::EVAL_TAG_OBJECT
+        && values
+            .object_identity(value)
+            .is_ok_and(|identity| context.closure_object_target(identity).is_some())
+    {
+        return Ok(true);
+    }
     let Ok((callback, receiver)) =
         eval_callable_for_probe(value, context, lexical_scope, values)
     else {
@@ -153,6 +169,11 @@ fn eval_is_callable_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    // A class another context declared (an autoloaded file) is known to this one only after a
+    // sync. Laravel's pipeline closure asked `method_exists($pipe, 'handle')` of a middleware its
+    // container had just autoloaded elsewhere, got false, and called the object as a closure.
+    #[cfg(not(test))]
+    context.sync_global_eval_classes();
     let callable_name = callable_name_target
         .map(|_| eval_callable_display_name(value, context, values))
         .transpose()?;
@@ -287,6 +308,7 @@ pub(in crate::interpreter) fn eval_callable_probe_exists(
         EvaluatedCallable::InvokableObject { object } => {
             eval_object_method_callable_probe(*object, "__invoke", context, values)
         }
+        EvaluatedCallable::NativeDescriptor { .. } => Ok(true),
         EvaluatedCallable::ObjectMethod {
             object,
             method,

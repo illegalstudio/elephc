@@ -28,6 +28,11 @@ pub(super) fn lower_fiber_start(
         ctx.load_value_to_result(*value)?;
         let source_ty = ctx.raw_value_php_type(*value)?;
         let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, &PhpType::Mixed)?;
+        // The Fiber keeps one reference to each start() argument and releases it with the
+        // Fiber (`object_free_deep`); an argument that already is a box is still the caller's.
+        if source_ty.codegen_repr() == PhpType::Mixed {
+            abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+        }
         abi::emit_push_result_value(ctx.emitter, &push_ty);
     }
     let overflow_bytes = abi::materialize_outgoing_args(ctx.emitter, &assignments);
@@ -232,8 +237,12 @@ pub(super) fn emit_optional_mixed_arg(ctx: &mut FunctionContext<'_>, value: Opti
         ctx.load_value_to_result(value)?;
         let source_ty = ctx.raw_value_php_type(value)?;
         materialize_direct_call_arg_for_param(ctx, &source_ty, &PhpType::Mixed)?;
+        // The runtime CONSUMES this value: `resume()`/`suspend()` park it in the fiber's transfer
+        // slot and the other side receives it owned. A scalar arrives here freshly boxed, but a
+        // value that already is a box is still the caller's, which releases it after the call --
+        // `Fiber::suspend($x * 2)` freed the box twice and the fiber's `return $x + $y` read a
+        // recycled cell. The runtime gets its own reference (the caller keeps its staged input).
         if matches!(source_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
-            // The coroutine consumes its transfer cell; the caller still owns its staged input.
             abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
         }
         return Ok(());
@@ -275,69 +284,192 @@ pub(super) fn lower_fiber_state_predicate(
     emit_fiber_state_predicate_call(ctx, inst, state)
 }
 
-/// Lowers Fiber state predicates when the receiver is boxed as `Mixed`.
-pub(super) fn lower_mixed_fiber_state_predicate(
+/// Lowers `$mixed->isStarted()` (and the other Fiber state names) on a receiver that may be any
+/// object: a real `Fiber` takes the state predicate, everything else the ordinary dispatch.
+///
+/// The names are not Fiber's alone. Symfony's `Session::isStarted()` reached through the session
+/// factory closure's `static $sess` (a `Mixed` slot) was routed to the Fiber predicate by its
+/// NAME, and the non-Fiber receiver hit that path's fatal: `Call to a member function
+/// isStarted() on null`, on every symfony/demo page that renders flash messages.
+pub(super) fn lower_mixed_maybe_fiber_state_predicate(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     object: ValueId,
     method_name: &str,
     state: FiberStatePredicate,
 ) -> Result<()> {
-    if inst.operands.len() != 1 {
-        return Err(CodegenIrError::unsupported(format!(
-            "Fiber mixed state predicate {} with EIR arguments",
-            method_name
-        )));
-    }
-    emit_mixed_fiber_receiver_to_arg(ctx, object, method_name)?;
-    emit_fiber_state_predicate_call(ctx, inst, state)
-}
-
-/// Unboxes a `Mixed` receiver and leaves a verified `Fiber*` in argument register 0.
-pub(super) fn emit_mixed_fiber_receiver_to_arg(
-    ctx: &mut FunctionContext<'_>,
-    object: ValueId,
-    method_name: &str,
-) -> Result<()> {
-    let object_label = ctx.next_label("mixed_fiber_state_object");
-    let fiber_label = ctx.next_label("mixed_fiber_state_fiber");
-    let class_id = ctx
-        .module
-        .class_infos
-        .get("Fiber")
-        .map(|class| class.class_id)
-        .ok_or_else(|| {
-            CodegenIrError::unsupported("mixed Fiber predicate without Fiber metadata")
-        })?;
+    let fiber_class_id = ctx.module.class_infos.get("Fiber").map(|class| class.class_id);
+    let Some(class_id) = fiber_class_id.filter(|_| inst.operands.len() == 1) else {
+        return super::method_dispatch::lower_mixed_method_call(ctx, inst, object, method_name);
+    };
+    let generic_label = ctx.next_label("mixed_fiber_name_generic");
+    let done_label = ctx.next_label("mixed_fiber_name_done");
     let receiver_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #6");                              // continue only when the Mixed receiver holds an object
-            ctx.emitter.instruction(&format!("b.eq {}", object_label));         // inspect the object class before calling the Fiber predicate
-            emit_method_call_on_null_fatal(ctx, method_name);
-            ctx.emitter.label(&object_label);
+            ctx.emitter.instruction("cmp x0, #6");                              // only an object can be a Fiber receiver
+            ctx.emitter.instruction(&format!("b.ne {}", generic_label));        // anything else takes the ordinary method dispatch
             ctx.emitter.instruction("ldr x9, [x1]");                            // load the receiver object's runtime class id
-            ctx.emitter.instruction(&format!("cmp x9, #{}", class_id));         // verify the boxed object is a Fiber instance
-            ctx.emitter.instruction(&format!("b.eq {}", fiber_label));          // call the Fiber predicate only for real Fiber receivers
-            emit_method_call_on_null_fatal(ctx, method_name);
-            ctx.emitter.label(&fiber_label);
+            ctx.emitter.instruction(&format!("cmp x9, #{}", class_id));         // is the boxed object a Fiber?
+            ctx.emitter.instruction(&format!("b.ne {}", generic_label));        // another class with the same method name: dispatch normally
             ctx.emitter
                 .instruction(&format!("mov {}, x1", receiver_arg));             // pass the unboxed Fiber object to the runtime predicate
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 6");                              // continue only when the Mixed receiver holds an object
-            ctx.emitter.instruction(&format!("je {}", object_label));           // inspect the object class before calling the Fiber predicate
-            emit_method_call_on_null_fatal(ctx, method_name);
-            ctx.emitter.label(&object_label);
+            ctx.emitter.instruction("cmp rax, 6");                              // only an object can be a Fiber receiver
+            ctx.emitter.instruction(&format!("jne {}", generic_label));         // anything else takes the ordinary method dispatch
             ctx.emitter.instruction("mov r10, QWORD PTR [rdi]");                // load the receiver object's runtime class id
-            ctx.emitter.instruction(&format!("cmp r10, {}", class_id));         // verify the boxed object is a Fiber instance
-            ctx.emitter.instruction(&format!("je {}", fiber_label));            // call the Fiber predicate only for real Fiber receivers
-            emit_method_call_on_null_fatal(ctx, method_name);
-            ctx.emitter.label(&fiber_label);
+            ctx.emitter.instruction(&format!("cmp r10, {}", class_id));         // is the boxed object a Fiber?
+            ctx.emitter.instruction(&format!("jne {}", generic_label));         // another class with the same method name: dispatch normally
         }
     }
+    emit_fiber_state_predicate_call(ctx, inst, state)?;
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&generic_label);
+    super::method_dispatch::lower_mixed_method_call(ctx, inst, object, method_name)?;
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Fiber runtime methods a `mixed` receiver may name, other than the state predicates.
+pub(super) enum MixedFiberMethod {
+    Start,
+    Resume,
+    Throw,
+    GetReturn,
+}
+
+/// Resolves a Fiber runtime method (not a state predicate) solely from the method name.
+pub(super) fn mixed_fiber_method(method_name: &str) -> Option<MixedFiberMethod> {
+    match php_symbol_key(method_name).as_str() {
+        "start" => Some(MixedFiberMethod::Start),
+        "resume" => Some(MixedFiberMethod::Resume),
+        "throw" => Some(MixedFiberMethod::Throw),
+        "getreturn" => Some(MixedFiberMethod::GetReturn),
+        _ => None,
+    }
+}
+
+/// Lowers `$mixed->start()` (and `resume`/`throw`/`getReturn`) on a receiver that may be any
+/// object: a real `Fiber` takes its runtime helper, everything else the ordinary dispatch.
+///
+/// `Fiber` has no method entry symbols, so the boxed dispatch leaves it out of its candidates,
+/// and a Fiber held in an untyped property — `$this->fiber = new Fiber(...)`, then
+/// `$s->fiber->start()` — died with "Call to a member function start() on null". The names are
+/// not Fiber's alone (Symfony's `Session::start()`), so the class id decides at run time.
+///
+/// The unboxed Fiber is parked on the temporary stack while the arguments are materialized and
+/// popped into the receiver register last.
+pub(super) fn lower_mixed_maybe_fiber_method(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    method_name: &str,
+    method: MixedFiberMethod,
+) -> Result<()> {
+    let fiber_class_id = ctx.module.class_infos.get("Fiber").map(|class| class.class_id);
+    let Some(class_id) = fiber_class_id else {
+        return super::method_dispatch::lower_mixed_method_call(ctx, inst, object, method_name);
+    };
+    // `Fiber::throw()` takes exactly one argument, so a zero-argument `->throw()` can never be the
+    // Fiber's: it is another class's method. laravel's `$http->get($url)->throw()->body()` (an
+    // `Illuminate\Http\Client\Response` held in a `mixed`) was refused "Fiber::throw without exactly
+    // one EIR argument" and interpreted four framework files.
+    if matches!(method, MixedFiberMethod::Throw) {
+        let visible =
+            fiber_visible_args(ctx, inst.operands.get(1..).unwrap_or(&[]), "Fiber::throw")?;
+        if visible.len() != 1 {
+            return super::method_dispatch::lower_mixed_method_call(ctx, inst, object, method_name);
+        }
+    }
+    let generic_label = ctx.next_label("mixed_fiber_method_generic");
+    let done_label = ctx.next_label("mixed_fiber_method_done");
+    let receiver_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let second_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let payload_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #6");                              // only an object can be a Fiber receiver
+            ctx.emitter.instruction(&format!("b.ne {}", generic_label));        // anything else takes the ordinary method dispatch
+            ctx.emitter.instruction("ldr x9, [x1]");                            // load the receiver object's runtime class id
+            ctx.emitter.instruction(&format!("cmp x9, #{}", class_id));         // is the boxed object a Fiber?
+            ctx.emitter.instruction(&format!("b.ne {}", generic_label));        // another class with the same method name: dispatch normally
+            "x1"
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 6");                              // only an object can be a Fiber receiver
+            ctx.emitter.instruction(&format!("jne {}", generic_label));         // anything else takes the ordinary method dispatch
+            ctx.emitter.instruction("mov r10, QWORD PTR [rdi]");                // load the receiver object's runtime class id
+            ctx.emitter.instruction(&format!("cmp r10, {}", class_id));         // is the boxed object a Fiber?
+            ctx.emitter.instruction(&format!("jne {}", generic_label));         // another class with the same method name: dispatch normally
+            "rdi"
+        }
+    };
+    abi::emit_push_reg(ctx.emitter, payload_reg); // park the unboxed Fiber while the arguments are materialized
+    match method {
+        MixedFiberMethod::Start => {
+            let args = fiber_start_visible_args(ctx, inst)?;
+            let param_types = vec![PhpType::Mixed; args.len()];
+            let assignments =
+                abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &param_types, 1);
+            for value in &args {
+                ctx.load_value_to_result(*value)?;
+                let source_ty = ctx.raw_value_php_type(*value)?;
+                let push_ty =
+                    materialize_direct_call_arg_for_param(ctx, &source_ty, &PhpType::Mixed)?;
+                // The Fiber owns a reference to each start() argument (see `lower_fiber_start`).
+                if source_ty.codegen_repr() == PhpType::Mixed {
+                    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+                }
+                abi::emit_push_result_value(ctx.emitter, &push_ty);
+            }
+            let overflow_bytes = abi::materialize_outgoing_args(ctx.emitter, &assignments);
+            if overflow_bytes != 0 {
+                return Err(CodegenIrError::unsupported(
+                    "Fiber::start on a mixed receiver with stack-passed arguments",
+                ));
+            }
+            abi::emit_pop_reg(ctx.emitter, receiver_arg); // the parked Fiber is the receiver
+            emit_store_fiber_start_args(ctx, &assignments, args.len())?;
+            abi::emit_call_label(ctx.emitter, "__rt_fiber_start");
+        }
+        MixedFiberMethod::Resume => {
+            let value = fiber_single_optional_arg(
+                ctx,
+                inst.operands.get(1..).unwrap_or(&[]),
+                "Fiber::resume",
+            )?;
+            emit_optional_mixed_arg(ctx, value)?;
+            abi::emit_reg_move(ctx.emitter, second_arg, abi::int_result_reg(ctx.emitter));
+            abi::emit_pop_reg(ctx.emitter, receiver_arg); // the parked Fiber is the receiver
+            abi::emit_call_label(ctx.emitter, "__rt_fiber_resume");
+        }
+        MixedFiberMethod::Throw => {
+            let args =
+                fiber_visible_args(ctx, inst.operands.get(1..).unwrap_or(&[]), "Fiber::throw")?;
+            let [thrown] = args.as_slice() else {
+                return Err(CodegenIrError::unsupported(
+                    "Fiber::throw without exactly one EIR argument",
+                ));
+            };
+            ctx.load_value_to_result(*thrown)?;
+            abi::emit_reg_move(ctx.emitter, second_arg, abi::int_result_reg(ctx.emitter));
+            abi::emit_pop_reg(ctx.emitter, receiver_arg); // the parked Fiber is the receiver
+            abi::emit_call_label(ctx.emitter, "__rt_fiber_throw");
+        }
+        MixedFiberMethod::GetReturn => {
+            abi::emit_pop_reg(ctx.emitter, receiver_arg); // the parked Fiber is the receiver
+            abi::emit_call_label(ctx.emitter, "__rt_fiber_get_return");
+        }
+    }
+    store_if_result(ctx, inst)?;
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&generic_label);
+    super::method_dispatch::lower_mixed_method_call(ctx, inst, object, method_name)?;
+    ctx.emitter.label(&done_label);
     Ok(())
 }
 
@@ -361,6 +493,16 @@ pub(super) fn emit_fiber_state_predicate_call(
             Arch::X86_64 => {
                 ctx.emitter.instruction("xor rax, 1");                          // invert not-started into PHP's isStarted predicate
             }
+        }
+    }
+    // A `mixed` receiver's call result is `mixed` too: `Fiber::getCurrent()->isRunning()`
+    // stored the raw bool where a boxed cell belongs, and the `?:` reading it dereferenced 0x1.
+    if let Some(result) = inst.result {
+        if matches!(
+            ctx.value_php_type(result)?.codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        ) {
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
         }
     }
     store_if_result(ctx, inst)
@@ -442,6 +584,23 @@ pub(super) fn lower_nullsafe_method_call(ctx: &mut FunctionContext<'_>, inst: &I
     };
     if !nullable {
         return lower_method_call(ctx, inst);
+    }
+    let normalized_class = class_name.trim_start_matches('\\');
+    if !ctx.module.class_infos.contains_key(normalized_class)
+        && !ctx.module.interface_infos.contains_key(normalized_class)
+        && !ctx.module.extern_class_infos.contains_key(normalized_class)
+        && !ctx.module.packed_class_infos.contains_key(normalized_class)
+    {
+        let null_label = ctx.next_label("nullsafe_unknown_method_null");
+        let done_label = ctx.next_label("nullsafe_unknown_method_done");
+        let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+        objects::emit_nullable_receiver_object_payload(ctx, object, &null_label, object_reg)?;
+        exceptions::emit_error(ctx, &format!("Class \"{}\" not found", normalized_class));
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&null_label);
+        objects::emit_boxed_null(ctx);
+        ctx.emitter.label(&done_label);
+        return store_if_result(ctx, inst);
     }
     let target = resolve_method_call_target(ctx, &class_name, &method_name, inst.operands.len())?;
     let null_label = ctx.next_label("nullsafe_method_null");

@@ -171,7 +171,8 @@ These helpers implement PHP's `@` error-suppression operator and the runtime war
 |---|---|---|---|
 | `__rt_diag_push_suppression` | Enter one nested `@` suppression scope (increment `_rt_diag_suppression`) | — | — |
 | `__rt_diag_pop_suppression` | Leave one `@` suppression scope, clamped against underflow | — | — |
-| `__rt_diag_warning` | Write a runtime warning string to stderr unless suppression is active | `x1`/`x2` = message string | — |
+| `__rt_diag_warning` | Write a runtime warning string to stderr unless suppression is active. In a build that compiled the `set_error_handler()` dispatch prelude (`RuntimeFeatures.diag_user_handler`) the fragment is instead appended to `_rt_diag_buf` and, at its terminating newline, offered to the PHP function `__elephc_diag_render`; the stderr write is the fallback for a diagnostic no handler took | `x1`/`x2` = message string | — |
+| `__rt_diag_message` | The same, for a caller that delivers a WHOLE diagnostic in one call with no trailing newline (the interpreter's warnings). Sets `_rt_diag_complete` and falls into `__rt_diag_warning` | `x1`/`x2` = message string | — |
 
 Array-key conversion uses `__rt_float_key_to_int` to apply PHP's integer
 conversion and report precision loss or an unrepresentable float through the
@@ -925,7 +926,7 @@ Common copy-producing array/hash routines now also have dedicated `_refcounted` 
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
-| `__rt_hash_fnv1a` | FNV-1a hash of string | `x1`/`x2` = string | `x0` = hash |
+| `__rt_hash_bytes` | Hash a byte string eight bytes per step | `x1`/`x2` = string | `x0` = hash |
 | `__rt_hash_normalize_key` | Normalize PHP string array keys, converting integer-form numeric strings to integer keys | `x1`/`x2` = string key | `x1`/`x2` = normalized key |
 | `__rt_hash_key_hash` | Hash a normalized int/string array key | `x1`/`x2` = normalized key | `x0` = hash |
 | `__rt_hash_key_eq` | Compare normalized int/string array keys | `x1`/`x2`, `x3`/`x4` = keys | `x0` = equal flag |
@@ -1893,6 +1894,8 @@ Additionally, the runtime emits static data tables:
 - `_ob_ntc_*`, `_ob_warn_bad_callback_*`, `_ob_fatal_in_handler` — PHP-parity `ob_*` notice, warning, and fatal texts, routed through `__rt_stdout_write` so parent buffers capture them like PHP
 - `_uncaught_exc_msg` — fatal exception string written by `__rt_throw_current` when no handler exists
 - `_diag_fopen_failed_msg`, `_diag_file_get_contents_failed_msg`, `_diag_define_already_defined_msg` — suppressible runtime warning text routed through `__rt_diag_warning`
+- `_rt_diag_buf`, `_rt_diag_buf_len`, `_rt_diag_complete`, `_rt_diag_dispatching` — the accumulator for ONE engine diagnostic, its length, the "this call ended the message" marker, and the guard that stops a diagnostic raised inside the PHP handler from re-entering the accumulator
+- `_rt_diag_file_ptr`, `_rt_diag_file_len`, `_rt_diag_line` — the raise site's source position, published by the lowered miss paths and consumed AND cleared by the next flush, so php's ` in FILE on line N` suffix and the handler's `$file`/`$line` arguments can be supplied from shared warning helpers that have no position of their own
 - `_fiber_msg_already_started`, `_fiber_msg_not_suspended`, `_fiber_msg_throw_not_suspended`, `_fiber_msg_not_terminated`, `_fiber_msg_suspend_outside`, `_fiber_msg_unsupported_callable`, `_fiber_msg_stack_alloc_failed` — messages used by `FiberError` runtime paths
 - `_fiber_class_id`, `_fiber_error_class_id` — per-program class ids used by Fiber object cleanup and `FiberError` construction
 - `_generator_class_id` — per-program class id used to recognize Generator frames during object deep-free

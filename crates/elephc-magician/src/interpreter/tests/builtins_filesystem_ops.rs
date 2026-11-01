@@ -67,6 +67,32 @@ return true;"#,
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies eval mkdir creates missing parent directories when recursive mode is enabled.
+#[test]
+fn execute_program_honors_recursive_mkdir() {
+    let pid = std::process::id();
+    let root = format!("elephc_magician_recursive_dir_{pid}");
+    let leaf = format!("{root}/branch/leaf");
+    let source = format!(
+        r#"echo mkdir("{leaf}", 0701, true) ? "mkdir:" : "bad:";
+echo is_dir("{leaf}") ? "recursive" : "bad";
+rmdir("{leaf}");
+rmdir("{root}/branch");
+rmdir("{root}");
+return true;"#,
+    );
+    let program = parse_fragment(source.as_bytes()).expect("parse eval fragment");
+    let _ = std::fs::remove_dir_all(&root);
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    let _ = std::fs::remove_dir_all(&root);
+    assert_eq!(values.output, "mkdir:recursive");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
 /// Verifies eval `stream_resolve_include_path()` mirrors elephc realpath semantics.
 #[test]
 fn execute_program_dispatches_stream_resolve_include_path_builtin() {
@@ -171,6 +197,7 @@ file_put_contents("{dir}/a.txt", "a");
 file_put_contents("{dir}/b.log", "b");
 file_put_contents("{dir}/c.txt", "c");
 file_put_contents("{dir}/.hidden.txt", "h");
+mkdir("{dir}/sub");
 $matches = glob("{dir}/*.txt");
 echo count($matches) === 2 && basename($matches[0]) === "a.txt" && basename($matches[1]) === "c.txt" ? "glob" : "bad"; echo ":";
 echo count(glob("{dir}/*.none")) === 0 ? "empty" : "bad"; echo ":";
@@ -178,6 +205,11 @@ $literal = glob("{dir}/a.txt");
 echo count($literal) === 1 && $literal[0] === "{dir}/a.txt" ? "literal" : "bad"; echo ":";
 $all = glob("{dir}/*");
 echo in_array("{dir}/.hidden.txt", $all) ? "bad" : "hidden"; echo ":";
+$dirs = glob("{dir}/*", GLOB_NOSORT | GLOB_ONLYDIR);
+echo count($dirs) === 1 && basename($dirs[0]) === "sub" ? "onlydir" : "bad"; echo ":";
+$brace = glob("{dir}/*.{{txt,log}}", GLOB_BRACE);
+echo count($brace) === 3 ? "brace" : "bad"; echo ":";
+echo glob("{dir}/missing", GLOB_NOCHECK)[0] === "{dir}/missing" ? "nocheck" : "bad"; echo ":";
 $call = call_user_func("glob", "{dir}/*.log");
 echo count($call) === 1 && basename($call[0]) === "b.log" ? "callglob" : "bad"; echo ":";
 $call_array = call_user_func_array("glob", ["pattern" => "{dir}/*.txt"]);
@@ -186,8 +218,9 @@ unlink("{dir}/.hidden.txt");
 unlink("{dir}/c.txt");
 unlink("{dir}/b.log");
 unlink("{dir}/a.txt");
+echo rmdir("{dir}/sub") ? "subcleanup" : "bad"; echo ":";
 echo rmdir("{dir}") ? "cleanup" : "bad"; echo ":";
-echo function_exists("glob");
+echo function_exists("glob"); echo defined("GLOB_ERR");
 return true;"#
     );
     let program = parse_fragment(source.as_bytes()).expect("parse eval fragment");
@@ -208,7 +241,7 @@ return true;"#
     let _ = std::fs::remove_dir(&dir);
     assert_eq!(
         values.output,
-        "glob:empty:literal:hidden:callglob:callarray:cleanup:1"
+        "glob:empty:literal:hidden:onlydir:brace:nocheck:callglob:callarray:subcleanup:cleanup:11"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
@@ -352,4 +385,62 @@ return true;"#
         "create:mtime:readmtime:nullatime:both:touch-false:calltouch:callarray:cleanup:1"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies `readfile()` accepts all three parameters php declares.
+///
+/// `php -n` 8.5.6 prints `hello;5;hello;5;hello;5` for the one-, two- and three-argument calls:
+/// each streams the file and returns the byte count. The registry declared `$filename` alone, so
+/// `readfile($f, true)` -- ordinary php that php runs -- was a fatal here.
+///
+/// `$use_include_path` is accepted and behaves as `false`, and a non-null `$context` is refused
+/// rather than ignored. Both are `file_get_contents()`'s existing answers to the same arguments,
+/// and the refusal is asserted too: accepting a context and dropping it would report a successful
+/// read that never honoured the options it was handed.
+#[test]
+fn execute_program_dispatches_readfile_with_all_three_parameters() {
+    let pid = std::process::id();
+    let name = format!("elephc_magician_readfile_arity_{pid}.txt");
+    let source = format!(
+        r#"file_put_contents("{name}", "hello");
+$a = readfile("{name}"); echo ";", $a, ";";
+$b = readfile("{name}", true); echo ";", $b, ";";
+$c = readfile("{name}", false, null); echo ";", $c;"#
+    );
+    let program = parse_fragment(source.as_bytes()).expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values);
+
+    // Removed here rather than by an `unlink()` at the end of the fragment: a fragment that
+    // fails part-way never reaches its last statement, and a sentinel run left exactly that file
+    // behind in the crate directory.
+    let _ = std::fs::remove_file(&name);
+    result.expect("execute eval ir");
+
+    assert_eq!(values.output, "hello;5;hello;5;hello;5");
+}
+
+/// Verifies a non-null `$context` is refused rather than silently dropped.
+///
+/// This is the deliberate divergence: php would honour the stream options, and eval has nowhere
+/// to put them, so it fails loudly instead of reporting a read that ignored them.
+#[test]
+fn execute_program_refuses_readfile_with_a_non_null_context() {
+    let pid = std::process::id();
+    let name = format!("elephc_magician_readfile_context_{pid}.txt");
+    let source = format!(
+        r#"file_put_contents("{name}", "hello");
+readfile("{name}", false, stream_context_create([]));"#
+    );
+    let program = parse_fragment(source.as_bytes()).expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let status = execute_program(&program, &mut scope, &mut values)
+        .expect_err("a non-null stream context should be refused");
+
+    let _ = std::fs::remove_file(&name);
+    assert_eq!(status, EvalStatus::RuntimeFatal);
 }

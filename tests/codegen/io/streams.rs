@@ -9,6 +9,106 @@
 
 use super::*;
 
+/// A PHP standard-input URL reads through EOF, including data beyond concat scratch.
+#[test]
+fn file_get_contents_stdin_reads_pipe_through_eof() {
+    let source = r#"<?php
+$path = 'php://stdin';
+$value = file_get_contents($path);
+$noise = str_repeat('q', 8192);
+echo strlen($value), ':', ($value === str_repeat('x', 131073) ? 'same' : 'changed');
+echo ':', strlen($noise), ':', strlen(stream_get_contents(STDIN));
+"#;
+    assert_eq!(compile_and_run_with_stdin(source, &"x".repeat(131073)), "131073:same:8192:0");
+}
+
+/// Bounded reads consume only their window and close only the duplicate descriptor.
+#[test]
+fn file_get_contents_stdin_length_preserves_remaining_input() {
+    let source = r#"<?php
+var_dump(file_get_contents('php://stdin', false, null, 0, 2));
+var_dump(stream_get_contents(STDIN));
+var_dump(file_get_contents('PHP://STDIN'));
+"#;
+    assert_eq!(compile_and_run_with_stdin(source, "abcdefg"),
+        "string(2) \"ab\"\nstring(5) \"cdefg\"\nstring(0) \"\"\n");
+}
+
+/// Case folding applies to URL letters, never to punctuation or control bytes.
+#[test]
+fn file_get_contents_stdin_rejects_control_byte_separators() {
+    let source = r#"<?php
+foreach (["php".chr(26)."//stdin", "php:".chr(15)."/stdin", "php:/".chr(15)."stdin"] as $name) {
+    var_dump(@file_get_contents($name));
+}
+var_dump(file_get_contents('php://stdin'));
+"#;
+    assert_eq!(compile_and_run_with_stdin(source, "payload"),
+        "bool(false)\nbool(false)\nbool(false)\nstring(7) \"payload\"\n");
+}
+
+/// A zero cap leaves stdin untouched; an empty stream returns a string rather than false.
+#[test]
+fn file_get_contents_stdin_zero_length_and_empty_input() {
+    let source = r#"<?php
+var_dump(file_get_contents('php://stdin', false, null, 0, 0));
+var_dump(file_get_contents('php://stdin'));
+var_dump(stream_get_contents(STDIN));
+"#;
+    assert_eq!(compile_and_run_with_stdin(source, "abc"),
+        "string(0) \"\"\nstring(3) \"abc\"\nstring(0) \"\"\n");
+    assert_eq!(compile_and_run_with_stdin(source, ""),
+        "string(0) \"\"\nstring(0) \"\"\nstring(0) \"\"\n");
+}
+
+/// A pipe cannot seek; failure must occur before any bytes are consumed.
+#[test]
+fn file_get_contents_stdin_pipe_seek_failure_preserves_input() {
+    let source = r#"<?php
+var_dump(@file_get_contents('php://stdin', false, null, 2));
+var_dump(@file_get_contents('php://stdin', false, null, -2));
+var_dump(stream_get_contents(STDIN));
+"#;
+    assert_eq!(compile_and_run_with_stdin(source, "abcdefg"),
+        "bool(false)\nbool(false)\nstring(7) \"abcdefg\"\n");
+}
+
+/// Dynamic eval must read the same process stdin as native code.
+#[test]
+fn file_get_contents_stdin_opaque_eval_preserves_input() {
+    let source = "<?php eval(readline());";
+    let input = "var_dump(file_get_contents('php://stdin', false, null, 0, 2)); var_dump(stream_get_contents(STDIN));\nabcdefg";
+    assert_eq!(compile_and_run_with_stdin(source, input),
+        "string(2) \"ab\"\nstring(5) \"cdefg\"\n");
+}
+
+/// A redirected regular stdin can seek, and duplicated handles share its cursor.
+#[test]
+fn file_get_contents_stdin_redirected_file_seeks() {
+    let source = r#"<?php
+var_dump(file_get_contents('php://stdin', false, null, -2));
+var_dump(file_get_contents('php://stdin', false, null, 2, 3));
+var_dump(stream_get_contents(STDIN));
+"#;
+    assert_eq!(compile_and_run_with_seekable_stdin(source, "abcdefg"),
+        "string(2) \"fg\"\nstring(3) \"cde\"\nstring(2) \"fg\"\n");
+}
+
+/// Validation and a failed duplicate cannot consume or close a valid standard descriptor.
+#[test]
+fn file_get_contents_stdin_validation_and_closed_descriptor() {
+    let source = r#"<?php
+try { file_get_contents('php://stdin', false, null, 0, -1); }
+catch (ValueError $error) { echo 'caught', "\n"; }
+var_dump(stream_get_contents(STDIN));
+fclose(STDIN);
+var_dump(@file_get_contents('php://stdin'));
+echo 'after', "\n";
+"#;
+    assert_eq!(compile_and_run_with_stdin(source, "abc"),
+        "caught\nstring(3) \"abc\"\nbool(false)\nafter\n");
+}
+
 /// Verifies STDIN constant evaluates to the expected resource display string.
 #[test]
 fn test_stdin_constant() {
@@ -188,6 +288,26 @@ unlink("rw.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies fread accepts an int-or-null tagged array lookup after narrowing its runtime int arm.
+#[test]
+fn test_fread_accepts_tagged_scalar_length_from_array_lookup() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$lengths = ["wanted" => 2];
+$key = $argc > 0 ? "wanted" : "missing";
+$f = fopen("tagged-fread.txt", "w");
+fwrite($f, "abcd");
+fclose($f);
+$f = fopen("tagged-fread.txt", "r");
+echo fread($f, $lengths[$key]);
+fclose($f);
+unlink("tagged-fread.txt");
+"#,
+    );
+    assert_eq!(out, "ab");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies fgets() reads one line from STDIN when piped input is provided.
 #[test]
 fn test_fgets_returns_false_at_eof() {
@@ -280,6 +400,34 @@ unlink("guarded.txt");
 "#,
     );
     assert_eq!(out, "safe");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `file_put_contents()` concatenates array payload pieces before writing.
+#[test]
+fn test_file_put_contents_array_payload() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("array-payload.txt", ["ab", 12, "cd"]);
+echo file_get_contents("array-payload.txt");
+unlink("array-payload.txt");
+"#,
+    );
+    assert_eq!(out, "ab12cd");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `file_put_contents()` accepts its optional flags and context parameters by name.
+#[test]
+fn test_file_put_contents_optional_named_parameters() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents(filename: "optional-write.txt", data: "ok", flags: 0, context: null);
+echo file_get_contents("optional-write.txt");
+unlink("optional-write.txt");
+"#,
+    );
+    assert_eq!(out, "ok");
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -547,6 +695,45 @@ echo is_resource(null) ? "y" : "n";
 fn test_get_resource_type_returns_stream() {
     let out = compile_and_run("<?php echo get_resource_type(STDOUT);");
     assert_eq!(out, "stream");
+}
+
+/// Verifies `get_debug_type()` names a resource the way PHP does, including after a close.
+///
+/// PHP never answers the bare word `resource` here: an open handle is `resource (stream)`
+/// and a closed one is `resource (closed)` — measured on PHP 8.5.6 for `fopen`/`fclose` and
+/// for `opendir`/`closedir` alike. The name is NOT the `get_resource_type()` label, which
+/// says `Unknown` for the same closed handle.
+#[test]
+fn test_get_debug_type_names_open_and_closed_resources() {
+    let out = compile_and_run(
+        r#"<?php
+echo get_debug_type(STDOUT) . "|";
+$f = fopen("php://memory", "r+");
+echo get_debug_type($f) . "|";
+fclose($f);
+echo get_debug_type($f);
+"#,
+    );
+    assert_eq!(out, "resource (stream)|resource (stream)|resource (closed)");
+}
+
+/// Verifies `get_debug_type()` names a resource reached through a boxed Mixed value.
+///
+/// An array element is a boxed cell, so this exercises the runtime tag-9 arm rather than
+/// the unboxed `Resource` one; both must reach the same runtime name resolver.
+#[test]
+fn test_get_debug_type_names_a_boxed_resource_element() {
+    let out = compile_and_run(
+        r#"<?php
+$m = ["r" => fopen("php://memory", "r+"), "n" => 1];
+echo get_debug_type($m["r"]) . "|";
+$d = opendir(".");
+echo get_debug_type($d) . "|";
+closedir($d);
+echo get_debug_type($d);
+"#,
+    );
+    assert_eq!(out, "resource (stream)|resource (stream)|resource (closed)");
 }
 
 /// Verifies compiled PHP keeps stream and stream-filter resources distinct.
@@ -1635,6 +1822,38 @@ fn test_fopen_php_stdout_writes_to_stdout() {
 fn test_fopen_php_output_is_stdout_alias() {
     let out = compile_and_run(r#"<?php $h = fopen("php://output", "w"); fwrite($h, "aliased");"#);
     assert_eq!(out, "aliased");
+}
+
+/// Verifies a `php://` URL held in a variable opens like a literal one, on a DUPLICATE of the
+/// standard descriptor so releasing the stream leaves stdout open. Symfony's `AbstractDumper`
+/// opens `static::$defaultOutput`, which only a literal used to reach.
+#[test]
+fn test_fopen_php_stream_urls_from_runtime_strings() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (["php://stdout", "php://output", "php://stderr", "php://memory", "php://temp", "php://temp/maxmemory:64"] as $url) {
+    foreach (["w", "wb", "a"] as $mode) {
+        $h = fopen($url, $mode);
+        echo is_resource($h) ? "y" : "n";
+    }
+}
+echo "\n";
+class Dumper {
+    protected static $defaultOutput = "php://output";
+    private $out;
+    public function __construct() { $this->out = fopen(static::$defaultOutput, "wb"); }
+    public function write($s) { fwrite($this->out, $s); }
+}
+(new Dumper)->write("first\n");
+(new Dumper)->write("second\n");
+$m = "php://memory";
+$h = fopen($m, "w+");
+fwrite($h, "mem");
+rewind($h);
+echo fread($h, 10), "\n";
+"#,
+    );
+    assert_eq!(out, "yyyyyyyyyyyyyyyyyy\nfirst\nsecond\nmem\n");
 }
 
 /// Verifies compiled PHP output for fopen php stream yields resource.
@@ -8279,5 +8498,24 @@ fn test_stream_context_set_option_nested_hash_retain_does_not_leak() {
         live_set(&single.stderr),
         live_set(&repeated.stderr),
         "repeated stream_context_set_option() calls grew the live heap"
+    );
+}
+
+/// `Phar::running()` outside a phar archive is the empty string, with or without the scheme.
+/// A builtin class's STATIC method body was discovered by the EIR scan but looked up as an
+/// instance method, so the discovery loop re-lowered it forever (psysh's `info()` helper).
+#[test]
+fn test_phar_running_outside_an_archive_is_empty() {
+    let out = compile_and_run(
+        r#"<?php
+function info(): array {
+    return ['phar' => \Phar::running(false), 'phar-full' => \Phar::running()];
+}
+var_dump(info());
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(2) {\n  [\"phar\"]=>\n  string(0) \"\"\n  [\"phar-full\"]=>\n  string(0) \"\"\n}\n"
     );
 }

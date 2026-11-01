@@ -57,6 +57,9 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             target: walk_instanceof_target(target, pass, span),
         },
         ExprKind::Negate(inner) => ExprKind::Negate(Box::new(walk_expr(*inner, pass))),
+        ExprKind::ArrayReference(inner) => {
+            ExprKind::ArrayReference(Box::new(walk_expr(*inner, pass)))
+        }
         ExprKind::Not(inner) => ExprKind::Not(Box::new(walk_expr(*inner, pass))),
         ExprKind::BitNot(inner) => ExprKind::BitNot(Box::new(walk_expr(*inner, pass))),
         ExprKind::Throw(inner) => ExprKind::Throw(Box::new(walk_expr(*inner, pass))),
@@ -251,6 +254,12 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
                 property: Box::new(walk_expr(*property, pass)),
             }
         }
+        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+            ExprKind::DynamicStaticPropertyAccess {
+                receiver: walk_static_receiver(receiver, pass, span),
+                property: Box::new(walk_expr(*property, pass)),
+            }
+        }
         ExprKind::NullsafePropertyAccess { object, property } => {
             ExprKind::NullsafePropertyAccess {
                 object: Box::new(walk_expr(*object, pass)),
@@ -326,6 +335,12 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             receiver: walk_static_receiver(receiver, pass, span),
             name,
         },
+        ExprKind::DynamicScopedConstantAccess { receiver, name } => {
+            ExprKind::DynamicScopedConstantAccess {
+                receiver: Box::new(walk_expr(*receiver, pass)),
+                name,
+            }
+        }
         ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
             receiver: walk_static_receiver(receiver, pass, span),
             args: args.into_iter().map(|a| walk_expr(a, pass)).collect(),

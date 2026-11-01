@@ -37,8 +37,7 @@ pub(super) fn eliminate_tail_recursion(module: &mut Module) -> bool {
     if eligibility::activation_chain_is_observable(module) {
         return false;
     }
-    let names: HashMap<_, _> = module.functions.iter().enumerate()
-        .map(|(index, function)| (php_symbol_key(&function.name), index)).collect();
+    let names = call_targets_by_name(module);
     let eligible: Vec<_> = module.functions.iter().map(|function| eligibility::frame_is_safe(function, module)).collect();
     let sites: Vec<Vec<TailSite>> = module.functions.iter().enumerate().map(|(index, function)| {
         if !eligible[index] { return Vec::new(); }
@@ -63,6 +62,23 @@ pub(super) fn eliminate_tail_recursion(module: &mut Module) -> bool {
         }
     }
     changed
+}
+
+/// Maps each PHP-callable function's folded name to its index.
+///
+/// The entry function is named `main` too, but no PHP call can reach it, so it is left out.
+/// Keyed with it, a user `function main()` resolved to whichever came last, the entry: the
+/// file's trailing `main();` looked like the entry tail-calling itself, became a loop, and the
+/// program printed nothing.
+fn call_targets_by_name(module: &Module) -> HashMap<String, usize> {
+    let mut names = HashMap::new();
+    for (index, function) in module.functions.iter().enumerate() {
+        if function.flags.is_main {
+            continue;
+        }
+        names.entry(php_symbol_key(&function.name)).or_insert(index);
+    }
+    names
 }
 
 /// Finds resolved calls with only scalar forwarding and proven numeric cleanup before return.

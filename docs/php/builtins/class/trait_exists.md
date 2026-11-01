@@ -2,7 +2,7 @@
 title: "trait_exists()"
 description: "Checks whether the trait exists."
 sidebar:
-  order: 101
+  order: 112
 ---
 
 ## trait_exists()

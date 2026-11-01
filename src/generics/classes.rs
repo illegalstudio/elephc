@@ -376,6 +376,14 @@ struct Instantiate<'a> {
     generic_functions: &'a std::collections::HashSet<String>,
     /// Template names declared inside a conditional, for the diagnostic that names them.
     conditional: &'a std::collections::HashSet<String>,
+    /// Every class, interface and trait name the program itself declares, by template key.
+    ///
+    /// A mention `Iterator<int, string>` of a class the program does NOT declare names a builtin
+    /// (or a class php resolves at runtime), which can never be a template. Its arguments are
+    /// PHPStan vocabulary — Symfony writes `@param \Iterator<TKey, TValue>` throughout — and are
+    /// forgotten rather than refused. A declared non-generic class (`Plain<int>`) is still an
+    /// error.
+    declared: &'a std::collections::HashSet<String>,
     /// (enclosing function, `new` site) -> the class the checker inferred for it.
     new_names: &'a HashMap<(String, Span), String>,
     /// `RefCell` because `Pass::transform_type` takes `&self`: the walk rebuilds the tree and
@@ -419,12 +427,23 @@ struct Instantiate<'a> {
 }
 
 impl Instantiate<'_> {
+    /// Whether `name` is neither a template nor any class the program declares.
+    fn names_a_builtin(&self, name: &Name) -> bool {
+        let key = template_key(name.as_str());
+        !self.templates.contains_key(&key)
+            && !self.conditional.contains(&key)
+            && !self.declared.contains(&key)
+    }
+
     /// Rewrites one type, recursing so a generic class nested anywhere inside is reached.
     ///
     /// The walker hands over a whole annotation (`?array<Box<int>>`), not one node at a time,
     /// so the recursion belongs here rather than in the walker.
     fn rewrite(&self, ty: TypeExpr, span: Span) -> TypeExpr {
         match ty {
+            TypeExpr::GenericClass { name, .. } if self.names_a_builtin(&name) => {
+                TypeExpr::Named(name)
+            }
             TypeExpr::GenericClass { name, args } => {
                 let args: Vec<TypeExpr> = args
                     .into_iter()
@@ -772,15 +791,24 @@ pub fn instantiate(
     // What the CHECKER worked out about `new Box(5)`, which this pass could not: the classes it
     // asked for, spliced here, and the constructions themselves, renamed by the walk below.
     let (program, new_names) = adopt_inferred_constructions(program, templates, inferred)?;
+    let declared: std::collections::HashSet<String> = {
+        let mut names = Vec::new();
+        collect_declared_names(&program, &mut names);
+        names.iter().map(|name| template_key(name)).collect()
+    };
     let mut program = program;
     let mut obligations = Vec::new();
     let mut warnings: Vec<crate::errors::CompileWarning> = Vec::new();
     let mut rounds = 0usize;
     loop {
+        // Before every walk, not once: an instantiation spliced last round is a fresh copy of a
+        // template and still carries the annotation.
+        forget_doc_inheritance_of_non_templates(&mut program, templates);
         let mut pass = Instantiate {
             templates,
             generic_functions: &templates_store.generic_functions,
             conditional: &templates_store.conditional,
+            declared: &declared,
             new_names: &new_names,
             requests: RefCell::new(Vec::new()),
             obligations: RefCell::new(Vec::new()),
@@ -945,6 +973,104 @@ fn collect_templates_into(
     }
 }
 
+/// Drops docblock-annotated type arguments inherited from a class that is no template.
+///
+/// `@extends \FilterIterator<string, SplFileInfo>` is PHPStan vocabulary on a class php sees as
+/// plain `extends FilterIterator`; refusing it as "declares no type parameters" would reject
+/// valid php over a comment. Only DOC-adopted arguments are forgotten, and only top-level and
+/// namespace-block declarations are visited, the same reach as `collect_templates_into`.
+fn forget_doc_inheritance_of_non_templates(
+    stmts: &mut [Stmt],
+    templates: &HashMap<String, Template>,
+) {
+    let is_template = |name: &crate::names::Name| templates.contains_key(&template_key(name.as_str()));
+    for stmt in stmts {
+        match &mut stmt.kind {
+            StmtKind::ClassDecl {
+                generics,
+                extends,
+                implements,
+                ..
+            } => {
+                // `class ArrayNode extends NodeDefinition`, where only the parent's docblock
+                // says `@template-covariant TParent`: php sees an ordinary parent, so the bare
+                // mention inherits the instantiation at each parameter's bound, default, or
+                // `mixed` — the reading a bare template type gets. A written-syntax template
+                // extended bare is left to its own diagnostic.
+                let bare_doc_parent = extends
+                    .as_ref()
+                    .and_then(|parent| templates.get(&template_key(parent.as_str())))
+                    .filter(|template| template.type_params.iter().all(|p| p.doc_annotated))
+                    .filter(|_| generics.as_ref().is_none_or(|decl| decl.extends_args.is_empty()));
+                if let Some(template) = bare_doc_parent {
+                    let arguments: Vec<TypeExpr> = template
+                        .type_params
+                        .iter()
+                        .map(|param| {
+                            param
+                                .bound
+                                .clone()
+                                .or_else(|| param.default.clone())
+                                .unwrap_or_else(|| TypeExpr::Named(crate::names::Name::unqualified("mixed")))
+                        })
+                        .collect();
+                    let (type_params, interface_args, doc_annotated) = generics
+                        .take()
+                        .map(|decl| (decl.type_params, decl.interface_args, decl.doc_annotated))
+                        .unwrap_or_default();
+                    *generics = GenericDecl::with_origin(
+                        type_params,
+                        arguments,
+                        interface_args,
+                        doc_annotated,
+                    );
+                }
+                let Some(decl) = generics.as_mut().filter(|decl| decl.doc_annotated) else {
+                    continue;
+                };
+                if !decl.extends_args.is_empty() && !extends.as_ref().is_some_and(is_template) {
+                    decl.extends_args.clear();
+                }
+                for (name, args) in implements.iter().zip(decl.interface_args.iter_mut()) {
+                    if !is_template(name) {
+                        args.clear();
+                    }
+                }
+                let decl = generics.take().expect("checked above");
+                *generics = GenericDecl::with_origin(
+                    decl.type_params,
+                    decl.extends_args,
+                    decl.interface_args,
+                    true,
+                );
+            }
+            StmtKind::InterfaceDecl {
+                generics, extends, ..
+            } => {
+                let Some(decl) = generics.as_mut().filter(|decl| decl.doc_annotated) else {
+                    continue;
+                };
+                for (name, args) in extends.iter().zip(decl.interface_args.iter_mut()) {
+                    if !is_template(name) {
+                        args.clear();
+                    }
+                }
+                let decl = generics.take().expect("checked above");
+                *generics = GenericDecl::with_origin(
+                    decl.type_params,
+                    decl.extends_args,
+                    decl.interface_args,
+                    true,
+                );
+            }
+            StmtKind::NamespaceBlock { body, .. } => {
+                forget_doc_inheritance_of_non_templates(body, templates)
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Normalizes a declared or written class name to the key both sides agree on.
 ///
 /// The name resolver qualifies a mention to `\App\Box` while the declaration is stored without
@@ -1025,8 +1151,10 @@ fn instantiate_declaration(template: &Stmt, target: &str, bindings: &Bindings) -
                     type_params: _,
                     extends_args,
                     interface_args,
+                    doc_annotated,
                 } = *declared;
-                *generics = GenericDecl::new(Vec::new(), extends_args, interface_args);
+                *generics =
+                    GenericDecl::with_origin(Vec::new(), extends_args, interface_args, doc_annotated);
             }
         }
         // A trait inherits nothing, so its copy keeps no generic half at all.

@@ -11,8 +11,16 @@
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
 use crate::names::Name;
-use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind, InstanceOfTarget, TypeExpr};
-use crate::parser::stmt::parse_name;
+use crate::parser::ast::{
+    ArrayEntry, BinOp, CallableTarget, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind, TypeExpr,
+};
+use crate::parser::stmt::{
+    assignment_target_append_stmt,
+    is_valid_reference_source,
+    lower_destructuring_assignment_expression,
+    parse_name,
+    try_parse_destructuring_assignment_expression_pattern,
+};
 use crate::span::Span;
 
 use super::assignment_targets::{
@@ -84,7 +92,22 @@ fn parse_expr_bp_inner(
     min_bp: u8,
     mut prefix_increment: Option<&mut PrefixIncrementTarget>,
 ) -> Result<Expr, CompileError> {
-    let mut lhs = parse_prefix(tokens, pos)?;
+    let mut lhs = if min_bp <= 7 {
+        let span = tokens
+            .get(*pos)
+            .map(|(_, metadata)| metadata.span)
+            .unwrap_or(Span::dummy());
+        match try_parse_destructuring_assignment_expression_pattern(tokens, pos, span)? {
+            Some(pattern) => {
+                let value = parse_expr_bp(tokens, pos, 6)?;
+                let span = span.merge(value.span);
+                lower_destructuring_assignment_expression(pattern, value, span)
+            }
+            None => parse_prefix(tokens, pos)?,
+        }
+    } else {
+        parse_prefix(tokens, pos)?
+    };
 
     loop {
         if *pos >= tokens.len() {
@@ -104,25 +127,87 @@ fn parse_expr_bp_inner(
                     lhs = error;
                     continue;
                 }
-                match crate::parser::expr::assignment_targets::desugar_lvalue_incdec(
-                    lhs.clone(),
-                    increment,
-                    false,
-                    span,
-                ) {
-                    Some(desugared) => {
-                        *pos += 1;
-                        lhs = desugared;
-                        continue;
+                // An element target keeps the generic update desugaring: its write half is
+                // recognised as the same dimension its read converted, so a float key reports
+                // its deprecation once (`$a[1.9]++`, `$o->m[1.9]++`), as PHP does.
+                let element_target = matches!(&lhs.kind, ExprKind::ArrayAccess { .. });
+                if element_target || !is_non_local_assignment_target(&lhs) {
+                    // Not a shape the stabilizing lowering can name. The generic desugaring
+                    // takes what it can; when it declines (a call, say, which cannot be read
+                    // twice) the operator is left unconsumed so the caller reports the error
+                    // it always did.
+                    let op_span = tokens[*pos].1.span;
+                    match crate::parser::expr::assignment_targets::desugar_lvalue_incdec(
+                        lhs.clone(),
+                        increment,
+                        false,
+                        op_span,
+                    ) {
+                        Some(desugared) => {
+                            *pos += 1;
+                            lhs = desugared;
+                            continue;
+                        }
+                        None => break,
                     }
-                    // Not a target this can rewrite (a call, say, which cannot be read
-                    // twice). Leave the operator unconsumed so the caller reports it
-                    // exactly as it did before.
-                    None => break,
                 }
+                let span = lhs.span.merge(tokens[*pos].1.span);
+                *pos += 1;
+                let op = if increment { BinOp::Add } else { BinOp::Sub };
+                let one = Expr::new(ExprKind::IntLiteral(1), span);
+                let mut lowerer = AssignmentExpressionLowerer::new(span);
+                let target = lowerer.stabilize_non_local_target(lhs, &one);
+                let old_value = lowerer.bind_result_value(target.clone());
+                let value = assignment_value(
+                    old_value.clone(),
+                    AssignmentOperator::Compound(op),
+                    one,
+                    span,
+                );
+                lhs = Expr::new(
+                    ExprKind::Assignment {
+                        target: Box::new(target),
+                        value: Box::new(value),
+                        result_target: Some(Box::new(old_value)),
+                        prelude: lowerer.finish(),
+                        conditional_value_temp: None,
+                    },
+                    span,
+                );
             }
             Token::LBracket => {
                 let span = tokens[*pos].1.span;
+                if matches!(
+                    (
+                        tokens.get(*pos + 1).map(|(token, _)| token),
+                        tokens.get(*pos + 2).map(|(token, _)| token),
+                    ),
+                    (Some(Token::RBracket), Some(Token::Assign))
+                ) {
+                    *pos += 3; // consume `[] =`
+                    let rhs = parse_expr_bp(tokens, pos, 6)?;
+                    let span = span.merge(rhs.span);
+                    let mut lowerer = AssignmentExpressionLowerer::new(span);
+                    let append_target = lowerer.stabilize_non_local_target(lhs, &rhs);
+                    let result = lowerer.bind_result_value(rhs);
+                    let mut prelude = lowerer.finish();
+                    prelude.push(assignment_target_append_stmt(
+                        append_target,
+                        result.clone(),
+                        span,
+                    )?);
+                    lhs = Expr::new(
+                        ExprKind::Assignment {
+                            target: Box::new(result.clone()),
+                            value: Box::new(result),
+                            result_target: None,
+                            prelude,
+                            conditional_value_temp: None,
+                        },
+                        span,
+                    );
+                    continue;
+                }
                 *pos += 1;
                 if matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::RBracket)) {
                     lhs = super::append_writes::parse_append_write(
@@ -143,6 +228,42 @@ fn parse_expr_bp_inner(
                     return Err(CompileError::new(span, "Expected ']'"));
                 }
                 *pos += 1;
+                // Rewrite the supported `$GLOBALS['name']` subset to an unforgeable variable
+                // alias. Later checker/lowering phases route that alias directly to the program's
+                // `_eir_global_name` storage instead of treating `$GLOBALS` as an ordinary array.
+                if matches!(&lhs.kind, ExprKind::Variable(name) if name == "GLOBALS") {
+                    let ExprKind::StringLiteral(key) = &index.kind else {
+                        // A computed key READ indexes the globals snapshot; a write cannot.
+                        let next = tokens.get(*pos).map(|(token, _)| token);
+                        if crate::globals_array::is_write_token(next)
+                            || matches!(next, Some(Token::LBracket))
+                        {
+                            return Err(CompileError::new(
+                                span,
+                                crate::globals_array::DYNAMIC_KEY_MESSAGE,
+                            ));
+                        }
+                        lhs = Expr::new(
+                            ExprKind::ArrayAccess {
+                                array: Box::new(crate::globals_array::snapshot_call(lhs.span)),
+                                index: Box::new(index),
+                            },
+                            span,
+                        );
+                        continue;
+                    };
+                    if !crate::globals_array::is_php_variable_name(key) {
+                        return Err(CompileError::new(
+                            span,
+                            crate::globals_array::BARE_USE_MESSAGE,
+                        ));
+                    }
+                    lhs = Expr::new(
+                        ExprKind::Variable(crate::globals_array::alias_name(key)),
+                        lhs.span,
+                    );
+                    continue;
+                }
                 lhs = Expr::new(
                     ExprKind::ArrayAccess {
                         array: Box::new(lhs),
@@ -190,15 +311,47 @@ fn parse_expr_bp_inner(
                         *pos += 1;
                         member
                     }
-                    _ => {
+                    // PHP's semi-reserved rule applies after `::` exactly as it does after `->`:
+                    // `$cls::do(...)`, `$cls::print(...)`, `$cls::list(...)` are all legal. The
+                    // named-class path (`Foo::do()`, in the prefix parser) already accepted them;
+                    // only this dynamic-receiver path refused, which is what made Symfony's
+                    // generated DI container unparsable — `Container::load()` dispatches through
+                    // `$class::do($this, $lazyLoad)`.
+                    Some((token, name_span)) => {
+                        match crate::parser::keyword_name::bareword_name_from_token(
+                            &token,
+                            &tokens[*pos].1,
+                        ) {
+                            Some(name) => {
+                                *pos += 1;
+                                Expr::new(ExprKind::StringLiteral(name), name_span)
+                            }
+                            None => {
+                                return Err(CompileError::new(
+                                    span,
+                                    "Expected method name after '::'",
+                                ));
+                            }
+                        }
+                    }
+                    None => {
                         return Err(CompileError::new(span, "Expected method name after '::'"));
                     }
                 };
                 if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
                     *pos += 1; // consume '('
+                    if parse_first_class_callable_parens(tokens, pos)? {
+                        let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
+                        lhs = super::prefix_complex::dynamic_member_closure(lhs, member, span);
+                        continue;
+                    }
                     let dynamic_args = crate::parser::expr::parse_args(tokens, pos, span)?;
                     let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
-                    reject_named_args_in_dynamic_call(&dynamic_args, span)?;
+                    if has_named_args(&dynamic_args) {
+                        let target = Expr::new(ExprKind::ArrayLiteral(vec![lhs, member]), span);
+                        lhs = named_args_dynamic_call(target, &dynamic_args, span);
+                        continue;
+                    }
                     let mut call_args =
                         vec![Expr::new(ExprKind::ArrayLiteral(vec![lhs, member]), span)];
                     call_args.extend(dynamic_args);
@@ -210,10 +363,46 @@ fn parse_expr_bp_inner(
                         span,
                     );
                 } else {
-                    return Err(CompileError::new(
+                    // `$expr::$prop` (Laravel's `$this->resource::$forceWrapping`): the class is
+                    // the run-time object's, so a subclass's redeclared static answers. Read it
+                    // by name through reflection, which resolves that class when the line runs.
+                    if let ExprKind::Variable(property) = &member.kind {
+                        let reflection = Expr::new(
+                            ExprKind::NewObject {
+                                class_name: crate::names::Name::from_parts(
+                                    crate::names::NameKind::FullyQualified,
+                                    vec!["ReflectionClass".to_string()],
+                                ),
+                                args: vec![lhs],
+                            },
+                            span,
+                        );
+                        lhs = Expr::new(
+                            ExprKind::MethodCall {
+                                object: Box::new(reflection),
+                                method: "getStaticPropertyValue".to_string(),
+                                args: vec![Expr::new(
+                                    ExprKind::StringLiteral(property.clone()),
+                                    member.span,
+                                )],
+                            },
+                            span,
+                        );
+                        continue;
+                    }
+                    let ExprKind::StringLiteral(name) = member.kind else {
+                        return Err(CompileError::new(
+                            span,
+                            "Dynamic class access without a call requires a constant name",
+                        ));
+                    };
+                    lhs = Expr::new(
+                        ExprKind::DynamicScopedConstantAccess {
+                            receiver: Box::new(lhs),
+                            name,
+                        },
                         span,
-                        "Dynamic class access (`$class::X`) is only supported for method calls",
-                    ));
+                    );
                 }
             }
             Token::Arrow | Token::QuestionArrow => {
@@ -229,9 +418,32 @@ fn parse_expr_bp_inner(
                                 return Err(CompileError::new(lhs.span, "Cannot use [] for reading"));
                             }
                             *pos += 1; // consume '('
+                            if parse_first_class_callable_parens(tokens, pos)? {
+                                if nullsafe {
+                                    return Err(CompileError::new(
+                                        arrow_span,
+                                        "Cannot combine nullsafe operator with Closure creation",
+                                    ));
+                                }
+                                let arrow_span = crate::parser::expr::span_through_prev_token(
+                                    tokens, *pos, arrow_span,
+                                );
+                                lhs = super::prefix_complex::dynamic_member_closure(
+                                    lhs, property, arrow_span,
+                                );
+                                continue;
+                            }
                             let dynamic_args =
                                 crate::parser::expr::parse_args(tokens, pos, arrow_span)?;
                             let arrow_span = crate::parser::expr::span_through_prev_token(tokens, *pos, arrow_span);
+                            if has_named_args(&dynamic_args) && !nullsafe {
+                                let target = Expr::new(
+                                    ExprKind::ArrayLiteral(vec![lhs, property]),
+                                    arrow_span,
+                                );
+                                lhs = named_args_dynamic_call(target, &dynamic_args, arrow_span);
+                                continue;
+                            }
                             reject_named_args_in_dynamic_call(&dynamic_args, arrow_span)?;
                             if nullsafe {
                                 lhs = Expr::new(
@@ -246,18 +458,46 @@ fn parse_expr_bp_inner(
                             }
                             // `$obj->$method(args)` reuses the runtime dynamic-dispatch path by
                             // desugaring to `call_user_func([$obj, $method], ...args)`.
-                            let mut call_args = vec![Expr::new(
+                            //
+                            // A call whose ONLY argument is a spread goes to
+                            // `call_user_func_array` instead: php binds a spread's string keys to
+                            // the parameters NAMED by them (`$this->{$method}(...['view' => 'v'])`),
+                            // which is what `call_user_func_array` does with its array, while
+                            // `call_user_func`'s variadic passes every entry positionally. Laravel's
+                            // `ViewController::callAction` is exactly `$this->{$method}(...$parameters)`.
+                            let target = Expr::new(
                                 ExprKind::ArrayLiteral(vec![lhs, property]),
                                 arrow_span,
-                            )];
-                            call_args.extend(dynamic_args);
-                            lhs = Expr::new(
-                                ExprKind::FunctionCall {
-                                    name: crate::names::Name::unqualified("call_user_func"),
-                                    args: call_args,
-                                },
-                                arrow_span,
                             );
+                            lhs = match dynamic_args.as_slice() {
+                                [only] if matches!(only.kind, ExprKind::Spread(_)) => {
+                                    let ExprKind::Spread(inner) = &only.kind else {
+                                        unreachable!("guarded by the match arm");
+                                    };
+                                    Expr::new(
+                                        ExprKind::FunctionCall {
+                                            name: crate::names::Name::unqualified(
+                                                "call_user_func_array",
+                                            ),
+                                            args: vec![target, inner.as_ref().clone()],
+                                        },
+                                        arrow_span,
+                                    )
+                                }
+                                _ => {
+                                    let mut call_args = vec![target];
+                                    call_args.extend(dynamic_args);
+                                    Expr::new(
+                                        ExprKind::FunctionCall {
+                                            name: crate::names::Name::unqualified(
+                                                "call_user_func",
+                                            ),
+                                            args: call_args,
+                                        },
+                                        arrow_span,
+                                    )
+                                }
+                            };
                             continue;
                         }
                         lhs = Expr::new(
@@ -361,15 +601,38 @@ fn parse_expr_bp_inner(
             Token::LParen => {
                 if matches!(
                     lhs.kind,
-                    ExprKind::ArrayAccess { .. }
+                    ExprKind::ArrayLiteral(_)
+                        | ExprKind::ArrayLiteralAssoc(_)
+                        | ExprKind::ArrayAccess { .. }
                         | ExprKind::ExprCall { .. }
                         | ExprKind::ClosureCall { .. }
                         | ExprKind::FunctionCall { .. }
                         | ExprKind::MethodCall { .. }
+                        | ExprKind::NullsafeMethodCall { .. }
                         | ExprKind::StaticMethodCall { .. }
+                        // `$o->m(...)()` / `strlen(...)('ab')`: php calls the Closure it just made.
+                        | ExprKind::FirstClassCallable(_)
                 ) {
                     let call_span = tokens[*pos].1.span;
                     *pos += 1;
+                    // `expr(...)` makes a Closure out of whatever `expr` produced, the same way
+                    // `$var(...)`, `$this(...)` and `(expr)(...)` already do — through the
+                    // callable's `__invoke`. Symfony's `ErrorListener` reaches this arm with
+                    // `$event->getController()(...)`, a first-class callable taken from a CALL
+                    // result; without it `parse_args` met the `...)` and reported a bare
+                    // "Unexpected token: RParen".
+                    if parse_first_class_callable_parens(tokens, pos)? {
+                        let call_span =
+                            crate::parser::expr::span_through_prev_token(tokens, *pos, call_span);
+                        lhs = Expr::new(
+                            ExprKind::FirstClassCallable(CallableTarget::Method {
+                                object: Box::new(lhs),
+                                method: "__invoke".to_string(),
+                            }),
+                            call_span,
+                        );
+                        continue;
+                    }
                     let args = parse_args(tokens, pos, call_span)?;
                     let call_span = crate::parser::expr::span_through_prev_token(tokens, *pos, call_span);
                     lhs = Expr::new(
@@ -454,16 +717,62 @@ fn parse_expr_bp_inner(
         }
 
         if let Some((op, l_bp, r_bp)) = assignment_bp(&tokens[*pos].0) {
-            if l_bp < min_bp && !is_assignment_expression_target(&lhs) {
+            // PHP binds assignment to the adjacent lvalue even when that lvalue is the operand of
+            // a tighter prefix/infix expression: `!$x = value` means `!($x = value)`. Only yield
+            // to the enclosing Pratt frame when the expression accumulated so far is not itself
+            // an assignment target.
+            let lhs_is_target = is_assignment_expression_target(&lhs);
+            if l_bp < min_bp && !lhs_is_target {
                 break;
             }
 
-            if !is_assignment_expression_target(&lhs) {
+            if !lhs_is_target {
                 return Err(CompileError::new(lhs.span, "Invalid assignment target"));
             }
 
             let span = tokens[*pos].1.span;
             *pos += 1;
+            if matches!(op, AssignmentOperator::Assign)
+                && matches!(
+                    tokens.get(*pos).map(|(token, _)| token),
+                    Some(Token::Ampersand)
+                )
+            {
+                let ExprKind::Variable(target_name) = &lhs.kind else {
+                    return Err(CompileError::new(
+                        lhs.span,
+                        "Reference assignment expression target must be a variable",
+                    ));
+                };
+                let target_name = target_name.clone();
+                let target = lhs.clone();
+                *pos += 1;
+                let source = parse_expr_bp(tokens, pos, r_bp)?;
+                if !is_valid_reference_source(&source.kind) {
+                    return Err(CompileError::new(
+                        source.span,
+                        "Reference assignment source must be a variable, array/property element, or a by-reference call",
+                    ));
+                }
+                let span = span.merge(source.span);
+                lhs = Expr::new(
+                    ExprKind::Assignment {
+                        target: Box::new(target.clone()),
+                        value: Box::new(target),
+                        result_target: None,
+                        prelude: vec![Stmt::new(
+                            StmtKind::RefAssign {
+                                target: target_name,
+                                source,
+                            },
+                            span,
+                        )],
+                        conditional_value_temp: None,
+                    },
+                    span,
+                );
+                continue;
+            }
             let rhs = parse_expr_bp(tokens, pos, r_bp)?;
             // Widen only the END so the span covers through the value expression;
             // the start stays on the operator token, keeping diagnostics anchored.
@@ -628,7 +937,7 @@ fn starts_unparenthesized_arrow_function(tokens: &[SpannedToken], pos: usize) ->
 ///
 /// `Named` holds a static identifier string. `Dynamic` holds an expression
 /// inside braces (`{$expr}`) used for computed property/method names.
-enum ObjectMember {
+pub(super) enum ObjectMember {
     Named(String),
     Dynamic(Expr),
 }
@@ -647,7 +956,7 @@ enum ObjectMember {
 /// # Inputs
 /// - `arrow_span`: span of the `->` or `?->` token, used for error reporting
 /// - `nullsafe`: whether the operator was `?->` (changes error messages)
-fn parse_object_member(
+pub(super) fn parse_object_member(
     tokens: &[SpannedToken],
     pos: &mut usize,
     arrow_span: Span,
@@ -699,6 +1008,48 @@ pub(super) enum AssignmentOperator {
     Assign,
     Compound(BinOp),
     NullCoalesce,
+}
+
+/// Desugars a dynamic call that carries named arguments to
+/// `call_user_func_array($target, [positional..., ...spread, 'name' => value])`.
+///
+/// The callee's parameter names are unknown at compile time, so the names cannot be matched to
+/// positions here. `call_user_func_array` binds string keys to the parameters they name at run
+/// time -- exactly php's rule for `$obj->{$m}(...$args, boolean: $b)` -- so the call is rebuilt
+/// around one ordered array literal. Callers gate it on [`has_named_args`], leaving the
+/// positional `call_user_func` desugaring untouched for every other call.
+pub(in crate::parser) fn named_args_dynamic_call(
+    target: Expr,
+    args: &[Expr],
+    span: Span,
+) -> Expr {
+    let entries = args
+        .iter()
+        .map(|arg| match &arg.kind {
+            ExprKind::NamedArg { name, value } => ArrayEntry::Keyed(
+                Expr::new(ExprKind::StringLiteral(name.clone()), arg.span),
+                value.as_ref().clone(),
+            ),
+            ExprKind::Spread(inner) => ArrayEntry::Spread(inner.as_ref().clone()),
+            _ => ArrayEntry::Value(arg.clone()),
+        })
+        .collect();
+    Expr::new(
+        ExprKind::FunctionCall {
+            name: crate::names::Name::unqualified("call_user_func_array"),
+            args: vec![
+                target,
+                Expr::new(ExprKind::ArrayLiteralMixed(entries), span),
+            ],
+        },
+        span,
+    )
+}
+
+/// Reports whether any argument of a call is a `name: value` named argument.
+pub(in crate::parser) fn has_named_args(args: &[Expr]) -> bool {
+    args.iter()
+        .any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. }))
 }
 
 /// Rejects named arguments in a dynamic call (`$obj->$m(...)`, `$cls::$m(...)`, `C::$m(...)`).
@@ -781,7 +1132,7 @@ fn assignment_value(target: Expr, op: AssignmentOperator, rhs: Expr, span: Span)
 ///
 /// Handles the PHP 8.0 class-name forms and the dynamic expression form:
 /// - `self`, `parent`, `static` keyword → `InstanceOfTarget::Name`
-/// - Variable or parenthesized expression → parsed as `Expr`, wrapped in
+/// - Variable, `$this`, or parenthesized expression → parsed as `Expr`, wrapped in
 ///   `InstanceOfTarget::Expr` with binding power 36 (above comparisons)
 /// - Class/interface name → resolved via `parse_name` into a qualified `Name`
 ///

@@ -1049,7 +1049,7 @@ echo $info[0];
 }
 
 /// W1: in the default EXCEPTION mode a failed statement throws a `PDOException`
-/// whose `errorInfo[0]` carries the SQLSTATE frameworks parse.
+/// whose `errorInfo[0]` carries the SQLSTATE userland consumers parse.
 #[test]
 fn test_pdo_exception_carries_error_info() {
     let out = compile_and_run(
@@ -5448,7 +5448,7 @@ run();
 /// `execute()` reported success. php-src raises HY093 "Invalid parameter number:
 /// parameter was not defined" instead. Both binding paths are covered: the recorded
 /// `bindValue()` replay, and the `execute($params)` array with an unknown key.
-/// `errorInfo[0]` is what frameworks parse, so the SQLSTATE is asserted there.
+/// `errorInfo[0]` is the conventional SQLSTATE slot, so it is asserted there.
 #[test]
 fn test_pdo_execute_unknown_named_placeholder_raises_hy093() {
     let out = compile_and_run(

@@ -1597,3 +1597,63 @@ echo implode(",", $kept);
     assert_eq!(out.stdout, "a0,aa10,aaa20,a30");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Verifies the TWO-argument `strtr()` keeps its replacement-pair meaning when the map's type is
+/// only known at run time.
+///
+/// The lowering picked its helper off the static type and fell through to the THREE-argument
+/// byte-translation form for anything else. That form reads a `$to` that is not there, gets a
+/// zero-length destination list, and returns the subject untouched: `strtr('abc', (array) $map)`
+/// answered `abc` for `['a' => 'X']`, with no error anywhere. Twig's `CoreExtension::replace()`
+/// is written exactly that way. Value-checked against `php -n`.
+#[test]
+fn test_strtr_with_a_runtime_typed_pair_map_still_replaces() {
+    let out = compile_and_run(
+        r#"<?php
+function replaceWith(string $subject, $map): string
+{
+    return strtr($subject, (array) $map);
+}
+
+function pairsFor($seq)
+{
+    return (array) $seq;
+}
+
+echo replaceWith('abc', ['a' => 'X']), ':';
+echo replaceWith('abc', ['a' => 'X', 'b' => 'Y']), ':';
+echo strtr('abc', ['a' => 'Z']), ':';
+echo strtr('abc', 'a', 'Q');
+"#,
+    );
+    assert_eq!(out, "Xbc:XYc:Zbc:Qbc");
+}
+
+/// Verifies `strip_tags()` keeps its allowlist, in both of php's spellings.
+///
+/// Only the one-argument form existed: the PHP-visible wrapper declared a single parameter, so
+/// `strip_tags($s, $allowed)` was an arity error. `twig/twig`'s `CoreExtension::striptags()` is the
+/// two-argument form. The scanner follows php-src's rules, which are not the obvious ones -- a `<`
+/// only starts a tag when the next byte is a letter, `/`, `!` or `?`, which is why
+/// `'a < b and c > d'` survives untouched, and an unterminated tag swallows the rest of the string.
+/// Value-checked against `php -n`, which prints the same line.
+#[test]
+fn test_strip_tags_keeps_its_allowed_tags() {
+    let out = compile_and_run(
+        r#"<?php
+echo strip_tags('<p>Hello <b>world</b></p>', '<b>'), ';';
+echo strip_tags('<p>Hello <b>world</b></p>', '<p><b>'), ';';
+echo strip_tags('<p>Hello <b>world</b></p>', ''), ';';
+echo strip_tags('<A HREF="x">link</A>', '<a>'), ';';
+echo strip_tags('before <!-- comment --> after', '<b>'), ';';
+echo strip_tags('unclosed <b bold text', '<b>'), ';';
+echo strip_tags('a < b and c > d', '<b>'), ';';
+echo strip_tags('<b>bold</b><i>it</i>', ['b']), ';';
+echo strip_tags('<p>plain <b>one</b></p>');
+"#,
+    );
+    assert_eq!(
+        out,
+        "Hello <b>world</b>;<p>Hello <b>world</b></p>;Hello world;<A HREF=\"x\">link</A>;before  after;unclosed ;a < b and c > d;<b>bold</b>it;plain one"
+    );
+}

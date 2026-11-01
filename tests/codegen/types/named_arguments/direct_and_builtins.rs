@@ -9,6 +9,23 @@
 
 use super::*;
 
+/// Verifies a named concrete container argument is boxed before entering a `mixed` parameter.
+#[test]
+fn test_named_static_property_argument_boxes_for_mixed_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+class NamedContainer {
+    public static array $values = ['answer' => 42];
+}
+function readNamedContainer(mixed $value): int {
+    return $value['answer'];
+}
+echo readNamedContainer(value: NamedContainer::$values);
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
 /// Verifies named arguments can reorder parameters; `describe(age: 30, name: "Alice")` outputs "Alice:30".
 #[test]
 fn test_named_arguments_reorder_function_call() {
@@ -128,6 +145,30 @@ fn test_named_arguments_static_method_call() {
         ",
     );
     assert_eq!(out, "Hi Alice?");
+}
+
+/// Verifies a named argument may skip an optional by-reference parameter; the
+/// declaration default is not mistaken for a caller-supplied non-lvalue.
+#[test]
+fn test_named_argument_skips_optional_by_ref_default() {
+    let out = compile_and_run(
+        r#"<?php
+class OptionalReferenceTarget {
+    public static function resolve(
+        string $input,
+        ?string &$metadata = null,
+        ?string &$parsed = null,
+    ): string {
+        $parsed = strtoupper($input);
+        return $input;
+    }
+}
+
+$parsed = null;
+echo OptionalReferenceTarget::resolve("value", parsed: $parsed), ":", $parsed;
+"#,
+    );
+    assert_eq!(out, "value:VALUE");
 }
 
 /// Verifies named arguments work on builtins `strlen` and `str_repeat`; outputs "5:hahaha".

@@ -72,7 +72,10 @@ fn require_assoc_search_value(name: &str, needle_ty: &PhpType, value_ty: &PhpTyp
         PhpType::Int | PhpType::Bool if matches!(needle_ty, PhpType::Int | PhpType::Bool) => {
             Ok(())
         }
-        PhpType::Mixed if matches!(needle_ty, PhpType::Int | PhpType::Bool | PhpType::Str) => {
+        PhpType::Mixed
+            if matches!(needle_ty, PhpType::Int | PhpType::Bool | PhpType::Str | PhpType::Void)
+                || (name == "in_array" && needle_ty == &PhpType::Mixed) =>
+        {
             Ok(())
         }
         _ => Err(CodegenIrError::unsupported(format!(
@@ -165,8 +168,12 @@ fn push_assoc_search_needle(
                 ctx.load_string_value_to_regs(needle, "x1", "x2")?;
                 abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
             }
-            PhpType::Int | PhpType::Bool => {
+            PhpType::Int | PhpType::Bool | PhpType::Mixed => {
                 ctx.load_value_to_reg(needle, "x1")?;
+                abi::emit_push_reg(ctx.emitter, "x1");
+            }
+            PhpType::Void | PhpType::Never => {
+                abi::emit_load_int_immediate(ctx.emitter, "x1", 0);
                 abi::emit_push_reg(ctx.emitter, "x1");
             }
             other => {
@@ -181,8 +188,12 @@ fn push_assoc_search_needle(
                 ctx.load_string_value_to_regs(needle, "rdi", "rdx")?;
                 abi::emit_push_reg_pair(ctx.emitter, "rdi", "rdx");
             }
-            PhpType::Int | PhpType::Bool => {
+            PhpType::Int | PhpType::Bool | PhpType::Mixed => {
                 ctx.load_value_to_reg(needle, "rdi")?;
+                abi::emit_push_reg(ctx.emitter, "rdi");
+            }
+            PhpType::Void | PhpType::Never => {
+                abi::emit_load_int_immediate(ctx.emitter, "rdi", 0);
                 abi::emit_push_reg(ctx.emitter, "rdi");
             }
             other => {
@@ -470,6 +481,14 @@ fn emit_mixed_assoc_value_match_aarch64(
     found_label: &str,
     in_array_mode: Option<InArrayMode>,
 ) -> Result<()> {
+    if needle_ty == &PhpType::Mixed {
+        return emit_mixed_needle_assoc_value_match_aarch64(
+            ctx,
+            needle_offset,
+            found_label,
+            in_array_mode,
+        );
+    }
     let concrete_label = ctx.next_label("assoc_mixed_search_concrete");
     let mismatch_label = ctx.next_label("assoc_mixed_search_mismatch");
     let expected_tag = runtime_value_tag("associative-array search", needle_ty)? as i64;
@@ -502,6 +521,9 @@ fn emit_mixed_assoc_value_match_aarch64(
             ctx.emitter.instruction("cmp x1, x6");                              // compare the unboxed scalar payload against the needle
             ctx.emitter.instruction(&format!("b.eq {}", found_label));          // branch when the unboxed scalar entry matches the needle
         }
+        PhpType::Void | PhpType::Never => {
+            ctx.emitter.instruction(&format!("b {}", found_label));             // equal null tags fully determine strict equality
+        }
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "associative-array mixed search needle PHP type {:?}",
@@ -532,6 +554,9 @@ fn emit_mixed_assoc_value_match_aarch64(
             ctx.emitter.instruction("cmp x3, x6");                              // compare the concrete scalar payload against the needle
             ctx.emitter.instruction(&format!("b.eq {}", found_label));          // branch when the concrete scalar entry matches the needle
         }
+        PhpType::Void | PhpType::Never => {
+            ctx.emitter.instruction(&format!("b {}", found_label));             // equal concrete null tags fully determine strict equality
+        }
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "associative-array mixed search needle PHP type {:?}",
@@ -551,6 +576,14 @@ fn emit_mixed_assoc_value_match_x86_64(
     found_label: &str,
     in_array_mode: Option<InArrayMode>,
 ) -> Result<()> {
+    if needle_ty == &PhpType::Mixed {
+        return emit_mixed_needle_assoc_value_match_x86_64(
+            ctx,
+            needle_offset,
+            found_label,
+            in_array_mode,
+        );
+    }
     let concrete_label = ctx.next_label("assoc_mixed_search_concrete");
     let mismatch_label = ctx.next_label("assoc_mixed_search_mismatch");
     let expected_tag = runtime_value_tag("associative-array search", needle_ty)? as i64;
@@ -588,6 +621,9 @@ fn emit_mixed_assoc_value_match_x86_64(
             ctx.emitter.instruction("cmp rdi, r10");                            // compare the unboxed scalar payload against the needle
             ctx.emitter.instruction(&format!("je {}", found_label));            // branch when the unboxed scalar entry matches the needle
         }
+        PhpType::Void | PhpType::Never => {
+            ctx.emitter.instruction(&format!("jmp {}", found_label));           // equal null tags fully determine strict equality
+        }
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "associative-array mixed search needle PHP type {:?}",
@@ -622,6 +658,9 @@ fn emit_mixed_assoc_value_match_x86_64(
             ctx.emitter.instruction("cmp rcx, r10");                            // compare the concrete scalar payload against the needle
             ctx.emitter.instruction(&format!("je {}", found_label));            // branch when the concrete scalar entry matches the needle
         }
+        PhpType::Void | PhpType::Never => {
+            ctx.emitter.instruction(&format!("jmp {}", found_label));           // equal concrete null tags fully determine strict equality
+        }
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "associative-array mixed search needle PHP type {:?}",
@@ -631,6 +670,140 @@ fn emit_mixed_assoc_value_match_x86_64(
     }
     ctx.emitter.label(&mismatch_label);
     Ok(())
+}
+
+/// Compares one associative Mixed entry against a boxed Mixed needle on AArch64.
+///
+/// Concrete hash payloads are boxed temporarily so both strict and loose membership reuse the
+/// canonical Mixed comparison helpers. Already-boxed entries remain borrowed. Any temporary box
+/// is released before control branches to the shared found label or resumes hash iteration.
+fn emit_mixed_needle_assoc_value_match_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    needle_offset: i32,
+    found_label: &str,
+    in_array_mode: Option<InArrayMode>,
+) -> Result<()> {
+    let boxed_entry = ctx.next_label("assoc_mixed_needle_boxed_entry");
+    let concrete_match = ctx.next_label("assoc_mixed_needle_concrete_match");
+    let concrete_done = ctx.next_label("assoc_mixed_needle_concrete_done");
+    let helper = mixed_assoc_comparison_helper(in_array_mode)?;
+
+    ctx.emitter.instruction("cmp x5, #7");                                      // detect an associative entry that already stores a boxed Mixed cell
+    ctx.emitter.instruction(&format!("b.eq {}", boxed_entry));                 // compare borrowed Mixed boxes without allocating another wrapper
+    crate::codegen::emit_box_runtime_payload_as_mixed(ctx.emitter, "x5", "x3", "x4");
+    abi::emit_push_reg(ctx.emitter, "x0");
+    ctx.emitter.instruction(&format!("ldr x0, [sp, #{}]", needle_offset + 16)); // reload the boxed needle after pushing the temporary entry box
+    ctx.emitter.instruction("ldr x1, [sp]");                                   // pass the temporary entry box as the second comparison argument
+    abi::emit_call_label(ctx.emitter, helper);
+    abi::emit_push_reg(ctx.emitter, "x0");
+    ctx.emitter.instruction("ldr x0, [sp, #16]");                              // load the owned temporary entry box for balanced release
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    abi::emit_pop_reg(ctx.emitter, "x0");
+    ctx.emitter.instruction("add sp, sp, #16");                                // discard the released temporary entry-box slot
+    emit_mixed_comparison_branch_aarch64(ctx, in_array_mode, &concrete_match)?;
+    ctx.emitter.instruction(&format!("b {}", concrete_done));                  // resume iteration after a non-matching concrete entry
+    ctx.emitter.label(&concrete_match);
+    ctx.emitter.instruction(&format!("b {}", found_label));                    // report a match only after the temporary entry box was released
+
+    ctx.emitter.label(&boxed_entry);
+    ctx.emitter.instruction("mov x1, x3");                                     // pass the borrowed entry Mixed box as the second comparison argument
+    ctx.emitter.instruction(&format!("ldr x0, [sp, #{}]", needle_offset));     // reload the boxed Mixed needle as the first comparison argument
+    abi::emit_call_label(ctx.emitter, helper);
+    emit_mixed_comparison_branch_aarch64(ctx, in_array_mode, found_label)?;
+    ctx.emitter.label(&concrete_done);
+    Ok(())
+}
+
+/// Compares one associative Mixed entry against a boxed Mixed needle on x86_64.
+fn emit_mixed_needle_assoc_value_match_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    needle_offset: i32,
+    found_label: &str,
+    in_array_mode: Option<InArrayMode>,
+) -> Result<()> {
+    let boxed_entry = ctx.next_label("assoc_mixed_needle_boxed_entry");
+    let concrete_match = ctx.next_label("assoc_mixed_needle_concrete_match");
+    let concrete_done = ctx.next_label("assoc_mixed_needle_concrete_done");
+    let helper = mixed_assoc_comparison_helper(in_array_mode)?;
+
+    ctx.emitter.instruction("cmp r9, 7");                                       // detect an associative entry that already stores a boxed Mixed cell
+    ctx.emitter.instruction(&format!("je {}", boxed_entry));                   // compare borrowed Mixed boxes without allocating another wrapper
+    crate::codegen::emit_box_runtime_payload_as_mixed(ctx.emitter, "r9", "rcx", "r8");
+    abi::emit_push_reg(ctx.emitter, "rax");
+    ctx.emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", needle_offset + 16)); // reload the boxed needle after pushing the temporary entry box
+    ctx.emitter.instruction("mov rsi, QWORD PTR [rsp]");                       // pass the temporary entry box as the second comparison argument
+    abi::emit_call_label(ctx.emitter, helper);
+    abi::emit_push_reg(ctx.emitter, "rax");
+    ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");                  // load the owned temporary entry box for balanced release
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    abi::emit_pop_reg(ctx.emitter, "rax");
+    ctx.emitter.instruction("add rsp, 16");                                    // discard the released temporary entry-box slot
+    emit_mixed_comparison_branch_x86_64(ctx, in_array_mode, &concrete_match)?;
+    ctx.emitter.instruction(&format!("jmp {}", concrete_done));                // resume iteration after a non-matching concrete entry
+    ctx.emitter.label(&concrete_match);
+    ctx.emitter.instruction(&format!("jmp {}", found_label));                  // report a match only after the temporary entry box was released
+
+    ctx.emitter.label(&boxed_entry);
+    ctx.emitter.instruction("mov rsi, rcx");                                   // pass the borrowed entry Mixed box as the second comparison argument
+    ctx.emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", needle_offset)); // reload the boxed Mixed needle as the first comparison argument
+    abi::emit_call_label(ctx.emitter, helper);
+    emit_mixed_comparison_branch_x86_64(ctx, in_array_mode, found_label)?;
+    ctx.emitter.label(&concrete_done);
+    Ok(())
+}
+
+/// Selects the canonical Mixed equality helper for associative membership mode.
+fn mixed_assoc_comparison_helper(in_array_mode: Option<InArrayMode>) -> Result<&'static str> {
+    match in_array_mode {
+        Some(InArrayMode::Loose) => Ok("__rt_mixed_loose_eq"),
+        Some(InArrayMode::Strict) => Ok("__rt_mixed_strict_eq"),
+        None => Err(CodegenIrError::unsupported(
+            "Mixed associative-array needle outside in_array".to_string(),
+        )),
+    }
+}
+
+/// Branches on the AArch64 Mixed comparison result using loose or strict helper semantics.
+fn emit_mixed_comparison_branch_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    in_array_mode: Option<InArrayMode>,
+    found_label: &str,
+) -> Result<()> {
+    match in_array_mode {
+        Some(InArrayMode::Loose) => {
+            ctx.emitter.instruction(&format!("cbnz x0, {}", found_label));     // nonzero from __rt_mixed_loose_eq means PHP loose equality
+            Ok(())
+        }
+        Some(InArrayMode::Strict) => {
+            ctx.emitter.instruction(&format!("cbnz x0, {}", found_label));     // nonzero from __rt_mixed_strict_eq means strict equality
+            Ok(())
+        }
+        None => Err(CodegenIrError::unsupported(
+            "Mixed associative-array needle outside in_array".to_string(),
+        )),
+    }
+}
+
+/// Branches on the x86_64 Mixed comparison result using loose or strict helper semantics.
+fn emit_mixed_comparison_branch_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    in_array_mode: Option<InArrayMode>,
+    found_label: &str,
+) -> Result<()> {
+    ctx.emitter.instruction("test rax, rax");                                  // inspect the selected Mixed comparison helper result
+    match in_array_mode {
+        Some(InArrayMode::Loose) => {
+            ctx.emitter.instruction(&format!("jne {}", found_label));          // nonzero from __rt_mixed_loose_eq means PHP loose equality
+            Ok(())
+        }
+        Some(InArrayMode::Strict) => {
+            ctx.emitter.instruction(&format!("jne {}", found_label));          // nonzero from __rt_mixed_strict_eq means strict equality
+            Ok(())
+        }
+        None => Err(CodegenIrError::unsupported(
+            "Mixed associative-array needle outside in_array".to_string(),
+        )),
+    }
 }
 
 /// Boxes the preserved AArch64 associative-array key for a successful search.

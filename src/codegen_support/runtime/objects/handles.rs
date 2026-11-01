@@ -44,6 +44,12 @@
 //!   before minting), and each live object owns at least 24 heap bytes, so at most
 //!   `heap_size / 24` handles can exist. `_obj_handle_free` is sized
 //!   `heap_size / 24 + 16` entries, which is that bound plus slack.
+//! - `new A(new B())` NUMBERS A FIRST, LIKE php-src, which allocates the object before it
+//!   evaluates the constructor arguments. elephc evaluates the arguments first, so a `new`
+//!   whose arguments may allocate reserves its handle up front (`__rt_object_handle_reserve`),
+//!   marks it pending just before the allocation (`__rt_object_handle_pend`), and the next
+//!   `acquire` -- that object's own -- takes it. `__rt_object_handle_unpend` runs after the
+//!   `new` and returns a reservation nothing took to the free stack.
 //! - HANDLE 0 MEANS "NO HANDLE". A block that never went through
 //!   `__rt_object_handle_acquire` reads back 0, which renders as `#0` rather than
 //!   as a plausible-looking small integer — a missed allocation site is meant to
@@ -74,12 +80,14 @@ pub(crate) fn emit_object_handles(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
             emit_object_handle_acquire_arm64(emitter);
+            emit_object_handle_reservation_arm64(emitter);
             emit_object_handle_of_arm64(emitter);
             emit_object_handle_release_arm64(emitter);
             emit_spl_object_hash_arm64(emitter);
         }
         Arch::X86_64 => {
             emit_object_handle_acquire_x86_64(emitter);
+            emit_object_handle_reservation_x86_64(emitter);
             emit_object_handle_of_x86_64(emitter);
             emit_object_handle_release_x86_64(emitter);
             emit_spl_object_hash_x86_64(emitter);
@@ -109,6 +117,13 @@ fn emit_object_handle_acquire_arm64(emitter: &mut Emitter) {
     emitter.instruction("b.lo __rt_object_handle_acquire_done");                // reject pointers that do not belong to the managed heap
     emitter.instruction("lsr x10, x10, #4");                                    // x10 = 16-byte granule index of this block
 
+    abi::emit_symbol_address(emitter, "x11", "_obj_handle_pending");
+    emitter.instruction("ldr x14, [x11]");                                      // x14 = the handle a `new` reserved before its arguments
+    emitter.instruction("cbz x14, __rt_object_handle_acquire_pool");            // none pending: take one from the pool
+    emitter.instruction("str xzr, [x11]");                                      // this allocation consumes the reservation
+    emitter.instruction("b __rt_object_handle_acquire_store");                  // record the reserved handle for this block
+
+    emitter.label("__rt_object_handle_acquire_pool");
     abi::emit_symbol_address(emitter, "x11", "_obj_handle_free_top");
     emitter.instruction("ldr x12, [x11]");                                      // x12 = number of released handles waiting for reuse
     emitter.instruction("cbz x12, __rt_object_handle_acquire_fresh");           // no released handle to reuse — mint the next fresh one
@@ -231,6 +246,14 @@ fn emit_object_handle_acquire_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rdx, r11");                                        // rdx = payload offset from the heap base
     emitter.instruction("shr rdx, 4");                                          // rdx = 16-byte granule index of this block
 
+    abi::emit_symbol_address(emitter, "r8", "_obj_handle_pending");
+    emitter.instruction("mov r10, QWORD PTR [r8]");                             // r10 = the handle a `new` reserved before its arguments
+    emitter.instruction("test r10, r10");                                       // is a reservation pending?
+    emitter.instruction("jz __rt_object_handle_acquire_pool");                  // none pending: take one from the pool
+    emitter.instruction("mov QWORD PTR [r8], 0");                               // this allocation consumes the reservation
+    emitter.instruction("jmp __rt_object_handle_acquire_store");                // record the reserved handle for this block
+
+    emitter.label("__rt_object_handle_acquire_pool");
     abi::emit_symbol_address(emitter, "r8", "_obj_handle_free_top");
     emitter.instruction("mov rcx, QWORD PTR [r8]");                             // rcx = number of released handles waiting for reuse
     emitter.instruction("test rcx, rcx");                                       // is the released-handle stack empty?
@@ -500,4 +523,125 @@ mod tests {
             assert!(asm.contains("__rt_object_handle_release:"), "{target:?}");
         }
     }
+}
+
+/// Emits the AArch64 `__rt_object_handle_reserve`, `__rt_object_handle_pend` and
+/// `__rt_object_handle_unpend` (see the module preamble). Each preserves every register but
+/// its result, and none makes a nested call.
+fn emit_object_handle_reservation_arm64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: object_handle_reserve ---");
+    emitter.label_global("__rt_object_handle_reserve");
+    emitter.instruction("stp x9, x10, [sp, #-32]!");                            // preserve the free-stack scratch pair
+    emitter.instruction("stp x11, x12, [sp, #16]");                             // preserve the table and cursor scratch pair
+    abi::emit_symbol_address(emitter, "x9", "_obj_handle_free_top");
+    emitter.instruction("ldr x10, [x9]");                                       // x10 = number of released handles waiting for reuse
+    emitter.instruction("cbz x10, __rt_object_handle_reserve_fresh");           // no released handle to reuse — mint the next fresh one
+    emitter.instruction("sub x10, x10, #1");                                    // pop the most recently released handle (LIFO, like php-src)
+    emitter.instruction("str x10, [x9]");                                       // publish the shortened released-handle stack
+    abi::emit_symbol_address(emitter, "x11", "_obj_handle_free");
+    emitter.instruction("ldr w0, [x11, x10, lsl #2]");                          // x0 = the reserved handle
+    emitter.instruction("b __rt_object_handle_reserve_done");                   // return the reused handle
+    emitter.label("__rt_object_handle_reserve_fresh");
+    abi::emit_symbol_address(emitter, "x11", "_obj_handle_next");
+    emitter.instruction("ldr x0, [x11]");                                       // x0 = next never-used handle
+    emitter.instruction("add x12, x0, #1");                                     // advance the never-used handle cursor
+    emitter.instruction("str x12, [x11]");                                      // publish the advanced cursor
+    emitter.label("__rt_object_handle_reserve_done");
+    emitter.instruction("ldp x11, x12, [sp, #16]");                             // restore the table and cursor scratch pair
+    emitter.instruction("ldp x9, x10, [sp], #32");                              // restore the free-stack scratch pair
+    emitter.instruction("ret");                                                 // return the reserved handle in x0
+
+    emitter.blank();
+    emitter.comment("--- runtime: object_handle_pend ---");
+    emitter.label_global("__rt_object_handle_pend");
+    emitter.instruction("str x9, [sp, #-16]!");                                 // preserve the address scratch
+    abi::emit_symbol_address(emitter, "x9", "_obj_handle_pending");
+    emitter.instruction("str x0, [x9]");                                        // the next object allocation takes this handle
+    emitter.instruction("ldr x9, [sp], #16");                                   // restore the address scratch
+    emitter.instruction("ret");                                                 // return with every register preserved
+
+    emitter.blank();
+    emitter.comment("--- runtime: object_handle_unpend ---");
+    emitter.label_global("__rt_object_handle_unpend");
+    emitter.instruction("stp x9, x10, [sp, #-32]!");                            // preserve the pending-slot scratch pair
+    emitter.instruction("stp x11, x12, [sp, #16]");                             // preserve the free-stack scratch pair
+    abi::emit_symbol_address(emitter, "x9", "_obj_handle_pending");
+    emitter.instruction("ldr x10, [x9]");                                       // x10 = a reservation nothing consumed
+    emitter.instruction("cbz x10, __rt_object_handle_unpend_done");             // the allocation took it: nothing to return
+    emitter.instruction("str xzr, [x9]");                                       // clear the pending slot
+    abi::emit_symbol_address(emitter, "x11", "_obj_handle_free_top");
+    emitter.instruction("ldr x12, [x11]");                                      // x12 = current released-handle stack depth
+    abi::emit_symbol_address(emitter, "x9", "_obj_handle_free");
+    emitter.instruction("str w10, [x9, x12, lsl #2]");                          // push the unused reservation for LIFO reuse
+    emitter.instruction("add x12, x12, #1");                                    // account for the pushed handle
+    emitter.instruction("str x12, [x11]");                                      // publish the deepened released-handle stack
+    emitter.label("__rt_object_handle_unpend_done");
+    emitter.instruction("ldp x11, x12, [sp, #16]");                             // restore the free-stack scratch pair
+    emitter.instruction("ldp x9, x10, [sp], #32");                              // restore the pending-slot scratch pair
+    emitter.instruction("ret");                                                 // return with every register preserved
+}
+
+/// Emits the x86_64 `__rt_object_handle_reserve`, `__rt_object_handle_pend` and
+/// `__rt_object_handle_unpend`. Each preserves every register but its result.
+fn emit_object_handle_reservation_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: object_handle_reserve ---");
+    emitter.label_global("__rt_object_handle_reserve");
+    emitter.instruction("push rcx");                                            // preserve the free-stack depth scratch
+    emitter.instruction("push r8");                                             // preserve the free-stack top address scratch
+    emitter.instruction("push r9");                                             // preserve the table address scratch
+    abi::emit_symbol_address(emitter, "r8", "_obj_handle_free_top");
+    emitter.instruction("mov rcx, QWORD PTR [r8]");                             // rcx = number of released handles waiting for reuse
+    emitter.instruction("test rcx, rcx");                                       // is the released-handle stack empty?
+    emitter.instruction("jz __rt_object_handle_reserve_fresh");                 // no released handle to reuse — mint the next fresh one
+    emitter.instruction("sub rcx, 1");                                          // pop the most recently released handle (LIFO, like php-src)
+    emitter.instruction("mov QWORD PTR [r8], rcx");                             // publish the shortened released-handle stack
+    abi::emit_symbol_address(emitter, "r9", "_obj_handle_free");
+    emitter.instruction("mov eax, DWORD PTR [r9 + rcx * 4]");                   // rax = the reserved handle
+    emitter.instruction("jmp __rt_object_handle_reserve_done");                 // return the reused handle
+    emitter.label("__rt_object_handle_reserve_fresh");
+    abi::emit_symbol_address(emitter, "r9", "_obj_handle_next");
+    emitter.instruction("mov rax, QWORD PTR [r9]");                             // rax = next never-used handle
+    emitter.instruction("lea rcx, [rax + 1]");                                  // advance the never-used handle cursor
+    emitter.instruction("mov QWORD PTR [r9], rcx");                             // publish the advanced cursor
+    emitter.label("__rt_object_handle_reserve_done");
+    emitter.instruction("pop r9");                                              // restore the table address scratch
+    emitter.instruction("pop r8");                                              // restore the free-stack top address scratch
+    emitter.instruction("pop rcx");                                             // restore the free-stack depth scratch
+    emitter.instruction("ret");                                                 // return the reserved handle in rax
+
+    emitter.blank();
+    emitter.comment("--- runtime: object_handle_pend ---");
+    emitter.label_global("__rt_object_handle_pend");
+    emitter.instruction("push r8");                                             // preserve the address scratch
+    abi::emit_symbol_address(emitter, "r8", "_obj_handle_pending");
+    emitter.instruction("mov QWORD PTR [r8], rax");                             // the next object allocation takes this handle
+    emitter.instruction("pop r8");                                              // restore the address scratch
+    emitter.instruction("ret");                                                 // return with every register preserved
+
+    emitter.blank();
+    emitter.comment("--- runtime: object_handle_unpend ---");
+    emitter.label_global("__rt_object_handle_unpend");
+    emitter.instruction("push rcx");                                            // preserve the free-stack depth scratch
+    emitter.instruction("push r8");                                             // preserve the address scratch
+    emitter.instruction("push r9");                                             // preserve the pending-handle scratch
+    abi::emit_symbol_address(emitter, "r8", "_obj_handle_pending");
+    emitter.instruction("mov r9, QWORD PTR [r8]");                              // r9 = a reservation nothing consumed
+    emitter.instruction("test r9, r9");                                         // did the allocation take it?
+    emitter.instruction("jz __rt_object_handle_unpend_done");                   // nothing to return
+    emitter.instruction("mov QWORD PTR [r8], 0");                               // clear the pending slot
+    abi::emit_symbol_address(emitter, "r8", "_obj_handle_free_top");
+    emitter.instruction("mov rcx, QWORD PTR [r8]");                             // rcx = current released-handle stack depth
+    emitter.instruction("push r10");                                            // preserve the table address scratch
+    abi::emit_symbol_address(emitter, "r10", "_obj_handle_free");
+    emitter.instruction("mov DWORD PTR [r10 + rcx * 4], r9d");                  // push the unused reservation for LIFO reuse
+    emitter.instruction("pop r10");                                             // restore the table address scratch
+    emitter.instruction("add rcx, 1");                                          // account for the pushed handle
+    emitter.instruction("mov QWORD PTR [r8], rcx");                             // publish the deepened released-handle stack
+    emitter.label("__rt_object_handle_unpend_done");
+    emitter.instruction("pop r9");                                              // restore the pending-handle scratch
+    emitter.instruction("pop r8");                                              // restore the address scratch
+    emitter.instruction("pop rcx");                                             // restore the free-stack depth scratch
+    emitter.instruction("ret");                                                 // return with every register preserved
 }

@@ -110,6 +110,43 @@ fn emit_class_name_table_read(
     emitter.label(done_label);
 }
 
+/// Loads the name of the class whose dense id is in `id_reg` into the string-result registers,
+/// or jumps to `missing_label` when the id names no class (a negative "no scope" id included:
+/// the unsigned bound check rejects it).
+pub(in crate::codegen::lower_inst) fn emit_class_name_for_id_or_branch(
+    ctx: &mut FunctionContext<'_>,
+    id_reg: &str,
+    missing_label: &str,
+) {
+    let (name_ptr_reg, name_len_reg) = abi::string_result_regs(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("mov x9, {}", id_reg));            // park the class id in the lookup scratch register
+            abi::emit_symbol_address(ctx.emitter, "x10", "_class_name_count");
+            ctx.emitter.instruction("ldr x10, [x10]");                          // load the dense class-name table bound
+            ctx.emitter.instruction("cmp x9, x10");                             // validate the class id before indexing metadata
+            ctx.emitter.instruction(&format!("b.hs {}", missing_label));        // no class: the caller's own message
+            abi::emit_symbol_address(ctx.emitter, "x10", "_class_name_entries");
+            ctx.emitter.instruction("lsl x11, x9, #4");                         // scale the class id to the 16-byte class-name row
+            ctx.emitter.instruction("add x10, x10, x11");                       // address the class-name metadata row
+            ctx.emitter.instruction(&format!("ldr {}, [x10]", name_ptr_reg));   // borrow the class-name pointer
+            ctx.emitter.instruction(&format!("ldr {}, [x10, #8]", name_len_reg)); // borrow the class-name byte length
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov r9, {}", id_reg));            // park the class id in the lookup scratch register
+            ctx.emitter.instruction("cmp r9, QWORD PTR [rip + _class_name_count]"); // validate the class id before indexing metadata
+            ctx.emitter.instruction(&format!("jae {}", missing_label));         // no class: the caller's own message
+            ctx.emitter.instruction("lea r10, [rip + _class_name_entries]");    // materialize the class-name metadata table base
+            ctx.emitter.instruction("shl r9, 4");                               // scale the class id to the 16-byte class-name row
+            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [r10 + r9]", name_ptr_reg)); // borrow the class-name pointer
+            ctx.emitter.instruction(&format!(
+                "mov {}, QWORD PTR [r10 + r9 + 8]",
+                name_len_reg
+            ));                                                                 // borrow the class-name byte length
+        }
+    }
+}
+
 /// Prepends a static fragment to the message held in the string-result registers.
 pub(in crate::codegen::lower_inst) fn emit_concat_static_prefix(
     ctx: &mut FunctionContext<'_>,
@@ -170,7 +207,7 @@ pub(in crate::codegen::lower_inst) fn emit_static_diagnostic(
 }
 
 /// The register pair `__rt_concat` reads its right operand from.
-pub(super) fn concat_right_operand_regs(emitter: &Emitter) -> (&'static str, &'static str) {
+pub(in crate::codegen::lower_inst) fn concat_right_operand_regs(emitter: &Emitter) -> (&'static str, &'static str) {
     match emitter.target.arch {
         Arch::AArch64 => ("x3", "x4"),
         Arch::X86_64 => ("rdi", "rsi"),

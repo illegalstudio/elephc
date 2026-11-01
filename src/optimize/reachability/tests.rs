@@ -10,7 +10,8 @@
 use std::collections::HashSet;
 
 use crate::names::{php_symbol_key, property_hook_get_method, property_hook_set_method};
-use crate::parser::ast::{Program, StmtKind};
+use crate::parser::ast::{Expr, ExprKind, Program, Stmt, StmtKind};
+use crate::span::Span;
 
 use super::usage::scan_program;
 use super::{prune_unreachable_declarations, PreludeInventory, PruneOptions};
@@ -83,6 +84,25 @@ fn parse(source: &str) -> Program {
 /// Prunes one self-contained fixture using the real checker and no compiler-owned roots.
 fn prune(source: &str) -> (Program, crate::types::CheckResult) {
     let program = parse(source);
+    let mut check = crate::types::check(&program).expect("fixture must type check");
+    let inventory = PreludeInventory::new();
+    let roots = HashSet::new();
+    let program = prune_unreachable_declarations(
+        program,
+        &mut check,
+        PruneOptions {
+            inventory: &inventory,
+            forced_groups: &roots,
+            exported_functions: &roots,
+            eval_forced: false,
+        },
+    );
+    (program, check)
+}
+
+/// Prunes one fixture after name resolution and static class-alias collection.
+fn prune_resolved(source: &str) -> (Program, crate::types::CheckResult) {
+    let program = crate::name_resolver::resolve(parse(source)).expect("fixture must resolve");
     let mut check = crate::types::check(&program).expect("fixture must type check");
     let inventory = PreludeInventory::new();
     let roots = HashSet::new();
@@ -199,6 +219,36 @@ fn scan_invalidates_receiver_classes_after_opaque_bindings() {
     }
 }
 
+/// Verifies supported array references are scanned and property writes invalidate receiver facts.
+#[test]
+fn scan_invalidates_receiver_classes_after_reference_container_writes() {
+    let reference_usage = scan_program(&parse("<?php $refs = ['session' => &$_SESSION];"));
+    assert!(!reference_usage.hazards.dynamic_method);
+
+    for source in [
+        "<?php class A { public function foo(): int { return 1; } } class Holder { public static array $items = []; } $x = new A(); Holder::$items[0] = &$x; $x->foo();",
+        "<?php class A { public function foo(): int { return 1; } } class Holder { public A $item; } $x = new A(); $holder = new Holder(); $holder->item =& $x; $x->foo();",
+    ] {
+        let usage = scan_program(&parse(source));
+        assert!(
+            usage
+                .wildcard_methods
+                .contains(&(php_symbol_key("foo"), false)),
+            "reference container write must widen later dispatch for: {source}",
+        );
+    }
+}
+
+/// Verifies dynamic static-property and scoped-constant forms retain their receiver class.
+#[test]
+fn scan_records_dynamic_static_receivers() {
+    let usage = scan_program(&parse(
+        "<?php class Holder { public static int $slot = 0; public const FLAG = 1; } $name = 'slot'; Holder::${$name} = 1; echo Holder::${$name}; $class = 'Holder'; echo $class::FLAG;",
+    ));
+    assert!(usage.classes.contains(&php_symbol_key("Holder")));
+    assert!(!usage.hazards.dynamic_class);
+}
+
 /// Verifies a reachable global alias widens same-named receiver dispatch across scopes.
 #[test]
 fn prune_reachable_global_alias_keeps_runtime_receiver_method() {
@@ -227,6 +277,21 @@ fn prune_dynamic_globals_array_alias_widens_all_receiver_names() {
     );
     assert!(has_method(&program, "A", "foo"));
     assert!(has_method(&program, "B", "foo"));
+}
+
+/// Verifies an internally constructed dynamic `$GLOBALS` key widens every variable name.
+#[test]
+fn scan_synthetic_dynamic_globals_array_alias_widens_all_receiver_names() {
+    let statement = Stmt::new(
+        StmtKind::ArrayAssign {
+            array: "GLOBALS".to_string(),
+            index: Expr::new(ExprKind::Variable("name".to_string()), Span::dummy()),
+            value: Expr::new(ExprKind::Null, Span::dummy()),
+        },
+        Span::dummy(),
+    );
+    let usage = scan_program(&[statement]);
+    assert!(usage.dynamic_global_alias);
 }
 
 /// Verifies a direct by-ref call invalidates the caller variable even under a different name.
@@ -577,6 +642,26 @@ fn scan_nested_literal_eval_records_names() {
     let usage = scan_program(&parse("<?php eval('eval(\\'echo hidden();\\');');"));
     assert!(!usage.hazards.dynamic_function);
     assert!(usage.functions.contains(&php_symbol_key("hidden")));
+}
+
+/// Verifies a resolver-preserved runtime include widens reachability like opaque eval source.
+#[test]
+fn scan_runtime_dynamic_include_is_eval_hazard() {
+    let usage = scan_program(&parse(
+        "<?php __elephc_dynamic_include($path, false, true);",
+    ));
+    assert!(usage.hazards.dynamic_function);
+    assert!(usage.hazards.dynamic_method);
+    assert!(usage.hazards.dynamic_class);
+}
+
+/// Verifies an unresolved include statement widens reachability for its opaque runtime source.
+#[test]
+fn scan_unresolved_include_statement_is_eval_hazard() {
+    let usage = scan_program(&parse("<?php require $path;"));
+    assert!(usage.hazards.dynamic_function);
+    assert!(usage.hazards.dynamic_method);
+    assert!(usage.hazards.dynamic_class);
 }
 
 /// Verifies a variable callable can dispatch to either a free function or an object method.
@@ -1319,6 +1404,48 @@ fn prune_ignores_internal_prelude_closure_dispatch_hazard() {
     assert!(!has_method(&program, "T", "sibling"));
 }
 
+/// Verifies a forced, array-iterating prelude body does not root the iterator protocol by name.
+///
+/// A `foreach` over an untyped parameter normally keeps every live class's `getIterator()`,
+/// `current()`, ... because the value might be a user `Traversable`. A compiler-owned helper
+/// declared `array_iteration_only` walks arrays, so its loop must not pin them.
+#[test]
+fn prune_array_iteration_only_prelude_does_not_root_iterator_protocol() {
+    let prelude = parse("<?php function walk_rows($rows) { foreach ($rows as $row) { echo $row; } }");
+    let user = parse(
+        "<?php class Box { public function getIterator() { return 1; } public function other() { return 2; } } $box = new Box(); echo $box->other();",
+    );
+    let run = |array_only: bool| {
+        let mut program = prelude.clone();
+        program.extend(user.clone());
+        let mut check = crate::types::check(&program).expect("fixture must type check");
+        let mut inventory = PreludeInventory::new();
+        inventory.record_program("test", &prelude);
+        if array_only {
+            inventory.record_array_iteration_only("test");
+        }
+        let forced: HashSet<String> = ["test".to_string()].into_iter().collect();
+        let roots = HashSet::new();
+        prune_unreachable_declarations(
+            program,
+            &mut check,
+            PruneOptions {
+                inventory: &inventory,
+                forced_groups: &forced,
+                exported_functions: &roots,
+                eval_forced: false,
+            },
+        )
+    };
+    assert!(
+        has_method(&run(false), "Box", "getIterator"),
+        "an untyped foreach in a forced body must keep the protocol surface by name"
+    );
+    let pruned = run(true);
+    assert!(!has_method(&pruned, "Box", "getIterator"));
+    assert!(has_method(&pruned, "Box", "other"));
+}
+
 /// Verifies `method_exists` observes static declarations as well as instance methods.
 #[test]
 fn prune_keeps_static_method_for_literal_method_exists() {
@@ -1326,6 +1453,35 @@ fn prune_keeps_static_method_for_literal_method_exists() {
         "<?php class T { public static function hidden(): int { return 1; } } echo method_exists('T', 'hidden') ? 'y' : 'n';",
     );
     assert!(has_method(&program, "T", "hidden"));
+}
+
+/// Verifies a static class alias retains its target's inherited callable surface for opaque code.
+#[test]
+fn prune_keeps_class_alias_target_method_hierarchy() {
+    let (program, _) = prune_resolved(
+        "<?php class ParentTarget { public function inherited(): int { return 1; } } class Target extends ParentTarget { public static function config(array $config): array { return $config; } } class_alias('Target', 'AliasTarget'); echo 'ok';",
+    );
+    assert!(has_method(&program, "Target", "config"));
+    assert!(has_method(&program, "ParentTarget", "inherited"));
+}
+
+/// Verifies aliases declared in deferred methods still retain their target's callable hierarchy.
+#[test]
+fn prune_keeps_class_alias_target_methods_from_deferred_method() {
+    let (program, _) = prune_resolved(
+        "<?php class ParentTarget { public function inherited(): int { return 1; } } class Target extends ParentTarget { public static function config(array $config): array { return $config; } } class AliasRegistrar { public static function register(): void { class_alias('Target', 'AliasTarget'); } } echo 'ok';",
+    );
+    assert!(has_method(&program, "Target", "config"));
+    assert!(has_method(&program, "ParentTarget", "inherited"));
+}
+
+/// Verifies a ReflectionClass class constant roots the reflected class's methods.
+#[test]
+fn prune_keeps_reflection_class_constant_target_methods() {
+    let (program, _) = prune_resolved(
+        "<?php class Target { public static function config(array $config): array { return $config; } } $reflection = new ReflectionClass(Target::class); echo $reflection->getMethod('config')->getName();",
+    );
+    assert!(has_method(&program, "Target", "config"));
 }
 
 /// Verifies instantiated classes retain static magic hooks such as `__set_state`.
@@ -1346,6 +1502,36 @@ fn prune_keeps_dynamic_call_magic_on_live_class() {
     );
     assert!(has_method(&program, "T", "__call"));
     assert!(has_method(&program, "T", "__callStatic"));
+}
+
+/// Verifies vtable-slot family seeding keeps the same methods on a lineage that mixes an
+/// interface contract, a trait, an abstract parent and two concrete leaves.
+///
+/// This is the retained-set characterization pin for the `lineage root -> descendants` index that
+/// replaced the per-pair `class_is_or_descends_from` scan in `graph::seed_vtable_slot_families`:
+/// every live class sharing the slot keeps its override, and a method outside the lineage that
+/// nothing calls is still pruned.
+#[test]
+fn prune_keeps_vtable_slot_family_across_interface_trait_and_abstract_parent() {
+    let (program, _) = prune(
+        "<?php interface Speaks { public function speak(): string; } trait Loud { public function shout(): string { return 'HI'; } } abstract class Animal implements Speaks { use Loud; public function speak(): string { return 'generic'; } } class Dog extends Animal { public function speak(): string { return 'woof'; } } class Cat extends Animal { public function speak(): string { return 'meow'; } } class Unrelated { public function speak(): string { return 'nope'; } public function unused(): string { return 'gone'; } } function greet(Animal $a): string { return $a->speak(); } echo greet(new Dog()); echo greet(new Cat()); $other = new Unrelated(); echo $other->speak();",
+    );
+    assert!(
+        has_method(&program, "Dog", "speak"),
+        "the called override survives",
+    );
+    assert!(
+        has_method(&program, "Cat", "speak"),
+        "the sibling sharing the same vtable slot survives",
+    );
+    assert!(
+        has_method(&program, "Unrelated", "speak"),
+        "an unrelated live receiver keeps the method it is called for",
+    );
+    assert!(
+        !has_method(&program, "Unrelated", "unused"),
+        "a method outside the lineage that nothing calls is still pruned",
+    );
 }
 
 /// Verifies the curl prelude's dynamic-dispatch sites are exactly the two USER-callable ones.
@@ -1418,4 +1604,25 @@ fn curl_prelude_dispatches_only_user_callables() {
 /// Returns whether one scanned declaration widened any dynamic lookup class.
 fn has_dynamic_hazard(usage: &super::usage::Usage) -> bool {
     usage.hazards.dynamic_function || usage.hazards.dynamic_method || usage.hazards.dynamic_class
+}
+
+/// A method call with no known receiver class asks for every class's signature of that method.
+/// The answer comes from a per-name index in class order and shares the indexed signatures:
+/// the previous form scanned the whole method table and deep-cloned each match per call site.
+#[test]
+fn receiverless_method_signatures_come_from_the_name_index() {
+    let program = parse(
+        "<?php class B { public function run(int $x) {} } class A { public function run(callable $f) {} public static function run2() {} }",
+    );
+    let program = crate::name_resolver::resolve(program).expect("fixture must resolve");
+    let check = crate::types::check(&program).expect("fixture must type check");
+    let signatures = super::usage::CallSignatureIndex::from_check_result(&check);
+
+    let first = signatures.method(&HashSet::default(), "run", false);
+    let second = signatures.method(&HashSet::default(), "run", false);
+    assert_eq!(first.len(), 2);
+    assert!(matches!(first[0].params[0].1, crate::types::PhpType::Callable), "class `a` sorts first");
+    assert!(first.iter().zip(&second).all(|(left, right)| std::sync::Arc::ptr_eq(left, right)));
+    assert!(signatures.method(&HashSet::default(), "run", true).is_empty());
+    assert_eq!(signatures.method(&HashSet::default(), "run2", true).len(), 1);
 }

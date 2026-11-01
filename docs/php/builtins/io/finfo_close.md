@@ -2,7 +2,7 @@
 title: "finfo_close()"
 description: "Returns true; PHP 8 finfo instances are freed automatically. Deprecated since PHP 8.5."
 sidebar:
-  order: 324
+  order: 335
 ---
 
 ## finfo_close()

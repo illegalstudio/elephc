@@ -31,7 +31,7 @@ use crate::types::{ClassInfo, EnumInfo, InterfaceInfo};
 /// composes trait constants into using classes before this lookup. `static::`
 /// is handled by the late-static lowering path before this helper is called.
 pub(crate) fn class_like_constant_is_defined(
-    classes: &HashMap<String, ClassInfo>,
+    classes: &HashMap<String, ClassInfo, impl std::hash::BuildHasher>,
     interfaces: &HashMap<String, InterfaceInfo>,
     enums: &HashMap<String, EnumInfo>,
     name: &str,
@@ -58,7 +58,7 @@ pub(crate) fn class_like_constant_is_defined(
 /// requires that class to have a parent. Valid relative receivers and ordinary
 /// class-like names return `None`.
 pub(crate) fn class_like_constant_scope_error(
-    classes: &HashMap<String, ClassInfo>,
+    classes: &HashMap<String, ClassInfo, impl std::hash::BuildHasher>,
     name: &str,
     current_class: Option<&str>,
 ) -> Option<String> {
@@ -113,7 +113,7 @@ fn split_class_const_name(name: &str) -> Option<(&str, &str)> {
 /// Relative receivers are case-insensitive, matching PHP. `static` is not
 /// rewritten to the lexical class because its answer depends on the called class.
 fn resolve_defined_receiver<'a>(
-    classes: &'a HashMap<String, ClassInfo>,
+    classes: &'a HashMap<String, ClassInfo, impl std::hash::BuildHasher>,
     class_name: &'a str,
     current_class: Option<&str>,
 ) -> Option<&'a str> {
@@ -154,7 +154,7 @@ fn enum_case_is_defined(
 /// declaration. Parent `private` constants are skipped because PHP does not
 /// inherit them. An inaccessible first declaration does not fall through.
 fn class_constant_is_defined(
-    classes: &HashMap<String, ClassInfo>,
+    classes: &HashMap<String, ClassInfo, impl std::hash::BuildHasher>,
     interfaces: &HashMap<String, InterfaceInfo>,
     class_name: &str,
     member_name: &str,
@@ -199,7 +199,7 @@ fn class_constant_is_defined(
 /// Returns whether `visibility` of a constant declared on `declaring_class` is
 /// accessible from `current_class`.
 fn constant_is_visible(
-    classes: &HashMap<String, ClassInfo>,
+    classes: &HashMap<String, ClassInfo, impl std::hash::BuildHasher>,
     current_class: Option<&str>,
     declaring_class: &str,
     visibility: &Visibility,
@@ -225,7 +225,7 @@ fn constant_is_visible(
 
 /// Returns the canonical parent class name, if the parent is in `classes`.
 fn parent_class_name<'a>(
-    classes: &'a HashMap<String, ClassInfo>,
+    classes: &'a HashMap<String, ClassInfo, impl std::hash::BuildHasher>,
     info: &ClassInfo,
 ) -> Option<&'a str> {
     lookup_ci(classes, info.parent.as_deref()?).map(|(name, _)| name)
@@ -233,7 +233,7 @@ fn parent_class_name<'a>(
 
 /// Returns true when `class_name` is `ancestor` or a descendant of it.
 fn is_same_or_descendant(
-    classes: &HashMap<String, ClassInfo>,
+    classes: &HashMap<String, ClassInfo, impl std::hash::BuildHasher>,
     class_name: &str,
     ancestor: &str,
 ) -> bool {
@@ -277,7 +277,7 @@ fn interface_constant_is_defined(
 
 /// Looks up a class-like schema by PHP's case-insensitive class-name rules.
 fn lookup_ci<'a, T>(
-    items: &'a HashMap<String, T>,
+    items: &'a HashMap<String, T, impl std::hash::BuildHasher>,
     name: &str,
 ) -> Option<(&'a str, &'a T)> {
     let trimmed = name.trim_start_matches('\\');

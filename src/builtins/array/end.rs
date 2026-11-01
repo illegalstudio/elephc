@@ -6,10 +6,8 @@
 //!
 //! Key details:
 //! - Returns `false` for an empty array, which also leaves the pointer invalid.
-//! - The receiver's internal pointer lives in a compiler-allocated cursor slot beside the
-//!   array local, so the argument must be a plain variable. Both that rule and the
-//!   argument-type rule are shared with the other five pointer builtins in
-//!   `crate::builtins::array::internal_pointer`.
+//! - Non-local writable receivers are adapted through the shared by-reference place rewrite;
+//!   plain locals retain their cursor directly between calls.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;

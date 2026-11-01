@@ -37,6 +37,26 @@ fn parse_fragment_accepts_dynamic_new_object_source() {
         }))]
     );
 }
+/// Verifies a runtime class name may be read from an array before construction.
+#[test]
+fn parse_fragment_accepts_array_element_dynamic_new_object_source() {
+    let program = parse_fragment(br#"return new $_SERVER["APP_RUNTIME"]("Ada");"#)
+        .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::DynamicNewObject {
+            class_name: Box::new(EvalExpr::ArrayGet {
+                array: Box::new(EvalExpr::LoadVar("_SERVER".to_string())),
+                index: Box::new(EvalExpr::Const(EvalConst::String(
+                    "APP_RUNTIME".to_string(),
+                ))),
+            }),
+            args: vec![EvalCallArg::positional(EvalExpr::Const(EvalConst::String(
+                "Ada".to_string(),
+            )))],
+        }))]
+    );
+}
 /// Verifies object construction accepts a parenthesized runtime class-name expression.
 #[test]
 fn parse_fragment_accepts_expression_new_object_source() {

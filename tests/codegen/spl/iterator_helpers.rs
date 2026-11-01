@@ -242,6 +242,38 @@ foreach ($items as $k => $v) {
     assert_eq!(out, "0=10 1=11 2=12 ");
 }
 
+/// Verifies a gradual source is checked at runtime, traversed when it contains an Iterator,
+/// and rejected with a catchable TypeError when it contains a non-Traversable scalar.
+#[test]
+fn test_iterator_to_array_accepts_gradual_traversable_source() {
+    let out = compile_and_run(
+        r#"<?php
+class GradualRange implements Iterator {
+    private int $i = 0;
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < 2; }
+    public function current(): int { return $this->i + 4; }
+    public function key(): int { return $this->i; }
+    public function next(): void { $this->i = $this->i + 1; }
+}
+function gradualSource(bool $valid): mixed {
+    return $valid ? new GradualRange() : 42;
+}
+$copy = iterator_to_array(gradualSource(true), false);
+echo implode(',', $copy), '|';
+try {
+    iterator_to_array(gradualSource(false), false);
+} catch (TypeError $error) {
+    echo $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "4,5|iterator_to_array(): Argument #1 ($iterator) must be of type Traversable|array, int given"
+    );
+}
+
 /// Verifies that iterator to array preserves iterator keys.
 #[test]
 fn test_iterator_to_array_preserves_iterator_keys() {
@@ -1130,4 +1162,32 @@ echo iterator_apply($s, function (): bool { return true; }), ";";
 "#,
     );
     assert_eq!(out, "[closed 1]2;[closed 2]2;[closed 3]2;");
+}
+
+/// Verifies `iterator_to_array()` over an object of a class the program never declares compiles,
+/// and that reaching it fails where php does: at the `new`.
+///
+/// Symfony's `RequestPayloadValueResolver` validates with `symfony/validator`, which an app need
+/// not install; the checker refused the call, so the whole class file was left out of the build
+/// and a closed-world console could not load the resolver at all.
+#[test]
+fn test_iterator_to_array_over_an_undeclared_class_fails_at_the_new() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class R {
+    public function run(bool $validate): string {
+        if ($validate) {
+            $violations = new \Missing\ViolationList();
+            return implode(",", iterator_to_array($violations));
+        }
+        return "skipped";
+    }
+}
+$r = new R();
+echo $r->run($argc > 5), "\n";
+try { $r->run($argc < 5); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert!(out.success, "fixture must not fault: {}", out.stderr);
+    assert_eq!(out.stdout, "skipped\nClass \"Missing\\ViolationList\" not found\n");
 }

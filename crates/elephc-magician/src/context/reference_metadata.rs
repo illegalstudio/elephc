@@ -14,6 +14,18 @@ use super::*;
 pub type NativeFunctionInvoker =
     unsafe extern "C" fn(*mut c_void, *mut RuntimeCell, i64) -> *mut RuntimeCell;
 
+/// Module-generated global transfer routine. The argument is the live global
+/// scope for this invocation, never a captured caller-frame address.
+pub type NativeGlobalSyncHook = unsafe extern "C" fn(*mut ElephcEvalScope);
+
+/// Both directions are registered together so a bridge cannot silently install
+/// only half of the native/eval global visibility protocol.
+#[derive(Clone, Copy)]
+pub struct NativeGlobalSyncHooks {
+    pub native_to_eval: NativeGlobalSyncHook,
+    pub eval_to_native: NativeGlobalSyncHook,
+}
+
 /// Snapshot of eval execution stacks used to restore caller-sensitive access checks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ElephcEvalExecutionScope {
@@ -187,17 +199,17 @@ pub(super) struct EvalMagicScope {
 #[derive(Clone)]
 pub enum EvalReferenceTarget {
     Variable {
-        scope: *mut ElephcEvalScope,
+        scope: crate::scope::EvalScopeRef,
         name: String,
     },
     ArrayElement {
-        scope: *mut ElephcEvalScope,
+        scope: crate::scope::EvalScopeRef,
         array_name: String,
-        index: RuntimeCellHandle,
+        index: EvalArrayReferenceKey,
     },
     NestedArrayElement {
         array_target: Box<EvalReferenceTarget>,
-        index: RuntimeCellHandle,
+        index: EvalArrayReferenceKey,
     },
     ObjectProperty {
         object: RuntimeCellHandle,
@@ -209,6 +221,15 @@ pub enum EvalReferenceTarget {
         property: String,
         access_scope: ElephcEvalExecutionScope,
     },
+    /// One function's `static` local, which lives in the context and outlives every activation.
+    ///
+    /// A by-reference RETURN of a static local must name it this way. The scope-based
+    /// `Variable` target points into the activation scope, which is drained the moment the call
+    /// returns, so the caller would hold a reference into freed storage.
+    StaticLocal {
+        function: String,
+        name: String,
+    },
     Cell {
         cell: RuntimeCellHandle,
     },
@@ -216,6 +237,22 @@ pub enum EvalReferenceTarget {
         slot: usize,
         source_tag: u64,
     },
+}
+
+impl EvalReferenceTarget {
+    /// Names the target's kind for eval traces.
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            Self::Variable { .. } => "Variable",
+            Self::ArrayElement { .. } => "ArrayElement",
+            Self::NestedArrayElement { .. } => "NestedArrayElement",
+            Self::ObjectProperty { .. } => "ObjectProperty",
+            Self::StaticProperty { .. } => "StaticProperty",
+            Self::StaticLocal { .. } => "StaticLocal",
+            Self::Cell { .. } => "Cell",
+            Self::InvokerSlot { .. } => "InvokerSlot",
+        }
+    }
 }
 
 /// Normalized PHP array key used for eval-side reference metadata.

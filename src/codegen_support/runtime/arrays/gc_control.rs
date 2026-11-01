@@ -231,6 +231,7 @@ fn emit_gc_roots_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr w11, [x9]");                                       // load payload size for candidate checks and advancement
     emitter.instruction("ldr w12, [x9, #4]");                                   // load the block's live refcount
     emitter.instruction("cbz w12, __rt_gc_status_roots_next");                  // free blocks are not roots
+    crate::codegen_support::runtime::arrays::gc_collect_cycles::emit_skip_parked_block(emitter, "w12", "__rt_gc_status_roots_next");
     emitter.instruction("ldr x13, [x9, #8]");                                   // load heap kind and indexed-array value type
     emitter.instruction("and x14, x13, #0xff");                                 // isolate the heap kind
     emitter.instruction("cmp x14, #3");                                         // hashes, objects, and mixed boxes are candidates
@@ -273,6 +274,7 @@ fn emit_gc_roots_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11d, DWORD PTR [r8 + 4]");                        // load the block's live refcount
     emitter.instruction("test r11d, r11d");                                     // is this block live?
     emitter.instruction("jz __rt_gc_status_roots_next");                        // free blocks are not roots
+    crate::codegen_support::runtime::arrays::gc_collect_cycles::emit_skip_parked_block_x86(emitter, "r11d", "__rt_gc_status_roots_next");
     emitter.instruction("mov rdx, QWORD PTR [r8 + 8]");                         // load heap kind and indexed-array value type
     emitter.instruction("mov rcx, rdx");                                        // preserve the packed kind while isolating its low byte
     emitter.instruction("and rcx, 0xff");                                       // isolate the heap kind

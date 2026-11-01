@@ -250,7 +250,7 @@ pub(super) fn eval_reflection_aot_method_invoke_dispatch(
 }
 
 /// Runs a reflected AOT invocation with the declaring class as visibility scope.
-pub(super) fn eval_reflection_with_declaring_class_scope<T>(
+pub(in crate::interpreter) fn eval_reflection_with_declaring_class_scope<T>(
     declaring_class: &str,
     context: &mut ElephcEvalContext,
     action: impl FnOnce(&mut ElephcEvalContext) -> Result<T, EvalStatus>,

@@ -1,81 +1,37 @@
 //! Purpose:
-//! Home of PHP's `get_class_methods` builtin and its AOT checker contract.
+//! Home of the PHP `get_class_methods` builtin: its registry declaration and semantic target.
 //!
 //! Called from:
-//! - Checker, optimizer, ownership, and class-introspection specialization through the registry.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - AOT accepts an object or a runtime class-name string.
-//! - Mixed arguments are validated against their runtime tag before metadata lookup.
-//! - Direct, spread, and statically resolved callable paths use the AOT metadata specializer.
-//! - The specializer composes GetClass and Explode with their own logical signatures.
-//!   Neither runtime ID aliases this builtin's one-argument signature in the registry.
+//! - The result is a boxed `Mixed` array: a class the compiled world does not know (declared by
+//!   `eval` or a runtime include) is answered by the eval bridge, whose result is a Mixed cell.
+//! - Visibility follows the calling scope at run time (see `RuntimeFnId::GetClassMethods`).
 
-use crate::builtins::semantics::{
-    BuiltinArgumentLowering, BuiltinCallablePolicy, BuiltinEffects, BuiltinLowering,
-    BuiltinLoweringContext, BuiltinLoweringError, BuiltinRequirements, BuiltinResultOwnership,
-    BuiltinResultType, BuiltinRuntimeFunctions, BuiltinSemanticInput, BuiltinSemantics,
-    BuiltinTargetStrategy, BuiltinTargetSupport, BuiltinValidation, LoweredBuiltinValue,
-    NormalizedBuiltinCall,
-};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
-use crate::ir::Effects;
-use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
     contract: "get_class_methods",
-    semantics: BuiltinSemantics {
-        validation: BuiltinValidation::Shared(validate),
-        result_type: BuiltinResultType::Shared(result_type),
-        effects: BuiltinEffects::Static(Effects::from_bits_retain(
-            Effects::READS_HEAP.bits()
-                | Effects::ALLOC_HEAP.bits()
-                | Effects::MAY_THROW.bits(),
-        )),
-        result_ownership: BuiltinResultOwnership::Fresh,
-        requirements: BuiltinRequirements::Static(&[]),
-        target_strategy: BuiltinTargetStrategy::EirGraph,
-        target_support: BuiltinTargetSupport::All,
-        runtime_functions: BuiltinRuntimeFunctions::None,
-        argument_lowering: BuiltinArgumentLowering::Standard,
-        callable: BuiltinCallablePolicy::StaticOnly(
-            "get_class_methods() requires a statically resolved callable target in AOT mode",
-        ),
-        lowering: BuiltinLowering::Eir(lower_unreachable),
-    },
+    check: check,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::GetClassMethods,
+    ),
 }
 
-/// Accepts static or boxed object/string arguments and defers unpacked entry validation to runtime binding.
-fn validate(input: &BuiltinSemanticInput<'_>) -> Result<(), CompileError> {
-    if input.args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_))) {
-        return Ok(());
-    }
-    if !input.arg_types.first().is_some_and(|ty| {
-        matches!(
-            ty.codegen_repr(),
-            PhpType::Object(_) | PhpType::Str | PhpType::Mixed | PhpType::Union(_)
-        )
-    }) {
+/// Requires an object or a class-name string and returns the method-name list as `Mixed`.
+fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    if !matches!(
+        ty.codegen_repr(),
+        PhpType::Object(_) | PhpType::Str | PhpType::Mixed | PhpType::Union(_)
+    ) {
         return Err(CompileError::new(
-            input.span,
-            "get_class_methods() argument must be an object or string in AOT mode",
+            cx.span,
+            "get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name",
         ));
     }
-    Ok(())
-}
-
-/// Shares the concrete indexed-string result layout between checker and EIR consumers.
-fn result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
-    PhpType::Array(Box::new(PhpType::Str))
-}
-
-/// Rejects any path that bypassed the AOT class-metadata specialization.
-fn lower_unreachable(
-    _ctx: &mut dyn BuiltinLoweringContext,
-    _call: &NormalizedBuiltinCall<'_>,
-) -> Result<LoweredBuiltinValue, BuiltinLoweringError> {
-    Err(BuiltinLoweringError::new(
-        "get_class_methods() bypassed its statically resolved EIR specialization",
-    ))
+    Ok(PhpType::Mixed)
 }

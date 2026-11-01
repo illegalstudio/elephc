@@ -656,6 +656,703 @@ echo $box->value;
     assert_eq!(out, "0");
 }
 
+/// Verifies that an inherited private typed property without a default starts
+/// uninitialized on instances of the child class, so `isset()` can initialize it.
+#[test]
+fn test_inherited_private_typed_property_without_default_starts_uninitialized() {
+    let out = compile_and_run(
+        r#"<?php
+class ParentBox {
+    private string $path;
+
+    public function path(): string {
+        if (!isset($this->path)) {
+            $this->path = "parent";
+        }
+
+        return $this->path;
+    }
+}
+
+class ChildBox extends ParentBox {}
+
+echo (new ChildBox())->path();
+"#,
+    );
+    assert_eq!(out, "parent");
+}
+
+/// Verifies that cloning a child preserves the uninitialized marker of a
+/// private typed property declared by an ancestor.
+#[test]
+fn test_clone_preserves_transitively_inherited_private_typed_property_marker() {
+    let out = compile_and_run(
+        r#"<?php
+class CloneRoot {
+    private string $path;
+
+    public function path(): string {
+        if (!isset($this->path)) {
+            $this->path = "cloned";
+        }
+
+        return $this->path;
+    }
+}
+
+class CloneMiddle extends CloneRoot {}
+class CloneChild extends CloneMiddle {}
+
+$copy = clone new CloneChild();
+echo $copy->path();
+"#,
+    );
+    assert_eq!(out, "cloned");
+}
+
+/// Verifies that a dynamic-evaluation context preserves uninitialized markers
+/// when it constructs an AOT class with a private typed ancestor property.
+#[test]
+fn test_eval_new_preserves_transitively_inherited_private_typed_property_marker() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalRoot {
+    private string $path;
+
+    public function path(): string {
+        if (!isset($this->path)) {
+            $this->path = "evaluated";
+        }
+
+        return $this->path;
+    }
+}
+
+class EvalMiddle extends EvalRoot {}
+class EvalChild extends EvalMiddle {}
+
+eval('$value = new EvalChild(); echo $value->path();');
+"#,
+    );
+    assert_eq!(out, "evaluated");
+}
+
+/// Verifies that a private typed property without a default remains
+/// uninitialized through multiple inheritance levels until its declaring class initializes it.
+#[test]
+fn test_transitively_inherited_private_typed_property_without_default_starts_uninitialized() {
+    let out = compile_and_run(
+        r#"<?php
+class RootBox {
+    private string $path;
+
+    public function path(): string {
+        if (!isset($this->path)) {
+            $this->path = "root";
+        }
+
+        return $this->path;
+    }
+}
+
+class MiddleBox extends RootBox {}
+class ChildBox extends MiddleBox {}
+
+echo (new ChildBox())->path();
+"#,
+    );
+    assert_eq!(out, "root");
+}
+
+/// Verifies that a closure-created child instance preserves transitive private
+/// typed-property initialization metadata through the dynamic callable path.
+#[test]
+fn test_closure_created_transitive_private_typed_property_starts_uninitialized() {
+    let out = compile_and_run(
+        r#"<?php
+class RootBox {
+    private string $path;
+
+    public function path(): string {
+        if (!isset($this->path)) {
+            $this->path = "closure";
+        }
+
+        return $this->path;
+    }
+}
+
+class MiddleBox extends RootBox {}
+class ChildBox extends MiddleBox {}
+
+$factory = static fn (): ChildBox => new ChildBox();
+echo $factory()->path();
+"#,
+    );
+    assert_eq!(out, "closure");
+}
+
+/// A compiled first-class callable stored behind `mixed` must retain its
+/// descriptor when a dynamic receiver requires a callable/Closure parameter.
+#[test]
+fn test_dynamic_method_callable_parameter_preserves_first_class_descriptor() {
+    let out = compile_and_run(
+        r#"<?php
+interface Processor {
+    public function getEnv(string $prefix, string $name, Closure $getEnv): string;
+}
+
+class ProcessorImpl implements Processor {
+    public function getEnv(string $prefix, string $name, Closure $getEnv): string {
+        return $getEnv instanceof Closure ? 'closure' : 'wrong';
+    }
+}
+
+class ParentHolder {
+    private Closure $getEnv;
+    private Processor $processor;
+
+    public function __construct() {
+        $this->processor = new ProcessorImpl();
+    }
+
+    protected function processor(): mixed {
+        return $this->processor;
+    }
+
+    protected function getEnv(string $name): string {
+        $this->getEnv ??= $this->getEnv(...);
+        $processor = $this->processor();
+
+        return $processor->getEnv('default', $name, $this->getEnv);
+    }
+}
+
+class ChildHolder extends ParentHolder {
+    public function run(): string {
+        return $this->getEnv('ok');
+    }
+}
+
+eval('');
+echo (new ChildHolder())->run();
+"#,
+    );
+    assert_eq!(out, "closure");
+}
+
+/// A native first-class method callable stored in a typed property remains a Closure when a
+/// dynamically evaluated receiver validates its declared parameter type.
+#[test]
+fn test_eval_method_closure_parameter_accepts_native_property_callable() {
+    let out = compile_and_run(
+        r#"<?php
+class Holder {
+    private Closure $getEnv;
+
+    private function native(string $name): string {
+        return $name;
+    }
+
+    public function run(): string {
+        $this->getEnv ??= $this->native(...);
+        $processor = eval('return new class {
+            public function getEnv(string $prefix, string $name, Closure $getEnv): string {
+                return $getEnv instanceof Closure ? $getEnv($name) : "wrong";
+            }
+        };');
+
+        return $processor->getEnv('default', 'ok', $this->getEnv);
+    }
+}
+
+echo (new Holder())->run();
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// A private typed property declared by an AOT parent remains parent-owned when an eval-created
+/// child invokes that parent method. The child cannot override the private slot, so `??=` must
+/// initialize and later read the native property rather than an eval overlay entry.
+#[test]
+fn test_eval_subclass_reads_parent_private_closure_slot_natively() {
+    let out = compile_and_run(
+        r#"<?php
+class NativeBase {
+    private Closure $callback;
+
+    protected function resolve(string $name): string {
+        $this->callback ??= static fn (string $value): string => $value;
+        return ($this->callback)($name);
+    }
+}
+
+$child = eval('return new class extends NativeBase {
+    public function run(): string { return $this->resolve("ok"); }
+};');
+echo $child->run();
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies lazy source-directory discovery across transitive inheritance,
+/// reflection, and a closure-created object without depending on a fixture path.
+#[test]
+fn test_transitive_private_typed_property_lazy_reflection_directory_initialization() {
+    let out = compile_cli_files_and_run(
+        &[
+            ("project-root.marker", "root\n"),
+            (
+                "src/RootBox.php",
+                r#"<?php
+namespace App;
+
+function pass_through(mixed $value): mixed {
+    return $value;
+}
+
+trait ParentStorage {
+    private array $entries = [];
+}
+
+trait ChildStorage {
+    private array $entries = [];
+}
+
+class RootBox {
+    protected array $bundles = [];
+    protected mixed $container = null;
+    protected bool $booted = false;
+    protected ?float $startTime = null;
+    private string $directory;
+
+    public function __construct(
+        protected string $environment,
+        protected bool $debug,
+    ) {}
+
+    public function directory(): string {
+        if (!isset($this->directory)) {
+            $file = pass_through((new \ReflectionObject($this))->getFileName());
+            if (!is_file($file)) {
+                return "missing";
+            }
+            $directory = dirname($file);
+            while (!is_file($directory . "/project-root.marker")) {
+                if ($directory === dirname($directory)) {
+                    return "root";
+                }
+                $directory = dirname($directory);
+            }
+            $this->directory = $directory;
+        }
+
+        return $this->directory;
+    }
+}
+"#,
+            ),
+            (
+                "src/MiddleBox.php",
+                "<?php\nnamespace App;\nclass MiddleBox extends RootBox { use ParentStorage; private ?string $warmup = null; private int $counter = 0; private bool $reset = false; }\n",
+            ),
+            (
+                "src/ChildBox.php",
+                "<?php\nnamespace App;\nclass ChildBox extends MiddleBox { use ChildStorage; }\n",
+            ),
+            (
+                "entry/main.php",
+                "<?php\nrequire __DIR__ . '/../src/RootBox.php';\nrequire __DIR__ . '/../src/MiddleBox.php';\nrequire __DIR__ . '/../src/ChildBox.php';\n$factory = static fn (): \\App\\ChildBox => new \\App\\ChildBox('dev', true);\n$directory = $factory()->directory();\necho is_file($directory . '/project-root.marker') ? 'ready' : 'wrong';\n",
+            ),
+        ],
+        "entry/main.php",
+    );
+    assert_eq!(out, "ready");
+}
+
+/// Verifies a dynamic include preserves the lexical class scope for a private method bridge.
+#[test]
+fn test_dynamic_include_preserves_private_method_scope() {
+    let out = compile_cli_files_and_run(
+        &[
+            (
+                "entry.php",
+                r#"<?php
+function scope_identity(mixed $value): mixed { return $value; }
+
+trait PrivateScopeAfterDynamicInclude {
+    private string $includePath;
+
+    private function privateLabel(array &$visited, array &$visiting = []): string {
+        $visited['called'] = true;
+        $visiting['entered'] = true;
+        return 'private-ok';
+    }
+
+    private function includeThenCallPrivate(): string {
+        $path = $this->includePath;
+        require $path;
+        $self = scope_identity($this);
+        $visited = [];
+        $label = $self->privateLabel($visited);
+        $copy = $visited;
+        $copy['copied'] = true;
+        return $label . '-' . $visited['called'] . '-' . $copy['copied'];
+    }
+}
+
+class ScopeCarrier {
+    use PrivateScopeAfterDynamicInclude;
+
+    public function __construct(string $path) { $this->includePath = $path; }
+    public function run(): string { return $this->includeThenCallPrivate(); }
+}
+
+final class ScopeCarrierChild extends ScopeCarrier {}
+
+echo (new ScopeCarrierChild(__DIR__.'/payload.php'))->run();
+"#,
+            ),
+            ("payload.php", "<?php $included = true;\n"),
+        ],
+        "entry.php",
+    );
+    assert_eq!(out, "private-ok-1-1");
+}
+
+/// Verifies a dynamically included class retains constructor parameters from a protected method.
+#[test]
+fn test_dynamic_include_class_constructor_keeps_associative_parameters() {
+    let out = compile_cli_files_and_run(
+        &[
+            (
+                "entry.php",
+                r#"<?php
+$path = __DIR__ . '/definition.php';
+require $path;
+$class = 'ParameterCarrier';
+$carrier = new $class();
+echo (($carrier->defaults()['kernel.debug'] ?? false) ? 'd' : 'x') . ($carrier->parameter('kernel.debug') ? 'p' : 'q');
+"#,
+            ),
+            (
+                "definition.php",
+                r#"<?php
+class ParameterCarrier {
+    protected array $parameters = [];
+
+    public function __construct() {
+        $this->parameters = $this->getDefaultParameters();
+    }
+
+    protected function getDefaultParameters(): array {
+        return ['kernel.debug' => true];
+    }
+
+    public function defaults(): array {
+        return $this->getDefaultParameters();
+    }
+
+    public function parameter(string $name): mixed {
+        if (array_key_exists($name, $this->parameters) && '.' !== ($name[0] ?? '')) {
+            return $this->parameters[$name];
+        }
+
+        return null;
+    }
+}
+"#,
+            ),
+        ],
+        "entry.php",
+    );
+    assert_eq!(out, "dp");
+}
+
+/// Verifies an associative map returned by a dynamic require reaches typed AOT method arguments.
+///
+/// The method receives a PHP `array` contract while the runtime value is hash-backed. Its nested
+/// traversal and by-reference accumulator must retain the associative storage rather than
+/// reinterpreting it as an indexed array.
+#[test]
+fn test_dynamic_require_assoc_map_survives_typed_method_arguments() {
+    let out = compile_cli_files_and_run(
+        &[
+            (
+                "entry.php",
+                r#"<?php
+class BundleResolver {
+    public function resolve(array $bundles): array {
+        $resolved = [];
+        foreach ($bundles as $class => $envs) {
+            $this->append($class, $envs, $bundles, $resolved);
+        }
+
+        return $resolved;
+    }
+
+    private function append(string $class, array $envs, array $bundles, array &$resolved, array &$visiting = []): void {
+        $visiting[$class] = true;
+        if (!isset($bundles[$class])) {
+            return;
+        }
+        $resolved[$class] = $envs;
+    }
+}
+
+$path = __DIR__ . '/bundles.php';
+$bundles = is_file($path) ? require $path : [];
+$resolved = (new BundleResolver())->resolve($bundles);
+echo $resolved['Fixture\\Bundle']['all'] ? 'resolved' : 'missing';
+"#,
+            ),
+            (
+                "bundles.php",
+                "<?php\nreturn ['Fixture\\\\Bundle' => ['all' => true]];\n",
+            ),
+        ],
+        "entry.php",
+    );
+    assert_eq!(out, "resolved");
+}
+
+/// Verifies a dynamic subclass updates a protected property used by an AOT parent method.
+#[test]
+fn test_dynamic_subclass_syncs_redeclared_protected_parent_property() {
+    let out = compile_cli_files_and_run(
+        &[
+            (
+                "entry.php",
+                r#"<?php
+class ParameterBase {
+    protected array $parameters = [];
+
+    public function parameter(string $name): mixed {
+        return $this->parameters[$name] ?? null;
+    }
+}
+
+$path = __DIR__ . '/definition.php';
+require $path;
+$class = 'ParameterCarrier';
+echo (new $class())->parameter('kernel.debug') ? 'ok' : 'wrong';
+"#,
+            ),
+            (
+                "definition.php",
+                r#"<?php
+class ParameterCarrier extends ParameterBase {
+    protected array $parameters = [];
+
+    public function __construct() {
+        $this->parameters = ['kernel.debug' => true];
+    }
+}
+"#,
+            ),
+        ],
+        "entry.php",
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies an eval barrier preserves an inherited boolean `$this` property.
+///
+/// `$this` is not assignable by PHP code, including dynamically included code. The following
+/// trait method must therefore keep its concrete object representation across the eval barrier
+/// and read the inherited boolean without routing the raw scalar through `__rt_mixed_cast_bool`.
+#[test]
+fn test_dynamic_include_preserves_inherited_bool_this_property_truthiness() {
+    let out = compile_cli_files_and_run(
+        &[
+            (
+                "entry.php",
+                r#"<?php
+trait DynamicBarrierBoolTrait {
+    protected function checkDynamicBarrierBool(): void {
+        $path = str_replace('/fixture/', '/fixture/', __DIR__ . '/fixture/declaration.php');
+        require $path;
+
+        if ($this->debug && !defined('DYNAMIC_BARRIER_BOOL_DISABLED')) {
+            echo 'ok';
+        }
+    }
+}
+
+class DynamicBarrierBoolBase {
+    public function __construct(protected bool $debug) {}
+}
+
+class DynamicBarrierBoolChild extends DynamicBarrierBoolBase {
+    use DynamicBarrierBoolTrait;
+
+    public function run(): void {
+        $this->checkDynamicBarrierBool();
+    }
+}
+
+(new DynamicBarrierBoolChild(true))->run();
+"#,
+            ),
+            ("fixture/declaration.php", "<?php\nfunction dynamic_barrier_marker(): void {}\n"),
+        ],
+        "entry.php",
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies a namespaced dynamically included class reads its protected associative property.
+#[test]
+fn test_namespaced_dynamic_class_reads_protected_associative_property() {
+    let out = compile_cli_files_and_run(
+        &[
+            (
+                "entry.php",
+                r#"<?php
+$path = __DIR__ . '/definition.php';
+require $path;
+$class = 'Generated\\ParameterCarrier';
+echo (new $class())->parameter('kernel.debug') ? 'ok' : 'wrong';
+"#,
+            ),
+            (
+                "definition.php",
+                r#"<?php
+namespace Generated;
+
+class ParameterCarrier {
+    protected array $parameters = [];
+
+    public function __construct() {
+        $this->parameters = ['kernel.debug' => true];
+    }
+
+    public function parameter(string $name): mixed {
+        if (array_key_exists($name, $this->parameters) && '.' !== ($name[0] ?? '')) {
+            return $this->parameters[$name];
+        }
+
+        return null;
+    }
+}
+"#,
+            ),
+        ],
+        "entry.php",
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies a generated-style dynamic getter finds values in its protected parameter map.
+#[test]
+fn test_dynamic_generated_style_parameter_getter_reads_protected_map() {
+    let out = compile_cli_files_and_run(
+        &[
+            (
+                "entry.php",
+                r#"<?php
+$path = __DIR__ . '/definition.php';
+require $path;
+$class = 'Generated\\ParameterCarrier';
+echo (new $class())->getParameter('kernel.debug') ? 'ok' : 'wrong';
+"#,
+            ),
+            (
+                "definition.php",
+                r#"<?php
+namespace Generated;
+
+class ParameterCarrier {
+    private const DEPRECATED_PARAMETERS = [];
+    private const NONEMPTY_PARAMETERS = [];
+    private array $loadedDynamicParameters = [];
+    private array $dynamicParameters = [];
+    protected array $parameters = [];
+
+    public function __construct(private array $buildParameters = [], protected string $containerDir = __DIR__) {
+        $this->parameters = $this->getDefaultParameters();
+    }
+
+    protected function getDefaultParameters(): array {
+        return [
+            'kernel.project_dir' => dirname(__DIR__, 2),
+            'kernel.environment' => 'dev',
+            'kernel.debug' => true,
+            'kernel.bundles' => [
+                'FrameworkBundle' => 'FrameworkBundle',
+            ],
+            'kernel.bundles_metadata' => [
+                'FrameworkBundle' => [
+                    'path' => dirname(__DIR__),
+                    'namespace' => 'Framework',
+                ],
+            ],
+            '.known_environments' => ['prod', 'dev', 'test'],
+            'kernel.logs_dir' => dirname(__DIR__) . '/log',
+            'kernel.http_method_override' => false,
+            'session.storage.options' => [
+                'cookie_secure' => 'auto',
+                'cookie_httponly' => true,
+            ],
+        ];
+    }
+
+    public function getParameter(string $name): mixed {
+        if (isset(self::DEPRECATED_PARAMETERS[$name])) {
+            return null;
+        }
+
+        if (array_key_exists($name, $this->buildParameters)) {
+            return $this->buildParameters[$name];
+        }
+
+        if (isset($this->loadedDynamicParameters[$name])) {
+            return $this->loadedDynamicParameters[$name]
+                ? $this->dynamicParameters[$name]
+                : null;
+        }
+
+        if (array_key_exists($name, $this->parameters) && '.' !== ($name[0] ?? '')) {
+            return $this->parameters[$name];
+        }
+
+        return null;
+    }
+}
+"#,
+            ),
+        ],
+        "entry.php",
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies a statically typed AOT call dispatches to a runtime-defined subclass override.
+#[test]
+fn test_typed_aot_method_call_dispatches_to_dynamic_subclass_override() {
+    let out = compile_and_run(
+        r#"<?php
+class BaseMessage {
+    public function label(): string {
+        return 'base';
+    }
+}
+
+function label_for(BaseMessage $message): string {
+    return $message->label();
+}
+
+$definition = 'namespace Generated; class Message extends \\BaseMessage { public function label(): string { return \'dynamic\'; } }';
+eval($definition);
+$class = 'Generated\\Message';
+echo label_for(new $class()) . label_for(new BaseMessage());
+"#,
+    );
+    assert_eq!(out, "dynamicbase");
+}
+
 /// Verifies that accessing an uninitialized typed static property throws a
 /// catchable `Error` that `catch(\Error $e)` can observe.
 #[test]
@@ -795,6 +1492,63 @@ echo Box::$value;
     assert_eq!(out, "0");
 }
 
+/// Verifies typed instance and static property defaults resolve class-like constants only after
+/// class, parent, and interface metadata is complete.
+#[test]
+fn test_typed_property_defaults_resolve_scoped_constants() {
+    let out = compile_and_run(
+        r#"<?php
+interface Defaults {
+    public const VALUE = 41;
+}
+
+class ParentBox {
+    protected const OFFSET = 1;
+}
+
+class Box extends ParentBox implements Defaults {
+    private const LOCAL = 40;
+
+    public int $interfaceValue = Defaults::VALUE;
+    public int $selfValue = self::LOCAL;
+    public int $parentValue = parent::OFFSET;
+    public static int $staticValue = Defaults::VALUE;
+}
+
+$box = new Box();
+echo $box->interfaceValue, ":", $box->selfValue, ":", $box->parentValue, ":", Box::$staticValue;
+"#,
+    );
+    assert_eq!(out, "41:40:1:41");
+}
+
+/// Verifies scoped constants nested in literal property defaults are resolved for instance and
+/// static storage, including an instance selected by a runtime class string.
+#[test]
+fn test_array_property_defaults_resolve_nested_scoped_constants() {
+    let out = compile_and_run(
+        r#"<?php
+class DefaultMap {
+    private const CREATED = 'c';
+    private const ALIGN = 'left';
+
+    public array $values = [self::CREATED => 1, 'align' => self::ALIGN];
+    public static array $staticValues = [self::CREATED => 2, 'align' => self::ALIGN];
+}
+
+function instantiate(string $class): object {
+    return new $class();
+}
+
+$direct = new DefaultMap();
+$dynamic = instantiate('DefaultMap');
+echo $direct->values['c'], ':', $dynamic->values['align'], ':';
+echo DefaultMap::$staticValues['c'], ':', DefaultMap::$staticValues['align'];
+"#,
+    );
+    assert_eq!(out, "1:left:2:left");
+}
+
 /// Verifies that a nullable typed static property with an explicit `= null` default
 /// is considered initialized (`is_null()` returns true), and that a typed static
 /// property without a default remains uninitialized and throws a catchable Error;
@@ -807,7 +1561,6 @@ fn test_nullable_static_property_default_null_is_initialized() {
 class WithDefault {
     public static ?int $value = null;
 }
-
 echo is_null(WithDefault::$value);
 "#,
     );
@@ -826,6 +1579,27 @@ echo WithoutDefault::$value;
         err.contains("Fatal error: Typed static property WithoutDefault::$value must not be accessed before initialization"),
         "{err}"
     );
+}
+
+/// Verifies a nullable integer narrowed by a null check can populate an integer static property.
+#[test]
+fn test_narrowed_nullable_int_static_property_assignment() {
+    let out = compile_and_run(
+        r#"<?php
+class StaticIntTarget {
+    public static int $value = 0;
+
+    public static function assign(?int $value): void {
+        if (null !== $value) {
+            self::$value = $value;
+        }
+    }
+}
+StaticIntTarget::assign(7);
+echo StaticIntTarget::$value;
+"#,
+    );
+    assert_eq!(out, "7");
 }
 
 /// Verifies that an untyped instance property with a `= null` default is strictly
@@ -1095,4 +1869,80 @@ fn test_example_asymmetric_visibility_compiles_and_runs() {
         out,
         "balance: 120\ninsufficient funds\nbalance: 120\ntransfer TX-1: 35\n"
     );
+}
+
+/// Verifies an untyped property whose default is a constant takes the constant's type: a global
+/// `const`, `self::`, `parent::` and named class constants, an array constant, and constants
+/// inside an array literal. The syntactic guess typed a class constant `string` and a global one
+/// `int`, so `public $k = self::K;` with `K = 9` failed the build (`prop_set` of an int into a
+/// string slot), and `public $l = self::L;` had no literal form at all.
+#[test]
+fn test_constant_valued_untyped_property_defaults_take_the_constant_type() {
+    let out = compile_and_run(
+        r#"<?php
+const GREETING = 'hi';
+class P { const S = 'str'; const F = 1.5; }
+class B extends P {
+    const K = 9;
+    const L = [1, 2];
+    public $g = GREETING;
+    public $s = self::S;
+    public $f = parent::F;
+    public $k = self::K;
+    public $l = self::L;
+    public $arr = [self::K, self::S];
+    public static $sk = self::K;
+    public $named = P::S;
+}
+$b = new B();
+echo json_encode([$b->g, $b->s, $b->f, $b->k, $b->l, $b->arr, B::$sk, $b->named]), "\n";
+$b->k = 'now a string';
+var_dump($b->k);
+"#,
+    );
+    assert_eq!(out, "[\"hi\",\"str\",1.5,9,[1,2],[9,\"str\"],9,\"str\"]\nstring(12) \"now a string\"\n");
+}
+
+/// Verifies an untyped scalar property written a value of another type keeps both: the default
+/// until the write, the written value after, and the default again on a fresh object. The slot
+/// used to be retyped to the written value, so propinit stored the `9` of `public $i = 9;` into a
+/// `string` slot and the program did not build.
+#[test]
+fn test_untyped_scalar_property_written_another_type_holds_both() {
+    let out = compile_and_run(
+        r#"<?php
+class B { public $i = 9; public $f = 1.5; public $s = "a"; public $b = true; public $i2 = 0; public $f2 = 0.0; }
+$b = new B();
+var_dump($b->i, $b->f, $b->s, $b->b, $b->i2, $b->f2);
+$b->i = "str"; $b->f = 3; $b->s = 5; $b->b = "x"; $b->i2 = 2.5; $b->f2 = 7;
+var_dump($b->i, $b->f, $b->s, $b->b, $b->i2, $b->f2);
+$c = new B();
+var_dump($c->i, $c->f, $c->s, $c->b, $c->i2, $c->f2);
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(9)\nfloat(1.5)\nstring(1) \"a\"\nbool(true)\nint(0)\nfloat(0)\n\
+         string(3) \"str\"\nint(3)\nint(5)\nstring(1) \"x\"\nfloat(2.5)\nint(7)\n\
+         int(9)\nfloat(1.5)\nstring(1) \"a\"\nbool(true)\nint(0)\nfloat(0)\n"
+    );
+}
+
+/// Verifies an enum case is a property default: untyped (boxed), static through an enum
+/// constant, and nullable-typed, each the case's own singleton. There was no default form for a
+/// case, so `public $mode = Mode::Slow;` failed the build in `object_new` and a static one in the
+/// static-property initializer.
+#[test]
+fn test_enum_case_property_defaults() {
+    let out = compile_and_run(
+        r#"<?php
+enum Mode { case Fast; case Slow; }
+enum Level: int { case Low = 1; case High = 2; const DEFAULT = self::High; }
+class Cfg { public $mode = Mode::Slow; public static $lvl = Level::DEFAULT; private ?Level $opt = Level::Low; public function opt() { return $this->opt; } }
+$c = new Cfg();
+var_dump($c->mode, Cfg::$lvl, $c->opt());
+var_dump(spl_object_id($c->mode) === spl_object_id(Mode::Slow));
+"#,
+    );
+    assert_eq!(out, "enum(Mode::Slow)\nenum(Level::High)\nenum(Level::Low)\nbool(true)\n");
 }

@@ -32,12 +32,20 @@ pub(crate) fn lower_stream_socket_server(
     store_if_result(ctx, inst)
 }
 
-/// Lowers `stream_socket_client(address)` and records the connected host for TLS defaults.
+/// Lowers `stream_socket_client(address, &error_code?, &error_message?, timeout?, flags?,
+/// context?)` and records the connected host for TLS defaults.
+///
+/// Only the address reaches the runtime helper. `$timeout`, `$flags` and `$context` are accepted
+/// and evaluated (their operands are already-computed IR values, so any side effect has happened)
+/// but not yet honoured: the helper always makes a blocking `STREAM_CLIENT_CONNECT`. The two
+/// by-reference outputs ARE honoured, through the same helper `fsockopen` uses, because a program
+/// reads them whatever the connection did -- `symfony/var-dumper`'s `Server\Connection::connect()`
+/// is written `stream_socket_client($this->host, $errno, $errstr, 3)`.
 pub(crate) fn lower_stream_socket_client(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::super::ensure_arg_count(inst, "stream_socket_client", 1)?;
+    ensure_arg_count_between(inst, "stream_socket_client", 1, 6)?;
     let address = expect_operand(inst, 0)?;
     load_string_to_result(ctx, address, "stream_socket_client address")?;
     match ctx.emitter.target.arch {
@@ -67,6 +75,7 @@ pub(crate) fn lower_stream_socket_client(
             abi::emit_call_label(ctx.emitter, "__rt_stash_connect_host");
         }
     }
+    store_socket_error_outputs(ctx, inst, 1, 2)?;
     box_stream_fd_or_false_result(ctx, "stream_socket_client");
     store_if_result(ctx, inst)
 }

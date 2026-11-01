@@ -26,6 +26,428 @@ fn assert_no_rust_panic_leaked(stderr: &str) {
     );
 }
 
+/// Returns the assembly of the named source functions, from each one's global label up to the
+/// next global label that belongs to another symbol.
+fn source_function_bodies(asm: &str, functions: &[&str]) -> String {
+    let mut bodies = String::new();
+    let mut inside = false;
+    for line in asm.lines() {
+        // `L…` labels and numeric local labels (`1:`) stay inside the function they appear in.
+        if !line.starts_with(char::is_whitespace)
+            && line.ends_with(':')
+            && !line.starts_with('L')
+            && !line.starts_with(|c: char| c.is_ascii_digit())
+        {
+            let label = line.trim_end_matches(':').trim_start_matches('_');
+            inside = functions.iter().any(|function| label.starts_with(function));
+        }
+        if inside {
+            bodies.push_str(line);
+            bodies.push('\n');
+        }
+    }
+    bodies
+}
+
+/// Verifies that distinct eval contexts call one shared metadata-registration body.
+#[test]
+fn test_eval_registration_helper_is_shared_across_context_sites() {
+    let dir = make_cli_test_dir("elephc_eval_registration_helper_shared");
+    let source = r#"<?php
+function first(string $code): void {
+    eval($code);
+}
+function second(string $code): void {
+    eval($code);
+}
+$code = $argc > 1 ? $argv[1] : 'echo "shared";';
+first($code);
+second($code);
+"#;
+    fs::write(dir.join("main.php"), source).unwrap();
+    let compile = elephc_cli_command(&dir)
+        .args(["--quiet", "main.php"])
+        .output()
+        .expect("failed to invoke elephc CLI");
+    assert!(
+        compile.status.success(),
+        "shared eval registration fixture should compile:\n{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let user_asm = fs::read_to_string(dir.join("main.s"))
+        .expect("shared eval registration fixture should emit assembly");
+    // Only the two source functions' bodies: a program that runs `eval()` keeps every runtime
+    // body reachable, and the ones that reach the bridge themselves (the session prelude, the
+    // Reflection methods) carry contexts of their own.
+    let user_bodies = source_function_bodies(&user_asm, &["fn_first", "fn_second"]);
+
+    assert_eq!(
+        user_bodies
+            .lines()
+            .filter(|line| {
+                let line = line.trim();
+                (line.starts_with("bl ") || line.starts_with("call "))
+                    && line.ends_with("__elephc_eval_context_new")
+            })
+            .count(),
+        2,
+        "each function must retain its own persistent eval context"
+    );
+    let native_function_registrations = user_asm
+        .lines()
+        .filter(|line| {
+            let line = line.trim();
+            (line.starts_with("bl ") || line.starts_with("call "))
+                && line.ends_with("__elephc_eval_register_native_function")
+        })
+        .count();
+    assert!(
+        native_function_registrations >= 2,
+        "both source functions must retain native registration metadata"
+    );
+    let metadata_sync_calls = user_bodies
+        .lines()
+        .filter(|line| {
+            let line = line.trim();
+            (line.starts_with("bl ") || line.starts_with("call "))
+                && line.ends_with("__elephc_eval_context_try_sync_aot_metadata")
+        })
+        .count();
+    assert_eq!(
+        metadata_sync_calls, 2,
+        "each generated context must first attempt to import the immutable module metadata"
+    );
+    let registration_helper_calls = user_bodies
+        .lines()
+        .filter(|line| {
+            let line = line.trim();
+            (line.starts_with("bl ") || line.starts_with("call "))
+                && line.contains("eir_shared_eval_register_module")
+                && !line.contains("_done_")
+        })
+        .count();
+    assert_eq!(
+        registration_helper_calls, 2,
+        "one shared helper call per context is expected"
+    );
+    let registration_helper_definitions = user_asm
+        .lines()
+        .filter(|line| {
+            let line = line.trim();
+            line.ends_with(':')
+                && line.contains("eir_shared_eval_register_module")
+                && !line.contains("_done_")
+        })
+        .count();
+    assert_eq!(
+        registration_helper_definitions, 1,
+        "one shared registration helper definition is expected"
+    );
+    assert!(
+        !user_asm.contains("_eir_second_eval_callable_invoker_"),
+        "the second context must call the shared invoker body"
+    );
+
+    let run = Command::new(dir.join("main"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run shared eval registration fixture");
+    assert!(
+        run.status.success(),
+        "shared eval registration fixture failed:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "sharedshared");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies callable selector lookup bodies are emitted once and reused by multiple sites.
+#[test]
+fn test_eval_callable_lookup_helpers_are_shared_across_sites() {
+    let dir = make_cli_test_dir("elephc_eval_callable_lookup_helpers_shared");
+    let source = r#"<?php
+function callback_lookup_value(int $value): int {
+    return $value + 1;
+}
+
+class CallableLookupBox {
+    public function __construct(callable $callback) {}
+
+    public function first(callable $callback): int {
+        return $callback(1);
+    }
+
+    public function second(callable $callback): int {
+        return $callback(2);
+    }
+
+    public static function third(callable $callback): int {
+        return $callback(3);
+    }
+}
+
+$code = $argc > 1 ? $argv[1] : 'return 0;';
+eval($code);
+"#;
+    fs::write(dir.join("main.php"), source).unwrap();
+    let compile = elephc_cli_command(&dir)
+        .args(["--quiet", "main.php"])
+        .output()
+        .expect("failed to invoke elephc CLI");
+    assert!(
+        compile.status.success(),
+        "shared callable lookup fixture should compile:\n{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let user_asm = fs::read_to_string(dir.join("main.s"))
+        .expect("shared callable lookup fixture should emit assembly");
+
+    for prefix in [
+        "__elephc_eval_callable_string_lookup_",
+        "__elephc_eval_callable_array_lookup_",
+        "__elephc_eval_callable_object_lookup_",
+    ] {
+        let definitions = user_asm
+            .lines()
+            .filter(|line| {
+                let line = line.trim();
+                line.starts_with(".globl ") && line.contains(prefix)
+            })
+            .count();
+        assert_eq!(
+            definitions, 1,
+            "one module-wide callable lookup helper is expected for {prefix}"
+        );
+        // An invokable OBJECT reaches its `__invoke` through the callable descriptor dispatch
+        // since the origin/main merge, so the object helper is defined once but has no callers;
+        // sharing is what this test pins, and the call count only means something for the two
+        // selector shapes that still look their target up.
+        if prefix == "__elephc_eval_callable_object_lookup_" {
+            continue;
+        }
+        let calls = user_asm
+            .lines()
+            .filter(|line| {
+                let line = line.trim();
+                (line.starts_with("bl ") || line.starts_with("call ")) && line.contains(prefix)
+            })
+            .count();
+        assert!(
+            calls >= 2,
+            "multiple callable sites should reuse {prefix}; observed {calls} calls"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies equal AOT callable signatures share an invoker while retaining distinct descriptors.
+#[test]
+fn test_eval_callable_invokers_are_shared_per_signature() {
+    let dir = make_cli_test_dir("elephc_eval_callable_invokers_shared_per_signature");
+    let source = r#"<?php
+function __elephc_callable_cache_first(int $value): int {
+    return $value + 1;
+}
+
+function __elephc_callable_cache_second(int $value): int {
+    return $value + 2;
+}
+
+class EvalCallableInvokerCacheGate {
+    private function gate(callable $callback): void {}
+}
+
+$code = $argc > 1 ? $argv[1] : 'return 0;';
+eval($code);
+"#;
+    fs::write(dir.join("main.php"), source).unwrap();
+    let compile = elephc_cli_command(&dir)
+        .args(["--quiet", "main.php"])
+        .output()
+        .expect("failed to invoke elephc CLI");
+    assert!(
+        compile.status.success(),
+        "shared callable invoker fixture should compile:\n{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let user_asm = fs::read_to_string(dir.join("main.s"))
+        .expect("shared callable invoker fixture should emit assembly");
+    let lines: Vec<_> = user_asm.lines().collect();
+
+    let invoker_labels = [
+        elephc::names::function_symbol("__elephc_callable_cache_first"),
+        elephc::names::function_symbol("__elephc_callable_cache_second"),
+    ]
+    .into_iter()
+    .map(|target| {
+        let target_entries: Vec<_> = lines
+            .iter()
+            .enumerate()
+            .filter_map(|(index, line)| {
+                (line.trim() == format!(".quad {target}")).then_some(index)
+            })
+            .collect();
+        assert!(
+            !target_entries.is_empty(),
+            "each callable target must retain at least one descriptor entry"
+        );
+
+        let invoker_labels: Vec<_> = target_entries
+            .into_iter()
+            .flat_map(|entry_index| {
+                let descriptor_start = (0..=entry_index)
+                    .rev()
+                    .find(|index| lines[*index].trim().ends_with(':'))
+                    .expect("callable descriptor must have a data label");
+                let descriptor_end = lines
+                    .iter()
+                    .enumerate()
+                    .skip(entry_index + 1)
+                    .find(|(_, line)| line.trim().ends_with(':'))
+                    .map(|(index, _)| index)
+                    .unwrap_or(lines.len());
+                let descriptor = &lines[descriptor_start..descriptor_end];
+                descriptor
+                    .iter()
+                    .filter_map(|line| {
+                        line.trim()
+                            .strip_prefix(".quad __elephc_eval_callable_invoker_")
+                            .map(|suffix| format!("__elephc_eval_callable_invoker_{suffix}"))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(
+            invoker_labels.len(),
+            1,
+            "each callable descriptor must contain one static invoker reference"
+        );
+        invoker_labels.into_iter().next().unwrap()
+    })
+    .collect::<Vec<_>>();
+
+    assert_eq!(
+        invoker_labels[0], invoker_labels[1],
+        "equal signature/capture layouts should share one invoker label"
+    );
+    let shared_label = format!("{}:", invoker_labels[0]);
+    assert_eq!(
+        lines.iter().filter(|line| line.trim() == shared_label).count(),
+        1,
+        "the shared invoker label must have one body definition"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies bridge-supported AOT callable targets use the dynamic descriptor path while an
+/// unregistered compiler-internal-named function retains its direct eval descriptor.
+#[test]
+fn test_eval_callable_bridge_supported_targets_are_not_emitted_as_direct_cases() {
+    let dir = make_cli_test_dir("elephc_eval_callable_bridge_supported_direct_cases");
+    let source = r#"<?php
+function eval_callable_bridge_supported_function(int $value): int {
+    return $value + 1;
+}
+
+function __elephc_callable_unregistered(int $value): int {
+    return $value + 2;
+}
+
+class EvalCallableBridgeSupportedBox {
+    public function __construct(callable $callback) {}
+
+    public function instance(int $value): int {
+        return $value + 3;
+    }
+
+    public static function staticMethod(int $value): int {
+        return $value + 4;
+    }
+
+    public function __invoke(int $value): int {
+        return $value + 5;
+    }
+}
+
+$code = $argc > 1 ? $argv[1] : 'return 0;';
+eval($code);
+"#;
+    fs::write(dir.join("main.php"), source).unwrap();
+    let compile = elephc_cli_command(&dir)
+        .args(["--quiet", "main.php"])
+        .output()
+        .expect("failed to invoke elephc CLI");
+    assert!(
+        compile.status.success(),
+        "bridge-supported callable fixture should compile:\n{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let user_asm = fs::read_to_string(dir.join("main.s"))
+        .expect("bridge-supported callable fixture should emit assembly");
+    let lines: Vec<_> = user_asm.lines().collect();
+    let direct_invokers_for_target = |target: &str| {
+        let target_entries: Vec<_> = lines
+            .iter()
+            .enumerate()
+            .filter_map(|(index, line)| {
+                (line.trim() == format!(".quad {target}")).then_some(index)
+            })
+            .collect();
+        assert!(
+            !target_entries.is_empty(),
+            "callable target must retain at least one descriptor entry: {target}"
+        );
+        target_entries
+            .into_iter()
+            .flat_map(|entry_index| {
+                let descriptor_start = (0..=entry_index)
+                    .rev()
+                    .find(|index| lines[*index].trim().ends_with(':'))
+                    .expect("callable descriptor must have a data label");
+                let descriptor_end = lines
+                    .iter()
+                    .enumerate()
+                    .skip(entry_index + 1)
+                    .find(|(_, line)| line.trim().ends_with(':'))
+                    .map(|(index, _)| index)
+                    .unwrap_or(lines.len());
+                lines[descriptor_start..descriptor_end]
+                    .iter()
+                    .filter_map(|line| {
+                        line.trim()
+                            .strip_prefix(".quad __elephc_eval_callable_invoker_")
+                            .map(|suffix| format!("__elephc_eval_callable_invoker_{suffix}"))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+    };
+    let supported_symbol =
+        elephc::names::function_symbol("eval_callable_bridge_supported_function");
+    assert!(
+        direct_invokers_for_target(&supported_symbol).is_empty(),
+        "bridge-supported function must not retain a direct eval invoker"
+    );
+    let unregistered_symbol = elephc::names::function_symbol("__elephc_callable_unregistered");
+    let unregistered_invokers = direct_invokers_for_target(&unregistered_symbol);
+    assert_eq!(
+        unregistered_invokers.len(),
+        1,
+        "unregistered compiler-internal function must retain exactly one direct eval invoker"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.trim() == format!(".quad {unregistered_symbol}")),
+        "the unregistered compiler-internal function should retain a direct descriptor entry"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Asserts a scope-aware literal eval was lowered as an internal EIR function without Magician.
 fn assert_scope_eir_aot_without_bridge(
     user_asm: &str,
@@ -4680,13 +5102,110 @@ fn test_eval_null_argument_is_empty_fragment() {
     assert_eq!(out, "");
 }
 
+/// Compiles one fixture that must die on a PHP parse error and returns its standard output.
+///
+/// PHP prints a parse diagnostic on standard output, not standard error — measured with
+/// `php -n` 8.5.6 — and elephc does the same now that the eval bridge names the file, the line
+/// and the failing token instead of printing one constant from generated assembly.
+fn compile_and_run_expect_parse_error(source: &str) -> String {
+    let output = compile_and_run_capture(source);
+    assert!(
+        !output.success,
+        "fixture should have failed; stdout was: {}",
+        output.stdout
+    );
+    output.stdout
+}
+
+/// Verifies a broken included file names the file, the line and the token like PHP does.
+///
+/// The whole diagnostic is pinned, not a fragment of it: the fixture echoes the path it wrote
+/// so the expected text can be rebuilt byte for byte.
+///
+/// Reference output captured from `php -n` (PHP 8.5.6) on the same fixture, exit status 255:
+/// `<piece>\n` then `\nParse error: syntax error, unexpected identifier "bar" in <piece> on
+/// line 3\n`.
+#[test]
+fn test_eval_include_parse_error_names_the_file_the_line_and_the_token() {
+    let out = compile_and_run_expect_parse_error(
+        r#"<?php
+$piece = __DIR__ . "/eval-broken-include.php";
+file_put_contents($piece, "<?php\n\$ok = 1;\nfoo bar;\n");
+echo $piece . "\n";
+include $piece;
+echo "unreachable";
+"#,
+    );
+    let piece = out.lines().next().expect("fixture echoes the include path");
+    assert_eq!(
+        out,
+        format!(
+            "{piece}\n\nParse error: syntax error, unexpected identifier \"bar\" in {piece} on line 3\n"
+        ),
+        "the include parse diagnostic did not match the one php -n prints"
+    );
+}
+
+/// Verifies a broken `eval()` string names the calling file, its line and the fragment line.
+///
+/// PHP reports the file and line of the `eval()` call itself, then `: eval()'d code on line n`
+/// for the line inside the fragment.
+///
+/// Reference output captured from `php -n` (PHP 8.5.6) on the same fixture, exit status 255:
+/// `<file>\n` then `\nParse error: syntax error, unexpected identifier "bar" in <file>(3) :
+/// eval()'d code on line 2\n`.
+#[test]
+fn test_eval_parse_error_names_the_call_site_and_the_fragment_line() {
+    let out = compile_and_run_expect_parse_error(
+        "<?php\necho __FILE__ . \"\\n\";\neval(\"\\$ok = 1;\\nfoo bar;\\n\");\necho \"unreachable\";\n",
+    );
+    let file = out.lines().next().expect("fixture echoes its own path");
+    assert_eq!(
+        out,
+        format!(
+            "{file}\n\nParse error: syntax error, unexpected identifier \"bar\" in {file}(3) : eval()'d code on line 2\n"
+        ),
+        "the eval parse diagnostic did not match the one php -n prints"
+    );
+}
+
+/// Verifies the reported line is the file line even when PHP code follows inline HTML.
+///
+/// Parsing runs on the bytes after `<?php`, so a fragment line is the file line only for the
+/// block that opens the file; every later block needs the newlines before it added back.
+///
+/// Reference value captured from `php -n` (PHP 8.5.6): the diagnostic names `on line 6`.
+#[test]
+fn test_eval_include_parse_error_line_survives_leading_inline_html() {
+    let out = compile_and_run_expect_parse_error(
+        r#"<?php
+$piece = __DIR__ . "/eval-broken-html-include.php";
+file_put_contents($piece, "one\ntwo\nthree\n<?php\n\$ok = 1;\nfoo bar;\n");
+echo $piece . "\n";
+include $piece;
+echo "unreachable";
+"#,
+    );
+    let piece = out.lines().next().expect("fixture echoes the include path");
+    assert!(
+        out.contains(&format!(
+            "Parse error: syntax error, unexpected identifier \"bar\" in {piece} on line 6\n"
+        )),
+        "the diagnostic did not name the file line of the failing token: {out}"
+    );
+}
+
 /// Verifies non-string scalar eval arguments are coerced before runtime parsing.
+///
+/// `php -n` 8.5.6 answers `syntax error, unexpected end of file` for the fragment `123`,
+/// which is the same reason clause asserted here.
 #[test]
 fn test_eval_integer_argument_is_coerced_then_parse_checked() {
-    let err = compile_and_run_expect_failure("<?php eval(123);");
+    let out = compile_and_run_expect_parse_error("<?php eval(123);");
     assert!(
-        err.contains("Parse error: eval() fragment is invalid"),
-        "stderr did not contain eval parse diagnostic: {err}"
+        out.contains("Parse error: syntax error, unexpected end of file")
+            && out.contains(" : eval()'d code on line 1"),
+        "stdout did not contain the eval parse diagnostic: {out}"
     );
 }
 
@@ -5393,6 +5912,89 @@ echo $items["name"];
     assert_eq!(out, "Grace");
 }
 
+/// Verifies eval splits a shared native associative array before a keyed mutation.
+#[test]
+fn test_eval_assoc_array_write_preserves_native_by_value_alias() {
+    let out = compile_and_run(
+        r#"<?php
+$items = ["name" => "Ada"];
+$snapshot = $items;
+eval('$items["name"] = "Grace";');
+echo $items["name"] . ":" . $snapshot["name"];
+"#,
+    );
+    assert_eq!(out, "Grace:Ada");
+}
+
+/// Verifies eval splits an associative array it created itself before a keyed mutation.
+#[test]
+fn test_eval_created_assoc_array_write_preserves_by_value_alias() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$items = ["name" => "Ada"]; $snapshot = $items; $items["name"] = "Grace"; echo $items["name"] . ":" . $snapshot["name"];');
+"#,
+    );
+    assert_eq!(out, "Grace:Ada");
+}
+
+/// Verifies an eval-created associative array crosses an AOT `array` parameter as raw hash storage.
+#[test]
+fn test_eval_assoc_array_typed_method_keyed_write_uses_raw_hash_payload() {
+    let out = compile_and_run(
+        r#"<?php
+class ConfigWriter {
+    public function writeConfigEnabled(array $config): string {
+        $config["enabled"] = "changed";
+        return $config["enabled"];
+    }
+}
+$config = eval('return ["enabled" => "old"];');
+echo (new ConfigWriter())->writeConfigEnabled($config) . ":" . $config["enabled"];
+"#,
+    );
+    assert_eq!(out, "changed:old");
+}
+
+/// Verifies eval passes an associative array by reference to an AOT `array` parameter as raw hash storage.
+#[test]
+fn test_eval_assoc_array_by_ref_aot_method_keyed_write_uses_raw_hash_payload() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalConfigWriter {
+    public function write(array &$config): void {
+        $config["enabled"] = "changed";
+    }
+}
+$writer = new EvalConfigWriter();
+eval('$config = ["enabled" => "old"]; $writer->write($config); echo $config["enabled"];');
+"#,
+    );
+    assert_eq!(out, "changed");
+}
+
+/// Verifies eval preserves raw hash representation through nested AOT array calls and by-reference writes.
+#[test]
+fn test_eval_assoc_array_nested_aot_by_ref_write_uses_raw_hash_payload() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalConfigWriter {
+    public function load(array $config): string {
+        $this->write($config["section"]);
+
+        return $config["section"]["enabled"];
+    }
+
+    private function write(array &$config): void {
+        $config["enabled"] = "changed";
+    }
+}
+$writer = new EvalConfigWriter();
+eval('$config = ["section" => ["enabled" => "old"]]; echo $writer->load($config);');
+"#,
+    );
+    assert_eq!(out, "changed");
+}
+
 /// Verifies eval can create and read associative array literals with string keys.
 #[test]
 fn test_eval_assoc_array_literal_and_string_key_read() {
@@ -5462,7 +6064,7 @@ echo $items["name"];
 /// outer `$v`, and `test_eval_nested_eval_return_value_is_expression_result` just below.
 #[test]
 fn test_eval_nested_eval_uses_same_scope() {
-    let err = compile_and_run_expect_failure(
+    let out = compile_and_run_expect_parse_error(
         r#"<?php
 $x = 1;
 eval('eval("$x = $x + 4;");');
@@ -5470,9 +6072,9 @@ echo $x;
 "#,
     );
     assert!(
-        err.contains("Parse error: eval() fragment is invalid"),
+        out.contains("Parse error: syntax error, unexpected token \"=\""),
         "the interpolated fragment assigns to a literal and must be refused, as reference PHP \
-         refuses it; stderr was: {err}"
+         refuses it with `syntax error, unexpected token \"=\"`; stdout was: {out}"
     );
 }
 
@@ -6719,6 +7321,10 @@ echo function_exists("rand"); echo function_exists("mt_rand"); echo function_exi
 
 /// Verifies eval `spl_classes()` exposes the same `ext/spl` class list as native code (the
 /// shared catalog's SPL module: `Exception` is SPL's `LogicException` parent but is Core).
+///
+/// The count and both probed positions are PHP's own: `php -n` 8.5.10 answers 55 classes with
+/// `AppendIterator` first, `UnderflowException` at 53 and `UnexpectedValueException` at 54.
+/// It was 54 while the catalog was missing `RecursiveTreeIterator`.
 #[test]
 fn test_eval_dispatches_spl_classes_builtin_calls() {
     let out = compile_and_run(
@@ -6736,7 +7342,7 @@ echo function_exists("spl_classes"); echo is_callable("spl_classes");');
     );
     assert_eq!(
         out,
-        "54:AppendIterator:UnexpectedValueException:exception:list:call:spread:11"
+        "55:AppendIterator:UnderflowException:exception:list:call:spread:11"
     );
 }
 
@@ -7253,11 +7859,11 @@ echo in_array("crc32c", $algos) ? "crc" : "bad";
 $call = call_user_func("hash_algos");
 echo ":" . $call[18];
 $spread = call_user_func_array("hash_algos", []);
-echo ":" . $spread[27] . ":";
+echo ":" . $spread[27] . ":" . $spread[28] . ":";
 echo function_exists("hash_algos") ? "exists" : "missing";');
 "#,
     );
-    assert_eq!(out, "28:md2:sha256:crc:whirlpool:joaat:exists");
+    assert_eq!(out, "29:md2:sha256:crc:whirlpool:joaat:xxh128:exists");
 }
 
 /// Verifies eval one-shot hash digest builtins use the crypto bridge.
@@ -7697,13 +8303,15 @@ echo getenv(name: "ELEPHC_EVAL_ENV_TEST") . ":";
 echo call_user_func("getenv", "ELEPHC_EVAL_ENV_TEST") . ":";
 echo call_user_func_array("putenv", ["assignment" => "ELEPHC_EVAL_ENV_TEST=spread"]) ? "set" : "bad";
 echo ":" . getenv("ELEPHC_EVAL_ENV_TEST") . ":";
+echo getenv()["ELEPHC_EVAL_ENV_TEST"] . ":";
+echo getenv(null, true)["ELEPHC_EVAL_ENV_TEST"] . ":";
 putenv("ELEPHC_EVAL_ENV_TEST");
 echo getenv("ELEPHC_EVAL_ENV_TEST") === false ? "missing" : "bad";
 echo ":"; echo function_exists("getenv");
 echo function_exists("putenv");');
 "#,
     );
-    assert_eq!(out, "direct:named:named:set:spread:missing:11");
+    assert_eq!(out, "direct:named:named:set:spread:spread:spread:missing:11");
 }
 
 /// Verifies eval `putenv()` raises PHP's exact `ValueError` across direct and callable dispatch.
@@ -8055,6 +8663,155 @@ echo function_exists("preg_match") && function_exists("preg_match_all") && funct
         out,
         "1:3:id42:id:42:0:3:2:3:b22:a:22:2:2:a1:a:22:b:0::-1:b:0:b22:3:0:4:b22:3:1:4:n:b:n:n:-1:n:-1:n:b:n:n:-1:n:-1:3:0:0:0:1-a 2-b:[A][B]:2:a:b,c:2:b:1:aN:3:,:a:0:b,c:2:3:,:1:b:3:ab12:ab:12:2:b2:2:ID:2:y:1"
     );
+}
+
+/// Verifies eval replacement limits and by-reference counters match direct compiled calls.
+#[test]
+fn test_eval_preg_replace_limit_and_count() {
+    let out = compile_and_run_with_regex(
+        r#"<?php
+eval('$count = 99;
+$result = preg_replace("/a/", "x", "aaaa", 2, $count);
+echo $result . ":" . $count . ":";
+$named = 99;
+$result = preg_replace(subject: "aaa", count: $named, replacement: "y", pattern: "/a/");
+echo $result . ":" . $named . ":";
+$callbackCount = 99;
+$result = preg_replace_callback("/a/", function($matches) { return "z"; }, "aaa", 2, $callbackCount);
+echo $result . ":" . $callbackCount;');
+"#,
+    );
+    assert_eq!(out, "xxaa:2:yyy:3:zza:2");
+}
+
+/// Verifies interpreted by-value array semantics: a parameter written by the callee stays the
+/// callee's copy, and a by-value `foreach` visits every element even when the body unsets
+/// entries of the same variable.
+#[test]
+fn test_eval_by_value_arrays_are_copies_for_params_and_foreach() {
+    let out = compile_and_run(
+        r#"<?php
+eval('function eval_plain_copy(array $p, int $d): array { $p[] = $d; if ($d < 2) { eval_plain_copy($p, $d + 1); } return $p; }
+function eval_sorted_ids(array $ids): array { asort($ids); return $ids; }
+echo implode(",", eval_plain_copy([], 0)), "|";
+$a = ["x", "y", "z"];
+foreach ($a as $k => $v) { if ($k == 0) { unset($a[1]); } echo $v; }
+echo "|";
+$b = eval_sorted_ids(["z", ".h", "a"]);
+foreach ($b as $k => $v) { if ($v[0] === ".") { unset($b[$k]); continue; } echo $v; }
+echo "|", implode(",", $b), "\n";');
+"#,
+    );
+    assert_eq!(out, "0|xyz|az|a,z\n");
+}
+
+/// Verifies a closure created in one compiled frame's eval context is callable from another's,
+/// and that a closure, array or object stored on a stdClass from eval reads back intact.
+#[test]
+fn test_eval_closure_crosses_contexts_and_survives_a_stdclass_property() {
+    let out = compile_and_run_with_regex(
+        r##"<?php
+function eval_ctx_a(): object {
+    eval('class EvalCtxBag { public function get(string $k): string { return "v:" . $k; } }
+    final class EvalCtxHolder { public \Closure $fetch; public function __construct(EvalCtxBag $p) { $this->fetch = $p->get(...); }
+        public function run(): string { return ($this->fetch)("a"); } }');
+    return eval('return new EvalCtxHolder(new EvalCtxBag());');
+}
+function eval_ctx_b(object $h): string {
+    return eval('return $h->run() . "|" . ($h->fetch)("b");');
+}
+echo eval_ctx_b(eval_ctx_a()), "\n";
+eval('$f = static function ($m) { return "<" . $m[1] . ">"; };
+$s = new \stdClass();
+$s->f = $f; $s->arr = [1, 2]; $s->o = new \ArrayObject([1]); $s->i = 5;
+echo gettype($s->f), " ", gettype($s->arr), " ", gettype($s->o), " ", gettype($s->i), " ";
+echo preg_replace_callback("#x(\\d)#", $s->f, "x1"), "\n";');
+"##,
+    );
+    assert_eq!(out, "v:a|v:b\nobject array object integer <1>\n");
+}
+
+/// Verifies eval's `str_replace` / `str_ireplace` write the by-reference replacement count.
+#[test]
+fn test_eval_str_replace_writes_its_count() {
+    let out = compile_and_run(
+        r#"<?php
+eval('namespace EvalCountNs;
+$c = str_replace(["a", "b"], "x", "abcab", $n);
+$e = \str_ireplace("A", "z", "aAa", $k);
+echo $c, " ", $n, " ", $e, " ", $k, "\n";');
+"#,
+    );
+    assert_eq!(out, "xxcxx 4 zzz 3\n");
+}
+
+/// Verifies a method returning a static property or class constant hands the caller its own
+/// reference: reassigning the caller's local must not release the class's cell.
+#[test]
+fn test_eval_returned_static_property_survives_the_callers_reassignment() {
+    let out = compile_and_run(
+        r#"<?php
+eval('final class EvalReturnedStatic {
+    private static $enc = "UTF-8";
+    const NAME = "const-" . "cell";
+    public static function get() { return self::$enc; }
+    public static function name() { return self::NAME; }
+    public static function run() {
+        $e = self::get(); $e = "x";
+        $n = self::name(); $n = "y";
+        return self::$enc . "|" . self::NAME;
+    }
+}
+echo EvalReturnedStatic::run(), " ", EvalReturnedStatic::run(), " ", EvalReturnedStatic::get(), "\n";');
+"#,
+    );
+    assert_eq!(out, "UTF-8|const-cell UTF-8|const-cell UTF-8\n");
+}
+
+/// Verifies eval passes an int or null to a compiled function's `?int` parameter as the value,
+/// not as the address of the box holding it.
+#[test]
+fn test_eval_call_passes_a_nullable_int_argument_to_a_compiled_function() {
+    let out = compile_and_run(
+        r#"<?php
+function eval_nullable_int_target(?string $s, ?int $n = 1, ?string $e = null): string {
+    return var_export($s, true) . ':' . var_export($n, true) . ':' . var_export($e, true);
+}
+echo eval_nullable_int_target('a', 2), "\n";
+eval('echo eval_nullable_int_target("b", 2), "\n";
+echo eval_nullable_int_target("c", null, "x"), "\n";
+echo eval_nullable_int_target("d"), "\n";');
+"#,
+    );
+    assert_eq!(out, "'a':2:NULL\n'b':2:NULL\n'c':NULL:'x'\n'd':1:NULL\n");
+}
+
+/// Verifies eval reports a `/u` match on invalid UTF-8 the way php does: `preg_match` false,
+/// `preg_replace` null, while a valid subject keeps its ordinary results.
+#[test]
+fn test_eval_preg_utf8_modifier_fails_on_invalid_subject() {
+    let out = compile_and_run_with_regex(
+        r#"<?php
+$bin = $argc > 0 ? "ab\xff\xfecd" : 'x';
+eval('var_dump(preg_match("//u", $bin));
+var_dump(preg_replace("/[\\\\p{Cc}]++/u", "", $bin));
+var_dump(preg_match("/b/u", $bin, $m), count($m), preg_match("/b/u", "abc"));');
+"#,
+    );
+    assert_eq!(out, "bool(false)\nNULL\nbool(false)\nint(0)\nint(1)\n");
+}
+
+/// Verifies dynamic evaluation preserves the `A` modifier's anchored-at-offset semantics.
+#[test]
+fn test_eval_preg_match_anchored_modifier() {
+    let out = compile_and_run_with_regex(
+        r#"<?php
+eval('$late = preg_match("/foo/A", "xxfoo", $lateMatches, 0, 0);
+$atOffset = preg_match("/foo/A", "xxfoo", $offsetMatches, 0, 2);
+echo $late . ":" . count($lateMatches) . "|" . $atOffset . ":" . $offsetMatches[0];');
+"#,
+    );
+    assert_eq!(out, "0:0|1:foo");
 }
 
 /// Verifies eval `preg_replace_callback()` accepts general callable forms.
@@ -9345,13 +10102,25 @@ try {
 Error:Object of class EvalBuiltinSprintfPlain could not be converted to string|\
 Error:Object of class Closure could not be converted to string|"
     );
+    // php appends ` in FILE(N) : eval()'d code on line N` to every warning; the temporary path
+    // is not part of the contract, so the location is checked for presence and then dropped.
+    let messages = output
+        .stderr
+        .lines()
+        .map(|line| {
+            let (message, location) = line.rsplit_once(" in ").expect("a warning carries its location");
+            assert!(location.contains("eval()'d code on line "), "{line}");
+            message
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     assert_eq!(
-        output.stderr,
+        messages,
         "Warning: Array to string conversion\n\
 Warning: Object of class EvalBuiltinSprintfPlain could not be converted to int\n\
 Warning: Object of class EvalBuiltinSprintfPlain could not be converted to float\n\
 Warning: Object of class Closure could not be converted to int\n\
-Warning: Object of class Closure could not be converted to float\n"
+Warning: Object of class Closure could not be converted to float"
     );
 }
 
@@ -9970,11 +10739,17 @@ echo eval('return (PHP_EOL === "\n" ? "eol" : "bad") . ":" .
     (defined("PHP_OS") ? "defined" : "bad") . ":" .
     (defined("\\\\PHP_OS") ? "root" : "bad") . ":" .
     (defined("php_os") ? "bad" : "case") . ":" .
-    (define("PHP_OS", "x") ? "bad" : "locked");');
+    (define("PHP_OS", "x") ? "bad" : "locked") . ":" .
+    (T_START_HEREDOC === 398 ? "token" : "bad") . ":" .
+    (T_WHITESPACE === 397 ? "space" : "bad") . ":" .
+    (T_COMMENT === 392 ? "comment" : "bad");');
 "#,
     );
     assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "eol:os:/:int:defined:root:case:locked");
+    assert_eq!(
+        out.stdout,
+        "eol:os:/:int:defined:root:case:locked:token:space:comment"
+    );
     assert!(
         out.stderr
             .contains("Warning: define(): Constant already defined"),
@@ -10046,12 +10821,16 @@ fn test_eval_missing_dynamic_constant_fetch_fails() {
 }
 
 /// Verifies invalid eval fragments report the dedicated parse-error diagnostic.
+///
+/// `php -n` 8.5.6 answers `Unclosed '('` here, from a bracket-matching pass this parser does
+/// not run; the shape asserted is elephc's own reason clause for the truncated fragment.
 #[test]
 fn test_eval_parse_error_reports_eval_parse_diagnostic() {
-    let err = compile_and_run_expect_failure("<?php eval('if (');");
+    let out = compile_and_run_expect_parse_error("<?php eval('if (');");
     assert!(
-        err.contains("Parse error: eval() fragment is invalid"),
-        "stderr did not contain eval parse-error diagnostic: {err}"
+        out.contains("Parse error: syntax error, unexpected end of file")
+            && out.contains(" : eval()'d code on line 1"),
+        "stdout did not contain the eval parse-error diagnostic: {out}"
     );
 }
 
@@ -10068,11 +10847,12 @@ fn assert_eval_failure_contains(source: &str, expected: &str) -> String {
 /// Verifies eval parse failures retain their stable user-facing diagnostic.
 #[test]
 fn test_eval_error_contract_reports_parse_failure() {
-    let stderr = assert_eval_failure_contains(
-        "<?php eval('if (');",
-        "Parse error: eval() fragment is invalid",
+    let stdout = compile_and_run_expect_parse_error("<?php eval('if (');");
+    assert!(
+        stdout.contains("Parse error: syntax error, unexpected end of file"),
+        "stdout did not contain the eval parse diagnostic: {stdout}"
     );
-    assert_no_rust_panic_leaked(&stderr);
+    assert_no_rust_panic_leaked(&stdout);
 }
 
 /// Verifies unsupported eval syntax retains its stable user-facing diagnostic.
@@ -10122,11 +10902,15 @@ echo eval('return define("EvalErrorContractConst", 2) ? "bad" : "ok";');
 /// Verifies malformed input, builtin failure, and non-callables do not leak Rust panics.
 #[test]
 fn test_eval_bridge_failure_paths_do_not_leak_rust_panics() {
+    // The parse diagnostic now travels on standard output, where PHP writes it, so it is
+    // checked separately from the rows whose fatals are still written to standard error.
+    let parse_stdout = compile_and_run_expect_parse_error("<?php eval('if (');");
+    assert!(
+        parse_stdout.contains("Parse error: syntax error, unexpected end of file"),
+        "stdout did not contain the eval parse diagnostic: {parse_stdout}"
+    );
+    assert_no_rust_panic_leaked(&parse_stdout);
     for (source, expected) in [
-        (
-            "<?php eval('if (');",
-            "Parse error: eval() fragment is invalid",
-        ),
         (
             "<?php eval('clamp(5, 10, 0);');",
             "Fatal error: eval() runtime failed",
@@ -10861,6 +11645,34 @@ echo ":" . $g;
     assert_eq!(out, "2:2");
 }
 
+/// Eval'd code inside a function reaches top-level variables through `global`, shadows them
+/// without it, and its read params are released.
+///
+/// With no compiled `global $g` anywhere, the top-level `$g` lived in main's frame slot, so
+/// `eval('global $g; $g = 7;')` in a function wrote a global main never read; once the name is
+/// program-global, the AOT fragment path must still not sync globals into a FUNCTION's eval
+/// scope (`$g = 5` there only shadows). The boxed null an unset `isset($zz)` read was passed as
+/// leaked once per call. Expected output is `php -n` 8.5's; the heap must end clean.
+#[test]
+fn test_eval_in_function_reaches_globals_only_through_global() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$g = 1;
+function shadow() { eval('$g = 5;'); }
+function reach() { eval('global $g; $g = 7;'); }
+function probe() { $n = 4; eval('echo $n + 1, isset($zz) ? "s" : "u", "|";'); }
+shadow();
+echo $g, "|";
+reach();
+echo $g, "|";
+for ($i = 0; $i < 5; $i++) { probe(); }
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1|7|5u|5u|5u|5u|5u|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Verifies unsetting an eval global alias does not unset the actual global value.
 #[test]
 fn test_eval_global_alias_unset_keeps_global_storage() {
@@ -10893,6 +11705,41 @@ echo $g;
 "#,
     );
     assert_eq!(out, "4");
+}
+
+/// Verifies a function local bound to a global's reference cell reaches eval as that global:
+/// `global $g` and `$h = &$g` both see fragment writes, inside the fragment through `$GLOBALS`
+/// and after it. A reference to a plain local keeps working the same way.
+#[test]
+fn test_eval_reference_to_global_bound_local_writes_the_global() {
+    let out = compile_and_run(
+        r#"<?php
+$g = 1;
+function via_global() {
+    global $g;
+    eval('$r =& $g; $r = 4; echo $GLOBALS["g"], ",";');
+    echo $g, ",";
+}
+function via_other_name() {
+    global $g;
+    $h = &$g;
+    eval('$z =& $h; $z = 5;');
+    echo $h, ",", $g, ",";
+}
+function local_reference() {
+    $r = 1;
+    $h = &$r;
+    eval('$y =& $h; $y = 9;');
+    echo $r, ",", $h, ",";
+}
+via_global();
+echo $g, ";";
+via_other_name();
+echo $g, ";";
+local_reference();
+"#,
+    );
+    assert_eq!(out, "4,4,4;5,5,5;9,9,");
 }
 
 /// Verifies top-level eval fragments can read CLI `$argc` and `$argv`.
@@ -12303,6 +13150,107 @@ echo (new EvalMethodArrayArgBox())->run();
 "#,
     );
     assert_eq!(out, "3:2");
+}
+
+/// Verifies eval preserves associative arrays across AOT method return and argument boundaries.
+#[test]
+fn test_eval_fragment_bridges_associative_array_method_values() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalMethodHashArrayBridgeBox {
+    private function items(): array {
+        return ['answer' => 42, 'other' => 7];
+    }
+
+    public function countItems(array $items): int {
+        return count($items);
+    }
+
+    public static function countItemsStatic(array $items): int {
+        return count($items);
+    }
+
+    public function run(): string {
+        return eval('$items = $this->items(); return $this->countItems($items) . ":" . self::countItemsStatic($items) . ":" . $items["answer"];');
+    }
+}
+
+echo (new EvalMethodHashArrayBridgeBox())->run();
+"#,
+    );
+    assert_eq!(out, "2:2:42");
+}
+
+/// Verifies eval can pass a private AOT kernel-parameter map into an array-typed method.
+#[test]
+fn test_eval_fragment_passes_private_kernel_parameter_map_to_aot_method() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalKernelParameterBag {
+    private array $parameters = [];
+
+    public function add(array $parameters): void {
+        foreach ($parameters as $name => $value) {
+            $this->parameters[$name] = $value;
+        }
+    }
+
+    public function has(string $name): bool {
+        return array_key_exists($name, $this->parameters);
+    }
+}
+
+class EvalKernelParameterBagChild extends EvalKernelParameterBag {}
+
+class EvalKernelParameterSource {
+    private array $bundles = [];
+    private string $environment = 'dev';
+    private bool $debug = false;
+
+    private function getAllowedEnvs(): array {
+        return ['prod', 'dev', 'test'];
+    }
+
+    private function getLogDir(): mixed {
+        return null;
+    }
+
+    private function getOptionalParameters(): mixed {
+        $directory = $this->getLogDir();
+
+        return null !== $directory ? ['kernel.logs_dir' => $directory] : [];
+    }
+
+    private function getBaseKernelParameters(): array {
+        $bundles = [];
+        $bundlesMetadata = [];
+        $knownEnvs = array_flip($this->getAllowedEnvs());
+
+        return [
+            'kernel.debug' => $this->debug,
+            'kernel.bundles' => $bundles,
+            'kernel.bundles_metadata' => $bundlesMetadata,
+            '.container.known_envs' => array_keys($knownEnvs),
+        ] + $this->getOptionalParameters();
+    }
+
+    private function getKernelParameters(): array {
+        $parameters = $this->getBaseKernelParameters();
+        $parameters['kernel.environment'] = $this->environment;
+        $parameters['kernel.charset'] = 'UTF-8';
+
+        return $parameters;
+    }
+
+    public function run(): bool {
+        return eval('$bag = new EvalKernelParameterBagChild(); $bag->add($this->getKernelParameters()); return $bag->has("kernel.debug");');
+    }
+}
+
+var_dump((new EvalKernelParameterSource())->run());
+"#,
+    );
+    assert_eq!(out, "bool(true)\n");
 }
 
 /// Verifies eval fragments can pass iterable arguments to AOT methods and constructors.
@@ -14404,7 +15352,13 @@ echo ":" . \EvalBarrierNs\DYN_EVAL_BARRIER_CONST;
     assert_eq!(out, "fcdFICD:fn:9");
 }
 
-/// Verifies eval-aware dynamic probes do not leak into sibling functions without a barrier.
+/// Verifies a function without an eval barrier still sees a function another function's eval
+/// declared, once that eval has run.
+///
+/// PHP's function table is process-global, so php 8.5.10 prints `NYY`: the third probe runs after
+/// `eval_with_barrier_probe()` declared the function. This test used to pin `NYN`, the answer of
+/// a literal `function_exists()` folded at compile time in a frame with no eval barrier -- the
+/// same fold that told Symfony a polyfill's runtime-declared `grapheme_extract()` did not exist.
 #[test]
 fn test_eval_barrier_is_not_inherited_by_sibling_functions() {
     let out = compile_and_run(
@@ -14421,7 +15375,7 @@ echo eval_with_barrier_probe();
 echo eval_no_barrier_probe();
 "#,
     );
-    assert_eq!(out, "NYN");
+    assert_eq!(out, "NYY");
 }
 
 /// Verifies callable probes inside eval inspect dynamic functions and supported builtins.
@@ -15977,9 +16931,12 @@ $box = new EvalReturnBadScalar();
 echo $box->id();');
 "#,
     );
+    // Oracle: `php -n` 8.5 throws this TypeError; it used to be a generic bridge fatal.
     assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
+        err.contains(
+            "Uncaught TypeError: EvalReturnBadScalar::id(): Return value must be of type int, string returned"
+        ),
+        "stderr did not contain php's return-type TypeError: {err}"
     );
 
     let err = compile_and_run_expect_failure(
@@ -16006,9 +16963,12 @@ $child = new EvalReturnStaticRuntimeChild();
 $child->make();');
 "#,
     );
+    // Oracle: `php -n` 8.5 names the class `static` resolved to and the object's eval class.
     assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
+        err.contains(
+            "Uncaught TypeError: EvalReturnStaticRuntimeBase::make(): Return value must be of type EvalReturnStaticRuntimeChild, EvalReturnStaticRuntimeBase returned"
+        ),
+        "stderr did not contain php's static return TypeError: {err}"
     );
 
     let err = compile_and_run_expect_failure(
@@ -17938,6 +18898,133 @@ class EvalMissingAbstractHookBox extends EvalMissingAbstractHookBase {}');
     );
 }
 
+/// An interpreted foreach resumes its generator, or calls its Iterator's `next()`/`current()`, on
+/// the foreach line. The body's own line markers were still current on the second iteration, so a
+/// backtrace taken there named the last body line: Twig live-component ids, which hash the trace
+/// lines, came out different from php's.
+#[test]
+fn test_dynamic_include_foreach_resumes_on_the_foreach_line() {
+    let dir = make_cli_test_dir("elephc_eval_include_foreach_resume_line");
+    fs::write(
+        dir.join("lines.php"),
+        r#"<?php
+final class Lines {
+    public function gen() {
+        yield (new Error(""))->getTrace()[0]["line"];
+        yield (new Error(""))->getTrace()[0]["line"];
+    }
+    public function drive(): string {
+        $seen = [];
+        foreach ($this->gen() as $line) {
+            $seen[] = $line;
+        }
+        return implode(",", $seen);
+    }
+}
+final class It implements Iterator {
+    private int $i = 0;
+    public function current(): mixed { return (new Error(""))->getTrace()[0]["line"]; }
+    public function key(): mixed { return $this->i; }
+    public function next(): void { $this->i++; }
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < 2; }
+}
+function driveIt(): string {
+    $seen = [];
+    foreach (new It() as $line) {
+        $seen[] = $line;
+    }
+    return implode(",", $seen);
+}
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+foreach ([__DIR__ . '/lines.php'] as $file) {
+    require $file;
+}
+echo (new Lines())->drive(), "|", driveIt(), "\n";
+"#,
+    )
+    .unwrap();
+
+    let compile = elephc_cli_command(&dir)
+        .args(["--quiet", "main.php"])
+        .output()
+        .expect("failed to invoke elephc CLI");
+    assert!(
+        compile.status.success(),
+        "fixture failed to compile: {}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let run = Command::new(dir.join("main"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run foreach line fixture");
+    assert!(
+        run.status.success(),
+        "fixture failed: stdout={:?} stderr={}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "9,9|25,25\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a runtime include can claim the matching class body already compiled by AOT discovery.
+#[test]
+fn test_dynamic_eval_include_claims_matching_aot_class_once() {
+    let dir = make_cli_test_dir("elephc_eval_include_claims_matching_aot_class_once");
+    fs::write(
+        dir.join("autoloaded.php"),
+        r#"<?php
+class EvalIncludedAotClaim {
+    private static $loader;
+    public static function read() {
+        return self::$loader === null ? "ok" : "bad";
+    }
+}
+return EvalIncludedAotClaim::read();
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+if ($argc < 0) {
+    require __DIR__ . '/autoloaded.php';
+}
+$code = $argc > 1 ? $argv[1] : 'return require __DIR__ . "/autoloaded.php";';
+echo eval($code);
+"#,
+    )
+    .unwrap();
+
+    let compile = elephc_cli_command(&dir)
+        .args(["--quiet", "main.php"])
+        .output()
+        .expect("failed to invoke elephc CLI");
+    assert!(
+        compile.status.success(),
+        "fixture failed to compile: {}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let run = Command::new(dir.join("main"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run eval include fixture");
+    assert!(
+        run.status.success(),
+        "fixture failed: stdout={:?} stderr={}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "ok");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies eval-declared static properties and static methods work through the bridge.
 #[test]
 fn test_eval_declared_static_members_and_late_static_binding() {
@@ -17950,6 +19037,7 @@ eval('class EvalStaticCounter {
         return self::$count;
     }
 }
+
 class EvalStaticBase {
     protected static int $n = 2;
     public static function add($x) {
@@ -20075,7 +21163,35 @@ echo count($r->getMethods()); echo ":";
 echo get_class_methods("EvalAotOnlyReflectableContract")[0] ?? "none";');
 "#,
     );
+    // php reports the declared spelling (`php -n` 8.5: `H:1:aotLabel`).
     assert_eq!(out, "H:1:aotLabel");
+}
+
+/// Verifies eval ReflectionClass materializes only members of the selected AOT class.
+#[test]
+fn test_eval_aot_reflection_member_lists_grow_from_matching_members() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotReflectionMemberListParent {}
+
+class EvalAotReflectionMemberListTarget extends EvalAotReflectionMemberListParent {
+    public string $first = "one";
+    private int $second = 2;
+
+    public function __construct(string $value = "") {}
+    public function alpha(string $value): string { return $value; }
+    protected function beta(array $items = []): int { return count($items); }
+    private static function gamma(?object $value = null): bool { return $value === null; }
+}
+
+echo eval('$reflection = new ReflectionClass("EvalAotReflectionMemberListTarget");
+$methods = $reflection->getMethods();
+$properties = $reflection->getProperties();
+echo count($methods) . ":" . $methods[1]->getName() . ":" . count($properties) . ":" . $properties[1]->getName() . ":";
+echo $reflection->getConstructor()->getName() . ":" . $reflection->getParentClass()->getName();');
+"#,
+    );
+    assert_eq!(out, "4:alpha:2:second:__construct:EvalAotReflectionMemberListParent");
 }
 
 /// Verifies eval interface `#[Override]` can target a generated/AOT parent interface.
@@ -21247,6 +22363,9 @@ echo EvalClassNameChild::staticName();');
 }
 
 /// Verifies eval-declared class attributes expose names and supported literal args.
+///
+/// `newInstance()` on an attribute whose class nothing declares throws php's `Attribute class
+/// "X" not found`; it used to answer null, which also hid the missing autoload of a real one.
 #[test]
 fn test_eval_declared_class_attribute_metadata() {
     let out = compile_and_run_capture(
@@ -21273,7 +22392,12 @@ echo $attrArgs[5] . ":";
 echo count($attrArgs[6]) . ":" . $attrArgs[6][0] . ":" . $attrArgs[6][1] . ":";
 $tagArgs = $attrs[1]->getArguments();
 echo $attrs[1]->getName() . ":" . $tagArgs[0] . ":";
-echo is_null($attrs[0]->newInstance()) ? "N" : "bad";');
+try {
+    $attrs[0]->newInstance();
+    echo "bad";
+} catch (\Error $e) {
+    echo $e->getMessage();
+}');
 "#,
     );
     assert!(
@@ -21283,7 +22407,7 @@ echo is_null($attrs[0]->newInstance()) ? "N" : "bad";');
     );
     assert_eq!(
         out.stdout,
-        "3:Route:Tag:Tag:7:/home:-1:1.5:T:N:EvalAttrDep:2:nested:2:first:3:Route:7:/home:-1:1.5:T:N:EvalAttrDep:2:nested:2:Tag:first:N"
+        "3:Route:Tag:Tag:7:/home:-1:1.5:T:N:EvalAttrDep:2:nested:2:first:3:Route:7:/home:-1:1.5:T:N:EvalAttrDep:2:nested:2:Tag:first:Attribute class \"Route\" not found"
     );
 }
 
@@ -21510,7 +22634,7 @@ echo $enum->getStartLine(); echo ":"; echo $enum->getEndLine();');
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "F:2:2:F:5:5:F:6:6:F:7:7");
+    assert_eq!(out.stdout, "F:2:4:F:5:5:F:6:6:F:7:7");
 }
 
 /// Verifies eval ReflectionMethod exposes generated/AOT source-location metadata.
@@ -23326,6 +24450,7 @@ echo $untyped->getType() === null ? "N" : "n";
     );
     assert_eq!(
         out.stdout,
+        // php 8.5 agrees: `int|string` lists `string` before `int`.
         "H:stringB,intB:n:D?EvalAotReflectPropertyTypeDepC:S?intB:B?stringB:uN"
     );
 }
@@ -23657,6 +24782,28 @@ try {
         out.stdout,
         "RBm:runUsEvalAotReflectMethodChild:SP:lockedFUEvalAotReflectMethodBase:4RBL:1S:1H:0:Method EvalAotReflectMethodChild::missing() does not exist"
     );
+}
+
+/// Verifies `getMethod()` on an eval-declared class finds a method its compiled parent declares,
+/// as `hasMethod()` already did, and that the builtin `Closure` reflects its own methods.
+#[test]
+fn test_eval_class_get_method_reaches_its_compiled_parent_and_closure_methods() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalGetMethodBase { public function setName(string $name): static { return $this; } }
+eval('class EvalGetMethodChild extends EvalGetMethodBase { public function own(): void {} }');
+$r = new ReflectionClass('EvalGetMethodChild');
+echo $r->hasMethod('setName') ? 'has' : 'no', ' ';
+$m = $r->getMethod('setName');
+echo $m->class, ' ', $m->getNumberOfParameters(), ' ';
+$c = new ReflectionClass(Closure::class);
+$from = $c->getMethod('fromCallable');
+echo count($c->getMethods()), ' ', $from->isStatic() ? 'static' : 'inst', ' ';
+echo $from->getParameters()[0]->getName(), ':', (string) $from->getReturnType();
+"#,
+    );
+    assert!(out.success, "program failed: stderr={}", out.stderr);
+    assert_eq!(out.stdout, "has EvalGetMethodBase 1 7 static callback:Closure");
 }
 
 /// Verifies eval reports declaring classes for inherited generated/AOT methods and constructors.
@@ -24261,10 +25408,13 @@ return $target->join("1", "2", "3", "4", "5", "6", "7", "8", "9")
     assert_eq!(out, "123456789|abcdefghi|ABCDEFGHI");
 }
 
-/// Verifies generated/AOT variadic bridge rejects named arguments captured by the tail.
+/// Verifies the generated/AOT variadic bridge collects a named argument into the tail.
+///
+/// Oracle: `php -n` 8.5 prints `1` -- since PHP 8.1 an unknown named argument lands in a
+/// variadic as a string key. The bridge used to refuse the call with a generic eval fatal.
 #[test]
-fn test_eval_aot_variadic_method_rejects_named_tail() {
-    let err = compile_and_run_expect_failure(
+fn test_eval_aot_variadic_method_collects_named_tail() {
+    let out = compile_and_run(
         r#"<?php
 class EvalAotVariadicNamedTailTarget {
     public function collect(...$items): int {
@@ -24272,13 +25422,10 @@ class EvalAotVariadicNamedTailTarget {
     }
 }
 eval('$target = new EvalAotVariadicNamedTailTarget();
-$target->collect(named: "A");');
+echo $target->collect(named: "A");');
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
+    assert_eq!(out, "1");
 }
 
 /// Verifies eval ReflectionMethod exposes generated/AOT declared type metadata.
@@ -25079,6 +26226,7 @@ echo $unionType;
     );
     assert_eq!(
         out.stdout,
+        // php 8.5 agrees: `int|string|null` renders as `string|int|null`.
         "dep:?EvalReflectTypeStringDep|union:string|int|null|both:EvalReflectTypeStringLeft&EvalReflectTypeStringRight|mixed:mixed|items:?array|cast:string|int|null|concat:string|int|null|echo:string|int|null"
     );
 }
@@ -25461,6 +26609,7 @@ echo ":" . $box->value;');
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
+    // php 8.5 lists `int|string` members as `string`, `int` (its canonical order).
     assert_eq!(out.stdout, "string:2:stringB:intB:2:7");
 }
 
@@ -26468,6 +27617,7 @@ echo $plain->getReturnType() === null ? "Q" : "q";');
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
+    // php 8.5 agrees: `int|string` lists `string` before `int`.
     assert_eq!(out.stdout, "T:int:N:B:2:stringBintB:never:n:B:p:Q");
 }
 
@@ -27390,6 +28540,7 @@ $box = eval('class EvalDestructEscapedBox {
     public function __construct($name) { $this->name = $name; }
     public function __destruct() { echo "drop:" . $this->name . ":"; }
 }
+
 return new EvalDestructEscapedBox("A");');
 echo "before:";
 unset($box);
@@ -27397,6 +28548,136 @@ echo "after";
 "#,
     );
     assert_eq!(out, "before:drop:A:after");
+}
+
+/// Verifies an eval expression statement releases the final fluent AOT object result.
+#[test]
+fn test_eval_discarded_native_fluent_result_runs_destructor() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalNativeFluentDestructor {
+    public function finish(): static { return $this; }
+    public function __destruct() { echo "drop:"; }
+}
+eval('(static function () { $value = new EvalNativeFluentDestructor(); $value->finish(); })();');
+echo "after";
+"#,
+    );
+    assert_eq!(out, "drop:after");
+}
+
+/// Verifies an explicit unset releases an AOT object stored in an eval closure scope.
+#[test]
+fn test_eval_closure_unset_native_object_runs_destructor() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalNativeUnsetDestructor {
+    public function __destruct() { echo "drop:"; }
+}
+eval('(static function () { $value = new EvalNativeUnsetDestructor(); unset($value); })();');
+echo "after";
+"#,
+    );
+    assert_eq!(out, "drop:after");
+}
+
+/// Verifies an ignored fresh fluent object returned by an AOT factory is finalized in eval.
+#[test]
+fn test_eval_discarded_native_factory_fluent_result_runs_destructor() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalNativeFactoryFluent {
+    public function finish(): static { return $this; }
+    public function __destruct() { echo "drop:"; }
+}
+class EvalNativeFactory {
+    public function create(): EvalNativeFactoryFluent {
+        $configurator = new EvalNativeFactoryFluent();
+        return $configurator->finish();
+    }
+}
+eval('(static function () { (new EvalNativeFactory())->create(); })();');
+echo "after";
+"#,
+    );
+    assert_eq!(out, "drop:after");
+}
+
+/// Verifies each temporary receiver in an eval fluent chain is released after its next call.
+#[test]
+fn test_eval_discarded_native_factory_fluent_chain_runs_destructor() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalNativeFluentChain {
+    public function set(): static { return $this; }
+    public function args(): static { return $this; }
+    public function __destruct() { echo "drop:"; }
+}
+class EvalNativeFluentChainFactory {
+    public function create(): EvalNativeFluentChain {
+        return new EvalNativeFluentChain();
+    }
+}
+eval('(static function () { (new EvalNativeFluentChainFactory())->create()->set()->args(); })();');
+echo "after";
+"#,
+    );
+    assert_eq!(out, "drop:after");
+}
+
+/// Verifies a dynamic fluent method can transfer its own receiver to the next call safely.
+#[test]
+fn test_eval_discarded_dynamic_fluent_chain_runs_destructor() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalDynamicFluentChain {
+    public function set() { return $this; }
+    public function args() { return $this; }
+    public function __destruct() { echo "drop:"; }
+}
+(new EvalDynamicFluentChain())->set()->args();');
+echo "after";
+"#,
+    );
+    assert_eq!(out, "drop:after");
+}
+
+/// Verifies eval executes a negated assignment on the right side of a logical disjunction.
+#[test]
+fn test_eval_logical_disjunction_negated_assignment() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalLogicalAssignmentReceiver {
+    public function isAnonymous(): bool { return false; }
+    public function getClosureCalledClass(): string { return "Named"; }
+}
+eval('$receiver = new EvalLogicalAssignmentReceiver(); if ($receiver->isAnonymous() || !$class = $receiver->getClosureCalledClass()) { echo "unexpected:"; } echo $class;');
+"#,
+    );
+    assert_eq!(out, "Named");
+}
+
+/// Verifies a closure returned by eval finalizes an ignored native fluent result when invoked later.
+#[test]
+fn test_returned_eval_closure_releases_native_fluent_result() {
+    let out = compile_and_run(
+        r#"<?php
+class ReturnedEvalFluent {
+    public function finish(): static { return $this; }
+    public function __destruct() { echo "drop:"; }
+}
+class ReturnedEvalFactory {
+    public function create(): ReturnedEvalFluent {
+        $value = new ReturnedEvalFluent();
+        return $value->finish();
+    }
+}
+$callback = eval('return static function () { (new ReturnedEvalFactory())->create(); };');
+$callback();
+echo "after";
+"#,
+    );
+    assert_eq!(out, "drop:after");
 }
 
 /// Explicit collection runs eval-declared destructors after their cyclic objects lose external roots.
@@ -28826,6 +30107,23 @@ echo class_exists("evalnativeclassexistsaot") ? "Y" : "N";
     assert_eq!(out, "Y");
 }
 
+/// Verifies a dynamically sourced eval barrier still sees declared AOT classes without autoloading.
+#[test]
+fn test_dynamic_eval_barrier_keeps_nonliteral_aot_class_exists_without_autoload() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalDynamicAotClassExists {}
+function has_aot_class_after_dynamic_eval(mixed $name): bool {
+    return class_exists($name, false);
+}
+$source = '$marker = 1;';
+eval($source);
+echo has_aot_class_after_dynamic_eval(EvalDynamicAotClassExists::class) ? "Y" : "N";
+"#,
+    );
+    assert_eq!(out, "Y");
+}
+
 /// Verifies duplicate eval-declared classes fail through the runtime bridge.
 #[test]
 fn test_eval_duplicate_declared_class_fails() {
@@ -29896,13 +31194,43 @@ echo eval('$box = new EvalDynamicNewNoCtorArgs(99); return $box->x;');
     assert_eq!(out, "4");
 }
 
+/// A `string` parameter given an object without `__toString()` throws php's TypeError inside
+/// eval; only a string CONTEXT (`(string) $o`) throws the conversion Error.
+///
+/// Oracle: `php -n` 8.5 prints the three lines asserted below. The builtins used to convert
+/// first and raised the conversion Error for all three.
+#[test]
+fn test_eval_string_parameter_rejects_a_non_stringable_object_with_a_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('
+    $out = [];
+    try { $out[] = strlen(new stdClass()); } catch (\TypeError $e) { $out[] = "T:" . $e->getMessage(); } catch (\Error $e) { $out[] = "E:" . $e->getMessage(); }
+    try { $out[] = (string) new stdClass(); } catch (\Error $e) { $out[] = "E:" . $e->getMessage(); }
+    try { $out[] = str_repeat(new stdClass(), 2); } catch (\TypeError $e) { $out[] = "T:" . $e->getMessage(); } catch (\Error $e) { $out[] = "E:" . $e->getMessage(); }
+    return implode("|", $out);
+');
+"#,
+    );
+    assert_eq!(
+        out,
+        "T:strlen(): Argument #1 ($string) must be of type string, stdClass given\
+         |E:Object of class stdClass could not be converted to string\
+         |T:str_repeat(): Argument #1 ($string) must be of type string, stdClass given"
+    );
+}
+
 /// Verifies eval object construction fails when no AOT class matches the name.
+///
+/// Oracle: `php -n` 8.5 prints `Fatal error: Uncaught Error: Class "EvalDynamicNewMissingClass"
+/// not found`. The bridge used to report a generic `eval() runtime failed` here; the missing class
+/// is now a real `Error` thrown from the interpreter.
 #[test]
 fn test_eval_dynamic_new_missing_class_fails() {
     let err = compile_and_run_expect_failure("<?php eval('new EvalDynamicNewMissingClass();');");
     assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
+        err.contains("Uncaught Error: Class \"EvalDynamicNewMissingClass\" not found"),
+        "stderr did not contain php's missing-class error: {err}"
     );
 }
 
@@ -29992,6 +31320,313 @@ echo eval('return include "eval-plain-piece.txt";');
 "#,
     );
     assert_eq!(out, "OT:RAW1");
+}
+
+/// Verifies a runtime-included file may bind a reference to a property of `$this`.
+///
+/// `$knownTagVersions = &$this->knownTagVersions;` sits at
+/// `vendor/symfony/cache/Adapter/TagAwareAdapter.php:290` and refused to parse, which killed the
+/// whole Symfony request: the interpreter's parser accepted only a plain variable after `=&`,
+/// while PHP accepts any assignable expression.
+///
+/// Reference value captured from `php -n` (PHP 8.5.6): `a,b;a,b,c;done`.
+#[test]
+fn test_eval_include_binds_a_reference_to_an_object_property() {
+    let out = compile_and_run(
+        r#"<?php
+$piece = __DIR__ . "/eval-ref-source-bind.php";
+file_put_contents($piece, '<?php
+class RefBagInc {
+    public array $known = ["a"];
+    public function share(): array {
+        $shared = &$this->known;
+        $shared[] = "b";
+        return $this->known;
+    }
+}
+$bag = new RefBagInc();
+echo implode(",", $bag->share());
+echo ";";
+$alias = &$bag->known;
+$alias[] = "c";
+echo implode(",", $bag->known);
+');
+include $piece;
+echo ";done";
+"#,
+    );
+    assert_eq!(out, "a,b;a,b,c;done");
+}
+
+/// Verifies `eval()` binds a reference to every assignable source PHP accepts after `=&`.
+///
+/// Object property, array element, static property and nested array element each name storage
+/// the interpreter can alias; before this they were all `Parse error: eval() fragment is
+/// invalid`, because the grammar demanded a bare `$name`.
+///
+/// Reference value captured from `php -n` (PHP 8.5.6): `a,b;9,2;1,2;7;done`.
+#[test]
+fn test_eval_binds_a_reference_to_every_assignable_source() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class RefBagEval { public array $known = ["a"]; }
+$bag = new RefBagEval();
+$alias = &$bag->known;
+$alias[] = "b";
+echo implode(",", $bag->known);
+echo ";";
+$a = [1, 2];
+$r = &$a[0];
+$r = 9;
+echo implode(",", $a);
+echo ";";
+class RefStatEval { public static array $v = [1]; }
+$s = &RefStatEval::$v;
+$s[] = 2;
+echo implode(",", RefStatEval::$v);
+echo ";";
+$n = ["k" => ["deep" => 1]];
+$d = &$n["k"]["deep"];
+$d = 7;
+echo $n["k"]["deep"];
+');
+echo ";done";
+"#,
+    );
+    assert_eq!(out, "a,b;9,2;1,2;7;done");
+}
+
+/// Verifies variable-to-variable aliasing keeps PHP's symmetric semantics.
+///
+/// This is the one reference source that must NOT travel through the new lvalue path: PHP
+/// aliases two scope names, so writing either name is visible through the other, which the
+/// scope's named-alias table models and a one-way write-back to a reference target does not.
+///
+/// Reference value captured from `php -n` (PHP 8.5.6): `2:9:9`.
+#[test]
+fn test_eval_variable_reference_alias_stays_symmetric() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$a = 1;
+$b = &$a;
+$a = 2;
+echo $b;
+echo ":";
+$b = 9;
+echo $a;
+echo ":";
+echo $b;');
+"#,
+    );
+    assert_eq!(out, "2:9:9");
+}
+
+/// Verifies `$x = &f()` in eval follows php: a by-value callee binds a copy after a notice, and
+/// a by-reference callee aliases its result.
+///
+/// `php -n` 8.5.6 raises `Only variables should be assigned by reference` (E_NOTICE) for the
+/// by-value callee and assigns the value; `function &f()` returning a static is aliased, so the
+/// write through the binding is visible on the next call.
+#[test]
+fn test_eval_reference_to_a_call_result_follows_php() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function ($no, $message) { echo "[", $no, ":", $message, "]"; return true; });
+eval('function eval_ref_src() { return 1; } $x = &eval_ref_src(); var_dump($x); $x++; echo $x, "\n";');
+eval('function &eval_ref_ok() { static $s = 5; return $s; } $y = &eval_ref_ok(); $y++; echo $y, "|", eval_ref_ok(), "\n";');
+"#,
+    );
+    assert_eq!(
+        out,
+        "[8:Only variables should be assigned by reference]int(1)\n2\n6|6\n"
+    );
+}
+
+/// Verifies repeated string-key writes from included code keep an `array`-declared
+/// property keyed.
+///
+/// The first write promotes the empty indexed payload to hash storage in place, so every
+/// later bridge read of that property must report the LIVE container kind. Boxing the
+/// declared `array` shape instead made the second write "promote" an already-promoted
+/// hash, which rewrote entry 0 as `int(0) => int(5)` and silently lost the first key.
+#[test]
+fn test_eval_bridge_string_key_writes_into_an_empty_array_property_stay_keyed() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag { public array $items = []; }
+$piece = __DIR__ . "/eval-array-prop-writes.php";
+file_put_contents($piece, '<?php $bag->items["b"] = 2; $bag->items["a"] = 1;');
+$bag = new Bag();
+include $piece;
+echo count($bag->items) . ";";
+echo implode(",", array_keys($bag->items)) . ";";
+foreach ($bag->items as $k => $v) { echo $k . "=" . $v . ","; }
+echo ";" . $bag->items["b"] . $bag->items["a"];
+"#,
+    );
+    assert_eq!(out, "2;b,a;b=2,a=1,;21");
+}
+
+/// Verifies included code reads back an `array`-declared property after its payload
+/// became hash storage.
+///
+/// `isset()`, the keyed element read, `count()` and `array_keys()` all run inside the
+/// interpreter here, so each one goes through the property getter that must box the
+/// promoted hash as an associative Mixed value rather than as an indexed one.
+#[test]
+fn test_eval_bridge_reads_an_array_property_promoted_to_hash_storage() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag { public array $items = []; }
+$piece = __DIR__ . "/eval-array-prop-read.php";
+file_put_contents($piece, '<?php
+$bag->items["b"] = 2;
+echo isset($bag->items["b"]) ? "Y" : "N";
+echo $bag->items["b"];
+$bag->items["a"] = 1;
+echo count($bag->items);
+echo implode(",", array_keys($bag->items));
+');
+$bag = new Bag();
+include $piece;
+echo ";" . count($bag->items) . ";" . implode(",", array_keys($bag->items));
+"#,
+    );
+    assert_eq!(out, "Y22b,a;2;b,a");
+}
+
+/// Verifies a service-container shape: nested runtime includes that register services
+/// under string keys on an `array`-declared property of the calling AOT object.
+///
+/// The inner include runs while the outer one is still on the stack, so the promoted
+/// hash has to survive a second bridge write from a different activation. Losing the
+/// first key made the container re-`require` an already-loaded factory file, which then
+/// aborted on the class redeclaration.
+#[test]
+fn test_eval_bridge_nested_includes_register_services_under_string_keys() {
+    let out = compile_and_run(
+        r#"<?php
+class Cont {
+    public array $services = [];
+    public function load(string $file): void { require $file; }
+    public function keys(): string { return implode(",", array_keys($this->services)); }
+}
+$outer = __DIR__ . "/eval-container-outer.php";
+$inner = __DIR__ . "/eval-container-inner.php";
+file_put_contents($outer, '<?php $this->load("' . $inner . '"); $this->services["a"] = 1;');
+file_put_contents($inner, '<?php $this->services["b"] = 2;');
+$c = new Cont();
+$c->load($outer);
+echo $c->keys() . ";";
+echo $c->services["b"] . $c->services["a"];
+"#,
+    );
+    assert_eq!(out, "b,a;21");
+}
+
+/// Verifies `instanceof` answers for an object whose class another eval context declared.
+///
+/// The relation has to be decided by the class table of the context that DECLARED the object.
+/// Resolving that context's class *name* against the asking context's own table loses the class
+/// whenever the asker never declared one of that name, and the probe then answers a definite
+/// false for every relation — its own class included. Every letter here is the value `php -n`
+/// prints: an upper-case letter is a true relation, its lower-case twin a false one.
+#[test]
+fn test_eval_bridge_instanceof_answers_from_the_declaring_context() {
+    let out = compile_and_run(
+        r#"<?php
+$decl = __DIR__ . "/eval-instanceof-owner-decl.php";
+file_put_contents($decl, '<?php
+interface EvalOwnerIface { public function values(): array; }
+class EvalOwnerRef {
+    public function __construct(private string $id) {}
+    public function __toString(): string { return $this->id; }
+}
+class EvalOwnerArg implements EvalOwnerIface {
+    private array $held;
+    public function __construct(mixed $value) { $this->held = [$value]; }
+    public function values(): array { return $this->held; }
+}
+class EvalOwnerBase {}
+class EvalOwnerChild extends EvalOwnerBase { public function __construct() {} }
+return [new EvalOwnerArg(new EvalOwnerRef("a")), new EvalOwnerRef("b"), new EvalOwnerChild()];');
+
+function probe(mixed $v, mixed $argTarget, mixed $refTarget): string {
+    eval('$seed = 1;');
+    if ($v === null) { $v = new EvalOwnerArg(1); }
+    return get_class($v)
+        . ":" . ($v instanceof EvalOwnerArg ? "A" : "a")
+        . ($v instanceof EvalOwnerIface ? "I" : "i")
+        . ($v instanceof EvalOwnerChild ? "C" : "c")
+        . ($v instanceof EvalOwnerBase ? "B" : "b")
+        . ($v instanceof EvalOwnerRef ? "R" : "r")
+        . (!$v instanceof EvalOwnerRef ? "N" : "n")
+        . ($v instanceof $argTarget ? "O" : "o")
+        . ($v instanceof $refTarget ? "P" : "p")
+        . (is_a($v, "EvalOwnerIface") ? "J" : "j")
+        . (is_subclass_of($v, "EvalOwnerBase") ? "K" : "k");
+}
+
+$values = include $decl;
+foreach ($values as $v) { echo probe($v, $values[0], $values[1]), ";"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "EvalOwnerArg:AIcbrNOpJk;EvalOwnerRef:aicbRnoPjk;EvalOwnerChild:aiCBrNopjK;"
+    );
+}
+
+/// Verifies the service-locator wrapping loop keeps its `instanceof` guards across eval contexts.
+///
+/// This is Symfony's `ServiceLocatorTagPass::register()` reduced to its decisions: an already
+/// wrapped argument must be kept as-is, and only a reference may become the new string key. When
+/// the relation probe loses the class, the first element is wrapped a second time and the second
+/// element's key is stringified — both observable in the wrapped keys, which is what this asserts.
+#[test]
+fn test_eval_bridge_instanceof_guards_the_service_locator_wrapping_loop() {
+    let out = compile_and_run(
+        r#"<?php
+$decl = __DIR__ . "/eval-instanceof-locator-decl.php";
+file_put_contents($decl, '<?php
+interface LocatorArgumentIface { public function getValues(): array; }
+class LocatorRef {
+    public function __construct(private string $id) {}
+    public function __toString(): string { return $this->id; }
+}
+class LocatorClosureArg implements LocatorArgumentIface {
+    private array $values;
+    public function __construct(mixed $value = []) { $this->values = [$value]; }
+    public function getValues(): array { return $this->values; }
+}
+return [new LocatorClosureArg(new LocatorRef("a")), new LocatorRef("b"), "k" => new LocatorRef("c")];');
+
+function wrapAll(mixed $values): string {
+    eval('$seed = 1;');
+    if ($values === null) { $values = [new LocatorClosureArg(1)]; }
+    $out = "";
+    $services = [];
+    $i = 0;
+    foreach ($values as $k => $v) {
+        $out .= ($v instanceof LocatorClosureArg ? "S" : "s");
+        $out .= ($v instanceof LocatorRef ? "R" : "r");
+        $out .= ($v instanceof LocatorArgumentIface ? "A" : "a");
+        if ($v instanceof LocatorClosureArg) { $services[$k] = $v; $out .= "=kept;"; continue; }
+        if ($i === $k) {
+            if ($v instanceof LocatorRef) { $k = (string) $v; }
+            ++$i;
+        } elseif (is_int($k)) { $i = null; }
+        $services[$k] = new LocatorClosureArg($v);
+        $out .= "=wrapped:" . $k . ";";
+    }
+    return $out . "count=" . count($services);
+}
+
+$values = include $decl;
+echo wrapAll($values);
+"#,
+    );
+    assert_eq!(out, "SrA=kept;sRa=wrapped:1;sRa=wrapped:k;count=3");
 }
 
 /// Verifies missing eval require aborts through the runtime eval fatal path.
@@ -30133,12 +31768,17 @@ echo $x;
 }
 
 /// Verifies the eval bridge maps PHP opening tags inside fragments to parse diagnostics.
+///
+/// `php -n` 8.5.6 lexes the tag as text and answers
+/// `syntax error, unexpected token "<", expecting end of file`; this parser refuses the whole
+/// tag, so it names `token "<?php"` in the same reason clause.
 #[test]
 fn test_eval_fragment_with_php_opening_tag_reports_parse_error() {
-    let err = compile_and_run_expect_failure("<?php eval('<?php echo 1;');");
+    let out = compile_and_run_expect_parse_error("<?php eval('<?php echo 1;');");
     assert!(
-        err.contains("Parse error: eval() fragment is invalid"),
-        "stderr did not contain eval parse diagnostic: {err}"
+        out.contains("Parse error: syntax error, unexpected token \"<?php\"")
+            && out.contains(" : eval()'d code on line 1"),
+        "stdout did not contain the eval parse diagnostic: {out}"
     );
 }
 
@@ -30194,10 +31834,8 @@ try {
 /// `throw Exception: nested boom in /path…;` — a syntax error. Neither `bad` nor `caught:` is ever
 /// printed. That the fragment is REFUSED is the behaviour worth pinning.
 ///
-/// The failure MODE still differs and is a pre-existing divergence, not one this change
-/// introduced: reference PHP reports a recoverable parse error and continues, while elephc treats
-/// an unparseable eval fragment as fatal (the same `Fatal error: eval() runtime failed` every
-/// other invalid-fragment test in this file asserts). Only WHICH fragments are invalid moved here.
+/// The inner fragment's `ParseError` is an `Error`, so the `catch (Exception)` does not take it
+/// and it ends the script with php's message, located at the nested eval'd code.
 ///
 /// The scalar case is the positive half and is verified separately: `eval('eval("echo $v + 1;");')`
 /// with `$v = 41` prints `42` in both, so interpolation reaches nested fragments correctly.
@@ -30215,7 +31853,8 @@ try {
 "#,
     );
     assert!(
-        err.contains("Fatal error: eval() runtime failed"),
+        err.contains("Parse error: syntax error, unexpected token \":\" in ")
+            && err.contains("(4) : eval()'d code(1) : eval()'d code on line 1"),
         "an interpolated Exception makes the inner fragment unparseable, as it does in reference \
          PHP; stderr was: {err}"
     );
@@ -30359,6 +31998,2660 @@ echo ":"; echo intval("42");');
     assert_eq!(out, "34:26:5:34:0:42:9223372036854775807:42");
 }
 
+/// `extract()` materializes PHP's default empty prefix for its one- and two-argument forms.
+#[test]
+fn test_extract_optional_flags_and_prefix_defaults() {
+    let out = compile_and_run(
+        r#"<?php
+function render_extract_defaults(array $context): void {
+    $name = "kept";
+    extract($context, EXTR_SKIP);
+    echo $name, ":", $value, "|";
+    extract(["name" => "overwritten"]);
+    echo $name;
+}
+render_extract_defaults(["name" => "ignored", "value" => 42]);
+"#,
+    );
+    assert_eq!(out, "kept:42|overwritten");
+}
+
+/// `extract()` inside an eval fragment reaches the interpreter's direct hook, its only
+/// implementation. Without `source_arguments` it took the evaluated-argument route and every call
+/// failed as an unsupported function: Laravel's `Filesystem::getRequire()` died on it.
+#[test]
+fn test_eval_extract_reaches_its_direct_hook() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$a = ["x" => 1]; extract($a); echo $x, "|";');
+eval('function viaFn($d) { $y = "kept"; extract($d, EXTR_SKIP); return $y . ":" . $z; } echo viaFn(["y" => 2, "z" => 3]), "|";');
+eval('namespace Fs; class K { function m($d) { return (static function () use ($d) { extract($d); return $w; })(); } } echo (new K)->m(["w" => 4]);');
+"#,
+    );
+    assert_eq!(out, "1|kept:3|4");
+}
+
+/// Verifies runtime-included code constructs a builtin Throwable the compiled program never names.
+///
+/// Oracle: `php -n` 8.5.6 prints the asserted line and exits 0. Before the fix the binary printed
+/// `Fatal error: eval() runtime failed` and exited 1 at the second class. The eval constructor
+/// bridge emits a helper for every name in `BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES` whenever the
+/// bridge is linked, but the class metadata that `__rt_new_by_name` scans carried only the eight
+/// throwables seeded unconditionally — so `Exception` worked and the SPL hierarchy allocated null.
+#[test]
+fn test_runtime_included_code_throws_builtin_exceptions_the_program_never_names() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "loaded.php",
+                r#"<?php
+foreach (['RuntimeException', 'LogicException', 'InvalidArgumentException', 'ReflectionException', 'DomainException'] as $class) {
+    try {
+        throw new $class('boom');
+    } catch (\Throwable $error) {
+        echo get_class($error), ':', $error->getMessage(), '|';
+    }
+}
+"#,
+            ),
+            (
+                "main.php",
+                "<?php\n$path = __DIR__ . '/loaded.php';\ninclude $path;\necho 'done';\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "RuntimeException:boom|LogicException:boom|InvalidArgumentException:boom|",
+            "ReflectionException:boom|DomainException:boom|done"
+        )
+    );
+}
+
+/// Verifies runtime-included code constructs an AOT class that INHERITS a builtin Throwable's
+/// constructor, and reads the inherited final getters back off it.
+///
+/// Oracle: `php -n` 8.5.10 prints the asserted line and exits 0. Before the fix the binary
+/// printed `Fatal error: eval() runtime failed: unsupported NewObject expression` and exited 1,
+/// and with only the constructor half fixed it got one step further and died on `getMessage()`
+/// with `unsupported MethodCall expression`.
+///
+/// The shape matters and a simpler one does NOT reproduce it: `AotEx` must be compiled AOT and
+/// must declare NO constructor of its own. A builtin Throwable's `__construct` and its four
+/// final getters have no EIR body — AOT `new Exception(...)` lowers to a runtime helper — so a
+/// class inheriting them can never get a constructor/method slot, and it matched neither the
+/// builtin-id dispatch (its own id is not a builtin id) nor the slot table. An eval-DECLARED
+/// subclass takes a different path entirely and passed throughout. This is Symfony's
+/// `EnvNotFoundException`, which blocked the `--web` request at `EnvVarProcessor.php:224`.
+#[test]
+fn test_runtime_included_code_constructs_an_aot_class_inheriting_a_builtin_throwable_constructor() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "loaded.php",
+                r#"<?php
+try {
+    throw new AotEx('boom');
+} catch (\Throwable $error) {
+    echo get_class($error), ':', $error->getMessage(), ':', $error->getCode(), ':', ($error->getLine() > 0 ? 'line' : 'noline'), '|';
+}
+"#,
+            ),
+            (
+                "main.php",
+                concat!(
+                    "<?php\n",
+                    "class AotEx extends InvalidArgumentException {}\n",
+                    "$path = __DIR__ . '/loaded.php';\n",
+                    "include $path;\n",
+                    "echo 'done';\n",
+                ),
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "AotEx:boom:0:line|done");
+}
+
+/// Verifies `class_exists()` runs an autoloader registered by runtime-included code.
+///
+/// Oracle: `php -n` 8.5.6 prints `loader:MissingWithAutoload|no|no|done`. PHP's second parameter
+/// defaults to true and means "ask the registered autoloaders"; the loader therefore runs once,
+/// for the first probe only. Before the fix the interpreter's `class_exists` consulted the eval
+/// declarations and the AOT name table and stopped there, so the loader never ran at all.
+#[test]
+fn test_class_exists_runs_a_loader_registered_by_runtime_included_code() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "loaded.php",
+                r#"<?php
+spl_autoload_register(function ($name) { echo 'loader:', $name, '|'; });
+echo class_exists('MissingWithAutoload') ? 'yes' : 'no', '|';
+echo class_exists('MissingWithoutAutoload', false) ? 'yes' : 'no', '|';
+"#,
+            ),
+            (
+                "main.php",
+                "<?php\n$path = __DIR__ . '/loaded.php';\ninclude $path;\necho 'done';\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "loader:MissingWithAutoload|no|no|done");
+}
+
+/// Verifies `interface_exists()`, `trait_exists()` and `enum_exists()` run the same loader chain.
+///
+/// Oracle: `php -n` 8.5.6 prints `iface=y;trait=y;enum=y;calls=1;noAuto=n;callsAfter=1;done`. PHP
+/// keeps ONE callback registry for classes, interfaces, traits and enums, and all four probes ask
+/// it: the loader runs once here because the file it includes declares all three symbols, and the
+/// `false` form never asks. These three evaluated their `$autoload` argument and then threw it
+/// away, so an optional Symfony component that is present but not yet loaded answered false —
+/// `interface_exists()` is what every DI pass calls to decide whether a component is installed.
+#[test]
+fn test_interface_trait_and_enum_exists_run_the_registered_loaders() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "lazy.php",
+                "<?php\ninterface ProbeLazyIface {}\ntrait ProbeLazyTrait {}\nenum ProbeLazyEnum { case Ready; }\n",
+            ),
+            (
+                "loaded.php",
+                r#"<?php
+$calls = 0;
+spl_autoload_register(function ($name) use (&$calls) {
+    $calls = $calls + 1;
+    include __DIR__ . '/lazy.php';
+});
+echo 'iface=', interface_exists('ProbeLazyIface') ? 'y' : 'n', ';';
+echo 'trait=', trait_exists('ProbeLazyTrait') ? 'y' : 'n', ';';
+echo 'enum=', enum_exists('ProbeLazyEnum') ? 'y' : 'n', ';';
+echo 'calls=', $calls, ';';
+echo 'noAuto=', interface_exists('ProbeNeverIface', false) ? 'y' : 'n', ';';
+echo 'callsAfter=', $calls, ';';
+"#,
+            ),
+            (
+                "main.php",
+                "<?php\n$path = __DIR__ . '/loaded.php';\ninclude $path;\necho 'done';\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        "iface=y;trait=y;enum=y;calls=1;noAuto=n;callsAfter=1;done"
+    );
+}
+
+/// Verifies a Throwable raised inside an autoloader reaches the interpreted code that asked.
+///
+/// Oracle: `php -n` 8.5.6 prints the asserted line and exits 0. This is Symfony's
+/// `ClassExistenceResource` shape: a temporary loader whose only job is to raise
+/// `ReflectionException` for a class it cannot provide, caught at the `class_exists()` and
+/// `new \ReflectionClass()` call sites. `class_exists()` must THROW, not answer false.
+#[test]
+fn test_a_throwing_autoloader_reaches_the_interpreted_caller_that_asked() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "loaded.php",
+                r#"<?php
+spl_autoload_register(function ($name) {
+    throw new \ReflectionException(sprintf('Class "%s" not found.', $name));
+});
+try {
+    echo class_exists('MissingThrows') ? 'yes' : 'no', '|';
+} catch (\Throwable $error) {
+    echo 'caught:', get_class($error), ':', $error->getMessage(), '|';
+}
+try {
+    $reflection = new \ReflectionClass('MissingReflected');
+    echo 'reflected:', $reflection->getName(), '|';
+} catch (\Throwable $error) {
+    echo 'caught:', get_class($error), ':', $error->getMessage(), '|';
+}
+"#,
+            ),
+            (
+                "main.php",
+                "<?php\n$path = __DIR__ . '/loaded.php';\ninclude $path;\necho 'done';\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "caught:ReflectionException:Class \"MissingThrows\" not found.|",
+            "caught:ReflectionException:Class \"MissingReflected\" not found.|done"
+        )
+    );
+}
+
+/// Verifies an autoloader's Throwable escapes the include and is caught by compiled code.
+///
+/// Oracle: `php -n` 8.5.6 prints the asserted line and exits 0. The catch that takes it is in the
+/// AOT file, so the throwable has to cross the bridge as status 3 carrying its object rather than
+/// collapsing into the anonymous status-2 fatal that ends the process.
+#[test]
+fn test_a_throwing_autoloader_escapes_the_include_into_a_compiled_catch() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "loaded.php",
+                r#"<?php
+spl_autoload_register(function ($name) {
+    throw new \ReflectionException(sprintf('Class "%s" not found.', $name));
+});
+class_exists('MissingEscapes');
+echo 'unreached|';
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+$path = __DIR__ . '/loaded.php';
+try {
+    include $path;
+    echo 'returned|';
+} catch (\Throwable $error) {
+    echo 'aot-caught:', get_class($error), ':', $error->getMessage(), '|';
+}
+echo 'done';
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        "aot-caught:ReflectionException:Class \"MissingEscapes\" not found.|done"
+    );
+}
+
+/// Verifies an autoloader's Throwable that nobody catches is reported the way PHP reports it.
+///
+/// Oracle: `php -n` 8.5.6 writes `Fatal error: Uncaught ReflectionException: Class
+/// "MissingUncaught" not found.` on STANDARD OUTPUT and exits 255. PHP then appends
+/// ` in <file>:<line>`, a stack trace and a `thrown in` line, which elephc's uncaught report has
+/// never emitted for a bridge-thrown object; the prefix, the stream and the exit status are what
+/// this pins. What matters is that the throwable reaches the uncaught report AT ALL rather than
+/// collapsing into `Fatal error: eval() runtime failed` on standard error with status 1.
+#[test]
+fn test_an_uncaught_autoloader_throwable_is_reported_as_php_reports_it() {
+    let dir = make_cli_test_dir("elephc_eval_uncaught_autoload_throwable");
+    fs::write(
+        dir.join("loaded.php"),
+        r#"<?php
+spl_autoload_register(function ($name) {
+    throw new \ReflectionException(sprintf('Class "%s" not found.', $name));
+});
+class_exists('MissingUncaught');
+echo 'unreached';
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main.php"),
+        "<?php\n$path = __DIR__ . '/loaded.php';\ninclude $path;\necho 'done';\n",
+    )
+    .unwrap();
+    let compile = elephc_cli_command(&dir)
+        .args(["--quiet", "./main.php"])
+        .output()
+        .expect("failed to invoke elephc CLI");
+    assert!(
+        compile.status.success(),
+        "compile failed:\n{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let run = Command::new(dir.join("main"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the uncaught autoload fixture");
+    let stdout = String::from_utf8_lossy(&run.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&run.stderr).to_string();
+    assert!(
+        stdout.contains(
+            "Fatal error: Uncaught ReflectionException: Class \"MissingUncaught\" not found."
+        ),
+        "stdout did not carry PHP's uncaught report:\n{stdout}\n{stderr}"
+    );
+    assert!(
+        !stdout.contains("unreached"),
+        "the loader's throw must abort the include:\n{stdout}"
+    );
+    assert_eq!(
+        run.status.code(),
+        Some(255),
+        "PHP exits 255 for an uncaught Throwable"
+    );
+    assert_no_rust_panic_leaked(&stderr);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a bridge runtime failure that is not a Throwable names its cause, file and line.
+///
+/// The status-2 fatal used to be a fixed string in the generated assembly, which could name none
+/// of the three. It is now written by `__elephc_eval_report_runtime_fatal` in the bridge, which
+/// keeps that string as its prefix — so every caller reading the old diagnostic still reads it —
+/// and appends what the interpreter recorded. The line is the `eval()` call site, which is the
+/// line PHP names too (`… in Command line code(1) : eval()'d code:1`).
+#[test]
+fn test_an_eval_runtime_failure_names_its_cause_and_call_site() {
+    let stderr = assert_eval_failure_contains(
+        "<?php\n$code = $argc > 1 ? $argv[1] : 'return MissingEvalContractConst;';\neval($code);\n",
+        "Fatal error: eval() runtime failed: undefined constant \"MissingEvalContractConst\" in ",
+    );
+    // php names the fragment by its call site: `test.php(3) : eval()'d code`.
+    assert!(
+        stderr.contains("test.php(3) : eval()'d code"),
+        "the fatal did not name the eval() call site: {stderr}"
+    );
+    assert_no_rust_panic_leaked(&stderr);
+}
+
+/// Verifies a runtime include runs the PHP syntax a whole vendor tree was refused for.
+///
+/// Every construct here was measured against the interpreter's parser over the 1543 PHP files of
+/// `examples/symfony-app`: a doc comment inside a parameter list (4 files, and the one that killed
+/// the Symfony request), `declare(strict_types=1)` (4), a comma-separated `for` clause (10), `self`
+/// as a closure parameter type inside a class (2), a disjunctive normal form property type (1), a
+/// trailing comma in an attribute argument list (1) and in a `match` arm condition list (1), and a
+/// brace opened in one `<?php … ?>` block and closed in a later one (6, every error-page template).
+///
+/// Reference value captured from `php -n` (PHP 8.5.6) running the included file directly:
+/// `3;01:S1Bag:null;hit;tail[in][alt]done`.
+#[test]
+fn test_eval_include_runs_the_php_syntax_the_interpreter_parser_refused() {
+    let out = compile_and_run(
+        r#"<?php
+$piece = __DIR__ . "/eval-source-syntax-piece.php";
+file_put_contents($piece, '<?php
+declare(strict_types=1);
+
+function s1_doc(/** @var int */ int $a, /** @var int */ int $b): int { return $a + $b; }
+
+class S1Bag
+{
+    protected (Countable&ArrayAccess)|null $slot = null;
+
+    public function frame(): string
+    {
+        $out = "";
+        for ($i = 0, $n = 3; $i < $n; ++$i, --$n) {
+            $out .= $i;
+        }
+        $pick = static fn (self $bag) => get_class($bag);
+        return $out . ":" . $pick($this) . ":" . (null === $this->slot ? "null" : "set");
+    }
+}
+
+echo s1_doc(/** here */ 1, 2), ";";
+echo (new S1Bag())->frame(), ";";
+$x = "a";
+echo match ($x) { "a", "b", => "hit", default => "miss" }, ";";
+?>
+tail<?php if (true) { ?>[in]<?php } ?>
+<?php if (false): ?>no<?php else: ?>[alt]<?php endif ?>
+done');
+include $piece;
+"#,
+    );
+    assert_eq!(out, "3;01:S1Bag:null;hit;tail[in][alt]done");
+}
+
+/// Verifies a runtime include applies an attribute whose argument list ends with a comma.
+///
+/// `#[AsCommand(name: 'error:dump', description: '…',)]` sits at
+/// `symfony/error-handler/Command/ErrorDumpCommand.php:35`; the trailing comma made the whole file
+/// unparseable, so the class never existed.
+///
+/// The attribute's own metadata is not asserted here on purpose: `new ReflectionClass()` on a class
+/// declared by a runtime-included file is a separate, pre-existing gap — it fails with
+/// `Fatal error: eval() runtime failed` on the block loop this commit replaced just as it does on
+/// the whole-file entry, so it is not this change's to fix. What is asserted is the consequence
+/// that matters: before, the trailing comma refused the file and the class did not exist at all.
+///
+/// Verifies a runtime include runs, and gets right, the write and reference shapes it refused.
+///
+/// Every construct here was measured over the 1543 PHP files of `examples/symfony-app`: a write
+/// through a chain deeper than one property or one index (21 files), a by-reference binding whose
+/// value is used (`ClassExistenceResource::throwOnRequiredClass`, the loader every Symfony
+/// `class_exists()` reaches), a reference bound into an element of a property (1), an assignment as
+/// the right operand of `??` (5, four as `$x ?? $x = …` and Container.php as `?? … ??= …`), and a
+/// spread inside an array literal (11).
+///
+/// The spread is the one that needed a VALUE test rather than a parse test: keying each element by
+/// its position in the literal instead of by the array's running length made `[1, ...$tail, 4]`
+/// print `1,2,4` — the last element silently overwrote the spread's last entry.
+///
+/// Reference value captured from `php -n` (PHP 8.5.6) running the included file directly:
+/// `74d;2;hit:11;miss;1,2,3,4/2,3,2,3;55;2`.
+#[test]
+fn test_eval_include_runs_the_write_and_reference_shapes_the_parser_refused() {
+    let out = compile_and_run(
+        r#"<?php
+$piece = __DIR__ . "/eval-write-shapes-piece.php";
+file_put_contents($piece, '<?php
+class S2Bag
+{
+    public array $rows = [];
+    public array $seen = [];
+    public array $data = [];
+
+    public function fill(): string
+    {
+        $this->rows["k"][] = 7;
+        $this->rows["k"]["n"] = 1;
+        $this->rows["k"]["n"] += 2;
+        ++$this->rows["k"]["n"];
+        $this->seen["x"] ??= "d";
+        return $this->rows["k"][0] . $this->rows["k"]["n"] . $this->seen["x"];
+    }
+
+    public function attach(array &$rows): void
+    {
+        $this->data["bag"] = &$rows;
+    }
+}
+
+class S2Cache
+{
+    public static array $existsCache = ["a" => 1];
+
+    public function probe(string $key): string
+    {
+        if (null !== $exists = &self::$existsCache[$key]) {
+            $exists = $exists + 10;
+            return "hit:" . self::$existsCache[$key];
+        }
+        return "miss";
+    }
+}
+
+$bag = new S2Bag();
+echo $bag->fill(), ";";
+$rows = [1];
+$bag->attach($rows);
+$rows[] = 2;
+echo count($bag->data["bag"]), ";";
+$cache = new S2Cache();
+echo $cache->probe("a"), ";", $cache->probe("b"), ";";
+$tail = [2, 3];
+echo implode(",", [1, ...$tail, 4]), "/", implode(",", [...$tail, ...$tail]), ";";
+$maybe = null;
+echo $maybe ?? $maybe = 5;
+echo $maybe, ";";
+$local = ["k" => ["c" => 1]];
+++$local["k"]["c"];
+echo $local["k"]["c"];
+');
+include $piece;
+"#,
+    );
+    assert_eq!(out, "74d;2;hit:11;miss;1,2,3,4/2,3,2,3;55;2");
+}
+
+/// Verifies a runtime include destructures into every target shape PHP accepts.
+///
+/// Twelve Symfony files were refused for these: a property target
+/// (`cache/Adapter/PhpArrayAdapter.php:357`), a keyed pattern
+/// (`http-kernel/DataCollector/DumpDataCollector.php:91`), an element target
+/// (`http-foundation/ServerBag.php:67`), a keyed pattern in `foreach`
+/// (`event-dispatcher/Debug/TraceableEventDispatcher.php:160`) and a property as the `foreach` KEY
+/// (`dependency-injection/Compiler/ResolveInvalidReferencesPass.php:45`).
+///
+/// The last group is why this is a value test and not a parse test: PHP evaluates the subject of a
+/// list assignment EXACTLY ONCE, so the closure counter must read 1, and a hole must consume its
+/// position, so `[$first, , $third] = [1, 2, 3]` must give `13` and not `12`.
+///
+/// Reference value captured from `php -n` (PHP 8.5.6) running the included file directly:
+/// `98;m1n2;AB;123;pq;56;13;781`.
+#[test]
+fn test_eval_include_destructures_into_every_target_php_accepts() {
+    let out = compile_and_run(
+        r#"<?php
+$piece = __DIR__ . "/eval-destructure-shapes-piece.php";
+file_put_contents($piece, '<?php
+class S3Bag
+{
+    public $key;
+    public $x;
+    public $y;
+
+    public function take(array $pair): string
+    {
+        [$this->x, $this->y] = $pair;
+        return $this->x . $this->y;
+    }
+
+    public function walk(array $map): string
+    {
+        $out = "";
+        foreach ($map as $this->key => $value) {
+            $out .= $this->key . $value;
+        }
+        return $out;
+    }
+}
+
+$bag = new S3Bag();
+echo $bag->take([9, 8]), ";";
+echo $bag->walk(["m" => 1, "n" => 2]), ";";
+["a" => $a, "b" => $b] = ["a" => "A", "b" => "B"];
+echo $a, $b, ";";
+[[$p, $q], $r] = [[1, 2], 3];
+echo $p, $q, $r, ";";
+$slot = [];
+[$slot["u"], $slot["v"]] = ["p", "q"];
+echo $slot["u"], $slot["v"], ";";
+foreach ([["k" => 5], ["k" => 6]] as ["k" => $only]) { echo $only; }
+echo ";";
+[$first, , $third] = [1, 2, 3];
+echo $first, $third, ";";
+$calls = 0;
+$maker = function () use (&$calls) { $calls = $calls + 1; return [7, 8]; };
+[$m, $n] = $maker();
+echo $m, $n, $calls;
+');
+include $piece;
+"#,
+    );
+    assert_eq!(out, "98;m1n2;AB;123;pq;56;13;781");
+}
+
+/// Reference value captured from `php -n` (PHP 8.5.6): `marked;yes`.
+#[test]
+fn test_eval_include_declares_a_class_behind_an_attribute_with_a_trailing_comma() {
+    let out = compile_and_run(
+        r#"<?php
+$piece = __DIR__ . "/eval-trailing-comma-attribute-piece.php";
+file_put_contents($piece, '<?php
+#[Attribute]
+class S1Named { public function __construct(public string $name = "") {} }
+
+#[S1Named(
+    name: "error:dump",
+)]
+final class S1Marked {
+    public function label(): string { return "marked"; }
+}
+
+echo (new S1Marked())->label(), ";", class_exists("S1Marked") ? "yes" : "no";
+');
+include $piece;
+"#,
+    );
+    assert_eq!(out, "marked;yes");
+}
+
+/// Verifies an AOT static method registered as a loader runs from a nested autoload three contexts deep.
+///
+/// Oracle: `php -n` 8.5.6 prints
+/// `ctxA;ctxB;closure:ProbeNeedNested;ctxC;aot:ProbeNeedAot:null;n;ctxCdone;n;ctxBdone;done`.
+///
+/// Three eval contexts take part. Context A is the one the registration ABI allocates for the AOT
+/// `spl_autoload_register()` in `arm()`; context B is the runtime include that registers a closure
+/// loader and asks for `ProbeNeedNested`; context C is the file that closure includes, which asks
+/// for `ProbeNeedAot` while the first lookup is still running. Answering C's lookup means reaching
+/// back into A and calling `ProbeExistence::throwOnRequired()` — an AOT static method, named by a
+/// string, invoked with one argument although it declares two.
+///
+/// That second parameter is what the defect turned into a fatal. Context A is allocated inside the
+/// registration call, which is the request's first eval operation, so the generated module has not
+/// published its AOT metadata yet and the import that happens once at creation imports nothing. A
+/// then held no native signature for any generated class for the rest of the request, so the bridge
+/// could not learn that `$previous` has a default and called the two-parameter method with one
+/// argument; the generated by-name dispatcher refused, and the refusal surfaced as
+/// `Fatal error: eval() runtime failed`. Each loader answers a disjoint set of names so the order
+/// the two loaders run in is not what this test measures.
+#[test]
+fn test_a_nested_autoload_calls_an_aot_loader_that_left_a_parameter_to_its_default() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "nested.php",
+                r#"<?php
+echo 'ctxC;';
+echo class_exists('ProbeNeedAot') ? 'y' : 'n', ';';
+echo 'ctxCdone;';
+"#,
+            ),
+            (
+                "driver.php",
+                r#"<?php
+echo 'ctxB;';
+spl_autoload_register(function (string $class): void {
+    if (str_ends_with($class, 'NeedNested')) {
+        echo 'closure:', $class, ';';
+        $nested = __DIR__ . '/nested.php';
+        require $nested;
+    }
+});
+echo class_exists('ProbeNeedNested') ? 'y' : 'n', ';';
+echo 'ctxBdone;';
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+class ProbeExistence
+{
+    public static function throwOnRequired(string $class, ?Exception $previous = null): void
+    {
+        if (str_ends_with($class, 'NeedAot')) {
+            echo 'aot:', $class, ':', null === $previous ? 'null' : 'exc', ';';
+        }
+    }
+
+    public static function arm(): void
+    {
+        spl_autoload_register(__CLASS__ . '::throwOnRequired');
+        echo 'ctxA;';
+    }
+}
+
+ProbeExistence::arm();
+$driver = __DIR__ . '/driver.php';
+include $driver;
+echo 'done';
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        "ctxA;ctxB;closure:ProbeNeedNested;ctxC;aot:ProbeNeedAot:null;n;ctxCdone;n;ctxBdone;done"
+    );
+}
+
+/// Verifies an unqualified `debug_backtrace()` written inside a namespace resolves by name.
+///
+/// Oracle: `php -n` 8.5.6 prints `piece;main;array;0;printed;done`.
+///
+/// PHP resolves an unqualified call inside a namespace against the namespaced name first and the
+/// global name second. Compiled code hands the bridge the namespaced candidate, the bridge asked
+/// which eval context DECLARED it, no context declares a runtime handler, and the call died as
+/// `Call to undefined function Probe\Deep\Space\debug_backtrace()`. The declaration question was
+/// the wrong one to end on: the answer now comes from the same table `function_exists()` reports,
+/// which is also the table the call dispatches through, so the two cannot disagree again.
+///
+/// The probe runs at file scope on purpose. There is no caller, so php's trace is empty and the
+/// assertion measures the RESOLUTION and nothing else -- a compiled call is not yet a frame the
+/// interpreter records, which would otherwise show up as a count difference here.
+#[test]
+fn test_a_namespaced_unqualified_backtrace_call_resolves_through_the_bridge() {
+    let out = compile_and_run_files(
+        &[
+            ("piece.php", "<?php\necho 'piece;';\n"),
+            (
+                "main.php",
+                r#"<?php
+
+namespace Probe\Deep\Space;
+
+$piece = __DIR__ . '/piece.php';
+include $piece;
+$trace = debug_backtrace();
+echo 'main;', gettype($trace), ';', count($trace), ';';
+debug_print_backtrace();
+echo 'printed;done';
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "piece;main;array;0;printed;done");
+}
+
+/// Verifies an autoloader sees the class probe that started it, the frame Symfony reads.
+///
+/// Oracle: `php -n` 8.5.6 prints
+/// `piece;A[0:report|Probe\Loader\Reporter|::|NopeA;1:class_exists|-|-|NopeA;2:none;n];B[0:report|Probe\Loader\Reporter|::|NopeB;1:class_exists|-|-|NopeB;2:eval|-|-|-;n];C[0:report|Probe\Loader\Reporter|::|NopeC;1:none;2:none;Error];done`.
+///
+/// `ClassExistenceResource::throwOnRequiredClass` reads exactly `$trace[1]` and returns quietly
+/// only when that frame's `function` is one of the class probes AND it has no `class` key;
+/// anything else throws a `ReflectionException` nobody catches. Two things hid that frame. The
+/// call stack was kept per eval context while php has one per request, and the interpreter runs a
+/// callback in the context that REGISTERED it, so the loader saw only its own frame. And a probe
+/// written in COMPILED code reached the autoload chain through the bridge ABI, which recorded no
+/// frame at all where the interpreter's own probes had recorded one for a while.
+///
+/// The three triggers are the three php shapes: a compiled `class_exists()`, an interpreted one
+/// inside `eval()` -- which adds php's `eval` frame above it -- and a `new` on a missing class,
+/// where php pushes NO frame and the loader correctly sees nothing above itself.
+#[test]
+fn test_an_autoload_loader_sees_the_class_probe_frame_that_started_it() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "piece.php",
+                r#"<?php
+
+namespace Probe\Loader;
+
+class Reporter
+{
+    public static function report(string $class): void
+    {
+        $trace = debug_backtrace();
+        foreach ([0, 1, 2] as $i) {
+            if (!isset($trace[$i])) {
+                echo $i, ':none;';
+                continue;
+            }
+            $frame = $trace[$i];
+            $arg = '-';
+            if (isset($frame['args'][0])) {
+                $arg = is_string($frame['args'][0]) ? $frame['args'][0] : gettype($frame['args'][0]);
+            }
+            echo $i, ':', $frame['function'] ?? '-', '|', $frame['class'] ?? '-', '|', $frame['type'] ?? '-', '|', $arg, ';';
+        }
+    }
+}
+
+echo 'piece;';
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+
+$piece = __DIR__ . '/piece.php';
+include $piece;
+spl_autoload_register('Probe\\Loader\\Reporter::report');
+echo 'A[';
+echo class_exists('NopeA') ? 'y' : 'n';
+echo '];B[';
+eval('echo class_exists("NopeB") ? "y" : "n";');
+echo '];C[';
+try {
+    $o = new NopeC();
+    echo 'made';
+} catch (\Throwable $e) {
+    echo get_class($e);
+}
+echo '];done';
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        "piece;A[0:report|Probe\\Loader\\Reporter|::|NopeA;1:class_exists|-|-|NopeA;2:none;n];\
+         B[0:report|Probe\\Loader\\Reporter|::|NopeB;1:class_exists|-|-|NopeB;2:eval|-|-|-;n];\
+         C[0:report|Probe\\Loader\\Reporter|::|NopeC;1:none;2:none;Error];done"
+    );
+}
+
+/// Verifies an include and an `eval()` are frames of their own, as php describes them.
+///
+/// Oracle: `php -n` 8.5.6 prints
+/// `inc<0:Probe\Deep\frames|-|-|inc;1:include|-|-|piece.php;2:none;>ev<0:Probe\Deep\frames|-|-|ev;1:eval|-|-|-;2:none;>top<0:Probe\Deep\frames|-|-|top;1:none;2:none;>done`.
+///
+/// php names the include frame for the form that was written and carries the path as its single
+/// argument; the `eval` frame carries none, because the code it ran is not an argument. Neither
+/// was recorded, so a function called from an included file reported the include's caller as its
+/// own, one frame short. The path is reduced to its basename here so the assertion does not
+/// depend on the temporary directory the harness compiles in.
+#[test]
+fn test_an_include_and_an_eval_are_frames_of_their_own() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "piece.php",
+                r#"<?php
+
+namespace Probe\Deep;
+
+function frames(string $tag): void
+{
+    $trace = debug_backtrace();
+    echo $tag, '<';
+    foreach ([0, 1, 2] as $i) {
+        if (!isset($trace[$i])) {
+            echo $i, ':none;';
+            continue;
+        }
+        $frame = $trace[$i];
+        $arg = '-';
+        if (isset($frame['args'][0])) {
+            $arg = is_string($frame['args'][0]) ? basename($frame['args'][0]) : gettype($frame['args'][0]);
+        }
+        echo $i, ':', $frame['function'] ?? '-', '|', $frame['class'] ?? '-', '|', $frame['type'] ?? '-', '|', $arg, ';';
+    }
+    echo '>';
+}
+
+frames('inc');
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+
+$piece = __DIR__ . '/piece.php';
+include $piece;
+eval('\\Probe\\Deep\\frames("ev");');
+\Probe\Deep\frames('top');
+echo 'done';
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        "inc<0:Probe\\Deep\\frames|-|-|inc;1:include|-|-|piece.php;2:none;>\
+         ev<0:Probe\\Deep\\frames|-|-|ev;1:eval|-|-|-;2:none;>\
+         top<0:Probe\\Deep\\frames|-|-|top;1:none;2:none;>done"
+    );
+}
+
+/// Verifies the autoload queue runs in registration order across the contexts that own it.
+///
+/// Oracle: `php -n` 8.5.6 prints
+/// `ctxA;ctxB;aot:ProbeMissingOne:null;closure:ProbeMissingOne;ctxC;aot:ProbeMissingTwo:null;closure:ProbeMissingTwo;n;ctxCdone;n;ctxBdone;seen=ProbeMissingOne,ProbeMissingTwo;done`.
+///
+/// PHP has ONE autoload queue per request and runs it in registration order. elephc keeps each
+/// callback on the context that registered it -- that is where it is retained and released -- and
+/// ran one context's whole list before starting the next one, so the loader registered FIRST ran
+/// LAST whenever two contexts were involved. Here the compiled `arm()` registers before the
+/// included file's closure does, so php runs `aot:` before `closure:` at both levels; elephc ran
+/// the closure first, took the nested include from inside it, and only then came back for the
+/// compiled loader, which the recorded order in `$seen` shows reversed.
+///
+/// This is the request's shape, not a contrivance: Symfony appends
+/// `ClassExistenceResource::throwOnRequiredClass` from one context and needs it to run AFTER
+/// Composer's loader, which lives in another. The registration order is now carried on each
+/// callback as a request-wide number, so merging the owners' lists reproduces the single queue.
+#[test]
+fn test_the_autoload_queue_runs_in_registration_order_across_owner_contexts() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "nested.php",
+                r#"<?php
+echo 'ctxC;';
+echo class_exists('ProbeMissingTwo') ? 'y' : 'n', ';';
+echo 'ctxCdone;';
+"#,
+            ),
+            (
+                "driver.php",
+                r#"<?php
+echo 'ctxB;';
+spl_autoload_register(function (string $class): void {
+    echo 'closure:', $class, ';';
+    if ('ProbeMissingOne' === $class) {
+        $nested = __DIR__ . '/nested.php';
+        require $nested;
+    }
+});
+echo class_exists('ProbeMissingOne') ? 'y' : 'n', ';';
+echo 'ctxBdone;';
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+
+class ProbeExistence
+{
+    public static array $seen = [];
+
+    public static function throwOnRequired(string $class, ?Exception $previous = null): void
+    {
+        self::$seen[] = $class;
+        echo 'aot:', $class, ':', null === $previous ? 'null' : 'exc', ';';
+    }
+
+    public static function arm(): void
+    {
+        spl_autoload_register(__CLASS__ . '::throwOnRequired');
+        echo 'ctxA;';
+    }
+}
+
+ProbeExistence::arm();
+$driver = __DIR__ . '/driver.php';
+include $driver;
+echo 'seen=', implode(',', ProbeExistence::$seen), ';';
+echo 'done';
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        "ctxA;ctxB;aot:ProbeMissingOne:null;closure:ProbeMissingOne;ctxC;\
+         aot:ProbeMissingTwo:null;closure:ProbeMissingTwo;n;ctxCdone;n;ctxBdone;\
+         seen=ProbeMissingOne,ProbeMissingTwo;done"
+    );
+}
+
+/// Verifies an APPEND into a nested property array survives the writes that follow it.
+///
+/// The dynamic-property overlay OWNS what it holds, and `eval_store_dynamic_property_value` is
+/// the single place that takes and gives back that reference. `eval_property_set_result` kept a
+/// hand-rolled release of its own from before that consolidation, so every property write gave
+/// the overlay's cell back TWICE -- and when the write re-stores the cell already held, which is
+/// exactly what an append does because the array is mutated in place, the overlay's own
+/// reference was the one dropped. The array then lived only on the object's slot, and the next
+/// write to that slot freed it: the whole property read back empty.
+///
+/// FakeOps cannot see this. Its `array_set` always returns the same handle and its boxing keeps
+/// a second reference alive, so the accounting error stays balanced there; only the real runtime
+/// frees the cell. That is why this test is here and not in the interpreter suite.
+///
+/// Reference value captured from `php -n` (PHP 8.5.6): `zero[7]n[3]count[1];done`.
+#[test]
+fn test_eval_include_keeps_a_nested_property_append_alive_across_later_writes() {
+    let out = compile_and_run(
+        r#"<?php
+$piece = __DIR__ . "/eval-overlay-append.php";
+file_put_contents($piece, '<?php
+class OverlayBagInc {
+    public array $m = [];
+    public function build(): void {
+        $this->m["a"][] = 7;
+        $this->m["n"] = 3;
+        $this->m["count"] = 0;
+        $this->m["count"] += 1;
+    }
+    public function show(): string {
+        return "zero[" . ($this->m["a"][0] ?? "MISS") . "]"
+            . "n[" . ($this->m["n"] ?? "MISS") . "]"
+            . "count[" . ($this->m["count"] ?? 0) . "]";
+    }
+}
+$bag = new OverlayBagInc();
+$bag->build();
+echo $bag->show();
+');
+include $piece;
+echo ";done";
+"#,
+    );
+    assert_eq!(out, "zero[7]n[3]count[1];done");
+}
+
+/// Verifies interpreted code can read a COMPILED class's `ReflectionClass` scalars.
+///
+/// Oracle: `php -n` 8.5.6 prints
+/// `main;ProbeAotShape[int=n;user=y;short=ProbeAotShape;ns=;inns=n;abs=n;iface=n;fin=n;anon=n;enum=n;ifn=1];done`.
+///
+/// `ReflectionClass` answered these from the eval context's own class table, and no eval context
+/// DECLARES a class the compiler produced. Every one of them therefore reported "not handled",
+/// which the bridge turns into `Fatal error: eval() runtime failed` -- while the facts existed the
+/// whole time, published by the generated program through the same reflection hooks that
+/// `getDocComment()` alone had been asking. Symfony's `ContainerBuilder` reflects on compiled
+/// classes while it tracks resources, which is where the cold path stopped.
+///
+/// `isUserDefined()` is derived rather than read: the program publishes flags only for classes it
+/// compiled FROM SOURCE, so arriving here at all answers the question unless the internal bit is
+/// set, and the flag word does not carry the bit itself.
+///
+/// TWO MEMBERS ARE LEFT OUT ON PURPOSE, because asserting what elephc prints today would pin a
+/// defect. `isInstantiable()` answers `false` where php answers `true`: php's rule needs the
+/// constructor's visibility, which the flag word does not carry. `getEndLine()` reports the line
+/// the class's LAST MEMBER starts on rather than the line its brace closes on.
+#[test]
+fn test_interpreted_code_reads_a_compiled_class_reflection_scalars() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "piece.php",
+                r#"<?php
+
+function probe_scalars(string $name): string
+{
+    $r = new ReflectionClass($name);
+    echo $name, '[';
+    echo 'int=' . ($r->isInternal() ? 'y' : 'n') . ';';
+    echo 'user=' . ($r->isUserDefined() ? 'y' : 'n') . ';';
+    echo 'short=' . $r->getShortName() . ';';
+    echo 'ns=' . $r->getNamespaceName() . ';';
+    echo 'inns=' . ($r->inNamespace() ? 'y' : 'n') . ';';
+    echo 'abs=' . ($r->isAbstract() ? 'y' : 'n') . ';';
+    echo 'iface=' . ($r->isInterface() ? 'y' : 'n') . ';';
+    echo 'fin=' . ($r->isFinal() ? 'y' : 'n') . ';';
+    echo 'anon=' . ($r->isAnonymous() ? 'y' : 'n') . ';';
+    echo 'enum=' . ($r->isEnum() ? 'y' : 'n') . ';';
+    echo 'ifn=' . count($r->getInterfaceNames());
+    echo ']';
+
+    return '';
+}
+
+echo probe_scalars('ProbeAotShape'), ';';
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+
+interface ProbeShapeContract
+{
+}
+
+class ProbeAotShape implements ProbeShapeContract
+{
+    public int $n = 1;
+}
+
+$piece = __DIR__ . '/piece.php';
+echo 'main;';
+include $piece;
+echo 'done';
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        "main;ProbeAotShape[int=n;user=y;short=ProbeAotShape;ns=;inns=n;abs=n;iface=n;fin=n;\
+         anon=n;enum=n;ifn=1];done"
+    );
+}
+
+/// Verifies `getFileName`, `getStartLine` and `getEndLine` name the file that DECLARED the class.
+///
+/// Oracle: `php -n` 8.5.6 prints
+/// `main;ProbeIncShape[piece.php|3|6];ProbeAotShape[main.php|3|6];ProbeEvalShape[main.php(8) : eval()'d code|1|1];ArrayObject[false|false|false];done`.
+///
+/// The generated program has ONE source file, its entry point, and that is what these three
+/// answered for every class: a class an include declared reported the entry file, and the
+/// compiled class reported its declaration line as BOTH ends, so every class looked one line long.
+/// php has three different answers here -- the include's own path, the compiled file, and
+/// `FILE(LINE) : eval()'d code` for a class an `eval()` declared -- and a builtin has no file at
+/// all, which is `false` three times.
+///
+/// Two things had to change to say that. The declaring path was already recorded when a
+/// declaration runs, and reflection simply was not reading it. And the compiler packed the
+/// declaration line into both the start and the end slot of the class flag word, because the
+/// declaration span itself ended where it started; the span now reaches the closing brace, which
+/// is the line php reports.
+///
+/// STILL SHORT, and left out rather than asserted wrong: an `eval()` written INSIDE an included
+/// file names the right file but line 1, because entering an included file sets the interpreter's
+/// position to line 1 and nothing moves it per statement. An eval written in compiled code, the
+/// case this test uses, carries its real line.
+#[test]
+fn test_reflection_names_the_file_and_lines_that_declared_the_class() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "piece.php",
+                r#"<?php
+
+class ProbeIncShape
+{
+    public int $n = 1;
+}
+
+function probe_where(string $name): void
+{
+    $r = new ReflectionClass($name);
+    $file = $r->getFileName();
+    echo $name, '[', false === $file ? 'false' : basename($file), '|';
+    $start = $r->getStartLine();
+    $end = $r->getEndLine();
+    echo false === $start ? 'false' : $start, '|', false === $end ? 'false' : $end, '];';
+}
+
+probe_where('ProbeIncShape');
+probe_where('ProbeAotShape');
+probe_where('ProbeEvalShape');
+probe_where('ArrayObject');
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+
+class ProbeAotShape
+{
+    public int $n = 1;
+}
+
+eval('class ProbeEvalShape { public int $n = 1; }');
+$piece = __DIR__ . '/piece.php';
+echo 'main;';
+include $piece;
+echo 'done';
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        "main;ProbeIncShape[piece.php|3|6];ProbeAotShape[main.php|3|6];\
+         ProbeEvalShape[main.php(8) : eval()'d code|1|1];ArrayObject[false|false|false];done"
+    );
+}
+
+/// The probe both provider tests run: one method, every parameter member php reports.
+const PROBE_SIG_PIECE: &str = r#"<?php
+
+class ProbeIncSig
+{
+    public function shape(int $n, ?string $tag = 't', int ...$rest): string
+    {
+        return $n . $tag . count($rest);
+    }
+}
+
+function probe_sig(string $class): void
+{
+    $m = new ReflectionMethod($class, 'shape');
+    echo $class, '[', $m->getNumberOfParameters(), '|', $m->getNumberOfRequiredParameters(), '|';
+    foreach ($m->getParameters() as $p) {
+        echo $p->getName(), ':', $p->getPosition(), ':';
+        echo $p->hasType() ? $p->getType()->getName() : '-', ':';
+        echo $p->getType() && $p->getType()->allowsNull() ? 'null' : 'nonull', ':';
+        echo $p->getType() && $p->getType()->isBuiltin() ? 'builtin' : 'class', ':';
+        echo $p->isOptional() ? 'opt' : 'req', ':';
+        echo $p->isVariadic() ? 'var' : 'fix', ';';
+    }
+    echo ']';
+}
+
+probe_sig('ProbeIncSig');
+"#;
+
+/// The same probe pointed at the compiled class.
+const PROBE_SIG_PIECE_AOT: &str = r#"<?php
+
+class ProbeIncSig
+{
+    public function shape(int $n, ?string $tag = 't', int ...$rest): string
+    {
+        return $n . $tag . count($rest);
+    }
+}
+
+function probe_sig(string $class): void
+{
+    $m = new ReflectionMethod($class, 'shape');
+    echo $class, '[', $m->getNumberOfParameters(), '|', $m->getNumberOfRequiredParameters(), '|';
+    foreach ($m->getParameters() as $p) {
+        echo $p->getName(), ':', $p->getPosition(), ':';
+        echo $p->hasType() ? $p->getType()->getName() : '-', ':';
+        echo $p->getType() && $p->getType()->allowsNull() ? 'null' : 'nonull', ':';
+        echo $p->getType() && $p->getType()->isBuiltin() ? 'builtin' : 'class', ':';
+        echo $p->isOptional() ? 'opt' : 'req', ':';
+        echo $p->isVariadic() ? 'var' : 'fix', ';';
+    }
+    echo ']';
+}
+
+probe_sig('ProbeAotSig');
+"#;
+
+/// Verifies interpreted code reads a method signature the INTERPRETER declared.
+///
+/// Oracle: `php -n` 8.5.6 prints `main;ProbeIncSig[3|1|n:0:int:nonull:builtin:req:fix;tag:1:string:null:builtin:opt:fix;rest:2:int:nonull:builtin:opt:var;];done`.
+///
+/// `ReflectionMethod::getParameters()` and everything reachable through it -- the parameter's
+/// name, position, type, the type's nullability and builtin-ness, optionality and variadicity --
+/// were a fatal for every class, whichever way it was declared. A reflection member's body is
+/// lowered only when COMPILED code names it, and interpreted code names members no compiled line
+/// mentions, so the call reached a method with no body: `native_method_error stage=invoke`, which
+/// the process prints as the six-word `Fatal error: eval() runtime failed`.
+#[test]
+fn test_interpreted_code_reads_an_interpreter_declared_method_signature() {
+    let out = compile_and_run_files(
+        &[
+            ("piece.php", PROBE_SIG_PIECE),
+            (
+                "main.php",
+                r#"<?php
+$piece = __DIR__ . '/piece.php';
+echo 'main;';
+include $piece;
+echo ';done';
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "main;ProbeIncSig[3|1|n:0:int:nonull:builtin:req:fix;tag:1:string:null:builtin:opt:fix;rest:2:int:nonull:builtin:opt:var;];done");
+}
+
+/// Verifies interpreted code reads a method signature the COMPILER produced.
+///
+/// Oracle: `php -n` 8.5.6 prints `main;ProbeAotSig[3|1|n:0:int:nonull:builtin:req:fix;tag:1:string:null:builtin:opt:fix;rest:2:int:nonull:builtin:opt:var;];done`.
+///
+/// The same members, the other provider: this class is compiled, so its shape comes from the AOT
+/// signature table the bridge imports rather than from a declaration the interpreter holds. The
+/// two answers are asserted separately and are the same string, which is the point -- the object
+/// is materialized from the same slots either way, so the providers cannot drift apart.
+#[test]
+fn test_interpreted_code_reads_a_compiled_method_signature() {
+    let out = compile_and_run_files(
+        &[
+            ("piece.php", PROBE_SIG_PIECE_AOT),
+            (
+                "main.php",
+                r#"<?php
+
+class ProbeAotSig
+{
+    public function shape(int $n, ?string $tag = 't', int ...$rest): string
+    {
+        return $n . $tag . count($rest);
+    }
+}
+
+$piece = __DIR__ . '/piece.php';
+echo 'main;';
+include $piece;
+echo ';done';
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "main;ProbeAotSig[3|1|n:0:int:nonull:builtin:req:fix;tag:1:string:null:builtin:opt:fix;rest:2:int:nonull:builtin:opt:var;];done");
+}
+
+/// Verifies a doc comment survives an attribute, and what `new` and `internal` mean per class.
+///
+/// Oracle: `php -n` 8.5.6 prints
+/// `main;ProbeR1Documented[doc=yes;inst=y;int=n;user=y];ProbeR1Public[doc=false;inst=y;int=n;user=y];ProbeR1Private[doc=false;inst=n;int=n;user=y];ProbeR1Abstract[doc=false;inst=n;int=n;user=y];ArrayObject[doc=false;inst=y;int=y;user=n];done`.
+///
+/// THE DOC COMMENT was dropped at TOKENIZATION when an attribute stood between it and its class.
+/// The filter that decides which doc comments survive asks whether the next token starts a
+/// declaration, and `#[` was not on that list -- so `/** … */ #[AsCommand(…)] class C {}`, which is
+/// how most of Symfony's commands are written, lost its comment before any grammar rule could ask.
+///
+/// `isInstantiable()` is a class you can write `new` in front of: not abstract, and no constructor
+/// less visible than public -- the private-constructor singleton is a shape Symfony's container
+/// uses. The flag word the compiler publishes carried neither fact, so every generated class
+/// answered `false`.
+///
+/// `isInternal()` is published from the declaration span: a class the compiler INJECTED has none
+/// of its own, which is what a dummy span says. It matters twice over, because `isUserDefined()`
+/// is derived from it -- without the bit a builtin claimed to be user-defined.
+#[test]
+fn test_reflection_answers_doc_comments_instantiability_and_internal_per_class_kind() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "piece.php",
+                r#"<?php
+
+#[Attribute]
+class ProbeR1Mark
+{
+}
+
+/** Documented through an attribute. */
+#[ProbeR1Mark]
+class ProbeR1Documented
+{
+}
+
+foreach (['ProbeR1Documented', 'ProbeR1Public', 'ProbeR1Private', 'ProbeR1Abstract', 'ArrayObject'] as $name) {
+    $r = new ReflectionClass($name);
+    $d = $r->getDocComment();
+    echo $name, '[doc=', false === $d ? 'false' : 'yes';
+    echo ';inst=', $r->isInstantiable() ? 'y' : 'n';
+    echo ';int=', $r->isInternal() ? 'y' : 'n';
+    echo ';user=', $r->isUserDefined() ? 'y' : 'n', '];';
+}
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+
+class ProbeR1Public
+{
+    public function __construct()
+    {
+    }
+}
+
+class ProbeR1Private
+{
+    private function __construct()
+    {
+    }
+}
+
+abstract class ProbeR1Abstract
+{
+}
+
+$piece = __DIR__ . '/piece.php';
+echo 'main;';
+include $piece;
+echo 'done';
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        "main;ProbeR1Documented[doc=yes;inst=y;int=n;user=y];\
+         ProbeR1Public[doc=false;inst=y;int=n;user=y];\
+         ProbeR1Private[doc=false;inst=n;int=n;user=y];\
+         ProbeR1Abstract[doc=false;inst=n;int=n;user=y];\
+         ArrayObject[doc=false;inst=y;int=y;user=n];done"
+    );
+}
+
+/// Verifies an interface, trait and enum name the file that DECLARED them, as a class does.
+///
+/// Oracle: `php -n` 8.5.6 prints
+/// `main;ProbeS1Class[piece.php];ProbeS1Iface[piece.php];ProbeS1Trait[piece.php];ProbeS1Enum[piece.php];ProbeS1Aot[main.php];done`.
+///
+/// Only a CLASS recorded its declaring file, so an interface, a trait and an enum an included file
+/// declared fell back to the generated program's single source file -- the entry point -- and each
+/// claimed to live in the file that included it. The rule is now one helper the four share, which
+/// is what stops them from answering differently.
+///
+/// Reduced from the shape `ContainerBuilder::addClassResource` actually runs, rather than from a
+/// probe: the reflector is built from a class name held in a VARIABLE, `isInternal()` is asked
+/// before `getFileName()`, and Symfony reflects on interfaces exactly as it does on classes.
+#[test]
+fn test_every_class_like_names_the_file_that_declared_it() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "piece.php",
+                r#"<?php
+
+interface ProbeS1Iface
+{
+}
+
+trait ProbeS1Trait
+{
+}
+
+enum ProbeS1Enum
+{
+    case One;
+}
+
+class ProbeS1Class
+{
+}
+
+foreach (['ProbeS1Class', 'ProbeS1Iface', 'ProbeS1Trait', 'ProbeS1Enum', 'ProbeS1Aot'] as $class) {
+    $r = new \ReflectionClass($class);
+    echo $class, '[';
+    if (!$r->isInternal()) {
+        $path = $r->getFileName();
+        echo false === $path ? 'false' : basename($path);
+    } else {
+        echo 'internal';
+    }
+    echo '];';
+}
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+
+class ProbeS1Aot
+{
+}
+
+$piece = __DIR__ . '/piece.php';
+echo 'main;';
+include $piece;
+echo 'done';
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        "main;ProbeS1Class[piece.php];ProbeS1Iface[piece.php];ProbeS1Trait[piece.php];\
+         ProbeS1Enum[piece.php];ProbeS1Aot[main.php];done"
+    );
+}
+
+/// `isset`/`empty`/`??`/`??=` answer for an uninitialized typed property instead of raising.
+///
+/// This is the shape that stopped the Symfony request:
+/// `CheckCircularReferencesPass` declares `private array $checkedLazyNodes;` with no default,
+/// never assigns it, and reads it through `empty($this->checkedLazyNodes[$id])`. PHP fetches
+/// the operand of `isset`/`empty`/`??`/`??=` in a QUIET mode that answers "absent" without
+/// performing the read, and the mode reaches down the whole property/dim chain — the failing
+/// read sits one `ArrayGet` beneath the operand root. A plain read still raises, which the
+/// `direct` cell holds in place. Every value here is `php -n` 8.5.6's.
+#[test]
+fn test_eval_quiet_fetch_answers_for_uninitialized_typed_property() {
+    let out = compile_and_run(
+        r#"<?php
+eval('
+class ProbeQ {
+    public array $t;
+    public ?string $n;
+    public function emptyDim($k) { return empty($this->t[$k]); }
+    public function issetDim($k) { return isset($this->t[$k]); }
+}
+function y($b) { return $b ? "y" : "n"; }
+$o = new ProbeQ();
+echo y(isset($o->t)), y(empty($o->t)), ";";
+echo ($o->t ?? "D"), ";", ($o->n ?? "D"), ";";
+echo y(isset($o->t["k"])), y(empty($o->t["k"])), ";";
+echo y($o->emptyDim("k")), y($o->issetDim("k")), ";";
+$a = new ProbeQ();
+$a->t ??= ["v"];
+echo implode(",", $a->t), y(isset($a->t)), ";";
+$b = new ProbeQ();
+try { $x = $b->t; echo "NOTHROW"; } catch (Error $e) { echo "direct:", $e->getMessage(); }
+');
+"#,
+    );
+    assert_eq!(
+        out,
+        "ny;D;D;ny;yn;vy;direct:Typed property ProbeQ::$t must not be accessed before initialization"
+    );
+}
+
+/// The quiet fetch stops at a call boundary, and a by-reference bind has its own rule.
+///
+/// Two halves of the same family that a single "answer instead of raising" would get wrong.
+/// Measured against `php -n` 8.5.6: `f($o) ?? 'D'` and `$o->getT() ?? 'D'` both RAISE, because
+/// PHP's quiet fetch is a fetch mode that does not cross into a callee — unlike `@`, which
+/// does. And `&$o->p` raises a DIFFERENT sentence naming the reference and the
+/// non-nullability, while the same bind on a NULLABLE typed property does not raise at all.
+#[test]
+fn test_eval_quiet_fetch_stops_at_calls_and_reference_binds() {
+    let out = compile_and_run(
+        r#"<?php
+eval('
+class ProbeR { public array $t; public ?array $na; public $u;
+    public function getT() { return $this->t; } }
+function readsUninit($o) { return $o->t; }
+function cell($id, $fn) {
+    try { $fn(); echo $id, ":NOTHROW;"; }
+    catch (Error $e) { echo $id, ":", $e->getMessage(), ";"; }
+}
+cell("call", function () { $o = new ProbeR(); return readsUninit($o) ?? "D"; });
+cell("method", function () { $o = new ProbeR(); return $o->getT() ?? "D"; });
+cell("ref", function () { $o = new ProbeR(); $r = &$o->t; return 1; });
+cell("refnull", function () { $o = new ProbeR(); $r = &$o->na; return 1; });
+cell("refuntyped", function () { $o = new ProbeR(); $r = &$o->u; return 1; });
+');
+"#,
+    );
+    assert_eq!(
+        out,
+        "call:Typed property ProbeR::$t must not be accessed before initialization;\
+         method:Typed property ProbeR::$t must not be accessed before initialization;\
+         ref:Cannot access uninitialized non-nullable property ProbeR::$t by reference;\
+         refnull:NOTHROW;refuntyped:NOTHROW;"
+    );
+}
+
+/// An indexed write through the bridge auto-initializes, and a scalar-typed one raises TypeError.
+///
+/// The interpreter reaches an indexed property write through two different routes — the
+/// `PropertyArraySet` statement and an expression-position `Assign` whose target is an
+/// `ArrayGet` — and only one of them was auto-initializing, so `$o->p[] = 1` worked while
+/// `$o->p['k'] = 1` raised. PHP's refusal for a type that cannot hold an array is a `TypeError`
+/// with its own sentence, not the uninitialized-read `Error`.
+#[test]
+fn test_eval_indexed_write_auto_initializes_or_raises_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+eval('
+class ProbeW { public array $a; public ?array $na; public $u; public int $i; }
+$one = new ProbeW(); $one->a["k"] = 1; echo count($one->a), ";";
+$two = new ProbeW(); $two->a[] = 2; echo count($two->a), ";";
+$three = new ProbeW(); $three->na["k"] = 3; echo count($three->na), ";";
+$four = new ProbeW(); $four->u["k"] = 4; echo count($four->u), ";";
+$five = new ProbeW(); $five->a["k"]["j"] = 5; echo $five->a["k"]["j"], ";";
+$six = new ProbeW();
+try { $six->i["k"] = 6; echo "NOTHROW"; }
+catch (TypeError $e) { echo get_class($e), ":", $e->getMessage(); }
+');
+"#,
+    );
+    assert_eq!(
+        out,
+        "1;1;1;1;5;TypeError:Cannot auto-initialize an array inside property ProbeW::$i of type int"
+    );
+}
+
+/// COMPILED code sets PHP's quiet fetch before reading an EVAL-OWNED uninitialized property.
+///
+/// This is the Symfony stop reduced. `CheckCircularReferencesPass` declares
+/// `private array $checkedLazyNodes;` with no default and reads it through
+/// `empty($this->checkedLazyNodes[$id])`; the class arrives by a runtime include, so the object
+/// is eval-owned and the read leaves compiled code through the bridge — a route on which
+/// nothing had entered the quiet mode, so the same source that answered when interpreted raised
+/// when compiled. The include path here is COMPUTED for that reason: a literal one is resolved
+/// at compile time and the class stops being eval-owned, which is a different path entirely and
+/// hides this defect.
+///
+/// `filled` is in the probe so the mode cannot be mistaken for "always answer": an INITIALIZED
+/// property still reports its real emptiness. Every value is `php -n` 8.5.6's.
+#[test]
+fn test_compiled_quiet_fetch_reaches_an_eval_owned_uninitialized_property() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "piece.php",
+                r#"<?php
+
+class BridgeProbe
+{
+    public array $lazy;
+    public ?string $maybe;
+    public array $filled = ['k' => 1];
+}
+
+return new BridgeProbe();
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+
+function emptyDim($o, $k) { return empty($o->lazy[$k]) ? 'y' : 'n'; }
+function issetDim($o, $k) { return isset($o->lazy[$k]) ? 'y' : 'n'; }
+function issetProp($o) { return isset($o->lazy) ? 'y' : 'n'; }
+function emptyProp($o) { return empty($o->lazy) ? 'y' : 'n'; }
+function coalesceProp($o) { return $o->lazy ?? 'D'; }
+function coalesceNullable($o) { return $o->maybe ?? 'D'; }
+function filledStillWorks($o) { return empty($o->filled['k']) ? 'y' : 'n'; }
+
+$name = 'piece';
+$probe = include __DIR__ . '/' . $name . '.php';
+echo emptyDim($probe, 'k'), issetDim($probe, 'k'), issetProp($probe), emptyProp($probe), ';';
+echo coalesceProp($probe), ';', coalesceNullable($probe), ';', filledStillWorks($probe);
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ynny;D;D;n");
+}
+
+/// A compiled indexed mutation quietly fetches an eval-owned uninitialized property container.
+///
+/// PHP auto-initializes the property for writes and `??=`, while `unset` is a no-op that leaves
+/// the property uninitialized. The include path is computed so the class remains runtime-owned;
+/// a literal include would exercise only the ordinary AOT property path.
+#[test]
+fn test_compiled_indexed_mutation_of_eval_owned_uninitialized_property_matches_php() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "piece.php",
+                r#"<?php
+
+return new MutationBridgeProbe();
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+
+class MutationBridgeProbe
+{
+    public array $values;
+
+    public function assignAndAppend(): string {
+        $this->values['first'] = 1;
+        $this->values[] = 2;
+        $this->values['last'] ??= 3;
+        return $this->values['first'] . ',' . $this->values[0] . ',' . $this->values['last'];
+    }
+
+    private function key(): string {
+        echo 'K';
+        return 'missing';
+    }
+
+    public function unsetOneLevel(): string {
+        unset($this->values[$this->key()]);
+        return isset($this->values) ? 'set' : 'unset';
+    }
+}
+
+$name = 'piece';
+$one = include __DIR__ . '/' . $name . '.php';
+$two = include __DIR__ . '/' . $name . '.php';
+
+echo $one->assignAndAppend(), ';';
+echo $two->unsetOneLevel();
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "1,2,3;Kunset");
+}
+
+/// A compiled callable array can target a static method declared by a runtime include.
+///
+/// The caller has no local eval context: only the request-wide declaration owner can dispatch
+/// the class-string selected at runtime. PHP resolves that owner before invoking the method.
+#[test]
+fn test_compiled_callable_array_invokes_runtime_declared_static_method() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "piece.php",
+                r#"<?php
+
+class RuntimeCallableTarget
+{
+    public static function events(): array { return ['ready']; }
+    public static function fail(): void { throw new RuntimeException('probe'); }
+}
+
+return RuntimeCallableTarget::class;
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+
+class RuntimeCallableDispatcher
+{
+    public static string $target;
+
+    public static function run(): string {
+        return [self::$target, 'events']()[0];
+    }
+
+    public static function catchFailure(): string {
+        try {
+            ([self::$target, 'fail'])();
+        } catch (RuntimeException $exception) {
+            return 'caught';
+        }
+        return 'not-caught';
+    }
+
+}
+
+$name = 'piece';
+RuntimeCallableDispatcher::$target = include __DIR__ . '/' . $name . '.php';
+echo RuntimeCallableDispatcher::run(), ';';
+echo RuntimeCallableDispatcher::catchFailure();
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ready;caught");
+}
+
+/// ReflectionClass::hasMethod sees inherited AOT methods on a runtime-declared child.
+#[test]
+fn test_compiled_reflection_has_method_sees_aot_parent_of_runtime_declared_class() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "piece.php",
+                r#"<?php
+
+namespace RuntimeReflectionLoaded;
+
+use RuntimeReflectionBase\RuntimeReflectionParent as ImportedParent;
+
+class RuntimeReflectionChild extends ImportedParent {}
+return RuntimeReflectionChild::class;
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+
+namespace RuntimeReflectionBase {
+    class RuntimeReflectionParent
+    {
+        public function inherited(): void {}
+    }
+}
+
+namespace {
+    class RuntimeReflectionDispatcher
+    {
+        public static function inspect(string $class): string {
+            $reflection = new ReflectionClass($class);
+            $subclass = $reflection->isSubclassOf(\RuntimeReflectionBase\RuntimeReflectionParent::class) ? 'sub' : 'not-sub';
+            $method = $reflection->hasMethod('inherited') ? 'method' : 'no-method';
+            return $subclass . ';' . $method;
+        }
+    }
+
+    $piece = 'piece';
+    $class = include __DIR__ . '/' . $piece . '.php';
+    echo RuntimeReflectionDispatcher::inspect($class);
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "sub;method");
+}
+
+/// ReflectionClass::implementsInterface autoloads an interface named at runtime.
+#[test]
+fn test_eval_reflection_implements_interface_autoloads_target() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "class.php",
+                r#"<?php
+class RuntimeReflectedClass {}
+return RuntimeReflectedClass::class;
+"#,
+            ),
+            (
+                "runner.php",
+                r#"<?php
+function inspectRuntimeInterface(mixed $reflection): bool {
+    return $reflection->implementsInterface('RuntimeLoadedInterface');
+}
+
+function inspectMissingRuntimeInterface(mixed $reflection): bool {
+    return $reflection->implementsInterface('RuntimeMissingInterface');
+}
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+class RuntimeInterfaceLoader
+{
+    public function __construct(private string $path) {}
+
+    public function load(string $class): void {
+        if ($class === 'RuntimeLoadedInterface') {
+            include $this->path;
+        }
+    }
+}
+
+$interfacePath = __DIR__ . '/runtime-interface.php';
+file_put_contents($interfacePath, '<?php interface RuntimeLoadedInterface {}');
+$loader = new RuntimeInterfaceLoader($interfacePath);
+spl_autoload_register([$loader, 'load']);
+$classFile = 'class';
+$class = include __DIR__ . '/' . $classFile . '.php';
+$reflection = new ReflectionClass($class);
+$runner = 'runner';
+include __DIR__ . '/' . $runner . '.php';
+var_dump(inspectRuntimeInterface($reflection));
+try {
+    inspectMissingRuntimeInterface($reflection);
+} catch (ReflectionException $exception) {
+    echo get_class($exception), ':', $exception->getMessage(), "\n";
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nReflectionException:Interface \"RuntimeMissingInterface\" does not exist\n"
+    );
+}
+
+/// ReflectionClass::isSubclassOf autoloads a class-like name supplied at runtime.
+#[test]
+fn test_eval_reflection_is_subclass_of_autoloads_target() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "runner.php",
+                r#"<?php
+function inspectRuntimeInterface(mixed $reflection): bool {
+    return $reflection->isSubclassOf('RuntimeLoadedInterface');
+}
+
+function inspectMissingRuntimeInterface(mixed $reflection): bool {
+    return $reflection->isSubclassOf('RuntimeMissingInterface');
+}
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+class RuntimeReflectedClass {}
+class RuntimeInterfaceLoader
+{
+    public function __construct(private string $path) {}
+
+    public function load(string $class): void {
+        if ($class === 'RuntimeLoadedInterface') {
+            include $this->path;
+        }
+    }
+}
+
+$interfacePath = __DIR__ . '/runtime-interface.php';
+file_put_contents($interfacePath, '<?php interface RuntimeLoadedInterface {}');
+$loader = new RuntimeInterfaceLoader($interfacePath);
+spl_autoload_register([$loader, 'load']);
+$reflection = new ReflectionClass(RuntimeReflectedClass::class);
+$runner = 'runner';
+include __DIR__ . '/' . $runner . '.php';
+var_dump(inspectRuntimeInterface($reflection));
+try {
+    inspectMissingRuntimeInterface($reflection);
+} catch (ReflectionException $exception) {
+    echo get_class($exception), ':', $exception->getMessage(), "\n";
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nReflectionException:Class \"RuntimeMissingInterface\" does not exist\n"
+    );
+}
+
+/// Repeating eval-backed getConstructor must not accumulate live heap allocations.
+/// Immutable eval metadata survives a CLI request, so compare the same binary at two
+/// iteration counts instead of requiring an empty process-global metadata heap.
+#[test]
+fn test_eval_reflection_get_constructor_result_has_balanced_ownership() {
+    let dir = make_cli_test_dir("elephc_eval_reflection_constructor_ownership");
+    fs::write(
+        dir.join("runner.php"),
+        r#"<?php
+function getRuntimeConstructor(mixed $reflection): ?ReflectionMethod {
+    if (!$constructor = $reflection->getConstructor()) {
+        return null;
+    }
+    if (!$constructor->isPublic()) {
+        return null;
+    }
+    return $constructor;
+}
+
+function inspectRuntimeConstructor(mixed $reflection): string {
+    $calls = [];
+    if ($constructor = getRuntimeConstructor($reflection)) {
+        $calls[] = [$constructor, []];
+    }
+
+    $seen = 'none';
+    foreach ($calls as $call) {
+        [$method, $arguments] = $call;
+        if ($method instanceof ReflectionFunctionAbstract) {
+            $seen = $method instanceof ReflectionMethod ? 'method' : 'function';
+        }
+    }
+    return $seen;
+}
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+$classPath = __DIR__ . '/runtime-constructor.php';
+file_put_contents($classPath, '<?php class RuntimeConstructorTarget { public function __construct(string $value = "x") {} }');
+include $classPath;
+$reflection = new ReflectionClass('RuntimeConstructorTarget');
+$runner = 'runner';
+include __DIR__ . '/' . $runner . '.php';
+$iterations = $argv[1] === 'once' ? 1 : 16;
+for ($i = 0; $i < $iterations; $i++) {
+    $seen = inspectRuntimeConstructor($reflection);
+}
+echo $seen;
+"#,
+    )
+    .unwrap();
+
+    let compile = elephc_cli_command(&dir)
+        .args(["--heap-debug", "--quiet", "main.php"])
+        .output()
+        .expect("failed to invoke elephc CLI");
+    assert!(
+        compile.status.success(),
+        "eval reflection ownership fixture should compile:\n{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let output = Command::new(dir.join("main"))
+        .current_dir(&dir)
+        .arg("once")
+        .output()
+        .expect("failed to run eval reflection ownership fixture");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "eval reflection ownership fixture failed:\n{stderr}"
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "method");
+    let baseline = stderr.lines()
+        .find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .expect("baseline run must report its live heap");
+    let repeated = Command::new(dir.join("main"))
+        .current_dir(&dir)
+        .arg("many")
+        .output()
+        .expect("failed to run repeated eval reflection ownership fixture");
+    let repeated_stderr = String::from_utf8_lossy(&repeated.stderr);
+    assert!(repeated.status.success(), "{repeated_stderr}");
+    assert_eq!(String::from_utf8_lossy(&repeated.stdout), "method");
+    let repeated_heap = repeated_stderr.lines()
+        .find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .expect("repeated run must report its live heap");
+    assert_eq!(baseline, repeated_heap, "constructor calls accumulated live allocations");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies the bridge DROPS extra positional arguments instead of refusing the call.
+///
+/// PHP accepts extra positional arguments to a userland function; they bind to no parameter and
+/// are reachable only through `func_get_args()`. The bridge treated the overflow as a fatal,
+/// which is how Symfony's route loading died: `ObjectLoader::load()` invokes
+/// `$loaderObject->$method($this, $this->env)` against `MicroKernelTrait::loadRoutes()`, which
+/// declares one parameter.
+#[test]
+fn test_eval_call_into_native_method_drops_extra_positional_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+class Target {
+    public function take(int $a): string { return 'got:' . $a; }
+    public function takeTwo(int $a, string $b = 'd'): string { return 'two:' . $a . ':' . $b; }
+}
+
+$GLOBALS['t'] = new Target();
+eval('echo $GLOBALS["t"]->take(1, 2, 3), "|",
+    $GLOBALS["t"]->takeTwo(4), "|",
+    $GLOBALS["t"]->takeTwo(5, "e", 6);');
+"#,
+    );
+    assert_eq!(out, "got:1|two:4:d|two:5:e");
+}
+
+/// Verifies an EVAL-DECLARED class satisfies an AOT method's interface-typed parameter, and that
+/// casting it to string there reaches the class's own `__toString()`.
+///
+/// Two separate answers had to come from the interpreter. The parameter's type check reads the
+/// object header's class id, which is `stdClass` for every object the interpreter builds, so the
+/// generated metadata alone can only refuse it. The `(string)` cast then dispatches through the
+/// interface's implementation table, which that same class id matches no row of -- and the
+/// table scan's defensive miss answered a null string pointer, read downstream as a length of
+/// its own choosing. Both are on the path of any Symfony request: the compiled DI container is
+/// interpreted, so the resources and loaders it hands to compiled Symfony code are eval objects.
+#[test]
+fn test_eval_object_satisfies_native_interface_parameter_and_string_cast() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag {
+    public function label(Stringable $r): string { return (string) $r; }
+    public function echoLabel(Stringable $r): void { echo $r; }
+}
+
+class NativeRes implements Stringable {
+    public function __toString(): string { return 'native-res'; }
+}
+
+$GLOBALS['bag'] = new Bag();
+echo $GLOBALS['bag']->label(new NativeRes()), '|';
+
+eval('class EvalRes implements Stringable {
+    public function __toString(): string { return "eval-res"; }
+}
+echo $GLOBALS["bag"]->label(new EvalRes()), "|";
+$GLOBALS["bag"]->echoLabel(new EvalRes());');
+"#,
+    );
+    assert_eq!(out, "native-res|eval-res|eval-res");
+}
+
+/// Verifies INTERPRETED code reaches `var_export()`, byte for byte with `php -n`.
+///
+/// The compiled side serves `var_export` from a prelude injected only when the compiled program
+/// itself names the function, which interpreted code can never reach: Symfony's routing dumper
+/// (`CompiledUrlMatcherDumper::export`) is interpreted and the call arrived as
+/// `call to undefined function var_export()`. The expectations below were measured against
+/// `php -n` 8.5.10, including the float layout thresholds -- `1.0E+17` is scientific while the
+/// one-power-smaller `10000000000000000.0` is not.
+#[test]
+fn test_eval_var_export_matches_php_for_scalars_arrays_and_floats() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$cases = [
+    0, -5, PHP_INT_MAX,
+    true, false, null,
+    "", "plain", "a\'b", "back\\\\slash",
+    1.0, 1.5, 1/3, 1e17, 1e16, 1e-6, 0.1, 100.0, 1.5e-7,
+    [],
+    [1, 2, 3],
+    ["k" => "v", "n" => 1],
+    [1, "k" => ["x" => 1]],
+];
+foreach ($cases as $case) {
+    echo var_export($case, true), "|";
+}
+var_export("echoed");');
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "0|-5|9223372036854775807|true|false|NULL|",
+            "''|'plain'|'a\\'b'|'back\\\\slash'|",
+            "1.0|1.5|0.3333333333333333|1.0E+17|10000000000000000.0|1.0E-6|0.1|100.0|1.5E-7|",
+            "array (\n)|",
+            "array (\n  0 => 1,\n  1 => 2,\n  2 => 3,\n)|",
+            "array (\n  'k' => 'v',\n  'n' => 1,\n)|",
+            "array (\n  0 => 1,\n  'k' => \n  array (\n    'x' => 1,\n  ),\n)|",
+            "'echoed'",
+        )
+    );
+}
+
+/// Verifies `^` under the `m` modifier anchors to LINE STARTS in interpreted code.
+///
+/// `pcre2_regexec`'s REG_STARTEND advances the subject POINTER, so every continuation of a global
+/// match saw its own start offset as the start of the subject and `^` matched there:
+/// `preg_replace('/^./m', ...)` rewrote every character rather than the first of each line. That
+/// is how Symfony's `CompiledUrlMatcherDumper` indents its dump, so the routing cache it wrote
+/// was unparsable PHP. The shim now calls `pcre2_match` on the whole subject with a start offset,
+/// which is what php's own preg does.
+///
+/// The empty-match case is the companion fix: an anchored zero-width match lands AHEAD of the
+/// cursor it was searched from, and advancing the cursor only up to the match end left it sitting
+/// on that same empty match, reporting every line start twice.
+#[test]
+fn test_eval_multiline_anchor_matches_line_starts_only() {
+    // Regex inside eval needs the managed PCRE2 provider (see
+    // `test_dynamic_eval_regex_without_capability_fails_at_runtime`).
+    let out = compile_and_run_with_regex(
+        r#"<?php
+$GLOBALS['code'] = "a1\nb2\nc3";
+eval('$c = $GLOBALS["code"];
+echo preg_replace("/^./m", "<$0>", $c), "|",
+    preg_replace("/^/m", ">", $c), "|",
+    preg_match_all("/^./m", $c), "|",
+    preg_replace("/.$/m", "!", $c);');
+"#,
+    );
+    assert_eq!(out, "<a>1\n<b>2\n<c>3|>a1\n>b2\n>c3|3|a!\nb!\nc!");
+}
+
+/// Verifies an eval-declared object serializes with its own class and properties from a DIFFERENT
+/// eval context than the one that built it.
+///
+/// The shared debug/serialize walk resolved the class through `dynamic_object_class`, which looks
+/// the OWNER's class name up in the ASKER's table and finds nothing when the asker never declared
+/// it. The object then serialized as `O:8:"stdClass":0:{}` -- which is what Symfony wrote into its
+/// routing cache metadata, and what came back as a bare `stdClass` on the next request.
+#[test]
+fn test_eval_serialize_reads_declaring_context_for_a_foreign_object() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class Box {
+    public int $n = 5;
+    private string $s = "p";
+}
+$GLOBALS["b"] = new Box();');
+
+eval('echo serialize($GLOBALS["b"]), "|", get_class(unserialize(serialize($GLOBALS["b"])));');
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!("O:3:\"Box\":2:{s:1:\"n\";i:5;s:6:\"\0Box\0s\";s:1:\"p\";}", "|Box"),
+    );
+}
+
+
+/// Verifies an eval-declared subclass of a builtin Throwable answers the whole final accessor
+/// surface, including the three that have no payload field to read.
+///
+/// Oracle: `php -n` 8.5.10 prints `MyEx|boom|7|trace|1|#0 FILE(2): eval()\n#1 {main}|noprev`:
+/// the exception is created inside the `eval()` frame, which is its one trace frame. The bridge
+/// has to answer rather than refuse the call: before the fix each accessor died with
+/// `unsupported MethodCall expression`, and `getTraceAsString()` later answered `""`.
+///
+/// This is Symfony's `ErrorListener::logKernelException`, which reads all three while flattening
+/// an exception. It runs at priority 0, ahead of the `RouterListener` at -64 that renders the 404
+/// welcome page, so the refusal hid the page the request was meant to produce.
+#[test]
+fn test_eval_declared_throwable_subclass_answers_every_inherited_final_getter() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class MyEx extends RuntimeException {}
+try {
+    throw new MyEx("boom", 7);
+} catch (Throwable $e) {
+    echo get_class($e), "|", $e->getMessage(), "|", $e->getCode(), "|";
+    echo is_array($e->getTrace()) ? "trace" : "notrace", "|";
+    echo count($e->getTrace()), "|";
+    echo $e->getTraceAsString(), "|";
+    echo ($e->getPrevious() === null) ? "noprev" : "prev";
+}');
+"#,
+    );
+    assert!(
+        out.starts_with("MyEx|boom|7|trace|1|#0 ") && out.ends_with("(2): eval()\n#1 {main}|noprev"),
+        "unexpected Throwable accessor output: {out:?}"
+    );
+}
+
+/// Verifies `getPrevious()` walks a chain of eval-declared exceptions and stops at its end.
+///
+/// Two producers write the previous slot with DIFFERENT shapes and the read has to discriminate:
+/// the compiled `Exception::__construct` assigns `$this->previous`, a declared `?Throwable`, so
+/// the slot holds a BOXED Mixed cell -- never a raw pointer, and never null, since a boxed null is
+/// a live cell with tag 8. The eval/native bridge instead materializes a raw object pointer there.
+/// Reading every slot as raw answers non-null for an exception with no previous, which turns the
+/// `while ($cursor = $cursor->getPrevious())` below into a walk off the end.
+///
+/// This is what `RouterListener::onKernelException` does to decide whether to render the welcome
+/// page: it gates on `$e->getPrevious() instanceof NoConfigurationException`.
+#[test]
+fn test_eval_declared_throwable_previous_chain_walks_and_terminates() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class NoConfigEx extends RuntimeException {}
+class NotFoundEx extends RuntimeException {}
+
+$inner = new NoConfigEx("no routes");
+$outer = new NotFoundEx("not found", 0, $inner);
+
+$prev = $outer->getPrevious();
+echo ($prev === null) ? "noprev" : "prev", "|";
+echo get_class($prev), "|", $prev->getMessage(), "|";
+echo ($prev instanceof NoConfigEx) ? "isNoConfig" : "notNoConfig", "|";
+echo ($prev->getPrevious() === null) ? "endofchain" : "morechain", "|";
+
+$walked = 0;
+$cursor = $outer;
+while ($cursor = $cursor->getPrevious()) {
+    $walked++;
+    if ($walked > 5) { break; }
+}
+echo "walked=", $walked;');
+"#,
+    );
+    assert_eq!(
+        out,
+        "prev|NoConfigEx|no routes|isNoConfig|endofchain|walked=1",
+    );
+}
+
+/// Verifies the same accessors on a class compiled AOT that only INHERITS them, read from eval.
+///
+/// The dispatch routes by class id, and an inheriting subclass's id is not a builtin id, so it
+/// reaches the bridge only because `collect_builtin_throwable_method_class_ids` adds the ids of
+/// classes whose method table resolves these names to a builtin. `AotChainEx` must therefore
+/// declare no constructor and no getter of its own for this to cover that path.
+#[test]
+fn test_eval_reads_final_getters_off_an_aot_class_that_only_inherits_them() {
+    let out = compile_and_run(
+        r#"<?php
+class AotChainEx extends InvalidArgumentException {}
+eval('$root = new AotChainEx("root");
+$wrapped = new AotChainEx("wrapped", 3, $root);
+echo get_class($wrapped), "|", $wrapped->getCode(), "|";
+echo count($wrapped->getTrace()), "|", $wrapped->getTraceAsString(), "|";
+echo $wrapped->getPrevious()->getMessage(), "|";
+echo ($root->getPrevious() === null) ? "noprev" : "prev";');
+"#,
+    );
+    // php records the `eval()` frame in the trace of an exception created inside it, so the count is
+    // 1 (the interpreter now captures frames for classes compiled ahead of time, see
+    // `__rt_throwable_capture_trace`); `getTraceAsString()` stays the synthetic empty string.
+    assert_eq!(out, "AotChainEx|3|1||root|noprev");
+}
+
+/// Declares an eval class that extends an AOT parent and meets its interface through inheritance.
+///
+/// PHP satisfies an interface contract with any method the class INHERITS. The interpreter's
+/// contract check only walked EVAL-declared ancestors, so a method living on the compiled parent
+/// looked unimplemented and the whole declaration was refused with `class ... could not be
+/// declared`. Symfony's `ContainerBag extends FrozenParameterBag implements ContainerBagInterface`
+/// is this exact shape — it inherits `resolveValue()` and `escapeValue()` from the compiled
+/// `ParameterBag` — and it stopped a compiled prod container from booting at all.
+#[test]
+fn test_eval_class_meets_interface_through_an_aot_parent_it_only_inherits_from() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class AotBaseBag
+{
+    public function resolveValue(mixed $value): mixed
+    {
+        return "resolved:" . $value;
+    }
+
+    public static function describe(): string
+    {
+        return "base";
+    }
+}
+
+class AotFrozenBag extends AotBaseBag
+{
+    public function escapeValue(mixed $value): mixed
+    {
+        return "escaped:" . $value;
+    }
+}
+
+$warm = new AotFrozenBag();
+echo $warm->resolveValue("warm"), "|";
+
+eval('interface EvalBagInterface {
+    public function all(): array;
+    public function resolveValue(mixed $value): mixed;
+    public function escapeValue(mixed $value): mixed;
+    public static function describe(): string;
+}');
+eval('class EvalBag extends AotFrozenBag implements EvalBagInterface {
+    public function all(): array { return ["k" => "v"]; }
+}');
+
+$bag = new EvalBag();
+echo ($bag instanceof EvalBagInterface) ? "impl" : "no-impl", "|";
+echo implode(",", array_keys($bag->all())), "|";
+echo $bag->resolveValue("deep"), "|", $bag->escapeValue("near"), "|", EvalBag::describe();
+"#,
+    );
+    assert_eq!(out, "resolved:warm|impl|k|resolved:deep|escaped:near|base");
+}
+
+/// Keeps refusing an eval class whose interface method NO ancestor provides.
+///
+/// The AOT-ancestor fallback above must not turn the contract check into a rubber stamp: a
+/// genuinely missing method is still a refused declaration, exactly as in PHP.
+#[test]
+fn test_eval_class_missing_an_interface_method_is_still_refused() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class AotPlainBag
+{
+    public function known(): string
+    {
+        return "known";
+    }
+}
+
+echo (new AotPlainBag())->known(), "|";
+eval('interface EvalStrictInterface { public function absent(): string; }');
+eval('class EvalStrictBag extends AotPlainBag implements EvalStrictInterface {}');
+echo "unreachable";
+"#,
+    );
+    assert!(
+        out.stderr.contains("EvalStrictBag"),
+        "expected the refused declaration to name the class: {}",
+        out.stderr
+    );
+    assert!(
+        !out.stdout.contains("unreachable"),
+        "declaration must not be accepted: {}",
+        out.stdout
+    );
+    assert_no_rust_panic_leaked(&out.stderr);
+}
+
+/// Builds a first-class callable out of every shape that can name a runtime-declared target.
+///
+/// `$callable(...)` normalizes through the generated candidate tables, which only describe
+/// AOT-compiled classes. A receiver declared at runtime always misses them — and a miss aborted
+/// the process ("callable array did not resolve to an invokable target", "mixed value is not
+/// callable") instead of handing the value to the interpreter that owns it. Symfony's
+/// `EventDispatcher::optimizeListeners` does exactly this with `[$service, 'onKernelRequest']`
+/// for every listener it wires, so no compiled prod container could dispatch a single event.
+#[test]
+fn test_first_class_callable_over_runtime_declared_targets() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class FccSvc {
+    public function greet(string $n): string { return "hi $n"; }
+    public static function shout(string $n): string { return "HI $n"; }
+    public function __invoke(string $n): string { return "call $n"; }
+}');
+
+$obj = new FccSvc();
+$listener = [$obj, 'greet'];
+$fn = $listener(...);
+echo $fn('a'), '|';
+
+$staticListener = ['FccSvc', 'shout'];
+$sfn = $staticListener(...);
+echo $sfn('b'), '|';
+
+$ifn = $obj(...);
+echo $ifn('c'), '|';
+
+$byRef = [$obj, 'greet'];
+$make = static function () use (&$byRef) {
+    return $byRef(...);
+};
+echo ($make())('d'), '|';
+
+echo is_callable([$obj, 'greet']) ? 'y' : 'n';
+echo is_callable([$obj, 'absent']) ? 'y' : 'n';
+echo is_callable(['FccSvc', 'shout']) ? 'y' : 'n';
+"#,
+    );
+    assert_eq!(out, "hi a|HI b|call c|hi d|yny");
+}
+
+/// Keeps a first-class callable over a COMPILED target on its native path.
+///
+/// The eval fallback is a miss handler, not a replacement: an AOT class still resolves through the
+/// generated descriptor tables, and a value that is callable nowhere still aborts.
+#[test]
+fn test_first_class_callable_over_compiled_targets_is_unchanged() {
+    let out = compile_and_run(
+        r#"<?php
+class AotFcc
+{
+    public function greet(string $n): string
+    {
+        return "aot $n";
+    }
+
+    public static function shout(string $n): string
+    {
+        return "AOT $n";
+    }
+}
+
+$obj = new AotFcc();
+$listener = [$obj, 'greet'];
+echo ($listener(...))('a'), '|';
+$staticListener = ['AotFcc', 'shout'];
+echo ($staticListener(...))('b'), '|';
+echo is_callable([$obj, 'greet']) ? 'y' : 'n';
+echo is_callable([$obj, 'absent']) ? 'y' : 'n';
+echo is_callable(['AotFcc', 'nope']) ? 'y' : 'n';
+"#,
+    );
+    assert_eq!(out, "aot a|AOT b|ynn");
+}
+
+/// Hands a COMPILED closure back to interpreted code from every callable-returning shape.
+///
+/// A compiled closure is a callable descriptor, not an object cell. Four separate layers assumed
+/// otherwise: the bridge boxed it with the OBJECT tag because `: \Closure` is an object type, the
+/// return-type check refused a descriptor for a declared `\Closure`, `gettype()` answered `NULL`
+/// and `is_callable()` answered false. Underneath all of that, `closure_new` held the descriptor
+/// in x19/r12 — CALLEE-SAVED registers an ordinary function's prologue never preserves — so
+/// returning one through the eval bridge destroyed a register its Rust caller was still using.
+/// Symfony's `HtmlErrorRenderer::isDebug(): \Closure` is this exact shape.
+#[test]
+fn test_compiled_closure_returned_into_eval_behaves_like_a_php_closure() {
+    let out = compile_and_run(
+        r#"<?php
+class ClosureSrc
+{
+    public static function typed(): \Closure
+    {
+        return static fn (): string => 'typed';
+    }
+
+    public static function untyped()
+    {
+        return static fn (): string => 'untyped';
+    }
+
+    public static function capturing(string $tag): \Closure
+    {
+        return static function () use ($tag): string {
+            return 'capturing:' . $tag;
+        };
+    }
+
+    public function instanceTyped(): \Closure
+    {
+        return static fn (): string => 'instance';
+    }
+}
+
+function closureSrcFree(): \Closure
+{
+    return static fn (): string => 'free';
+}
+
+eval('$src = new ClosureSrc();
+$typed = ClosureSrc::typed();
+echo $typed(), "|", get_debug_type($typed), "|", gettype($typed), "|";
+echo ($typed instanceof Closure) ? "y" : "n", "|", is_callable($typed) ? "y" : "n", "|";
+echo (ClosureSrc::untyped())(), "|";
+echo (ClosureSrc::capturing("x"))(), "|";
+echo ($src->instanceTyped())(), "|";
+echo (closureSrcFree())();');
+"#,
+    );
+    assert_eq!(
+        out,
+        "typed|Closure|object|y|y|untyped|capturing:x|instance|free"
+    );
+}
+
+/// Returns into eval'd code from a compiled method that ran `iterator_to_array()` over an object.
+///
+/// The object path of `iterator_to_array` keeps the iterator in x19/r12, the callee-saved
+/// nested-call register, across its `valid`/`current`/`next` calls. The frame only reserved a
+/// save slot for that register when the function contained one of a few listed opcodes, and a
+/// builtin call was not one of them, so the method returned with its caller's x19/r12 replaced
+/// by the iterator. A compiled caller survived it; the eval bridge's Rust caller did not, and the
+/// interpreter crashed unboxing a value through the clobbered register. Laravel's Dotenv
+/// `RepositoryBuilder::createWithDefaultAdapters()` is this shape, and it failed every request.
+#[test]
+fn test_compiled_iterator_to_array_returns_into_eval_intact() {
+    let out = compile_and_run(
+        r#"<?php
+final class Collector
+{
+    private static function items()
+    {
+        foreach (['a', 'b'] as $item) {
+            yield $item;
+        }
+    }
+
+    public static function fromGenerator()
+    {
+        $items = \iterator_to_array(self::items());
+        return count($items) . ':' . implode(',', $items);
+    }
+
+    public static function fromAggregate()
+    {
+        return count(\iterator_to_array(new \ArrayObject([1, 2, 3])));
+    }
+}
+
+eval('$first = Collector::fromGenerator();
+$second = Collector::fromAggregate();
+echo $first, "|", $second, "|", Collector::fromGenerator();');
+"#,
+    );
+    assert_eq!(out, "2:a,b|3|2:a,b");
+}
+
+/// Iterates eval-declared `Iterator` and `IteratorAggregate` objects from COMPILED code.
+///
+/// An object the interpreter built carries the generic `stdClass` header whatever class declared
+/// it, so the native interface-table scan found no `Iterator` entry: a compiled `foreach` over
+/// such an object iterated nothing, and `iterator_to_array()` / `iterator_count()` fataled with
+/// "foreach over iterable with unsupported kind". Laravel's Dotenv hands a runtime-loaded
+/// `PhpOption\Some` (an `IteratorAggregate`) to `iterator_to_array()` on every request.
+#[test]
+fn test_compiled_iteration_over_eval_declared_iterables() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalBox implements IteratorAggregate {
+    private $v;
+    public function __construct($v) { $this->v = $v; }
+    public function getIterator(): Traversable { return new ArrayIterator(["k" => $this->v]); }
+}
+class EvalWalker implements Iterator {
+    private $i = 0;
+    public function current(): mixed { return $this->i * 10; }
+    public function key(): mixed { return $this->i; }
+    public function next(): void { $this->i++; }
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < 3; }
+}');
+
+function collect($o) { return iterator_to_array($o); }
+function collectList($o) { return iterator_to_array($o, false); }
+function counted(\Traversable $o) { return iterator_count($o); }
+function walk($o) { foreach ($o as $k => $v) { echo $k, '=', $v, ','; } echo '|'; }
+
+$box = 'EvalBox';
+$walker = 'EvalWalker';
+echo json_encode(collect(new $box(5))), json_encode(collectList(new $box(6))), json_encode(collect(new $walker())), '|';
+echo counted(new $box(7)), counted(new $walker()), '|';
+walk(new $box(8));
+walk(new $walker());
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"{"k":5}[6][0,10,20]|13|k=8,|0=0,1=10,2=20,|"#
+    );
+}
+
+/// Hands an `ArrayIterator` built by interpreted code to a compiled `foreach`.
+///
+/// The interpreter keeps its own `ArrayIterator` state on the eval context, and allocated the
+/// program's COMPILED class without running its constructor, so compiled iteration read an
+/// uninitialized typed property and died on "must not be accessed before initialization".
+#[test]
+fn test_eval_built_array_iterator_iterates_in_compiled_code() {
+    let out = compile_and_run(
+        r#"<?php
+function make() { return eval('return new ArrayIterator(["k" => 1, "j" => 2]);'); }
+$it = make();
+echo get_class($it), '|';
+foreach ($it as $k => $v) { echo $k, '=', $v, ','; }
+echo '|', json_encode(iterator_to_array(make())), '|', count(make());
+"#,
+    );
+    assert_eq!(out, r#"ArrayIterator|k=1,j=2,|{"k":1,"j":2}|2"#);
+}
+
+/// Answers `instanceof` from COMPILED code about a class declared at runtime.
+///
+/// The closed-world fold that erases an `instanceof` whose target has no compiled metadata was
+/// guarded by a FLOW fact — "this function has lowered an `eval()`" — which is false in a compiled
+/// function that contains no `eval()` of its own, however much the program runs one elsewhere. So
+/// the fold hardcoded `false` for a class the runtime does declare. Symfony's compiled
+/// `FlattenException::createFromThrowable()` asks `$e instanceof HttpExceptionInterface` about an
+/// autoloaded interface: the false answer cost every `NotFoundHttpException` its status code and
+/// turned php's 404 into a 500.
+#[test]
+fn test_compiled_instanceof_sees_runtime_declared_classes() {
+    let out = compile_and_run(
+        r#"<?php
+class Flattener
+{
+    public static function statusOf(\Throwable $e): int
+    {
+        return ($e instanceof StatusCarrier) ? $e->getStatusCode() : 500;
+    }
+
+    public static function describe(mixed $value): string
+    {
+        return ($value instanceof StatusCarrier) ? 'carrier' : 'plain';
+    }
+
+    public static function isMissing(mixed $value): string
+    {
+        return ($value instanceof NeverDeclared) ? 'yes' : 'no';
+    }
+}
+
+eval('interface StatusCarrier { public function getStatusCode(): int; }');
+eval('class HttpError extends \RuntimeException implements StatusCarrier {
+    public function getStatusCode(): int { return 404; }
+}');
+eval('class NotFound extends HttpError {}');
+
+$e = new NotFound('nope');
+echo ($e instanceof StatusCarrier) ? 'carrier' : 'plain', '|';
+echo Flattener::describe($e), '|';
+echo Flattener::statusOf($e), '|';
+echo Flattener::describe(new \RuntimeException('plain')), '|';
+echo Flattener::isMissing($e);
+"#,
+    );
+    assert_eq!(out, "carrier|carrier|404|plain|no");
+}
+
+/// Accepts PHP 8.2's standalone `false` and `true` types, alone and inside a union.
+///
+/// Both used to parse as a CLASS named "false"/"true", which no boolean can satisfy: Symfony's
+/// `ControllerResolver::getController(): callable|false` threw a TypeError on its ordinary
+/// "no controller" path — the 404 route — instead of returning.
+#[test]
+fn test_eval_false_and_true_value_types() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class Resolver {
+    public function controller(bool $found): callable|false
+    {
+        return $found ? static fn (): string => "c" : false;
+    }
+
+    public function always(): true
+    {
+        return true;
+    }
+
+    public function never(): false
+    {
+        return false;
+    }
+
+    public function takesFalse(false $flag): string
+    {
+        return "took:" . var_export($flag, true);
+    }
+}');
+
+$r = new Resolver();
+echo var_export($r->controller(false), true), '|';
+echo is_callable($r->controller(true)) ? 'callable' : 'not', '|';
+echo var_export($r->always(), true), '|';
+echo var_export($r->never(), true), '|';
+echo $r->takesFalse(false);
+"#,
+    );
+    assert_eq!(out, "false|callable|true|false|took:false");
+}
+
 /// Decodes NUL escapes and warns only for observable undefined-variable reads in eval.
 #[test]
 fn test_eval_nul_escapes_and_undefined_variable_warning() {
@@ -30379,6 +34672,747 @@ return ":" . ($quiet ?? "fallback");');
         out.stderr
     );
     assert!(!out.stderr.contains("$quiet"), "{}", out.stderr);
+}
+
+
+/// `$s[$i] = $c` on a STRING writes one byte in place; it does not replace `$s` with an array.
+///
+/// The interpreter's variable index-assignment discarded every non-array-like existing value and
+/// started a fresh array, so `$s = "abc"; $s[0] = "X";` produced `["X"]` instead of `"Xbc"` — and
+/// every later read of `$s` warned `Array to string conversion`.
+///
+/// symfony/polyfill-mbstring's `mb_convert_case()` is written on exactly this operation
+/// (`$s[--$nlen] = $uchr[--$ulen];`), so `mb_strtoupper()` RETURNED AN ARRAY and Twig's `|upper`
+/// filter died with `Return value must be of type string, array returned`.
+///
+/// The fixture pins the rules that are easy to get wrong, each measured with `php -n` 8.5:
+/// only the first byte is taken, a negative offset counts from the end, an offset past the end
+/// pads with SPACES, an empty subject is still a string, and `null` still vivifies an ARRAY —
+/// that last row is what keeps the fix from swallowing PHP's real array behaviour.
+#[test]
+fn test_an_interpreted_string_offset_assignment_writes_into_the_string() {
+    let out = compile_and_run(
+        r#"<?php
+eval('
+$s = "abc"; $s[0] = "X";
+$t = "hello"; $t[1] = "E"; $t[4] = "O";
+$u = "abc"; $i = 2; $u[--$i] = "Z";
+$v = "ab"; $v[5] = "x";
+$w = ""; $w[0] = "X";
+$n = "abc"; $n[-1] = "Q";
+$d = null; $d[0] = "N";
+$a = ["p" => 1]; $a["q"] = 2;
+echo $s, ";", $t, ";", $u, ";", $v, "(", strlen($v), ");", $w, ";", $n, ";";
+echo gettype($d), json_encode($d), ";", json_encode($a), "\n";
+');
+"#,
+    );
+    assert_eq!(
+        out,
+        "Xbc;hEllO;aZc;ab   x(6);X;abQ;array[\"N\"];{\"p\":1,\"q\":2}\n"
+    );
+}
+
+
+/// The interpreter picks a JSON bracket from the KEYS, not from the storage kind.
+///
+/// php encodes an array as a JSON ARRAY when its keys are exactly `0..len-1`, and the EMPTY array
+/// is the degenerate case of that. Hash storage reaches the interpreter's encoder for both, and it
+/// unconditionally wrote `{`, so an emptied bag printed `{}` where php prints `[]`.
+///
+/// Symfony's `JsonResponse` shows it on any endpoint returning an emptied parameter bag:
+/// `/echo` answered `"post":{}` against php's `"post":[]`.
+///
+/// The fixture keeps the cases that must STAY objects beside it, because the fix is a key scan and
+/// a scan that is too eager would turn `{"5":..}` into an array.
+///
+/// Oracle: `php -n` prints the asserted line.
+#[test]
+fn test_interpreted_json_encode_picks_its_bracket_from_the_keys() {
+    let out = compile_and_run(
+        r#"<?php
+eval('
+$emptied = ["a" => 1]; unset($emptied["a"]);
+$seq = [0 => "a", 1 => "b"];
+$gap = [5 => "a", 6 => "b"];
+$str = ["k" => 1];
+echo json_encode($emptied), ";", json_encode([]), ";", json_encode($seq), ";",
+     json_encode($gap), ";", json_encode($str), "\n";
+');
+"#,
+    );
+    assert_eq!(out, "[];[];[\"a\",\"b\"];{\"5\":\"a\",\"6\":\"b\"};{\"k\":1}\n");
+}
+
+/// Verifies interpreted `html_entity_decode()` takes php's optional `$flags` and `$encoding`.
+///
+/// The compiled backend and the interpreter have to agree on a builtin's arity or the same
+/// source has two different meanings depending on which side runs it. This one was widened on
+/// the compiled side alone for a while: `html_entity_decode($s, ENT_QUOTES, 'UTF-8')` compiled,
+/// and inside `eval()` it was an UNCATCHABLE `eval() runtime failed: unsupported Call
+/// expression`, the same failure shape `memory_get_usage()` had.
+#[test]
+fn test_interpreted_html_entity_decode_takes_flags_and_encoding() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo html_entity_decode("&lt;b&gt;"), ":";
+echo html_entity_decode("&lt;b&gt;", ENT_QUOTES), ":";
+echo html_entity_decode("&quot;q&quot;&#039;s&#039;&amp;", ENT_QUOTES, "UTF-8");');
+"#,
+    );
+    assert_eq!(out, "<b>:<b>:\"q\"'s'&");
+}
+
+/// Verifies interpreted `str_replace()` implements php's array `$search`/`$replace`/`$subject`.
+///
+/// Every argument reached `string_bytes()` before, so the polyfill-shaped
+/// `str_replace($searches, $replacements, $subjects)` printed "Array to string conversion"
+/// three times and answered the literal string `"Array"`. Measured against php 8.5.10, in order:
+/// array subject keeps its KEYS; a scalar `$replace` is reused for every needle; a `$replace`
+/// shorter than `$search` fills with `''`; the passes are SEQUENTIAL, so `['a','X'] => ['X','Z']`
+/// on `"a"` is `Z`, not `X`; an empty needle leaves the subject alone.
+#[test]
+fn test_interpreted_str_replace_handles_array_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$subjects = str_replace(["a"], ["1"], ["ab", "ba"]);
+echo gettype($subjects), ":", count($subjects), ":", $subjects[0], ":", $subjects[1], ";";
+[$first, $second] = str_replace(["a", "b"], ["1", "2"], ["ab", "ba"]);
+echo $first, "|", $second, ";";
+$keyed = str_replace(["a"], ["X"], ["k" => "aa", "j" => "ba"]);
+echo implode(",", array_keys($keyed)), "=", implode(",", array_values($keyed)), ";";
+echo str_replace("a", "X", ["aa", "ba"])[1], ";";
+echo str_replace(["a", "b"], "X", "aba"), ";";
+echo str_replace(["a", "b"], ["X"], "aba"), ";";
+echo str_replace(["a", "X"], ["X", "Z"], "a"), ";";
+echo str_replace("", "X", "ab"), ";";
+echo gettype(str_replace(["a"], ["1"], "aba"));');
+"#,
+    );
+    assert_eq!(out, "array:2:1b:b1;12|21;k,j=XX,bX;bX;XXX;XX;Z;ab;string");
+}
+
+/// Verifies interpreted `str_ireplace()` shares the array handling, case-insensitively.
+#[test]
+fn test_interpreted_str_ireplace_handles_array_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+eval('[$first, $second] = str_ireplace(["A", "B"], ["x", "y"], ["ab", "BA"]);
+echo $first, "|", $second;');
+"#,
+    );
+    assert_eq!(out, "xy|yx");
+}
+
+/// Verifies interpreted code reaches the sealed-box surface and `SodiumException` even when the
+/// compiled program never names either: Symfony's `SodiumVault` runs this way.
+#[test]
+fn test_eval_sodium_crypto_box_surface_and_exception() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$pair = sodium_crypto_box_keypair();
+$sealed = sodium_crypto_box_seal("v", sodium_crypto_box_publickey($pair));
+echo strlen($pair), ":", strlen($sealed), ":", sodium_crypto_box_seal_open($sealed, $pair), "|";
+var_dump(sodium_crypto_box_seal_open("short", $pair));
+try {
+    sodium_crypto_box_seal("m", "x");
+} catch (SodiumException $e) {
+    echo get_class($e), "|", get_parent_class($e), "|", $e->getMessage(), "\n";
+}
+echo function_exists("sodium_crypto_box_seal") ? "y" : "n";');
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "64:49:v|bool(false)\n",
+            "SodiumException|Exception|sodium_crypto_box_seal(): Argument #2 ($public_key) must be SODIUM_CRYPTO_BOX_PUBLICKEYBYTES bytes long\n",
+            "y",
+        )
+    );
+}
+
+/// Verifies eval code calling a compiled static method with a `string ...$paths` variadic.
+///
+/// The compiled body stores that tail as a packed string array and is specialized on it, but the
+/// interpreter handed it boxed Mixed slots: Symfony's `Path::join()`, called from an interpreted
+/// class, ran `array_filter()` over them and asked the allocator for 8 GB ("heap memory
+/// exhausted"). Expected output is php 8.5.10's.
+#[test]
+fn test_eval_call_to_compiled_string_variadic_static_method() {
+    let out = compile_and_run(
+        r#"<?php
+final class Path {
+    public static function join(string ...$paths): string {
+        return implode('/', array_filter($paths, fn ($p) => $p !== ''));
+    }
+    public static function first(string $a, string ...$rest): string {
+        return $a . '+' . count($rest) . ':' . implode(',', $rest);
+    }
+}
+echo Path::join('a', '', 'c'), "\n";
+eval('
+echo Path::join("/var", "", "assets.json"), "\n";
+echo Path::join("x"), "|", Path::join(), "\n";
+echo Path::first("q", "w", "e"), "\n";
+$parts = ["m", "n"];
+echo Path::join(...$parts), "\n";
+');
+"#,
+    );
+    assert_eq!(out, "a/c\n/var/assets.json\nx|\nq+2:w,e\nm/n\n");
+}
+
+/// Verifies eval code can open `php://stdout` and `php://stderr` in any write mode.
+///
+/// The interpreter's `fopen()` knew no `php://std*` stream, so Monolog's `StreamHandler`
+/// (`fopen('php://stderr', 'a')`, the Symfony demo's production log target) threw "could not be
+/// opened in append mode" on every request. Closing one must not close the process descriptor.
+/// Expected output is php 8.5.10's.
+#[test]
+fn test_eval_opens_php_std_streams() {
+    let out = compile_and_run(
+        r#"<?php
+eval('
+foreach (["a", "ab", "w", "wb"] as $m) {
+    $h = fopen("php://stderr", $m);
+    echo $m, "=", is_resource($h) ? "ok" : "no", "\n";
+    fclose($h);
+}
+$o = fopen("php://stdout", "a");
+fwrite($o, "through-stdout\n");
+fclose($o);
+$o = fopen("PHP://STDOUT", "w");
+fwrite($o, "again\n");
+');
+echo "end\n";
+"#,
+    );
+    assert_eq!(out, "a=ok\nab=ok\nw=ok\nwb=ok\nthrough-stdout\nagain\nend\n");
+}
+
+/// Verifies compiled `method_exists()` / `property_exists()` see the members of an object whose
+/// class the interpreter declared.
+///
+/// A compiled frame with no eval context of its own answered from the native class tables, which
+/// only know the compiled parent. Twig's compiled `Template::getTemplateForMacro()` asks
+/// `method_exists($this, 'macro_render_language_selector')` of a template class loaded at run
+/// time, so every page using a macro failed with "Macro ... is not defined". Expected output is
+/// php 8.5.10's.
+#[test]
+fn test_compiled_member_exists_sees_an_interpreted_subclass() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class Template {
+    public function has(string $name): bool { return method_exists($this, $name); }
+    public function has2(string $name): bool { eval('$x = 1;'); return method_exists($this, $name); }
+    abstract public function name(): string;
+}
+function probe(object $o, string $m): string { return method_exists($o, $m) ? "y" : "n"; }
+function prop(object $o, string $p): string { return property_exists($o, $p) ? "y" : "n"; }
+$code = 'class Tpl_abc extends Template {
+    public $shown = 1;
+    public function name(): string { return "tpl"; }
+    public function macro_render(): string { return "macro!"; }
+    private function secret(): void {}
+}
+return new Tpl_abc();' . ($argc > 5 ? '' : '');
+$t = eval($code);
+echo $t->name(), " ", $t->has('macro_render') ? "has" : "missing", " ", $t->has('nope') ? "has" : "missing", "\n";
+echo probe($t, 'macro_render'), probe($t, 'name'), probe($t, 'secret'), probe($t, 'has'), probe($t, 'zzz'), "\n";
+echo prop($t, 'shown'), prop($t, 'hidden'), "\n";
+class Plain { public $p; public function m() {} }
+echo probe(new Plain(), 'm'), probe(new Plain(), 'x'), prop(new Plain(), 'p'), "\n";
+echo $t->has2('macro_render') ? "has2" : "missing2", "\n";
+"#,
+    );
+    assert_eq!(out, "tpl has missing\nyyyyn\nyn\nyny\nhas2\n");
+}
+
+/// Variable-variables parse and run in evaluated code: `$$name` and `${expr}` read and write
+/// the variable the value names, inside a function too. Carbon's `Date::set()` writes
+/// `$$name = self::monthToInt($value, $name);` and the whole trait used to be a parse error.
+#[test]
+fn test_eval_variable_variables_read_and_write() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$name = "x"; ${"y"} = 4; echo $y, "\n";');
+eval('$n = "x"; $x = 1; echo $$n, "\n";');
+eval('$name = "x"; $$name = 5; echo $x, "\n";');
+eval('function vv($name, $value) { $x = 0; $$name = $value; return $x; } echo vv("x", 7), "\n";');
+eval('$a = "b"; $b = "c"; $c = "deep"; echo $$$a, "\n";');
+"#,
+    );
+    assert_eq!(out, "4\n1\n5\n7\ndeep\n");
+}
+
+/// An interpreted subclass of a compiled builtin overrides a method whose return type php only
+/// treats as tentative, under `#[\ReturnTypeWillChange]` (Carbon's `createFromFormat(): ?static`
+/// over `DateTime::createFromFormat(): DateTime|false`); the class used to be refused.
+#[test]
+fn test_eval_override_with_return_type_will_change_over_compiled_parent() {
+    let out = compile_and_run(
+        r#"<?php
+$d = DateTime::createFromFormat('Y-m-d', '2020-01-02');
+echo $d->format('Y'), "\n";
+eval('namespace Lib; use DateTime; use ReturnTypeWillChange;
+class MyDate extends DateTime {
+    #[ReturnTypeWillChange]
+    public static function createFromFormat($format, $time, $timezone = null): ?static
+    {
+        $d = parent::createFromFormat($format, $time);
+        return $d === false ? null : new static($d->format("Y-m-d"));
+    }
+}');
+$cls = 'Lib\MyDate';
+$x = $cls::createFromFormat('Y-m-d', '2021-03-04');
+echo get_class($x), " ", $x->format('Y-m-d'), "\n";
+"#,
+    );
+    assert_eq!(out, "2020\nLib\\MyDate 2021-03-04\n");
+}
+
+/// An override's narrower return class that nobody has loaded yet is autoloaded to decide
+/// covariance, over a compiled builtin parent (`DateTime::diff(): DateInterval`) and over an eval
+/// parent alike. The check used to read "not declared" as "not a subtype" and refuse the class.
+#[test]
+fn test_eval_override_autoloads_its_narrower_return_class() {
+    let out = compile_and_run(
+        r#"<?php
+class Loader {
+    public function load($c) {
+        echo "autoload $c\n";
+        if ($c === 'Lib\MyInterval') {
+            eval('namespace Lib; class MyInterval extends \DateInterval {}');
+        }
+        if ($c === 'Lib\Circle') {
+            eval('namespace Lib; class Circle extends Shape {}');
+        }
+    }
+}
+spl_autoload_register([new Loader, 'load']);
+$i = (new DateTime('2020-01-01'))->diff(new DateTime('2020-01-03'));
+echo $i->days, "\n";
+eval('namespace Lib; class MyDate extends \DateTime {
+    public function diff($date = null, bool $absolute = false, array $skip = []): MyInterval {
+        $d = parent::diff($date ?? new \DateTime(), $absolute);
+        return new MyInterval("P" . $d->days . "D");
+    }
+}');
+$cls = 'Lib\MyDate';
+$x = new $cls('2020-01-01');
+$r = $x->diff(new DateTime('2020-01-05'));
+echo get_class($r), " ", $r->d, "\n";
+eval('namespace Lib; class Shape {} class Maker { public function make(): Shape { return new Shape; } }');
+eval('namespace Lib; class CircleMaker extends Maker { public function make(): Circle { return new Circle; } }');
+$m = 'Lib\CircleMaker';
+echo get_class((new $m)->make()), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "2\nautoload Lib\\MyInterval\nLib\\MyInterval 4\nautoload Lib\\Circle\nLib\\Circle\n"
+    );
+}
+
+/// An interface implementation's narrower return class is autoloaded the same way, against a
+/// compiled interface, an eval interface, and a builtin one -- and an eval class whose native
+/// ancestor is `ArrayIterator` is a `Traversable` for that check.
+#[test]
+fn test_eval_interface_implementation_autoloads_its_narrower_return_class() {
+    let out = compile_and_run(
+        r#"<?php
+interface Clock {
+    public function now(): DateTimeImmutable;
+}
+class SystemClock implements Clock {
+    public function now(): DateTimeImmutable { return new DateTimeImmutable('2020-01-01'); }
+}
+echo (new SystemClock)->now()->format('Y'), "\n";
+class Loader {
+    public function load($c) {
+        echo "autoload $c\n";
+        $defs = [
+            'Lib\MyImm' => 'namespace Lib; class MyImm extends \DateTimeImmutable {}',
+            'Lib\Square' => 'namespace Lib; class Square implements Shape {}',
+            'Lib\MyIter' => 'namespace Lib; class MyIter extends \ArrayIterator {}',
+        ];
+        if (isset($defs[$c])) {
+            eval($defs[$c]);
+        }
+    }
+}
+spl_autoload_register([new Loader, 'load']);
+eval('namespace Lib; class Frozen implements \Clock { public function now(): MyImm { return new MyImm("2021-02-03"); } }');
+$f = 'Lib\Frozen';
+echo get_class((new $f)->now()), "\n";
+eval('namespace Lib; interface Shape {} interface Factory { public function make(): Shape; }');
+eval('namespace Lib; class SquareFactory implements Factory { public function make(): Square { return new Square; } }');
+$s = 'Lib\SquareFactory';
+echo get_class((new $s)->make()), "\n";
+eval('namespace Lib; class Bag implements \IteratorAggregate { public function getIterator(): MyIter { return new MyIter([1, 2]); } }');
+$b = 'Lib\Bag';
+foreach (new $b as $v) {
+    echo $v, "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "2020\nautoload Lib\\MyImm\nLib\\MyImm\nautoload Lib\\Square\nLib\\Square\nautoload Lib\\MyIter\n1\n2\n"
+    );
+}
+
+/// A subclass may override a builtin date method with php's own signature. The compiled builtins
+/// declared wider parameters (`mixed`, `DateTimeInterface`) and a narrower return (`?DateTime`)
+/// than php does, and the eval override check compares against exactly those declarations.
+#[test]
+fn test_eval_overrides_builtin_date_methods_with_php_signatures() {
+    let out = compile_and_run(
+        r#"<?php
+echo DateTime::createFromTimestamp(86400)->format('Y-m-d'), "\n";
+echo DateTimeImmutable::createFromMutable(new DateTime('2020-01-02'))->format('Y-m-d'), "\n";
+echo DateTime::createFromImmutable(new DateTimeImmutable('2021-03-04'))->format('Y-m-d'), "\n";
+$p = new DatePeriod(new DateTime('2020-01-01'), new DateInterval('P1D'), new DateTime('2020-01-03'));
+echo $p->getEndDate()->format('Y-m-d'), "\n";
+eval('class Stamp extends DateTime { public static function createFromTimestamp(int|float|string $timestamp): static { return new static("@" . (int) $timestamp); } }');
+eval('class Mut extends DateTime { public static function createFromImmutable(DateTimeImmutable $object): static { return new static($object->format("Y-m-d")); } }');
+eval('class Imm extends DateTimeImmutable { public static function createFromMutable(DateTime $object): static { return new static($object->format("Y-m-d")); } }');
+eval('class Period extends DatePeriod { public function getEndDate(): ?DateTimeInterface { return null; } }');
+echo "declared\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "1970-01-02\n2020-01-02\n2021-03-04\n2020-01-03\ndeclared\n"
+    );
+}
+
+/// An internal class's return types are tentative to php, so an eval override with a different
+/// return type is declared (php deprecates, it does not refuse): php's own
+/// `DateTime::getTimezone(): DateTimeZone|false` over elephc's narrower builtin, and Carbon's
+/// `CarbonPeriod::key(): ?int` over the `key()` elephc's iterator-shaped `DatePeriod` carries.
+#[test]
+fn test_eval_override_of_an_internal_method_has_a_tentative_return_type() {
+    let out = compile_and_run(
+        r#"<?php
+$p = new DatePeriod(new DateTime('2020-01-01'), new DateInterval('P1D'), 1);
+echo (new DateTime('2020-01-01', new DateTimeZone('UTC')))->getTimezone()->getName(), "\n";
+eval('class Zoned extends DateTime { public function getTimezone(): DateTimeZone|false { return false; } }
+class Period extends DatePeriod { public function key(): ?int { return null; } }');
+var_dump((new Zoned('2020-01-01'))->getTimezone());
+echo (new ReflectionMethod('Period', 'key'))->getReturnType(), "\n";
+"#,
+    );
+    assert_eq!(out, "UTC\nbool(false)\n?int\n");
+}
+
+/// `Closure` narrows `callable` in a return type. A compiled interface's `Closure|self|null`
+/// reaches eval as `callable|self|null`, and an eval'd class taking the method from a trait that
+/// spells it `Closure|Clock|null` (Carbon's `getTestNow()`) was refused at declaration.
+#[test]
+fn test_eval_trait_method_narrows_compiled_callable_return_to_closure() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Lib;
+
+use Closure;
+
+interface Clock {
+    public static function getTestNow(): Closure|self|null;
+}
+class Fixed implements Clock {
+    public static function getTestNow(): Closure|Clock|null { return null; }
+}
+var_dump(Fixed::getTestNow());
+eval('namespace Lib; use Closure; trait Test {
+    public static function getTestNow(): Closure|Clock|null { return fn () => "now"; }
+}
+class Live extends \DateTime implements Clock { use Test; }');
+$c = 'Lib\Live';
+echo ($c::getTestNow())(), "\n";
+"#,
+    );
+    assert_eq!(out, "NULL\nnow\n");
+}
+
+/// A class satisfies an interface's `static` return with a method it INHERITS from a parent that
+/// does not implement the interface: `static` is the class being declared (Carbon's
+/// `FactoryImmutable implements ClockInterface` taking `withTimeZone(): static` from `Factory`).
+#[test]
+fn test_eval_inherited_static_return_satisfies_a_compiled_interface() {
+    let out = compile_and_run(
+        r#"<?php
+interface Clock {
+    public function withZone(string $zone): static;
+}
+class Base {
+    public string $zone = 'UTC';
+    public function withZone(string $zone): static { $c = clone $this; $c->zone = $zone; return $c; }
+}
+class Zoned extends Base implements Clock {}
+echo (new Zoned)->withZone('Europe/Paris')->zone, "\n";
+eval('class EvalBase { public $zone = "UTC"; public function withZone(string|int $zone): static { $c = clone $this; $c->zone = $zone; return $c; } }
+class EvalZoned extends EvalBase implements Clock {}');
+$z = 'EvalZoned';
+$w = (new $z)->withZone('Asia/Tokyo');
+echo get_class($w), " ", $w->zone, "\n";
+"#,
+    );
+    assert_eq!(out, "Europe/Paris\nEvalZoned Asia/Tokyo\n");
+}
+
+/// An eval override may narrow a return to a COMPILED class-like whose ancestry only the compiled
+/// program knows: Carbon's `CarbonPeriod::getStartDate(): CarbonInterface` (a compiled interface
+/// extending `DateTimeInterface`) over `DatePeriod::getStartDate()`.
+#[test]
+fn test_eval_override_narrows_return_to_compiled_class_likes() {
+    let out = compile_and_run(
+        r#"<?php
+interface Moment extends DateTimeInterface {}
+class Instant extends DateTimeImmutable implements Moment {}
+abstract class Shape {}
+class Square extends Shape {}
+echo get_class(new Instant('2020-01-01')), " ", (new Square) instanceof Shape ? "y" : "n", "\n";
+eval('class Period extends DatePeriod {
+    public function getStartDate(): Moment { return new Instant("2020-01-01"); }
+}
+abstract class Maker { abstract public function make(): Shape; }
+class SquareMaker extends Maker { public function make(): Square { return new Square; } }
+interface Source { public function start(): DateTimeInterface; }
+class Clock implements Source { public function start(): Instant { return new Instant("2021-01-01"); } }');
+echo (new ReflectionMethod('Period', 'getStartDate'))->getReturnType(), " ", get_class((new SquareMaker)->make()), " ", (new Clock)->start()->format('Y'), "\n";
+"#,
+    );
+    assert_eq!(out, "Instant y\nMoment Square 2021\n");
+}
+
+/// `return self::$instance ??= new self();` keeps the instance in the static slot when the result
+/// is only used as a temporary receiver. The null the slot held was released as though the fetch
+/// had produced a temporary, so the slot pointed at a freed cell and the next call returned
+/// whatever reused it (Carbon's `FactoryImmutable::getDefaultInstance()`).
+#[test]
+fn test_eval_static_null_coalesce_assign_keeps_the_slot_value() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class F { private static ?self $d = null; public $n = 1; public static function get(): self { return self::$d ??= new self(); } public function m() { return $this->n++; } }');
+eval('echo F::get()->m(), F::get()->m(), F::get()->m(), "\n"; var_dump(F::get() === F::get());');
+"#,
+    );
+    assert_eq!(out, "123\nbool(true)\n");
+}
+
+/// Eval implements `array_replace_recursive()` and `array_merge_recursive()`; Carbon's
+/// `Carbon::setLocale()` merges its translation messages with the first, and eval refused both.
+#[test]
+fn test_eval_array_replace_and_merge_recursive() {
+    let out = compile_and_run(
+        r#"<?php
+$base = ['a' => ['x' => 1, 'y' => [1, 2]], 'b' => 2, 5 => 'five'];
+$over = ['a' => ['y' => [9], 'z' => 3], 'b' => ['nested'], 7 => 'seven'];
+eval('echo json_encode(array_replace_recursive($base, $over)), "\n";
+echo json_encode(array_merge_recursive($base, $over)), "\n";
+echo json_encode(array_merge_recursive(["k" => null], ["k" => 1], ["k" => [2, 3]], [4])), "\n";
+echo json_encode(array_replace_recursive(["m" => ["en" => ["a" => "A"]]], ["m" => ["en" => ["b" => "B"], "fr" => []]])), "\n";
+echo count(array_merge_recursive()), "\n";');
+echo json_encode($base), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"a\":{\"x\":1,\"y\":[9,2],\"z\":3},\"b\":[\"nested\"],\"5\":\"five\",\"7\":\"seven\"}\n{\"a\":{\"x\":1,\"y\":[1,2,9],\"z\":3},\"b\":[2,\"nested\"],\"0\":\"five\",\"1\":\"seven\"}\n{\"k\":[null,1,2,3],\"0\":4}\n{\"m\":{\"en\":{\"a\":\"A\",\"b\":\"B\"},\"fr\":[]}}\n0\n{\"a\":{\"x\":1,\"y\":[1,2]},\"b\":2,\"5\":\"five\"}\n"
+    );
+}
+
+/// Laravel's facade shape across the boundary: a compiled base answers every static call through
+/// `__callStatic()`, which asks `static::getFacadeAccessor()`. An interpreted facade must run it
+/// with `static` = itself, and a compiled facade called from interpreted code must receive its
+/// argument array in the shape the compiled body reads.
+#[test]
+fn test_eval_facades_reach_the_compiled_call_static_with_their_own_static() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class Facade {
+    protected static function getFacadeAccessor() { throw new RuntimeException('Facade does not implement getFacadeAccessor method.'); }
+    public static function __callStatic($method, $args) {
+        return static::getFacadeAccessor() . '->' . $method . '(' . implode(',', $args) . ') via ' . static::class;
+    }
+}
+class Log extends Facade { protected static function getFacadeAccessor() { return 'log'; } }
+echo Log::info('a'), "\n";
+eval('class View extends Facade { protected static function getFacadeAccessor() { return "view"; } }');
+eval('echo View::replaceNamespace("errors", "x"), "\n"; echo \Log::debug("b"), "\n";');
+"#,
+    );
+    assert_eq!(
+        out,
+        "log->info(a) via Log\nview->replaceNamespace(errors,x) via View\nlog->debug(b) via Log\n"
+    );
+}
+
+/// Eval parses php 7.3's trailing comma in `unset(...)`, which Carbon's `CarbonPeriod` uses.
+#[test]
+fn test_eval_unset_accepts_a_trailing_comma() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$b = [1, 2, 3]; unset($b[0], $b[1],); echo json_encode($b), "\n";');
+"#,
+    );
+    assert_eq!(out, "{\"2\":3}\n");
+}
+
+/// An untyped `__toString()` has php 8's implicit `string` return type, so an eval class taking
+/// it from a trait satisfies a compiled interface that spells `: string` (Laravel's `Collection`
+/// against `Enumerable`), and reflection reports the type.
+#[test]
+fn test_eval_untyped_tostring_has_the_implicit_string_return_type() {
+    let out = compile_and_run(
+        r#"<?php
+interface Showable {
+    public function __toString(): string;
+}
+class Shown implements Showable {
+    public function __toString(): string { return 'compiled'; }
+}
+echo new Shown, "\n";
+eval('trait Renders { public function __toString() { return "from trait"; } }
+class Bag implements Showable { use Renders; }
+class Plain implements Showable { public function __toString() { return "plain"; } }
+echo new Bag, " ", new Plain, "\n";
+echo (new ReflectionMethod("Plain", "__toString"))->getReturnType(), "\n";');
+"#,
+    );
+    assert_eq!(out, "compiled\nfrom trait plain\nstring\n");
+}
+
+/// Eval code reads a compiled class's ARRAY constants -- own, inherited, from an interface, from
+/// an interpreted subclass -- with visibility enforced. The generated constant helper boxes
+/// scalars only, so `ReflectionCaster::UNSET_CLOSURE_FILE_INFO` was "Undefined constant".
+#[test]
+fn test_eval_reads_compiled_array_class_constants() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Lib;
+interface HasList { const LIST = [1, 2]; }
+class Base { public const U = ["Closure" => __CLASS__ . "::unset"]; protected const P = ["p" => true]; }
+class RC extends Base implements HasList { public const W = ["a" => 1, "n" => ["x" => null, 3.5]]; }
+echo json_encode(RC::W), "\n";
+eval('echo json_encode([\Lib\RC::W, \Lib\RC::U, \Lib\Base::U, \Lib\RC::LIST, \Lib\HasList::LIST]), "\n";');
+eval('namespace Lib; class Sub extends RC { static function q() { return static::P; } } echo json_encode([Sub::q(), Sub::W]), "\n";');
+eval('try { var_dump(\Lib\RC::P); } catch (\Error $e) { echo $e->getMessage(), "\n"; }');
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"a\":1,\"n\":{\"x\":null,\"0\":3.5}}\n[{\"a\":1,\"n\":{\"x\":null,\"0\":3.5}},{\"Closure\":\"Lib\\\\Base::unset\"},{\"Closure\":\"Lib\\\\Base::unset\"},[1,2],[1,2]]\n[{\"p\":true},{\"a\":1,\"n\":{\"x\":null,\"0\":3.5}}]\nCannot access protected constant Lib\\RC::P\n"
+    );
+}
+
+/// Eval code calls a compiled STATIC method through an instance, as php allows
+/// (`$request->enableHttpMethodParameterOverride()`); `static::` inside is the object's class.
+#[test]
+fn test_eval_calls_compiled_static_method_through_an_instance() {
+    let out = compile_and_run(
+        r#"<?php
+class Req {
+    protected static bool $override = false;
+    public static function enableOverride(): void { self::$override = true; }
+    public static function overrides(): bool { return self::$override; }
+    public static function make(string $x): string { return "made $x"; }
+    public static function who(): string { return static::class; }
+}
+class Child extends Req {}
+$ch = new Child();
+eval('echo $ch->who(), " ", Child::who(), "\\n";');
+$r = new Req();
+var_dump(Req::overrides());
+eval('$r->enableOverride(); var_dump($r->overrides()); echo $r->make("a"), "\n";');
+eval('class Sub extends Req { public static function twice(int $n): int { return $n * 2; } }');
+$s = new Sub();
+eval('echo $s->twice(21), " ", $s->make("b"), "\n";');
+"#,
+    );
+    assert_eq!(out, "Child Child\nbool(false)\nbool(true)\nmade a\n42 made b\n");
+}
+
+/// An interpreted `return static::$x = [...];` hands its caller a value of the caller's own: a
+/// `foreach` over the result leaves the static intact.
+///
+/// The static-property setter takes the reference it is given, and the assignment handed the
+/// same reference back as its value, so the caller's release after the loop freed the array
+/// the static still held. A `return static::$x ?? static::$x = [...];` returned the static's own
+/// cell unretained on every later call, which freed it the same way. Laravel's
+/// `Route::getValidators()` is that shape; the third route matched read freed validators
+/// ("unsupported Foreach statement").
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_eval_static_assignment_value_is_independent_of_the_static() {
+    let out = compile_and_run(
+        r#"<?php
+$code = <<<'PHP'
+class Validators {
+    public static $all;
+    public $mine;
+    public static function get() {
+        if (isset(static::$all)) {
+            return static::$all;
+        }
+        return static::$all = ['uri', 'method'];
+    }
+    public function own() { return $this->mine = [7, 8]; }
+    public static $lazy;
+    public static function lazy() { return static::$lazy ?? static::$lazy = ['a', 'b']; }
+}
+for ($i = 0; $i < 2; $i++) {
+    foreach (Validators::get() as $v) { echo $v, " "; }
+    echo "| ", json_encode(Validators::$all), "\n";
+}
+for ($i = 0; $i < 3; $i++) {
+    foreach (Validators::lazy() as $v) { echo $v; }
+}
+echo " | ", json_encode(Validators::$lazy), "\n";
+$o = new Validators();
+foreach ($o->own() as $v) { echo $v, " "; }
+echo "| ", json_encode($o->mine), "\n";
+PHP;
+eval($code);
+"#,
+    );
+    assert_eq!(
+        out,
+        "uri method | [\"uri\",\"method\"]\nuri method | [\"uri\",\"method\"]\nababab | [\"a\",\"b\"]\n7 8 | [7,8]\n"
+    );
+}
+
+/// Verifies `return eval($code);` hands the caller the fragment's value, not a cell the eval scope
+/// has already torn down. `$r = eval($code); return $r;` retained the fragment's cell in the
+/// store, but a bare `return eval(...)` returned it unretained, so a fragment that returned one
+/// of its own locals gave back null or garbage (php returns the value). Oracle: php 8.5.
+#[test]
+fn test_return_eval_of_a_fragment_local_yields_the_value() {
+    let out = compile_and_run(
+        r##"<?php
+function viaArrayLocal($x) {
+    $code = '$v = [1,2]; $w = $v; return $w;';
+    return eval($code);
+}
+function viaArray($x) {
+    $code = '$v = [1,2]; return $v;';
+    return eval($code);
+}
+function viaString($x) {
+    $code = '$v = "abc" . $x; return $v;';
+    return eval($code);
+}
+class Runner {
+    public function run($code) { return eval($code); }
+}
+echo json_encode(viaArrayLocal('p')), json_encode(viaArray('p')), json_encode(viaString('p')), "\n";
+echo json_encode((new Runner)->run('$n = ["k" => 5]; return $n;')), "\n";
+"##,
+    );
+    assert_eq!(out, "[1,2][1,2]\"abcp\"\n{\"k\":5}\n");
 }
 
 /// Verifies eval receives the complete typed AOT Core constant inventory.
@@ -31091,4 +36125,261 @@ eval('$x = true and false; var_dump($x); $y = 1 or 0; var_dump($y);');
 "#,
     );
     assert_eq!(out, "bool(true)\nint(1)\n");
+}
+
+/// Verifies reflection on an interpreted method whose attribute takes class-constant arguments.
+///
+/// The eval parser kept attribute arguments only when every one was a literal, so a single
+/// `Requirement::POSITIVE_INT` dropped them all and reflecting the method fataled. Symfony's
+/// `ControllerEvent::setController()` reflects every controller, and the demo's controllers carry
+/// `#[Route(requirements: ['page' => Requirement::POSITIVE_INT])]`. The class constant is folded
+/// to its value, as php does, in `getArguments()`, `newInstance()` and `__toString()`. Expected
+/// output is php 8.5.10's.
+#[test]
+fn test_eval_attribute_with_class_constant_arguments_reflects() {
+    let out = compile_and_run(
+        r#"<?php
+final class Requirement { public const POSITIVE_INT = "[1-9][0-9]*"; public const PREFIX = "/blog"; }
+eval('
+#[\Attribute(\Attribute::TARGET_METHOD | \Attribute::IS_REPEATABLE)]
+final class Route {
+    public function __construct(public string $path, public string $name = "", public array $requirements = []) {}
+}
+final class BlogController {
+    #[Route("/", name: "blog_index")]
+    #[Route(Requirement::PREFIX . "/page/{page}", name: "blog_index_paginated", requirements: ["page" => Requirement::POSITIVE_INT])]
+    public function index(int $page): string { return "index $page"; }
+}
+$r = new \ReflectionMethod(new BlogController(), "index");
+foreach ($r->getAttributes() as $a) {
+    echo $a->getName(), " ", json_encode($a->getArguments()), "\n";
+    $route = $a->newInstance();
+    echo $route->path, "|", $route->name, "|", json_encode($route->requirements), "\n";
+}
+echo (string) $r->getAttributes()[1];
+');
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "Route {\"0\":\"\\/\",\"name\":\"blog_index\"}\n",
+            "/|blog_index|[]\n",
+            "Route {\"0\":\"\\/blog\\/page\\/{page}\",\"name\":\"blog_index_paginated\",\"requirements\":{\"page\":\"[1-9][0-9]*\"}}\n",
+            "/blog/page/{page}|blog_index_paginated|{\"page\":\"[1-9][0-9]*\"}\n",
+            "Attribute [ Route ] {\n",
+            "  - Arguments [3] {\n",
+            "    Argument #0 [ '/blog/page/{page}' ]\n",
+            "    Argument #1 [ name = 'blog_index_paginated' ]\n",
+            "    Argument #2 [ requirements = ['page' => '[1-9][0-9]*'] ]\n",
+            "  }\n",
+            "}\n",
+        )
+    );
+}
+
+/// A compiled body calling a method an interpreted subclass overrides must not hand the override
+/// its hidden `func_get_args()` collector (present on every body once `debug_backtrace()` is
+/// used). Symfony's compiled `Container::get()` calling `$this->load($file)` on the dumped
+/// container bound the collector array to `load($file, $lazyLoad = true)`'s `$lazyLoad`.
+#[test]
+fn test_compiled_call_into_interpreted_override_splices_the_hidden_collector() {
+    let out = compile_and_run(
+        r#"<?php
+class LoaderBase
+{
+    public function get($file) { return $this->load($file); }
+    public function getWith($file, $extra) { return $this->load($file, $extra); }
+    public function count3($a, $b = 'b') { return $this->arity($a); }
+    protected function load($file) { return 'base:' . $file; }
+    protected function arity($a, $b = 'b') { return 'base'; }
+    public function trace() { return count(debug_backtrace()); }
+    public static function sget($file) { return static::sload($file); }
+    public static function sgetWith($file, $extra) { return static::sload($file, $extra); }
+    public static function sload($file) { return 'base:' . $file; }
+}
+eval('class LoaderChild extends LoaderBase {
+    protected function load($file, $lazyLoad = true) {
+        return $file . ":" . var_export($lazyLoad, true) . ":" . func_num_args();
+    }
+    protected function arity($a, $b = "child") {
+        return $a . ":" . $b . ":" . func_num_args();
+    }
+    public static function sload($file, $lazyLoad = true) {
+        return "s" . $file . ":" . var_export($lazyLoad, true) . ":" . func_num_args();
+    }
+}');
+$c = new LoaderChild();
+echo $c->get('x'), "\n";
+echo $c->getWith('y', false), "\n";
+echo $c->count3('z'), "\n";
+echo $c->trace() > 0 ? "ok" : "no", "\n";
+$k = 'LoaderChild';
+echo $k::sget('x'), "\n";
+echo $k::sgetWith('y', false), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "x:true:1\ny:false:2\nz:child:1\nok\nsx:true:1\nsy:false:2\n"
+    );
+}
+
+/// A reference bound to a by-reference method returning `$this->prop` must stay writable after
+/// the call returns. The target named the callee's `$this` cell, which the frame released, so the
+/// first write through the alias read a freed cell ("unsupported StoreVar statement"). Symfony's
+/// `ContextListener::onKernelResponse` binds `&$session->getUsageIndex()` this way on every
+/// response with a session.
+#[test]
+fn test_eval_reference_to_a_by_ref_property_return_is_written_through() {
+    let out = compile_and_run(
+        r#"<?php
+eval('
+class Sess {
+    private int $usageIndex = 0;
+    public function &getUsageIndex(): int { return $this->usageIndex; }
+    public function use(): void { ++$this->usageIndex; }
+    public function read(): int { return $this->usageIndex; }
+}
+class Listener {
+    public function onResponse(object $session): string {
+        $usageIndexValue = $session instanceof Sess ? $usageIndexReference = &$session->getUsageIndex() : null;
+        $usageIndexReference = \PHP_INT_MIN;
+        $session->use();
+        $mid = $session->read();
+        $usageIndexReference = $usageIndexValue;
+        return $usageIndexValue . "|" . $mid . "|" . $session->read();
+    }
+}
+$s = new Sess();
+$s->use();
+echo (new Listener())->onResponse($s), "\n";
+$t = new Sess();
+$r = &$t->getUsageIndex();
+$r = 7;
+echo $t->read(), "\n";
+');
+"#,
+    );
+    assert_eq!(out, "1|-9223372036854775807|1\n7\n");
+}
+
+/// A compiled `ReflectionClass::newInstanceWithoutConstructor()` must reach a class declared at
+/// run time. The constructorless allocation matched compiled classes only and died "Class not
+/// found"; Symfony's `polyfill-deepclone` builds every cached object's prototype this way.
+#[test]
+fn test_compiled_new_instance_without_constructor_reaches_a_runtime_class() {
+    let out = compile_and_run(
+        r#"<?php
+final class Maker {
+    public static function make(string $class): object {
+        return (new \ReflectionClass($class))->newInstanceWithoutConstructor();
+    }
+}
+eval('class Built { public string $state = "default"; public function __construct() { $this->state = "constructed"; } }');
+$o = Maker::make('Built');
+echo get_class($o), ' ', $o->state, "\n";
+try {
+    Maker::make('Missing');
+} catch (\ReflectionException $e) {
+    echo get_class($e), "\n";
+}
+"#,
+    );
+    assert_eq!(out, "Built default\nReflectionException\n");
+}
+
+/// `ReflectionProperty::getValue()` / `setValue()` must reach private and protected properties of
+/// an interpreted class, as php has without `setAccessible()` since 8.1. The compiled bodies write
+/// `$object->{$name}` from the reflection class's scope, and the interpreter refused it: Doctrine
+/// hydrates every entity this way, so a refreshed user lost its password and the session token
+/// looked stale on every admin page.
+#[test]
+fn test_reflection_property_values_reach_private_members_of_an_interpreted_class() {
+    let out = compile_and_run(
+        r#"<?php
+eval('
+class Person2 {
+    private ?string $password = "secret";
+    protected string $role = "admin";
+    public string $name = "jane";
+}');
+$e = new Person2();
+$props = [];
+foreach (['password', 'role', 'name'] as $n) {
+    $props[$n] = new ReflectionProperty('Person2', $n);
+}
+foreach ($props as $n => $p) {
+    echo $n, '=', $p->getValue($e), "\n";
+}
+$props['password']->setValue($e, 'changed');
+$props['role']->setValue($e, 'editor');
+echo $props['password']->getValue($e), ' ', $props['role']->getValue($e), "\n";
+"#,
+    );
+    assert_eq!(out, "password=secret\nrole=admin\nname=jane\nchanged editor\n");
+}
+
+/// `constant('Cls::NAME')` of a COMPILED class reaches the eval bridge's dynamic lookup whenever
+/// the program links the bridge (here a computed callable method name does). The bridge hands
+/// back that constant already owned, and the builtin retained it a second time, leaking the box
+/// and its string on every call. Expected output is `php -n` 8.5's; the heap must end clean.
+#[test]
+fn test_constant_of_compiled_class_const_does_not_leak_under_the_bridge() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class A {
+    const FOO = 'foo-a';
+    public static function shouldOverflowYears(): bool { return true; }
+    public function check(string $unit): bool { $u = ucfirst($unit) . 's'; return call_user_func([static::class, 'shouldOverflow' . $u]); }
+    public function greet(): string { return constant(static::class . '::' . 'FOO'); }
+}
+class B extends A { const FOO = 'foo-b'; }
+$n = $argc > 1 ? 1 : 200;
+for ($i = 0; $i < $n; $i++) {
+    $g = (new B)->greet();
+}
+echo $g, "|", (new B)->check('year') ? 'y' : 'n', "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "foo-b|y\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// `class_implements()`/`class_parents()` answer for the language-level `Closure` class.
+///
+/// `Closure` has no generated metadata row, so the relation builtins answered `false` (not `[]`);
+/// Symfony's `DebugClassLoader::getOwnInterfaces()` then ran `foreach (false)` and turned every
+/// dev container build into "Warning: foreach() argument must be of type array|object, false
+/// given".
+#[test]
+fn test_eval_class_relations_know_the_closure_class() {
+    let out = compile_and_run(
+        r#"<?php
+$code = 'var_dump(class_implements("Closure"), class_parents("Closure"));';
+eval($argc > 0 ? $code : '');
+"#,
+    );
+    assert_eq!(out, "array(0) {\n}\narray(0) {\n}\n");
+}
+
+/// A property default's `self::` resolves against the DECLARING class, not the caller's scope.
+///
+/// Reflecting `Holder` from an eval-declared `Other` evaluated `self::CREATED` under `Other`'s
+/// class scope, which reported "Undefined constant DebugClassLoader::CREATED" for the real
+/// Symfony class that triggered the same path.
+#[test]
+fn test_reflected_property_default_self_uses_the_declaring_scope() {
+    let out = compile_and_run(
+        r#"<?php
+class Holder { public const CREATED = "c"; public array $meta = [self::CREATED => 0]; }
+$code = 'class Other { public function go(): void { $r = new ReflectionClass("Holder"); var_dump($r->getDefaultProperties()); } } (new Other)->go();';
+eval($argc > 0 ? $code : '');
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(1) {\n  [\"meta\"]=>\n  array(1) {\n    [\"c\"]=>\n    int(0)\n  }\n}\n"
+    );
 }

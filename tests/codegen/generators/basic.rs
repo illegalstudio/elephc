@@ -57,6 +57,29 @@ echo $g->valid() ? "T" : "F";
     assert_eq!(out, "T7T9F");
 }
 
+/// Verifies a generator can parse an eval fragment containing a qualified
+/// `::class` expression without exhausting its coroutine stack.
+#[test]
+fn test_generator_eval_qualified_class_name_uses_sufficient_coroutine_stack() {
+    let out = compile_and_run(
+        r#"<?php
+class GeneratorEvalClassName {}
+
+function entries(): iterable {
+    $source = 'return [GeneratorEvalClassName::class => ["all" => true]];';
+    foreach (eval($source) as $class => $envs) {
+        yield $class . ':' . ($envs['all'] ? 'yes' : 'no');
+    }
+}
+
+foreach (entries() as $entry) {
+    echo $entry;
+}
+"#,
+    );
+    assert_eq!(out, "GeneratorEvalClassName:yes");
+}
+
 /// Verifies that a generator yields string literal values and that foreach
 /// iteration correctly receives each yielded string.
 #[test]

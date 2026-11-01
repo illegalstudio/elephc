@@ -79,14 +79,14 @@ fn test_hash_immediately_followed_by_bracket_is_attribute() {
     assert_eq!(t[4], Token::Echo);
 }
 
-/// PHP allows fully-qualified attribute names like `#[\Symfony\Required]`.
+/// PHP allows fully-qualified attribute names like `#[\Vendor\Required]`.
 /// Verifies `AttrOpen Backslash Identifier Backslash Identifier RBracket`.
 #[test]
 fn test_qualified_attribute_name() {
-    let t = tokens("<?php #[\\Symfony\\Required]");
+    let t = tokens("<?php #[\\Vendor\\Required]");
     assert_eq!(t[1], Token::AttrOpen);
     assert_eq!(t[2], Token::Backslash);
-    assert_eq!(t[3], Token::Identifier("Symfony".into()));
+    assert_eq!(t[3], Token::Identifier("Vendor".into()));
     assert_eq!(t[4], Token::Backslash);
     assert_eq!(t[5], Token::Identifier("Required".into()));
     assert_eq!(t[6], Token::RBracket);

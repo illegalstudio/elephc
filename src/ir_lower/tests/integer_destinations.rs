@@ -45,7 +45,13 @@ function refsink(int &$value): void { $value = 3; }
 function reference(int $value): int { refsink($value); return $value; }
 echo unknown($argc), observe($argc), wide($argc), returned($argc), reference($argc);
 "#);
-    for name in ["unknown", "observe", "wide", "returned", "reference"] {
+    // `unknown` sums a Mixed value: the sum stays a dynamic numeric binop (never an integer-leaf
+    // checked add). The Mixed result is narrowed once, at the `int` argument boundary of `sink`
+    // (a plain boundary cast; php is silent about the shape).
+    let f = function(&module, "unknown");
+    assert!(f.instructions.iter().any(|inst| inst.op == Op::MixedNumericBinop), "unknown");
+    assert!(!f.instructions.iter().any(|inst| inst.op == Op::ICheckedAdd), "unknown");
+    for name in ["observe", "wide", "returned", "reference"] {
         let f = function(&module, name);
         assert!(!f.instructions.iter().any(|inst| inst.op == Op::Cast
             && inst.result_php_type == PhpType::Int

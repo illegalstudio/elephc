@@ -320,15 +320,31 @@ fn test_fold_nan_comparisons_match_php() {
     );
 }
 
-/// Verifies a float against a non-numeric string is left for the runtime.
+/// Verifies a float against a non-numeric string folds only when php's string form is certain.
 ///
 /// PHP stringifies the float through `zend_double_to_str` and compares bytes, so `INF ==
-/// "INF"` is `true`; the fold refuses to guess that formatting and keeps the operation.
+/// "INF"` is `true`; the fold refuses to guess that formatting and keeps the operation. A plain
+/// short decimal is written the same at any sane precision, which decides version guards such as
+/// `PHP_VERSION < 8.2`.
 #[test]
-fn test_float_versus_non_numeric_string_declines_fold() {
-    let expr = Expr::binop(Expr::float_lit(1.5), BinOp::Eq, Expr::string_lit("abc"));
+fn test_float_versus_non_numeric_string_folds_only_plain_decimals() {
+    let expr = Expr::binop(Expr::float_lit(f64::INFINITY), BinOp::Eq, Expr::string_lit("INF"));
     let folded = fold_constants(vec![Stmt::echo(expr.clone())]);
     assert_eq!(folded, vec![Stmt::echo(expr)]);
+
+    // php -n -r 'var_dump(1.5 == "abc", 8.2 < "8.5.6", "8.5.0" < 8.2);'
+    assert_eq!(
+        fold_binop(Expr::float_lit(1.5), BinOp::Eq, Expr::string_lit("abc")),
+        ExprKind::BoolLiteral(false)
+    );
+    assert_eq!(
+        fold_binop(Expr::float_lit(8.2), BinOp::Lt, Expr::string_lit("8.5.6")),
+        ExprKind::BoolLiteral(true)
+    );
+    assert_eq!(
+        fold_binop(Expr::string_lit("8.5.0"), BinOp::Lt, Expr::float_lit(8.2)),
+        ExprKind::BoolLiteral(false)
+    );
 }
 
 /// Verifies integer arithmetic folds match PHP, including every overflow boundary.

@@ -10,6 +10,7 @@
 
 use crate::names::Name;
 use crate::span::Span;
+use std::path::PathBuf;
 
 use super::{
     AttributeGroup, CType, ClassConst, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind,
@@ -131,6 +132,19 @@ pub enum UseKind {
     Const,
 }
 
+/// The kind of a compiler-generated declaration activation event.
+///
+/// This is deliberately separate from declaration metadata: discovery may make a declaration
+/// known without activating it. The source path and enclosing statement span together preserve
+/// the physical declaration identity until the typed source registry is wired.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClassLikeKind {
+    Class,
+    Interface,
+    Trait,
+    Enum,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Use item. Represents a single imported name with optional alias.
 pub struct UseItem {
@@ -215,10 +229,12 @@ pub enum StmtKind {
         required: bool,
     },
     IncludeOnceMark {
-        label: String,
+        source_path: std::path::PathBuf,
     },
     IncludeOnceGuard {
-        label: String,
+        source_path: std::path::PathBuf,
+        /// `require_once` when true, `include_once` when false (spelled in trace frames).
+        required: bool,
         body: Vec<Stmt>,
     },
     Throw(Expr),
@@ -298,6 +314,8 @@ pub enum StmtKind {
         /// carry this (`class UserRepo implements Repository<User>`): it is an ordinary class
         /// that instantiates someone else's template.
         generics: Option<Box<crate::parser::ast::GenericDecl>>,
+        /// Verbatim PHP doc comment attached to this class declaration.
+        doc_comment: Option<String>,
         extends: Option<Name>,
         implements: Vec<Name>,
         is_abstract: bool,
@@ -356,10 +374,23 @@ pub enum StmtKind {
         methods: Vec<ClassMethod>,
         constants: Vec<ClassConst>,
     },
+    /// Compiler-generated activation event for a class-like declaration.
+    /// This variant is never produced by the PHP parser.
+    ClassLikeActivate {
+        name: String,
+        kind: ClassLikeKind,
+        source_path: PathBuf,
+    },
     PropertyAssign {
         object: Box<Expr>,
         property: String,
         value: Expr,
+    },
+    /// Binds a declared instance property to the reference cell owned by another property.
+    PropertyRefAssign {
+        object: Box<Expr>,
+        property: String,
+        source: Expr,
     },
     StaticPropertyAssign {
         receiver: StaticReceiver,
@@ -375,6 +406,21 @@ pub enum StmtKind {
         receiver: StaticReceiver,
         property: String,
         index: Expr,
+        value: Expr,
+    },
+    /// Binds one static-property array element by reference to another element.
+    StaticPropertyElementRefAssign {
+        receiver: StaticReceiver,
+        property: String,
+        index: Expr,
+        source: Expr,
+    },
+    /// Writes a direct value, indexed element, or appended element through a computed static-property name.
+    DynamicStaticPropertyWrite {
+        receiver: StaticReceiver,
+        property: Box<Expr>,
+        index: Option<Expr>,
+        append: bool,
         value: Expr,
     },
     PropertyArrayPush {

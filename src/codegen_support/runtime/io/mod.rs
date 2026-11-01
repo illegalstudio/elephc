@@ -29,6 +29,7 @@ mod fgetcsv;
 mod fgets;
 mod file;
 mod file_get_contents;
+mod file_get_contents_stdin;
 mod file_get_contents_range;
 mod file_get_contents_url;
 mod file_put_contents;
@@ -42,6 +43,7 @@ mod fputcsv;
 mod fread;
 mod fwrite;
 mod http_response;
+mod headers;
 mod response_metadata;
 mod php_input;
 mod stdout_write;
@@ -150,7 +152,7 @@ mod var_dump_object;
 mod var_dump_walk;
 
 pub(crate) use basename::emit_basename;
-pub(crate) use backtrace_arg::emit_backtrace_print_arg;
+pub(crate) use backtrace_arg::{emit_backtrace_print_arg, emit_backtrace_print_frame};
 pub(crate) use cstr::emit_cstr;
 pub(crate) use disk_space::emit_disk_space;
 pub(crate) use dirname::emit_dirname;
@@ -160,6 +162,7 @@ pub(crate) use fgetcsv::emit_fgetcsv;
 pub(crate) use fgets::emit_fgets;
 pub(crate) use file::emit_file;
 pub(crate) use file_get_contents::emit_file_get_contents;
+pub(crate) use file_get_contents_stdin::emit_file_get_contents_stdin;
 pub(crate) use file_get_contents_range::{
     emit_file_get_contents_range, FILE_GET_CONTENTS_SEEK_MESSAGES,
 };
@@ -172,7 +175,10 @@ pub(crate) use fopen::emit_fopen;
 pub(crate) use fputcsv::emit_fputcsv;
 pub(crate) use fread::emit_fread;
 pub(crate) use fwrite::emit_fwrite;
-pub(crate) use http_response::{emit_header, emit_http_response_code};
+pub(crate) use http_response::{
+    emit_header, emit_header_remove, emit_headers_list, emit_http_response_code,
+};
+pub(crate) use headers::emit_headers_sent;
 pub(crate) use php_input::emit_php_input;
 pub(crate) use stdout_write::emit_stdout_write;
 pub(crate) use phar_read::emit_phar_read;
@@ -193,7 +199,9 @@ pub(crate) use modify::emit_modify;
 pub(crate) use principal_lookup::emit_principal_lookup;
 pub(crate) use pathinfo_array::emit_pathinfo_array;
 pub(crate) use pathinfo_str::emit_pathinfo_str;
-pub(crate) use realpath::emit_realpath;
+pub(crate) use realpath::{
+    emit_realpath, emit_realpath_cache_invalidate, REALPATH_CACHE_ENTRY_BYTES, REALPATH_CACHE_SLOTS,
+};
 pub(crate) use scandir::emit_scandir;
 pub(crate) use stat::emit_stat;
 pub(crate) use stat_array::emit_stat_array;

@@ -9,6 +9,15 @@
 
 use super::*;
 
+/// Returns the value type stored by an array/hash container used for reference binding.
+fn reference_element_type(container: &PhpType) -> PhpType {
+    match container.codegen_repr() {
+        PhpType::AssocArray { value, .. } => (*value).clone(),
+        PhpType::Array(element) => (*element).clone(),
+        _ => PhpType::Mixed,
+    }
+}
+
 /// Lowers a static property write.
 ///
 /// A static property outlives the enclosing scope, so it must hold its own
@@ -35,6 +44,15 @@ use super::*;
 ///   `?SessionHandlerInterface` parameter) leaves the property dangling once the
 ///   borrow's owner releases its reference, so a later read dispatches on freed
 ///   memory (a fatal "on null").
+///
+///   A heap load from a local slot only *looks* like an owning temporary. Main
+///   classifies concrete array/object local loads that way for provisional
+///   unbox-release tracking, but the slot stays the owner and the frame epilogue
+///   releases it, so moving from one hands the property a reference the epilogue
+///   then takes back. `throw $e` reached the same conclusion first (issue #448):
+///   publishing a pointer somewhere that outlives the frame is not a transfer.
+///   A static property outlives it by the widest margin there is — the process —
+///   so a local-slot load is acquired here like any other borrow.
 pub(super) fn lower_static_property_assign(
     ctx: &mut LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
@@ -50,12 +68,55 @@ pub(super) fn lower_static_property_assign(
         raise_deferred_default_error(ctx, receiver, &[source], span);
         return;
     }
-    let source = static_property_type(ctx, receiver, property)
+    // A DECLARED type is enforced (php's TypeError for a wrong value); an untyped slot's inferred
+    // type is only a storage shape, so its coercion stays unguarded.
+    let declared = static_receiver_class_name(ctx, receiver).is_some_and(|class_name| {
+        ctx.classes
+            .get(class_name.as_str())
+            .is_some_and(|class_info| class_info.declared_static_properties.contains(property))
+    });
+    let mut source = static_property_type(ctx, receiver, property)
         .map(|slot_ty| {
             let source = ctx.retype_packed_address_for_pointer_sink(source, &slot_ty, Some(span));
-            coerce_typed_assign_value(ctx, source, &slot_ty, span)
+            if declared {
+                super::typed_foreach::coerce_property_assign_value(ctx, source, &slot_ty, span)
+            } else {
+                coerce_typed_assign_value(ctx, source, &slot_ty, span)
+            }
         })
         .unwrap_or(source);
+    // The checker can see a narrowed array where lowering still holds the boxed value -- a
+    // parameter typed `array|string|null`, narrowed by `is_array()` and fed through `array_map()`,
+    // stays a Mixed local here. A list slot with concrete elements cannot take the box (its
+    // elements are raw); polyfill-mbstring's `mb_detect_order()` writing `self::$encodingList` is
+    // this shape. PHP copies the array on assignment anyway, so the store takes a fresh list of
+    // the slot's element type, each element converted with the same guarded coercion a spread
+    // uses.
+    if matches!(
+        ctx.builder.value_php_type(source.value).codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        if let Some(PhpType::Array(element)) = static_property_type(ctx, receiver, property) {
+            if element.codegen_repr() != PhpType::Mixed {
+                let list = ctx.emit_value(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(0)),
+                    PhpType::Array(element.clone()),
+                    Op::ArrayNew.default_effects(),
+                    Some(span),
+                );
+                crate::ir_lower::expr::lower_indexed_array_spread_into_array(
+                    ctx,
+                    list,
+                    source,
+                    Some(&*element),
+                    span,
+                );
+                source = list;
+            }
+        }
+    }
     if static_property_store_retains_independent_value(ctx, receiver, property, source) {
         store_static_property(ctx, receiver, property, source.value, span);
         if ctx.value_is_owning_temporary(source) {
@@ -159,7 +220,38 @@ pub(super) fn static_property_store_retains_independent_value(
                 | PhpType::Object(_)
                 | PhpType::TaggedScalar
         );
-    boxes_into_mixed || narrows_out_of_mixed
+    boxes_into_mixed || narrows_out_of_mixed || converts_into_array_slot(&value_ty, &slot_ty)
+}
+
+/// Returns true for the two container stores codegen's `load_static_property_store_value_to_result`
+/// gives their own reference rather than moving the source into the slot.
+///
+/// - A hash going into an `array<mixed>`-valued slot is normalized (`__rt_hash_to_mixed` hands
+///   back the reference it took) and then RETAINED for the slot.
+/// - A list going into a hash slot is copied into fresh storage by `__rt_array_to_hash`, which
+///   leaves the source with its own owner.
+///
+/// Treated as moves, both leaked: an owned temporary was never released, and a borrowed source
+/// was acquired on top of the slot's own retain. `Box::$items = []` into a slot typed
+/// `array<mixed, mixed>` leaked one hash per assignment that way.
+///
+/// The predicates mirror `can_store_assoc_array_as_mixed_property` and
+/// `can_convert_indexed_array_to_assoc_property` in `codegen::lower_inst::objects`.
+fn converts_into_array_slot(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
+    match (value_ty, slot_ty) {
+        (PhpType::AssocArray { .. }, PhpType::Array(element)) => {
+            element.codegen_repr() == PhpType::Mixed
+        }
+        (PhpType::AssocArray { .. }, PhpType::AssocArray { value, .. }) => {
+            value.codegen_repr() == PhpType::Mixed
+        }
+        (PhpType::Array(source), PhpType::AssocArray { key, value }) => {
+            matches!(key.codegen_repr(), PhpType::Int | PhpType::Mixed)
+                && (value.codegen_repr() == PhpType::Mixed
+                    || value.codegen_repr() == source.codegen_repr())
+        }
+        _ => false,
+    }
 }
 
 /// Lowers `Class::$prop[] = value`.
@@ -188,7 +280,10 @@ pub(super) fn lower_static_property_array_push(
             Op::MixedArrayAppend.default_effects(),
             Some(span),
         );
-        if ctx.value_is_owning_temporary(value) {
+        // The boxed append takes a call's string over; only a copied one is still ours.
+        if ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Str {
+            super::array_write_core::release_string_copied_into_box(ctx, value, span);
+        } else if ctx.value_is_owning_temporary(value) {
             crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
         }
         return;
@@ -209,8 +304,30 @@ pub(super) fn lower_static_property_array_push(
         return;
     }
 
+    // A hash-typed slot (a keyed write came first: `static::$map[$name] = $v`) appends at the
+    // next integer key through the hash writer, which publishes a relocated table back into the
+    // loaded value, and that value goes back into the slot. The generic placeholder below would
+    // read the slot as a box and drop the write.
+    if let Some(property_ty) =
+        static_property_type(ctx, receiver, property).filter(is_assoc_array_type)
+    {
+        let property_value = load_static_property_as(ctx, receiver, property, property_ty, span);
+        ctx.emit_void(
+            Op::RuntimeCall,
+            vec![property_value.value, value.value],
+            None,
+            effects_lookup::runtime_effects(),
+            Some(span),
+        );
+        release_persisted_string_operand(ctx, value, span);
+        store_static_property(ctx, receiver, property, property_value.value, span);
+        return;
+    }
+
     let property_value = load_static_property(ctx, receiver, property, span);
-    if static_property_may_be_eval_dynamic(ctx, receiver) {
+    let boxed_slot = static_property_type(ctx, receiver, property)
+        .is_some_and(|ty| matches!(ty.codegen_repr(), PhpType::Mixed));
+    if boxed_slot || static_property_may_be_eval_dynamic(ctx, receiver) {
         ctx.emit_void(
             Op::MixedArrayAppend,
             vec![property_value.value, value.value],
@@ -415,11 +532,11 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
     {
         let value = ctx.retype_value_for_container_element(&property_ty, value, Some(span));
         let array_ty = property_ty.clone();
-        let property_value = load_static_property_as(ctx, receiver, property, property_ty, span);
         // PHP reads a plain-variable index at STORE time, after the right-hand side, so
         // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
         // rule; sharing the helper is what keeps the two from answering differently for
         // the same source line.
+        let property_value = load_static_property_as(ctx, receiver, property, property_ty, span);
         crate::ir_lower::expr::unpin_in_flight_owners(
             ctx,
             std::mem::take(&mut index_pins),
@@ -489,16 +606,20 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
         .filter(|ty| type_satisfies_array_access_for_ir(ctx, ty));
     // `offsetSet` receives the original key, so only a boxed array receiver has a key to rebuild.
     let key_marker = if array_access_ty.is_some() { None } else { key_marker };
+    // PHP reads a plain-variable index at STORE time, after the right-hand side, so
+    // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
+    // rule; sharing the helper is what keeps the two from answering differently for
+    // the same source line.
     let property_value = if let Some(property_ty) = array_access_ty {
         load_static_property_as(ctx, receiver, property, property_ty, span)
     } else {
         load_static_property(ctx, receiver, property, span)
     };
-    // PHP reads a plain-variable index at STORE time, after the right-hand side, so
-    // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
-    // rule; sharing the helper is what keeps the two from answering differently for
-    // the same source line.
-    if static_property_may_be_eval_dynamic(ctx, receiver) {
+    // A boxed slot is written through the mixed-array writer, which may vivify or relocate what
+    // the box holds, so the box goes back to the slot like an eval-owned one.
+    let boxed_slot = static_property_type(ctx, receiver, property)
+        .is_some_and(|ty| matches!(ty.codegen_repr(), PhpType::Mixed));
+    if boxed_slot || static_property_may_be_eval_dynamic(ctx, receiver) {
         ctx.emit_void(
             Op::RuntimeCall,
             vec![property_value.value, index.value, value.value],
@@ -546,9 +667,11 @@ pub(super) fn bind_mixed_static_array_write_root(
         ctx.prepare_mutated_local_owner_for_backend_retire(
             &name, source, assoc_ty.clone(), Some(root.span),
         );
-        // ArrayToHash checks the actual heap kind, reusing already-promoted storage.
-        let hash = ctx.emit_value(Op::ArrayToHash, vec![source.value], None, assoc_ty.clone(),
-            Op::ArrayToHash.default_effects(), Some(root.span));
+        // ArrayToHash checks the actual heap kind, reusing already-promoted storage. It MOVES the
+        // cell's reference: the `StoreRefCell` publishing the result keeps the previous occupant
+        // because the conversion consumed it, so a borrowing conversion leaked the indexed array
+        // (and took a reference on an already-promoted hash) on every `array<mixed>` static write.
+        let hash = ctx.emit_local_array_to_hash_move(&name, source, assoc_ty.clone(), root.span);
         ctx.store_prepared_mutated_local(&name, hash, assoc_ty, Some(root.span));
     }
     Some(name)
@@ -579,6 +702,219 @@ pub(crate) fn lower_static_property_array_unset(
         Op::OffsetUnset.default_effects(),
         Some(span),
     );
+}
+
+/// Lowers `self::$a[$target] = &self::$a[$source]` through one shared managed cell.
+pub(super) fn lower_static_property_element_ref_assign(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    property: &str,
+    target_index: &Expr,
+    source: &Expr,
+    span: Span,
+) {
+    let ExprKind::ArrayAccess {
+        index: source_index,
+        ..
+    } = &source.kind
+    else {
+        lower_expr(ctx, source);
+        return;
+    };
+
+    let hash_ty = static_property_type(ctx, receiver, property).unwrap_or(PhpType::Mixed);
+    let mut hash = load_static_property_as(ctx, receiver, property, hash_ty, span);
+    if let IrType::Heap(crate::ir::IrHeapKind::Array) = hash.ir_type {
+        let current_ty = ctx.builder.value_php_type(hash.value);
+        let element_ty = reference_element_type(&current_ty);
+        let assoc_ty = promoted_assoc_array_type(current_ty, element_ty);
+        hash = ctx.emit_value(
+            Op::ArrayToHash,
+            vec![hash.value],
+            None,
+            assoc_ty,
+            Op::ArrayToHash.default_effects(),
+            Some(span),
+        );
+    }
+
+    let element_ty = reference_element_type(&ctx.builder.value_php_type(hash.value));
+    let source_key = lower_expr(ctx, source_index);
+    let cell = ctx.emit_value(
+        Op::HashRefElement,
+        vec![hash.value, source_key.value],
+        None,
+        element_ty,
+        Op::HashRefElement.default_effects(),
+        Some(span),
+    );
+    let hash_ty_after = ctx.builder.value_php_type(hash.value);
+    let target_key = lower_expr(ctx, target_index);
+    let bound_hash = ctx.emit_value(
+        Op::HashBindRefElement,
+        vec![hash.value, target_key.value, cell.value],
+        None,
+        hash_ty_after,
+        Op::HashBindRefElement.default_effects(),
+        Some(span),
+    );
+    store_static_property(ctx, receiver, property, bound_hash.value, span);
+}
+
+/// Lowers a direct, indexed, or append write through a runtime static-property name.
+pub(super) fn lower_dynamic_static_property_write(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    property: &Expr,
+    index: Option<&Expr>,
+    append: bool,
+    value: &Expr,
+    span: Span,
+) {
+    let name = lower_expr(ctx, property);
+    let name = coerce_to_string_at_span(ctx, name, Some(property.span)).value;
+    let common_ty = dynamic_static_property_common_type(ctx, receiver);
+
+    if append {
+        if let Some(array_ty) = common_ty.clone().filter(is_indexed_array_type) {
+            let array = load_dynamic_static_property_as(ctx, receiver, name, array_ty, span);
+            let value = lower_expr(ctx, value);
+            ctx.emit_void(
+                Op::ArrayPush,
+                vec![array.value, value.value],
+                None,
+                Op::ArrayPush.default_effects(),
+                Some(span),
+            );
+            store_dynamic_static_property(ctx, receiver, name, array.value, span);
+            return;
+        }
+        let array_ty = common_ty
+            .filter(|ty| type_satisfies_array_access_for_ir(ctx, ty))
+            .unwrap_or(PhpType::Mixed);
+        let array = load_dynamic_static_property_as(ctx, receiver, name, array_ty, span);
+        let value = lower_expr(ctx, value);
+        ctx.emit_void(
+            Op::RuntimeCall,
+            vec![array.value, value.value],
+            None,
+            effects_lookup::runtime_effects(),
+            Some(span),
+        );
+        return;
+    }
+
+    if let Some(index) = index {
+        lower_dynamic_static_array_element_set(
+            ctx, receiver, name, common_ty, index, value, span,
+        );
+        return;
+    }
+
+    let value = lower_expr(ctx, value);
+    store_dynamic_static_property(ctx, receiver, name, value.value, span);
+}
+
+/// Lowers an indexed write through a runtime static-property name.
+fn lower_dynamic_static_array_element_set(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    name: crate::ir::ValueId,
+    common_ty: Option<PhpType>,
+    index: &Expr,
+    value: &Expr,
+    span: Span,
+) {
+    if let Some(array_ty) = common_ty.clone().filter(is_indexed_array_type) {
+        let element_array_ty = array_ty.clone();
+        let array = load_dynamic_static_property_as(ctx, receiver, name, array_ty, span);
+        let index = lower_expr(ctx, index);
+        let value = lower_expr(ctx, value);
+        let value = coerce_indexed_array_set_value(ctx, &element_array_ty, value, Some(span));
+        ctx.emit_void(
+            Op::ArraySet,
+            vec![array.value, index.value, value.value],
+            None,
+            Op::ArraySet.default_effects(),
+            Some(span),
+        );
+        store_dynamic_static_property(ctx, receiver, name, array.value, span);
+        return;
+    }
+
+    let array_ty = common_ty
+        .filter(|ty| type_satisfies_array_access_for_ir(ctx, ty))
+        .unwrap_or(PhpType::Mixed);
+    let array = load_dynamic_static_property_as(ctx, receiver, name, array_ty, span);
+    let index = lower_expr(ctx, index);
+    let value = lower_expr(ctx, value);
+    ctx.emit_void(
+        Op::RuntimeCall,
+        vec![array.value, index.value, value.value],
+        None,
+        effects_lookup::runtime_effects(),
+        Some(span),
+    );
+}
+
+/// Loads a runtime-named static property using a precomputed string value.
+fn load_dynamic_static_property_as(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    name: crate::ir::ValueId,
+    php_type: PhpType,
+    span: Span,
+) -> LoweredValue {
+    let class_name =
+        static_receiver_class_name(ctx, receiver).unwrap_or_else(|| receiver_name(receiver));
+    let data = ctx.intern_string(&class_name);
+    ctx.emit_value(
+        Op::LoadDynamicStaticProperty,
+        vec![name],
+        Some(Immediate::Data(data)),
+        php_type,
+        Op::LoadDynamicStaticProperty.default_effects(),
+        Some(span),
+    )
+}
+
+/// Stores through a runtime static-property name using a precomputed string value.
+fn store_dynamic_static_property(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    name: crate::ir::ValueId,
+    value: crate::ir::ValueId,
+    span: Span,
+) {
+    let class_name =
+        static_receiver_class_name(ctx, receiver).unwrap_or_else(|| receiver_name(receiver));
+    let data = ctx.intern_string(&class_name);
+    ctx.emit_void(
+        Op::StoreDynamicStaticProperty,
+        vec![name, value],
+        Some(Immediate::Data(data)),
+        Op::StoreDynamicStaticProperty.default_effects(),
+        Some(span),
+    );
+}
+
+/// Returns the common codegen representation of a class's static properties.
+fn dynamic_static_property_common_type(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+) -> Option<PhpType> {
+    let class_name = static_receiver_class_name(ctx, receiver)?;
+    let class_info = ctx.classes.get(class_name.as_str())?;
+    let mut types = class_info
+        .static_properties
+        .iter()
+        .map(|(_, ty)| normalize_value_php_type(ty.codegen_repr()));
+    let first = types.next()?;
+    if types.all(|ty| ty == first) {
+        Some(first)
+    } else {
+        Some(PhpType::Mixed)
+    }
 }
 
 /// Publishes a detached boxed PHP array before a static-property element mutation.

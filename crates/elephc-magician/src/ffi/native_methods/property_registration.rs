@@ -170,6 +170,57 @@ pub(super) unsafe fn register_native_property_default_array_inner(
     register_native_property_default_inner(ctx, property_key_ptr, property_key_len, default)
 }
 
+/// Records one array-valued compiled class constant in the class-constant default table.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_register_native_class_constant_default_array`; invalid handles,
+/// names or encodings fail closed as `false`.
+pub(super) unsafe fn register_native_class_constant_default_array_inner(
+    ctx: *mut ElephcEvalContext,
+    record_ptr: *const u8,
+    record_len: u64,
+    spec_ptr: *const u8,
+    spec_len: u64,
+) -> i32 {
+    let Some(default) = native_callable_array_default(spec_ptr, spec_len) else {
+        return 0;
+    };
+    let Some(context) = ctx.as_mut() else {
+        return 0;
+    };
+    if context.abi_version() != ABI_VERSION {
+        return 0;
+    }
+    let Ok(record) = abi_name_to_string(record_ptr, record_len) else {
+        return 0;
+    };
+    let mut parts = record.splitn(3, '|');
+    let (Some(visibility), Some(declaring_class), Some(constant_key)) =
+        (parts.next(), parts.next(), parts.next())
+    else {
+        return 0;
+    };
+    let declaring_class = declaring_class.to_string();
+    let Some((class_name, constant_name)) = split_property_key(constant_key) else {
+        return 0;
+    };
+    let visibility = match visibility {
+        "0" => crate::eval_ir::EvalVisibility::Public,
+        "1" => crate::eval_ir::EvalVisibility::Protected,
+        "2" => crate::eval_ir::EvalVisibility::Private,
+        _ => return 0,
+    };
+    i32::from(context.define_native_class_constant_default(
+        class_name,
+        constant_name,
+        crate::context::NativeClassConstantDefault {
+            declaring_class,
+            visibility,
+            default,
+        },
+    ))
+}
+
 /// Records a native property default in the property metadata table.
 ///
 /// # Safety

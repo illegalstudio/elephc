@@ -115,8 +115,19 @@ impl std::ops::Deref for BuiltinSpec {
     /// Exposes neutral contract fields through the existing `BuiltinSpec` view.
     fn deref(&self) -> &Self::Target {
         match &self.contract {
-            BuiltinContractRef::Shared(id) => elephc_builtin_contract::lookup_id(*id)
-                .expect("AOT builtin implementation must reference a shared contract"),
+            BuiltinContractRef::Shared(id) => match elephc_builtin_contract::lookup_id(*id) {
+                Some(contract) => contract,
+                // Naming the id is what turned a wall of ~1900 unrelated-looking failures into a
+                // one-line diagnosis: a STALE build mixing an older `elephc-builtin-contract`
+                // with an `elephc` that already referenced newly added contracts. Cargo
+                // fingerprints path dependencies by mtime, so restoring sources with preserved
+                // timestamps can reproduce it; `find … -exec touch {} +` forces the rebuild.
+                None => panic!(
+                    "AOT builtin implementation must reference a shared contract: missing id \
+                     {id:?} (catalog has {} contracts -- a stale build mixes crate versions)",
+                    elephc_builtin_contract::contracts().len(),
+                ),
+            },
             #[cfg(test)]
             BuiltinContractRef::Inline(contract) => contract,
         }

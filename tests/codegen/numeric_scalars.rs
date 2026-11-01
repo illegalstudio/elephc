@@ -531,3 +531,37 @@ foreach ([$h->big, $h->eps, $h->flat, $h->neg] as $v) { var_dump($v); }
         "Holder Object\n(\n    [big] => 1.0E+17\n    [eps] => 0.3\n    [flat] => 1.0E+15\n    [neg] => -0\n)\nfloat(1.0E+17)\nfloat(0.30000000000000004)\nfloat(1000000000000000)\nfloat(-0)\n"
     );
 }
+
+/// Verifies the single-array min/max overload scans indexed integer and float payloads and returns
+/// the element type instead of propagating the array's own type into EIR.
+#[test]
+fn test_min_max_single_array_overload() {
+    let out = compile_and_run(
+        r#"<?php
+function integerBounds(array $values): void {
+    echo min($values), ":", max($values), ";";
+}
+
+function floatBounds(array $values): void {
+    echo min($values), ":", max($values);
+}
+
+integerBounds([7, -2, 12, 4]);
+floatBounds([7.5, -2.25, 12.75, 4.0]);
+"#,
+    );
+    assert_eq!(out, "-2:12;-2.25:12.75");
+}
+
+/// Verifies single-array min/max compares Mixed associative values with PHP ordering and returns
+/// the winning value rather than the hash pointer used to store it.
+#[test]
+fn test_min_max_mixed_associative_array_overload() {
+    let out = compile_and_run(
+        r#"<?php
+$values = ["low" => 3, "high" => "9", "middle" => 7];
+echo min($values), ":", max($values);
+"#,
+    );
+    assert_eq!(out, "3:9");
+}

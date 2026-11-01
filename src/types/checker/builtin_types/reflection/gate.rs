@@ -30,6 +30,12 @@ pub(crate) const REFLECTION_CLASS_NAMES: &[&str] = &[
     "ReflectionClassConstant",
     "ReflectionEnumUnitCase",
     "ReflectionEnumBackedCase",
+    // Spelled only through a static call (`ReflectionReference::fromArrayElement(...)`) or as a
+    // parent in `instanceof`/a type, these never reached the gate, and such a program failed
+    // to check with "Undefined class: ReflectionReference".
+    "ReflectionReference",
+    "ReflectionType",
+    "ReflectionFunctionAbstract",
 ];
 
 /// Returns whether `program` can reach any builtin Reflection class.
@@ -58,13 +64,22 @@ pub(crate) const REFLECTION_CLASS_NAMES: &[&str] = &[
 /// covers it. A parsable literal fragment is scanned as inline code instead: it registers the
 /// Reflection family only when its source names it or carries a dynamic hazard of its own.
 ///
+/// AND SO DOES A RUNTIME INCLUDE, for exactly the same reason and by a different flag. An
+/// `include $path` whose path is not a string literal runs PHP TEXT THAT DOES NOT EXIST YET
+/// through the same interpreter, and that text can write `new ReflectionClass(…)` about the class
+/// it just declared — which is what every Composer autoloader does. `usage.introspects` does not
+/// see it, because the program spells no introspecting builtin; `usage.includes_runtime_php` is
+/// the flag that does. Reading only the first one is what made
+/// `interpreter::tests::include_reflection` die with `eval() runtime failed` while the identical
+/// code inside `eval('…')` printed php's answer.
+///
 /// IT SEES THE PROGRAM AFTER PRELUDE INJECTION, so a prelude that hints a Reflection type
 /// registers the family exactly as user code would. None does today.
 ///
 /// AND SOME REFERENCES ARE NOT SPELLED AT ALL — see `REFLECTION_PRODUCING_BUILTINS`.
 pub(crate) fn program_may_reference_reflection(program: &[Stmt]) -> bool {
-    let usage = crate::prelude_prune::usage::collect(program);
-    if usage.introspects {
+    let usage = crate::prelude_prune::usage::collect_shared(program);
+    if usage.introspects || usage.includes_runtime_php {
         return true;
     }
     if REFLECTION_PRODUCING_BUILTINS
@@ -134,6 +149,26 @@ mod tests {
         assert!(!program_may_reference_reflection(&parse("<?php echo 1;")));
         assert!(!program_may_reference_reflection(&parse(
             "<?php function f(int $x): string { return (string) $x; } echo f(2);"
+        )));
+    }
+
+    /// An include whose path is not a literal runs PHP that can reflect on what it just declared.
+    ///
+    /// This is `eval` by another door and it spells nothing: the included text does not exist at
+    /// compile time, so no walk of this program can see the `new ReflectionClass(…)` inside it.
+    /// Reading `usage.introspects` alone left every such program without the fourteen Reflection
+    /// classes, and `new ReflectionClass("X")` on an include-declared class died with
+    /// `Fatal error: eval() runtime failed` while the identical code inside `eval('…')` printed
+    /// php's answer — that asymmetry is what named this gate. The second assertion keeps the gate
+    /// a gate: a LITERAL include path is inlined at compile time, so its contents are walked here
+    /// and nothing has to be widened for it.
+    #[test]
+    fn a_runtime_include_registers_the_reflection_surface_with_no_name_spelled() {
+        assert!(program_may_reference_reflection(&parse(
+            "<?php $piece = __DIR__ . '/piece.php'; include $piece; echo 1;"
+        )));
+        assert!(!program_may_reference_reflection(&parse(
+            "<?php $piece = __DIR__ . '/piece.php'; echo $piece;"
         )));
     }
 

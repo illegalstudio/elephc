@@ -2,7 +2,7 @@
 title: "random_bytes()"
 description: "Generates cryptographically secure pseudo-random bytes."
 sidebar:
-  order: 660
+  order: 673
 ---
 
 ## random_bytes()

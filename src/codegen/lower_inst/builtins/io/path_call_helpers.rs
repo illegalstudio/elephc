@@ -37,20 +37,6 @@ pub(super) fn lower_unary_path_int(
     store_if_result(ctx, inst)
 }
 
-/// Loads a path string, calls an array-returning runtime helper, and stores the array.
-pub(super) fn lower_unary_path_array(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    name: &str,
-    runtime_label: &str,
-) -> Result<()> {
-    super::super::ensure_arg_count(inst, name, 1)?;
-    let path = expect_operand(inst, 0)?;
-    load_string_to_result(ctx, path, name)?;
-    abi::emit_call_label(ctx.emitter, runtime_label);
-    store_if_result(ctx, inst)
-}
-
 /// Loads a stream resource, calls a boolean fd runtime helper, and stores its result.
 pub(super) fn lower_unary_stream_bool_runtime(
     ctx: &mut FunctionContext<'_>,
@@ -66,22 +52,43 @@ pub(super) fn lower_unary_stream_bool_runtime(
 }
 
 /// Stores `__rt_flock`'s would-block output into a local slot while preserving the return value.
+///
+/// The runtime yields the output as a raw integer. A dynamic include can
+/// widen the destination local to `Mixed`, so the write-back must materialize a
+/// Mixed cell before writing the local; storing the raw `0` or `1` there would
+/// make a later truthiness read dereference it as a cell pointer.
 pub(super) fn store_flock_would_block(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Result<()> {
-    let offset = ctx.local_offset(slot)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_push_reg(ctx.emitter, "x0");
             ctx.emitter.instruction("mov x0, x1");                              // move would_block into the canonical integer register for local storage
-            abi::store_at_offset(ctx.emitter, "x0", offset);
-            abi::emit_pop_reg(ctx.emitter, "x0");
         }
         Arch::X86_64 => {
             abi::emit_push_reg(ctx.emitter, "rax");
             ctx.emitter.instruction("mov rax, rdx");                            // move would_block into the canonical integer register for local storage
-            abi::store_at_offset(ctx.emitter, "rax", offset);
-            abi::emit_pop_reg(ctx.emitter, "rax");
         }
     }
+    match ctx.local_php_type(slot)?.codegen_repr() {
+        PhpType::Mixed => {
+            let result_reg = abi::int_result_reg(ctx.emitter);
+            abi::emit_push_reg(ctx.emitter, result_reg);
+            ctx.release_local_before_refcounted_writeback(slot)?;
+            abi::emit_pop_reg(ctx.emitter, result_reg);
+            crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+        }
+        PhpType::TaggedScalar => {
+            crate::codegen::sentinels::emit_tagged_scalar_from_int_result(ctx.emitter);
+        }
+        PhpType::Int | PhpType::Bool => {}
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "flock would_block output destination with PHP type {:?}",
+                other
+            )));
+        }
+    }
+    ctx.store_current_result_to_local(slot)?;
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     Ok(())
 }
 
@@ -114,7 +121,8 @@ pub(super) fn lower_binary_path_call(
     name: &str,
     runtime_label: &str,
 ) -> Result<()> {
-    super::super::ensure_arg_count(inst, name, 2)?;
+    // A trailing stream `$context` (`copy($from, $to, $context)`) has no effect on local paths.
+    super::super::ensure_arg_count_between(inst, name, 2, 3)?;
     let first = expect_operand(inst, 0)?;
     let second = expect_operand(inst, 1)?;
     match ctx.emitter.target.arch {

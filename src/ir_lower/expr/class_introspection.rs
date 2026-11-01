@@ -24,6 +24,12 @@ pub(super) fn lower_class_introspection(
 ) -> Option<LoweredValue> {
     let kind = match php_symbol_key(name.trim_start_matches('\\')).as_str() {
         "get_class_vars" => ClassIntrospectionKind::Variables,
+        // A CLASS's `get_class_methods()` stays on `RuntimeFnId::GetClassMethods`: visibility
+        // follows the calling scope at run time (a private method is listed from inside its
+        // class), and a class only eval declared is answered by the bridge. The runtime method
+        // rows are indexed by class id, so interfaces, traits and enums (whose `cases`/`from`/
+        // `tryFrom` are not declared methods) are answered from the static projection here,
+        // and a runtime name that is none of those falls back to the runtime call.
         "get_class_methods" => ClassIntrospectionKind::Methods,
         _ => return None,
     };
@@ -31,7 +37,15 @@ pub(super) fn lower_class_introspection(
         .and_then(literal_class_argument)
         .and_then(|requested| resolved_class_name(ctx, &requested))
     {
-        return Some(materialize_class_introspection(ctx, kind, &class_name, expr));
+        if kind == ClassIntrospectionKind::Variables {
+            return Some(materialize_class_introspection(ctx, kind, &class_name, expr));
+        }
+        if is_static_method_projection(ctx, &class_name) {
+            let methods = materialize_class_introspection(ctx, kind, &class_name, expr);
+            return Some(box_method_names(ctx, methods, expr));
+        }
+        // A literal compiled class keeps the plain runtime call.
+        return None;
     }
 
     // Consume the shared argument planner for every source form, including an empty
@@ -43,7 +57,145 @@ pub(super) fn lower_class_introspection(
         panic!("checked {name} call did not lower to exactly one operand");
     };
     let argument = lowered_value_from_id(ctx, *argument);
+    if kind == ClassIntrospectionKind::Methods {
+        return Some(lower_class_methods_value(ctx, argument, expr));
+    }
     Some(lower_class_introspection_value(ctx, kind, argument, expr))
+}
+
+/// Answers `get_class_methods()` for an already lowered object, class-name string or boxed value.
+///
+/// An object goes straight to the runtime method rows (its class id, or the eval bridge for an
+/// interpreted object). A name is first matched against the class-likes the runtime rows do not
+/// cover (interfaces, traits, enums), then handed to the runtime call. A boxed value is
+/// tag-checked first, so a scalar or an array raises php's TypeError naming its type.
+fn lower_class_methods_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    argument: LoweredValue,
+    expr: &Expr,
+) -> LoweredValue {
+    let argument_type = ctx.builder.value_php_type(argument.value).codegen_repr();
+    match argument_type {
+        PhpType::Object(_) => emit_runtime_class_methods(ctx, argument, expr),
+        PhpType::Mixed | PhpType::Union(_) => {
+            let name = super::class_introspection_mixed::lower_mixed_class_name(
+                ctx,
+                ClassIntrospectionKind::Methods,
+                argument,
+                expr,
+            );
+            lower_class_methods_by_name(ctx, name, expr)
+        }
+        _ => lower_class_methods_by_name(ctx, argument, expr),
+    }
+}
+
+/// Returns whether `class_name` is answered by the static projection rather than the runtime
+/// rows: everything class-like that is not an ordinary compiled class.
+fn is_static_method_projection(ctx: &LoweringContext<'_, '_>, class_name: &str) -> bool {
+    !ctx.classes.contains_key(class_name) || ctx.enums.contains_key(class_name)
+}
+
+/// The class-like names a runtime `get_class_methods()` name is matched against before the
+/// runtime call, in deterministic order.
+fn static_method_projection_candidates(ctx: &LoweringContext<'_, '_>) -> Vec<String> {
+    class_introspection_candidates(ctx)
+        .into_iter()
+        .filter(|candidate| is_static_method_projection(ctx, candidate))
+        .collect()
+}
+
+/// Boxes a statically projected method list into the `mixed` cell the runtime call answers.
+fn box_method_names(
+    ctx: &mut LoweringContext<'_, '_>,
+    methods: LoweredValue,
+    expr: &Expr,
+) -> LoweredValue {
+    ctx.box_value_as_mixed(methods, PhpType::Mixed, Some(expr.span))
+}
+
+/// Emits the runtime `get_class_methods()` call on an object, a class-name string or a box.
+fn emit_runtime_class_methods(
+    ctx: &mut LoweringContext<'_, '_>,
+    argument: LoweredValue,
+    expr: &Expr,
+) -> LoweredValue {
+    let result_owner = prepublish_call_result(ctx, &PhpType::Mixed, expr.span);
+    let (argument, argument_owner) = root_owned_call_operand(ctx, argument, expr.span);
+    let target = crate::ir::RuntimeFnId::GetClassMethods;
+    let methods = ctx.emit_value(
+        Op::RuntimeCall,
+        vec![argument.value],
+        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target))),
+        PhpType::Mixed,
+        target.effects(),
+        Some(expr.span),
+    );
+    stage_call_result(ctx, result_owner.as_ref(), methods, expr.span);
+    if let Some(slot) = argument_owner {
+        retire_owned_call_operand(ctx, slot, expr.span);
+    }
+    take_prepublished_call_result(ctx, result_owner, methods, expr.span)
+}
+
+/// Matches a class-name string against the statically projected class-likes, falling back to
+/// the runtime call for every other name.
+fn lower_class_methods_by_name(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: LoweredValue,
+    expr: &Expr,
+) -> LoweredValue {
+    let candidates = static_method_projection_candidates(ctx);
+    if candidates.is_empty() {
+        return emit_runtime_class_methods(ctx, name, expr);
+    }
+    // One published owner for the name across the whole comparison chain (see
+    // `lower_dynamic_class_introspection`).
+    let name_temp = ctx.declare_hidden_temp(PhpType::Str);
+    store_value_into_temp(ctx, &name_temp, PhpType::Str, name, expr.span);
+    let name_slot = ctx.local_slots[&name_temp];
+    register_owned_call_operand(ctx, name_slot, expr.span);
+    let name_var = Expr::new(ExprKind::Variable(name_temp.clone()), expr.span);
+    let result_temp = ctx.declare_owned_hidden_temp(PhpType::Mixed);
+    let merge = ctx
+        .builder
+        .create_named_block("class.methods.merge", Vec::new());
+    for class_name in candidates {
+        let match_block = ctx
+            .builder
+            .create_named_block("class.methods.match", Vec::new());
+        let next_block = ctx
+            .builder
+            .create_named_block("class.methods.next", Vec::new());
+        let condition = class_name_match_expr(&name_var, &class_name, expr.span);
+        let condition = lower_expr(ctx, &condition);
+        let condition = coerce_to_int_at_span(ctx, condition, Some(expr.span));
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: condition.value,
+            then_target: match_block,
+            then_args: Vec::new(),
+            else_target: next_block,
+            else_args: Vec::new(),
+        });
+        ctx.builder.position_at_end(match_block);
+        let methods = materialize_class_introspection(
+            ctx,
+            ClassIntrospectionKind::Methods,
+            &class_name,
+            expr,
+        );
+        let boxed = box_method_names(ctx, methods, expr);
+        store_value_into_temp(ctx, &result_temp, PhpType::Mixed, boxed, expr.span);
+        branch_to(ctx, merge);
+        ctx.builder.position_at_end(next_block);
+    }
+    let name_value = lower_expr(ctx, &name_var);
+    let methods = emit_runtime_class_methods(ctx, name_value, expr);
+    store_value_into_temp(ctx, &result_temp, PhpType::Mixed, methods, expr.span);
+    branch_to(ctx, merge);
+    ctx.builder.position_at_end(merge);
+    retire_owned_call_operand(ctx, name_slot, expr.span);
+    take_owned_temp(ctx, &result_temp, expr.span)
 }
 
 /// Resolves an already lowered class name or object and dispatches its AOT metadata projection.
@@ -620,6 +772,7 @@ fn visible_class_default_entries(
             default: info.defaults.get(index).cloned().flatten(),
         });
     }
+    let instance_count = entries.len();
     for (index, (property, _)) in info.static_properties.iter().enumerate() {
         if !seen.insert(property.clone()) || !static_property_visible(ctx, class_name, info, property)
         {
@@ -631,6 +784,41 @@ fn visible_class_default_entries(
                 .cloned().unwrap_or_else(|| class_name.to_string()),
             default: info.static_defaults.get(index).cloned().flatten(),
         });
+    }
+    // php lists the instance properties, then the static ones, each in reflection order: the
+    // class's own declarations as written, then what it inherits. The storage layouts above are
+    // parent-first, so `class B extends A { public $b; }` answered `a, b` where php says `b, a`.
+    //
+    // A PRIVATE property of an ancestor is not in the class's reflection list, yet `get_class_vars()`
+    // reports it from inside that ancestor's own scope -- where php keeps it at its place in the
+    // ancestor's table, not after everything else. Such an entry inherits the position of the
+    // nearest property before it in the physical layout (which is parent-first), so
+    // `class P { public $b; private $c; public $n; }` still lists `b, c, n` for a child.
+    let reflection_position = |name: &str| {
+        info.reflection_properties
+            .iter()
+            .position(|listed| listed == name)
+    };
+    let order_key = |group: &[ClassDefaultEntry]| {
+        let mut previous: i64 = -1;
+        group
+            .iter()
+            .map(|entry| match reflection_position(&entry.name) {
+                Some(position) => {
+                    previous = position as i64;
+                    (previous, 0u8)
+                }
+                None => (previous, 1u8),
+            })
+            .collect::<Vec<_>>()
+    };
+    for range in [0..instance_count, instance_count..entries.len()] {
+        let keys = order_key(&entries[range.clone()]);
+        let mut keyed: Vec<_> = entries.drain(range.clone()).zip(keys).collect();
+        keyed.sort_by_key(|(_, key)| *key);
+        for (offset, (entry, _)) in keyed.into_iter().enumerate() {
+            entries.insert(range.start + offset, entry);
+        }
     }
     entries
 }

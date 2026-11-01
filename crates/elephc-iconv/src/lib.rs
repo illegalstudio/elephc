@@ -1,6 +1,9 @@
 //! Purpose:
 //! Implements PHP's `iconv` extension once, for both elephc backends: the AOT runtime
 //! reaches it through the `elephc_iconv_*` C ABI and Magician links the same Rust API.
+//! It also hosts mbstring's `mb_strtoupper()` / `mb_strtolower()` (`crate::case`): those
+//! need a charset layer for every non-UTF-8 encoding, and living here lets both backends
+//! share one implementation and one bridge instead of growing a second one.
 //!
 //! Called from:
 //! - `crate::abi`, which the compiled program's `__rt_iconv_*` helpers call through
@@ -13,8 +16,11 @@
 //! - Every operation returns `IconvError`, which carries the severity and message text
 //!   php-src emits, so both backends render identical diagnostics.
 //! - The encoding trio set by `iconv_set_encoding()` is process-wide state owned here.
+//! - Case mapping is not delegated to libc: it ports mbstring's own rules and tables so
+//!   the result matches php byte for byte, and only a few CJK encodings go through iconv.
 
 pub mod abi;
+mod case;
 mod convert;
 mod encoding_state;
 mod error;
@@ -26,6 +32,7 @@ mod text;
 #[cfg(test)]
 mod tests;
 
+pub use case::{convert_case, CaseError, CaseMode};
 pub use convert::convert;
 pub use encoding_state::{effective_charset, get, set, EncodingKind, DEFAULT_ENCODING};
 pub use error::{IconvError, IconvResult, Severity};

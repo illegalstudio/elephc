@@ -696,6 +696,210 @@ echo $r["x"] . "," . $r["y"];
     assert_eq!(out, "10,20");
 }
 
+/// Verifies an associative map returned as `array` survives union, iteration, and property storage.
+#[test]
+fn test_typed_assoc_method_result_populates_array_parameter_property() {
+    let out = compile_and_run(
+        r#"<?php
+class KernelValues {
+    public function parameters(): array {
+        $known = array_flip([]);
+        if (!$known) {
+            foreach ([
+                'Services' => ['all' => true],
+                'Framework' => ['all' => true],
+            ] as $envs) {
+                $known += $envs;
+            }
+            $known += ['dev' => true];
+            unset($known['all']);
+        }
+
+        return [
+            'kernel.debug' => true,
+            'kernel.bundles' => ['Framework' => 'FrameworkBundle'],
+            '.container.known_envs' => array_keys($known),
+        ] + ['kernel.logs_dir' => '/tmp/log'];
+    }
+}
+
+class Bag {
+    private array $parameters = [];
+
+    public function add(array $parameters): void {
+        foreach ($parameters as $key => $value) {
+            $this->parameters[$key] = $value;
+        }
+    }
+
+    public function get(string $name): mixed {
+        return $this->parameters[$name] ?? null;
+    }
+}
+
+$bag = new Bag();
+$bag->add((new KernelValues())->parameters());
+echo ($bag->get('kernel.debug') ? 'debug' : 'missing') . ':' . $bag->get('kernel.logs_dir') . ':' . $bag->get('.container.known_envs')[0];
+"#,
+    );
+    assert_eq!(out, "debug:/tmp/log:dev");
+}
+
+/// Verifies a nested associative write survives a bare `array` method return.
+///
+/// Regression: return lowering retyped the associative pointer to the declared generic array
+/// contract, but the epilogue still released the hash local. The caller then observed a dangling
+/// array and every key lookup produced null.
+#[test]
+fn test_typed_array_method_return_preserves_associative_map_owner() {
+    let out = compile_and_run(
+        r#"<?php
+class ParameterSource {
+    public function values(): array {
+        return [
+            'kernel.debug' => true,
+            'kernel.bundles_metadata' => ['Framework' => ['path' => '/vendor/framework']],
+        ];
+    }
+
+    public function completedValues(): array {
+        $parameters = $this->values();
+        $parameters['kernel.bundles_metadata']['Framework']['namespace'] = 'Fixture';
+
+        return $parameters;
+    }
+}
+
+$parameters = (new ParameterSource())->completedValues();
+echo ($parameters['kernel.debug'] ? 'debug' : 'missing')
+    . ':' . ($parameters['kernel.bundles_metadata']['Framework']['path'] ?? 'missing')
+    . ':' . ($parameters['kernel.bundles_metadata']['Framework']['namespace'] ?? 'missing')
+    . ':' . (array_key_exists('kernel.debug', $parameters) ? 'present' : 'absent');
+"#,
+    );
+    assert_eq!(out, "debug:/vendor/framework:Fixture:present");
+}
+
+/// Verifies a large heterogeneous associative method result survives an array-typed handoff.
+#[test]
+fn test_large_typed_assoc_method_result_populates_parameter_map() {
+    let out = compile_and_run(
+        r#"<?php
+class BundlePath {
+    public function __construct(private string $path) {}
+    public function getPath(): string { return $this->path; }
+}
+
+class KernelValues {
+    private bool $debug = true;
+    private string $environment = 'dev';
+    private array $bundles;
+
+    public function __construct() {
+        $this->bundles = [];
+        foreach ([
+            'Services' => '/vendor/services',
+            'Console' => '/vendor/console',
+            'Framework' => '/vendor/framework',
+        ] as $name => $path) {
+            $this->bundles[$name] = new BundlePath($path);
+        }
+    }
+
+    public function metadata(): array {
+        $metadata = [];
+        foreach ($this->bundles as $name => $bundle) {
+            $metadata[$name] = ['path' => $bundle->getPath()];
+        }
+
+        return $metadata;
+    }
+
+    public function parameters(): array {
+        $bundles = [];
+        $metadata = [];
+        foreach ($this->bundles as $name => $bundle) {
+            $bundles[$name] = $bundle::class;
+            $metadata[$name] = ['path' => $bundle->getPath()];
+        }
+
+        $known = array_flip(['prod', 'dev', 'test']);
+        return [
+            'kernel.project_dir' => '/project',
+            'kernel.environment' => $this->environment,
+            'kernel.runtime_environment' => '%env(default:kernel.environment:APP_RUNTIME_ENV)%',
+            'kernel.runtime_mode' => '%env(query_string:default:container.runtime_mode:APP_RUNTIME_MODE)%',
+            'kernel.runtime_mode.web' => '%env(bool:default::key:web:default:kernel.runtime_mode:)%',
+            'kernel.runtime_mode.cli' => '%env(not:default:kernel.runtime_mode.web:)%',
+            'kernel.runtime_mode.worker' => '%env(int:default::key:worker:default:kernel.runtime_mode:)%',
+            'kernel.debug' => $this->debug,
+            'kernel.build_dir' => '/cache',
+            'kernel.cache_dir' => '/cache',
+            'kernel.bundles' => $bundles,
+            'kernel.bundles_metadata' => $metadata,
+            'kernel.container_class' => 'GeneratedContainer',
+            '.kernel.config_dir' => '/project/config',
+            '.kernel.bundles_definition' => ['Services' => ['all' => true]],
+            '.container.known_envs' => array_keys($known),
+        ] + ['kernel.logs_dir' => '/project/log'];
+    }
+
+    public function completedParameters(): array {
+        $parameters = $this->parameters();
+        $parameters['kernel.charset'] = 'UTF-8';
+        foreach ($this->bundles as $name => $bundle) {
+            $parameters['kernel.bundles_metadata'][$name]['namespace'] = 'Fixture';
+        }
+
+        return $parameters;
+    }
+
+    public function completedSingleParameters(): array {
+        $parameters = $this->parameters();
+        $parameters['kernel.bundles_metadata']['Framework']['namespace'] = 'Fixture';
+
+        return $parameters;
+    }
+
+    public function completedSingleDebug(): string {
+        $parameters = $this->parameters();
+        $parameters['kernel.bundles_metadata']['Framework']['namespace'] = 'Fixture';
+
+        return $parameters['kernel.debug'] ? 'debug' : 'missing';
+    }
+}
+
+class Bag {
+    private array $parameters = [];
+
+    public function add(array $parameters): void {
+        foreach ($parameters as $key => $value) {
+            $this->parameters[$key] = $value;
+        }
+    }
+
+    public function get(string $name): mixed {
+        return $this->parameters[$name] ?? null;
+    }
+}
+
+$kernel = new KernelValues();
+$metadata = $kernel->metadata()['Framework']['path'] ?? 'missing';
+$insideDebug = $kernel->completedSingleDebug();
+$single = $kernel->completedSingleParameters();
+$singleDebug = $single['kernel.debug'] ? 'debug' : 'missing';
+$singleMetadata = $single['kernel.bundles_metadata']['Framework']['path'] ?? 'missing';
+$parameters = $kernel->completedParameters();
+$direct = $parameters['kernel.bundles_metadata']['Framework']['path'] ?? 'missing';
+$bag = new Bag();
+$bag->add($parameters);
+$stored = $bag->get('kernel.bundles_metadata')['Framework']['path'] ?? 'missing';
+echo $insideDebug . ':' . $singleDebug . ':' . $singleMetadata . ':' . ($bag->get('kernel.debug') ? 'debug' : 'missing') . ':' . $metadata . ':' . $direct . ':' . $stored . ':' . $bag->get('.container.known_envs')[1];
+"#,
+    );
+    assert_eq!(out, "debug:debug:/vendor/framework:debug:/vendor/framework:/vendor/framework:/vendor/framework:dev");
+}
+
 /// Verifies an `[]`-initialized property whose whole value is reassigned widens its element type.
 /// Regression: `private $row = [];` types the property as `Array(Never)`, and a later
 /// `$this->row = [10, 20, 30]` left the element type pinned at `Never`, so reading the returned
@@ -1365,6 +1569,58 @@ var_dump(isset_of($a, "k"));
     assert_eq!(out.stdout, "bool(true)\nbool(false)\n");
 }
 
+/// Verifies an `isset()` probe over a temporary array receiver normalizes a boxed runtime key
+/// instead of treating the Mixed-cell pointer itself as a packed-array integer offset.
+#[test]
+fn test_temporary_indexed_array_isset_accepts_runtime_mixed_key() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function values(): array {
+    return ["zero", "one"];
+}
+function probe(mixed $key): bool {
+    return isset(values()[$key]);
+}
+var_dump(probe(1));
+var_dump(probe("1"));
+var_dump(probe("missing"));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "bool(true)\nbool(true)\nbool(false)\n");
+}
+
+/// Verifies that `isset` keeps dynamic iteration and string keys on the generic PHP array-key
+/// path instead of requiring the backend's packed-array integer probe.
+#[test]
+fn test_isset_array_offset_accepts_dynamic_iteration_and_string_keys() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function table_probe(array $headers, array $rows): bool {
+    foreach ($headers as $i => $header) {
+        foreach ($rows as $row) {
+            if (isset($row[$i])) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+function path_probe(string $id, array $path): bool {
+    return isset($path[$id]);
+}
+function config_probe(string $key, array $config): bool {
+    return isset($config[$key]);
+}
+var_dump(table_probe(["header"], [["value"]]));
+var_dump(path_probe("id", ["id" => true]));
+var_dump(config_probe("missing", []));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "bool(true)\nbool(true)\nbool(false)\n");
+}
+
 /// Verifies `array_key_exists($k, $arr)` answers `true`/`false` correctly for a
 /// non-literal string key once `$arr` has been promoted to runtime hash storage via a
 /// dynamic mixed-key write, while `$arr` stays statically `Array(Mixed)` (not
@@ -1780,6 +2036,25 @@ $key = 1;
 $groups[$key][] = 7;
 $groups[$key][] = 8;
 echo count($groups[1]), ":", $groups[1][0], $groups[1][1], "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2:78\n");
+}
+
+/// Verifies nested append probing preserves a runtime Mixed key on an indexed outer array before
+/// auto-vivifying the missing bucket.
+#[test]
+fn test_indexed_nested_append_auto_vivifies_runtime_mixed_key() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function append_value(array $groups, mixed $key, int $value): array {
+    $groups[$key][] = $value;
+    return $groups;
+}
+$groups = append_value([], "alpha", 7);
+$groups = append_value($groups, "alpha", 8);
+echo count($groups["alpha"]), ":", $groups["alpha"][0], $groups["alpha"][1], "\n";
 "#,
     );
     assert!(out.success, "program failed: {}", out.stderr);
@@ -2280,6 +2555,230 @@ echo count($grow->b["k"]), ":", $grow->b["k"][11], "\n";
     );
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "2:2:1\n12:11\n");
+}
+
+/// Verifies nested append auto-vivifies every missing property-backed parent.
+///
+/// The additional subscript matters: `$this->listeners[$event][$priority][] = $listener`
+/// first needs a bucket for `$event`, then one for `$priority`. A read/push/write-back
+/// desugaring must not perform its initial read through the ordinary warning-producing array
+/// access path, otherwise each first listener is both diagnosed as a missing key and appended to
+/// a detached temporary. This is a general PHP array-write rule; listener registries are merely a
+/// compact representative shape. Scalar payloads keep this regression focused on array-write
+/// semantics; callable dispatch has independent coverage.
+#[test]
+fn test_nested_append_vivifies_multiple_property_backed_parents_without_warnings() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class ListenerRegistry {
+    private array $listeners = [];
+
+    public function add(string $event, string $payload, int $priority = 0): void {
+        $this->listeners[$event][$priority][] = $payload;
+    }
+
+    public function render(string $event): string {
+        $output = "";
+        foreach ($this->listeners[$event] ?? [] as $listeners) {
+            foreach ($listeners as $payload) {
+                $output .= $payload;
+            }
+        }
+
+        return $output;
+    }
+}
+
+$registry = new ListenerRegistry();
+$registry->add("request", "low", -10);
+$registry->add("request", "high", 10);
+$registry->add("request", "second", 10);
+echo $registry->render("request");
+"#,
+    );
+
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "lowhighsecond");
+    assert!(
+        !out.stderr.contains("Undefined array key"),
+        "nested append must not read missing write parents: {}",
+        out.stderr
+    );
+}
+
+/// Verifies a nested property registry survives reverse key sorting.
+///
+/// This is the next generic operation after nested autovivification in a priority registry:
+/// integer priorities are deliberately sparse and include both signs, so the outer bucket must
+/// retain associative-array storage through `krsort()` rather than being traversed as a dense
+/// indexed array.
+#[test]
+fn test_nested_property_priority_buckets_sort_without_missing_index_warnings() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class PriorityRegistry {
+    private array $listeners = [];
+
+    public function add(string $event, string $payload, int $priority): void {
+        $this->listeners[$event][$priority][] = $payload;
+    }
+
+    public function render(string $event): string {
+        krsort($this->listeners[$event]);
+        $output = "";
+        foreach ($this->listeners[$event] as $listeners) {
+            foreach ($listeners as $payload) {
+                $output .= $payload;
+            }
+        }
+
+        return $output;
+    }
+}
+
+$registry = new PriorityRegistry();
+$registry->add("request", "low", -200);
+$registry->add("request", "middle", 0);
+$registry->add("request", "high", 200);
+echo $registry->render("request");
+"#,
+    );
+
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "highmiddlelow");
+    assert!(
+        !out.stderr.contains("Undefined array key"),
+        "sorting sparse priority buckets must not scan missing indexes: {}",
+        out.stderr
+    );
+}
+
+/// Verifies a sorted nested registry can append through a by-reference bucket alias.
+///
+/// The shape is intentionally generic: priority buckets hold callback-shaped array values, are
+/// traversed by reference, then copied into a second property through `$property[$key][]` by
+/// reference. It protects the array layout and reference path independently of any framework.
+#[test]
+fn test_sorted_nested_property_registry_preserves_reference_appends() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class PriorityRegistry {
+    private array $listeners = [];
+    private array $optimized = [];
+
+    public function add(string $event, callable|array $listener, int $priority): void {
+        $this->listeners[$event][$priority][] = $listener;
+    }
+
+    public function optimize(string $event): int {
+        krsort($this->listeners[$event]);
+        $this->optimized[$event] = [];
+        foreach ($this->listeners[$event] as &$listeners) {
+            foreach ($listeners as &$listener) {
+                $closure = &$this->optimized[$event][];
+                $closure = $listener;
+            }
+        }
+
+        return count($this->optimized[$event]);
+    }
+}
+
+$registry = new PriorityRegistry();
+$registry->add("request", ["first"], -200);
+$registry->add("request", ["second"], 0);
+$registry->add("request", ["third"], 200);
+echo $registry->optimize("request");
+"#,
+    );
+
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "3");
+    assert!(
+        !out.stderr.contains("Undefined array key"),
+        "reference appends must not scan missing indexes: {}",
+        out.stderr
+    );
+}
+
+/// Verifies first-class callables retain sparse priority-bucket structure.
+///
+/// `$listener(...)` is PHP's first-class callable syntax. The registry is entered through the
+/// dynamic execution boundary, then runs its compiled methods; converting callback-shaped array
+/// values after sorting must not reinterpret the surrounding priority map as a dense array or
+/// retain a detached append target.
+#[test]
+fn test_sorted_priority_buckets_survive_first_class_callable_conversion() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$opaque = $argc > 99 ? 'return null;' : '';
+eval($opaque);
+
+class CallbackTarget {
+    public static int $calls = 0;
+
+    public function handle(): void {
+        self::$calls++;
+    }
+}
+
+class PriorityRegistry {
+    private array $listeners = [];
+    private array $optimized = [];
+
+    public function add(string $event, callable|array $listener, int $priority): void {
+        $this->listeners[$event][$priority][] = $listener;
+    }
+
+    public function dispatch(string $event): string {
+        krsort($this->listeners[$event]);
+        $this->optimized[$event] = [];
+        foreach ($this->listeners[$event] as &$listeners) {
+            foreach ($listeners as &$listener) {
+                $closure = &$this->optimized[$event][];
+                if (is_array($listener) && isset($listener[0]) && $listener[0] instanceof Closure && 2 >= count($listener)) {
+                    $closure = static function (...$args) use (&$listener, &$closure) {
+                        if ($listener[0] instanceof Closure) {
+                            $listener[0] = $listener[0]();
+                            $listener[1] ??= "__invoke";
+                        }
+                        $closure = $listener(...);
+                        $closure(...$args);
+                    };
+                } else {
+                    $closure = $listener(...);
+                }
+            }
+        }
+
+        foreach ($this->optimized[$event] as $closure) {
+            $closure();
+        }
+
+        return count($this->optimized[$event]).":".CallbackTarget::$calls;
+    }
+}
+
+$registry = new PriorityRegistry();
+echo eval('$registry->add("request", [static fn (): object => new CallbackTarget(), "handle"], -200);
+    $registry->add("request", [static fn (): object => new CallbackTarget(), "handle"], 0);
+    $registry->add("request", [static fn (): object => new CallbackTarget(), "handle"], 200);
+    return $registry->dispatch("request");');
+"#,
+    );
+
+    assert!(
+        out.success,
+        "program failed: stdout={:?}, stderr={}",
+        out.stdout,
+        out.stderr
+    );
+    assert_eq!(out.stdout, "3:3");
+    assert!(
+        !out.stderr.contains("Undefined array key"),
+        "callable conversion must not scan missing indexes: {}",
+        out.stderr
+    );
 }
 
 /// Verifies nested append auto-vivifies on a STATIC-property base.
@@ -4094,4 +4593,1329 @@ echo count($map), "\n";
     );
     assert_eq!(out.stdout, "12\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Verifies an associative-array literal can be materialized directly into a `Mixed` slot.
+#[test]
+fn test_assoc_literal_materialized_as_mixed() {
+    let output = compile_and_run(
+        r#"<?php
+function replace(mixed $value): mixed {
+    $value = ["name" => "elephc", "count" => 2];
+    return $value;
+}
+$result = replace(null);
+echo $result["name"].":".$result["count"];
+"#,
+    );
+    assert_eq!(output, "elephc:2");
+}
+
+/// Verifies a declared `array` property with a homogeneous associative default still accepts
+/// heterogeneous keys and values in later whole-array assignments, including static storage.
+#[test]
+fn test_typed_array_property_assoc_default_keeps_generic_storage() {
+    let out = compile_and_run(
+        r#"<?php
+class GenericArrayProperties {
+    private array $styles = ['default' => 'plain'];
+    private static array $casters = ['Initial' => ['Caster', 'cast']];
+
+    public function merge(array $styles): void {
+        $this->styles = $styles + $this->styles;
+    }
+
+    public static function add(array $casters): void {
+        self::$casters = [...self::$casters, ...$casters];
+    }
+
+    public function value(int|string $key): mixed {
+        return $this->styles[$key];
+    }
+
+    public static function caster(string $key): mixed {
+        return self::$casters[$key];
+    }
+}
+
+$properties = new GenericArrayProperties();
+$properties->merge([7 => new stdClass(), 'accent' => 42]);
+GenericArrayProperties::add(['Later' => 9]);
+echo get_debug_type($properties->value(7)), ':', $properties->value('accent'), ':';
+echo GenericArrayProperties::caster('Later');
+"#,
+    );
+    assert_eq!(out, "stdClass:42:9");
+}
+
+/// Verifies strict equality compares string-array contents and ordered positions rather than heap pointers.
+#[test]
+fn test_strict_equality_compares_indexed_string_array_values() {
+    let out = compile_and_run(
+        r#"<?php
+$left = ['Reflector', 'Type'];
+$same = ['Reflector', 'Type'];
+$reordered = ['Type', 'Reflector'];
+echo ($left === $same ? 'same' : 'bad'), ':', ($left === $reordered ? 'bad' : 'order');
+"#,
+    );
+    assert_eq!(out, "same:order");
+}
+
+/// Verifies boxed Mixed arrays recurse into nested indexed arrays for both `===` and `!==`.
+#[test]
+fn test_strict_equality_recurses_through_mixed_indexed_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+$left = [1, 'x', [2, 'y']];
+$same = [1, 'x', [2, 'y']];
+$different = [1, 'x', [2, 'z']];
+echo ($left === $same ? 'same' : 'bad'), ':', ($left !== $different ? 'different' : 'bad');
+"#,
+    );
+    assert_eq!(out, "same:different");
+}
+
+
+/// An array element write through an UNTYPED parameter holding an object must persist.
+///
+/// A boxed gradual receiver is not `PhpType::Object`, so the write fell through to the runtime
+/// fallback, whose `__rt_mixed_property_get` only understands stdClass and answers null for every
+/// other class. `__rt_mixed_array_set` then wrote into that null and the element was SILENTLY
+/// DISCARDED, while a SCALAR write to the same property through the same receiver persisted --
+/// that one already went through the declared-property class-id ladder.
+///
+/// Symfony's generated DI container is written entirely against this shape:
+/// `getXService($container, $lazyLoad = true)` storing into `$container->services[$id]`, so every
+/// service it built was rebuilt on the next `get()`.
+///
+/// Oracle: `php -n` prints the asserted line.
+#[test]
+fn test_array_element_write_through_an_untyped_object_parameter_persists() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag {
+    public array $services = [];
+    public array $list = [];
+    public string $marker = 'init';
+}
+function writeUntyped($c): void {
+    $c->marker = 'written';
+    $c->services['k'] = 'assoc';
+    $c->list[] = 'pushed';
+}
+function writeTyped(Bag $c): void {
+    $c->services['t'] = 'typed';
+}
+$b = new Bag();
+writeUntyped($b);
+writeTyped($b);
+echo $b->marker, '|', $b->services['k'] ?? 'MISSING', '|', $b->services['t'] ?? 'MISSING',
+     '|', $b->list[0] ?? 'MISSING', '|', count($b->services);
+"#,
+    );
+    assert_eq!(out, "written|assoc|typed|pushed|2");
+}
+
+/// A container-shaped `get()` must return the SAME instance on a second call.
+///
+/// The end-to-end shape the write-back fix exists for: a static factory stores the new service
+/// into the container's array property through an untyped parameter, and the cached read on the
+/// next call has to find it.
+///
+/// Oracle: `php -n` prints the asserted line.
+#[test]
+fn test_container_style_service_cache_returns_the_same_instance() {
+    let out = compile_and_run(
+        r#"<?php
+class Svc { public function __construct(public string $name) {} }
+class Cnt {
+    protected array $services = [];
+    protected array $methodMap = [];
+    public function __construct() { $this->methodMap['svc'] = 'getSvcService'; }
+    public function get(string $id): ?object {
+        return $this->services[$id] ?? $this->{$this->methodMap[$id]}($this);
+    }
+    protected static function getSvcService($container) {
+        return $container->services['svc'] = new Svc('built');
+    }
+}
+$c = new Cnt();
+$first = $c->get('svc');
+$second = $c->get('svc');
+echo $first->name, '|', $second->name, '|', var_export($first === $second, true);
+"#,
+    );
+    assert_eq!(out, "built|built|true");
+}
+
+/// Indexing a callable descriptor must answer BOTH slots of PHP's `[$object, 'method']` array.
+///
+/// A `callable` slot holds a descriptor, not the array the caller wrote. Index 0 (the bound
+/// receiver) was already rebuilt from the descriptor's first runtime capture, but index 1 fell
+/// through to the boxed-array reader, which answers null for the callable descriptor tag -- so
+/// `$c[1]` read back EMPTY while `is_array($c)` on the same value answered true.
+///
+/// Symfony's `ControllerEvent::getAttributes` needs both halves: it reaches
+/// `method_exists($this->controller[0], $this->controller[1])` under an `is_array` guard, and with
+/// an empty second argument no `match` arm matched and the request died on `unhandled match case`.
+///
+/// Oracle: `php -n` prints the asserted line.
+#[test]
+fn test_callable_array_descriptor_indexes_both_slots_through_a_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Target { public function preview(): string { return 'ok'; } }
+function makeCallable(): callable { return [new Target(), 'preview']; }
+final class Holder {
+    private string|array|object $c;
+    public function set(callable $c): void { $this->c = $c; }
+    public function probe(): string {
+        if (!\is_array($this->c)) {
+            return 'NOT-ARRAY';
+        }
+        return get_class($this->c[0]).'|'.$this->c[1].'|'
+            .var_export(method_exists($this->c[0], $this->c[1]), true);
+    }
+}
+$h = new Holder();
+$h->set(makeCallable());
+echo $h->probe();
+"#,
+    );
+    assert_eq!(out, "Target|preview|true");
+}
+
+
+/// An array write that CREATES its local must have storage before the loop that performs it.
+///
+/// PHP auto-vivifies on `$keys[] = $k` when nothing assigned `$keys` yet -- the write makes the
+/// array. elephc refused it as `Undefined variable`, and where an error-suppression rule swallowed
+/// that diagnostic the program compiled with the local still NULL, so the read below the loop died
+/// with "implode(): Argument #2 ($array) must be of type ?array, null given".
+///
+/// `crate::append_vivify` now decides which names those are, and BOTH the checker's scope entry
+/// environment and EIR lowering's entry block seed them from that one scan. Seeding at the write
+/// instead would reset the array on every iteration.
+///
+/// `Symfony\Component\VarDumper\Caster\StubCaster::castStub` is the shape.
+///
+/// Oracle: `php -n` prints the asserted line.
+#[test]
+fn test_array_append_creates_its_local_before_the_loop_that_fills_it() {
+    let out = compile_and_run(
+        r#"<?php
+function collect(array $src): string {
+    foreach (array_keys($src) as $k) {
+        $keys[] = 'p'.$k;
+    }
+    return implode(',', $keys);
+}
+function byKey(array $src): string {
+    foreach ($src as $v) {
+        $map['k'.$v] = $v * 2;
+    }
+    return implode(',', array_keys($map)).'|'.implode(',', $map);
+}
+echo collect(['a' => 1, 'b' => 2]), '/', byKey([3, 4]);
+"#,
+    );
+    assert_eq!(out, "pa,pb/k3,k4|6,8");
+}
+
+/// A `foreach` whose by-REFERENCE target names its own source must not follow the rebound name.
+///
+/// `foreach ($v as $k => &$v)` is legal PHP: the loop walks the array it already holds, so
+/// rebinding `$v` to element after element leaves the walk alone. elephc re-read the source out of
+/// the slot each iteration and followed an element reference as if it were the array, which
+/// segfaulted on the second one. The parser now binds a hidden local to the source first.
+///
+/// `Symfony\Component\VarDumper\Caster\ReflectionCaster::castFunctionAbstract` is the shape.
+///
+/// Oracle: `php -n` prints the asserted line.
+#[test]
+fn test_by_ref_foreach_target_naming_its_own_source_walks_every_element() {
+    let out = compile_and_run(
+        r#"<?php
+function shadow(array $src): string {
+    $v = $src;
+    $out = [];
+    foreach ($v as $k => &$v) {
+        $out[] = $k.'='.$v;
+    }
+    unset($v);
+    return implode(',', $out);
+}
+echo shadow([10, 20, 30]);
+"#,
+    );
+    assert_eq!(out, "0=10,1=20,2=30");
+}
+
+
+/// An untyped property accepts `[]=` and auto-vivifies, as it does in PHP.
+///
+/// `updated_array_property_assign_type` already had a `PhpType::Mixed` arm -- the boxed storage
+/// type is preserved and the runtime writer does the mutation and the auto-vivification -- but the
+/// PUSH sibling `updated_array_property_push_type` did not, so `$this->brackets[] = $x` against
+/// `private $brackets;` was refused with `Array push requires an array property, got mixed` while
+/// `$this->brackets[$k] = $x` was accepted. Twig's `Lexer` writes the push form five times.
+///
+/// `$this->states` is never assigned before its first push, so this also covers vivification from
+/// an uninitialized untyped property, not just from one an earlier `= []` had already made array.
+///
+/// Oracle: `php -n` prints the asserted line.
+#[test]
+fn test_untyped_property_accepts_an_array_push_and_vivifies() {
+    let out = compile_and_run(
+        r#"<?php
+class Lex {
+    private $brackets;
+    private $states;
+    public function run(): string {
+        $this->brackets = [];
+        $this->brackets[] = ['"', 1];
+        $this->brackets[] = ['{', 2];
+        $this->states[] = 'first';
+        $this->states[] = 'second';
+        $out = '';
+        foreach ($this->brackets as $b) { $out .= $b[0] . $b[1] . ','; }
+        return $out . '|' . implode('/', $this->states) . '|' . count($this->brackets);
+    }
+}
+echo (new Lex())->run();
+"#,
+    );
+    assert_eq!(out, "\"1,{2,|first/second|2");
+}
+
+/// `array_push()` takes the variadic tail PHP gives it.
+///
+/// The contract already declared `variadic: Some(VariadicSpec::value("values"))`, but `max_args:
+/// Some(2)` capped it at one value to reproduce a legacy CHECK arm, so `array_push($a, $x, $y)`
+/// was refused with `array_push() takes exactly 2 arguments`. Twig's
+/// `ArrayExpression::addElement` pushes a key and a value in one call.
+///
+/// Both receiver shapes the lowering dispatches on are covered: the boxed Mixed cell of an untyped
+/// property, and a plain indexed local. The single-value form must keep working unchanged.
+///
+/// Oracle: `php -n` prints the asserted line.
+#[test]
+fn test_array_push_appends_every_variadic_value_in_order() {
+    let out = compile_and_run(
+        r#"<?php
+class Expr {
+    private $nodes;
+    public function __construct() { $this->nodes = []; }
+    public function add(string $key, string $value): void {
+        array_push($this->nodes, $key, $value);
+    }
+    public function dump(): string { return implode(',', $this->nodes) . '#' . count($this->nodes); }
+}
+$e = new Expr();
+$e->add('k1', 'v1');
+$e->add('k2', 'v2');
+echo $e->dump(), '|';
+$plain = [1, 2];
+array_push($plain, 3, 4, 5);
+echo implode('-', $plain), '|';
+$one = ['a'];
+array_push($one, 'b');
+echo implode('-', $one);
+"#,
+    );
+    assert_eq!(out, "k1,v1,k2,v2#4|1-2-3-4-5|a-b");
+}
+
+
+/// `array_chunk()` answers for hash storage and for a boxed `Mixed` cell, not just a dense list.
+///
+/// The native lowering walks dense indexed storage and picks its runtime helper from the source
+/// ELEMENT type, so it had nothing to run against either shape and the checker refused both.
+/// Twig's `ArrayExpression` calls `array_chunk($this->nodes, 2)` against `protected $nodes;`.
+///
+/// `array<mixed>` is routed to the prelude too, deliberately: it is what a declared `array`
+/// parameter and an untyped property both get, and it does NOT promise indexed storage. Leaving it
+/// native ran the dense walk over a hash and produced a short, malformed result — the same trap
+/// `lower_array_union` documents. Only a narrower element type keeps the native path.
+///
+/// The `$assoc` case is what caught that: `count($pair)` stayed right while `$pair[0]` came back
+/// as garbage, so a weaker assertion would have passed.
+///
+/// Oracle: `php -n` prints the asserted line.
+#[test]
+fn test_array_chunk_splits_hash_and_boxed_sources() {
+    let out = compile_and_run(
+        r#"<?php
+class Node {
+    protected $nodes;
+    public function __construct(array $nodes = []) { $this->nodes = $nodes; }
+    public function pairs(): string {
+        $out = '';
+        foreach (array_chunk($this->nodes, 2) as $pair) {
+            $out .= '(' . $pair[0] . ',' . ($pair[1] ?? '-') . ')';
+        }
+        return $out;
+    }
+}
+echo (new Node(['k1', 'v1', 'k2']))->pairs(), '|';
+echo (new Node(['a' => 1, 'b' => 2, 'c' => 3]))->pairs(), '|';
+echo (new Node([]))->pairs(), '|';
+$assoc = ['x' => 10, 'y' => 20, 'z' => 30];
+foreach (array_chunk($assoc, 2) as $c) { echo '[' . implode('/', $c) . ']'; }
+echo '|';
+$plain = [1, 2, 3, 4, 5];
+foreach (array_chunk($plain, 2) as $c) { echo '[' . implode('/', $c) . ']'; }
+"#,
+    );
+    assert_eq!(out, "(k1,v1)(k2,-)|(1,2)(3,-)||[10/20][30]|[1/2][3/4][5]");
+}
+
+
+/// A by-value `foreach` binds a COPY: writing its element must not reach the source array.
+///
+/// The dynamic indexed iterator handed the loop body the array's OWN boxed cell with nothing but
+/// an `__rt_incref`, so the binding aliased the slot and `$row[0] = ...` wrote straight into the
+/// source. Only a source elephc could see was a fresh local literal was safe; a declared `array`
+/// parameter and an object property both leaked, and assigning the property to a local first did
+/// not help.
+///
+/// The indexed read `$row = $rows[0]` already got this right — its `Mixed` arm detaches through
+/// `emit_mixed_array_get_deref_invoker_ref_cell`, unboxing and re-boxing into a fresh cell whose
+/// payload is retained, so the container's refcount reaches 2 and the element write separates it.
+/// The iterator now does the same. Isolated by construction: the same loop fetching the element BY
+/// INDEX was correct, and so was a `for` loop doing the indexed read.
+///
+/// The last case is what made this expensive to find. It destroys a value on FIRST use, so the
+/// SECOND use fails somewhere else entirely: a closure held in a nested array came back as runtime
+/// tag 0 and fatalled with `Unsupported EIR callable_descriptor_invoke mixed value is not
+/// callable`. Calling one method twice is enough, so a weaker fixture that resolves once passes.
+///
+/// Oracle: `php -n` prints the asserted line.
+#[test]
+fn test_by_value_foreach_binding_does_not_write_through_to_the_source() {
+    let out = compile_and_run(
+        r#"<?php
+function fromParam(array $rows): string {
+    foreach ($rows as $row) { $row[0] = 'REPLACED'; }
+    return $rows[0][0];
+}
+class Target {}
+class Holder {
+    public array $rows = [['keep', 'b']];
+    private array $entries = [];
+    public function viaProp(): string {
+        foreach ($this->rows as $row) { $row[0] = 'REPLACED'; }
+        return $this->rows[0][0];
+    }
+    public function viaPropCopy(): string {
+        $local = $this->rows;
+        foreach ($local as $row) { $row[0] = 'REPLACED'; }
+        return $this->rows[0][0];
+    }
+    public function addLazy(array $entry): void { $this->entries[] = $entry; }
+    public function resolveTwice(): string {
+        $out = [];
+        for ($i = 0; $i < 2; $i++) {
+            foreach ($this->entries as $entry) {
+                $entry[0] = $entry[0]();
+                $out[] = get_class($entry[0]);
+            }
+        }
+        return implode(',', $out);
+    }
+}
+echo fromParam([['keep', 'b']]), '|';
+echo (new Holder())->viaProp(), '|';
+echo (new Holder())->viaPropCopy(), '|';
+$h = new Holder();
+$h->addLazy([fn () => new Target(), 'run']);
+echo $h->resolveTwice();
+"#,
+    );
+    assert_eq!(out, "keep|keep|keep|Target,Target");
+}
+
+
+/// A gradual value narrowed to a bare `array` return keeps the CONTAINER KIND it arrived with.
+///
+/// The boundary answered an `array<mixed>` target with `MixedToHash`, so an indexed source came
+/// back as a hash, and the return contract then restamped that hash as the declared indexed type
+/// rather than converting it — converting would discard string keys, so the restamp is deliberate.
+/// The static type therefore lied about the storage, and only the consumers that ask
+/// `__rt_heap_kind` survived it: `count()`, `$a[0]`, `foreach`, `json_encode()`, `serialize()`,
+/// `array_keys()`, `array_values()`, `array_merge()`, `array_slice()`, `array_reverse()`,
+/// `array_unique()`, `sort()` and `var_export()` were right, while `in_array()`, `array_filter()`,
+/// `array_pop()` and `min()` SEGFAULTED, `array_shift()` answered `NULL`, `current()`/`end()`
+/// answered nothing and `print_r()` printed the keys in place of the values.
+///
+/// It takes TWO implementers to reach: with one, the guarded call is concrete, no gradual value
+/// crosses the boundary, and the same source is correct. The `method_exists()` guard is what makes
+/// a method the interface does not declare callable at all.
+///
+/// Oracle: `php -n` prints the asserted line.
+#[test]
+fn test_gradual_array_return_keeps_its_container_kind() {
+    let out = compile_and_run(
+        r#"<?php
+interface ParserInterface { public function getName(): string; }
+abstract class AbstractParser implements ParserInterface {
+    public function getOperatorTokens(): array { return ['op-' . $this->getName(), 'zz']; }
+}
+class Rich extends AbstractParser { public function getName(): string { return 'rich'; } }
+class Plain implements ParserInterface { public function getName(): string { return 'plain'; } }
+function tokensFor(ParserInterface $parser): array {
+    if (method_exists($parser, 'getOperatorTokens')) { return $parser->getOperatorTokens(); }
+    return [$parser->getName()];
+}
+$a = tokensFor(new Rich());
+echo implode(',', $a), ';';
+echo var_export(in_array('zz', $a, true), true), ';';
+echo implode('|', array_filter($a, fn ($v) => $v !== 'zz')), ';';
+echo min($a), ';';
+echo current($a), '/', end($a), ';';
+echo str_replace("\n", '', print_r($a, true)), ';';
+echo array_shift($a), ';';
+echo implode(',', tokensFor(new Plain()));
+"#,
+    );
+    assert_eq!(
+        out,
+        "op-rich,zz;true;op-rich;op-rich;op-rich/zz;Array(    [0] => op-rich    [1] => zz);op-rich;plain"
+    );
+}
+
+/// `implode()` over an `array<mixed>` asks what container it actually has.
+///
+/// `Array(Mixed)` is the one indexed contract associative storage is stored under: a bare `array`
+/// return contract RESTAMPS a hash rather than converting it, and a by-reference write promotes a
+/// live array to a hash in place. `implode()` handed the raw pointer to a renderer that walks a
+/// packed header, so a hash joined to the empty string while `count()`, `array_keys()` and
+/// `foreach` over the very same value were correct — which reads as an empty result rather than a
+/// miscompile.
+///
+/// The fixture reaches the restamp through a hash-returning implementation behind a
+/// `method_exists()` guard, which is the shape that keeps the value gradual all the way to the
+/// return boundary.
+///
+/// Oracle: `php -n` prints the asserted line.
+#[test]
+fn test_implode_reads_a_hash_stored_under_a_list_contract() {
+    let out = compile_and_run(
+        r#"<?php
+interface ParserInterface { public function getName(): string; }
+abstract class AbstractParser implements ParserInterface {
+    public function getOperatorTokens(): array {
+        return ['first' => 'op-' . $this->getName(), 'second' => 'zz'];
+    }
+}
+class Rich extends AbstractParser { public function getName(): string { return 'rich'; } }
+class Plain implements ParserInterface { public function getName(): string { return 'plain'; } }
+function tokensFor(ParserInterface $parser): array {
+    if (method_exists($parser, 'getOperatorTokens')) { return $parser->getOperatorTokens(); }
+    return [$parser->getName()];
+}
+$a = tokensFor(new Rich());
+echo count($a), ':', implode(',', $a), ':', implode('|', array_keys($a));
+"#,
+    );
+    assert_eq!(out, "2:op-rich,zz:first|second");
+}
+
+
+/// `unset($obj->prop[$key])` works through a receiver whose class the compiler cannot name.
+///
+/// The element WRITE through the same shape already had its own lowering, and it exists because
+/// Symfony's generated container is written entirely that way: `getXService($container, …)` takes
+/// an UNTYPED parameter and mutates `$container->services[$id]`. The UNSET never got the
+/// counterpart, so the container's own error path —
+///
+/// ```php
+/// } catch (\Throwable $e) {
+///     unset($container->services['event_dispatcher']);
+///     throw $e;
+/// }
+/// ```
+///
+/// refused with `unsupported EIR backend feature: unset target shape with 1 lowered operands`,
+/// which is where the `--web` build of the Symfony preload stopped. Declaring the parameter
+/// (`C $container`) compiled the identical body, which is what isolated it to the receiver type.
+///
+/// The fixture covers all three things the lowering has to get right: the key is really removed,
+/// removing an ABSENT key is a no-op rather than a fault, and the property itself is updated (the
+/// `count` afterwards reads the written-back container). A `stdClass` receiver is included because
+/// it reaches the same path by a different predicate — dynamic property storage rather than a
+/// gradual type.
+///
+/// NOT heap-clean, and not because of this lowering: a property WRITE through a generic receiver
+/// already leaks. Measured with the same harness on `$container->services = [...]` alone, with no
+/// unset anywhere: 3 writes leave 9 live blocks, 6 writes leave 18 — exactly 3 blocks per write,
+/// linear, so the slot's previous value is never released. This unset inherits that (it replaces
+/// the property's container), which is why the assertion below is on BEHAVIOUR. Fixing the store
+/// makes both clean; asserting cleanliness here first would only pin the wrong component.
+///
+/// Oracle: `php -n` prints the asserted lines.
+#[test]
+fn test_unset_removes_an_element_through_a_generic_object_property() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class C {
+    protected $services = ['a' => 1, 'b' => 2, 'c' => 3];
+    protected static function drop($container, $key)
+    {
+        unset($container->services[$key]);
+        return implode(',', array_keys($container->services));
+    }
+    public function run()
+    {
+        echo self::drop($this, 'b'), "\n";
+        echo self::drop($this, 'zzz'), "\n";
+        echo count($this->services), "\n";
+    }
+}
+(new C())->run();
+$o = new stdClass();
+$o->bag = ['k' => 'v', 'j' => 'w'];
+$f = static function ($obj) { unset($obj->bag['k']); };
+$f($o);
+echo implode(',', array_keys($o->bag)), "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "a,c\na,c\n2\nj\n");
+}
+
+
+/// `asort()` and `arsort()` on a LIST carry each key with its value, as PHP does.
+///
+/// The values came out ordered and the keys came out `0|1|2` — a silent wrong answer, and the
+/// entire difference between `asort()` and `sort()`. An indexed array has no key storage for a
+/// slot permuter to carry, so the result is only representable as a hash; the lowering now
+/// promotes the local with `ArrayToHash` before the call, which is the same promotion
+/// `unset($list[$k])` performs at its own site, and the backend already routes a hash receiver to
+/// `__rt_hash_asort` / `__rt_hash_arsort`.
+///
+/// Measured across the family at the time of the fix: `ksort`, `krsort`, `sort`, `rsort` and
+/// `usort` were already right, so they are asserted here as the controls that must stay right.
+/// `uasort` has the SAME fault and is deliberately not fixed — there is no `__rt_hash_uasort`, so
+/// promoting its receiver would trade a wrong answer for a refusal to compile. It is asserted at
+/// its current behaviour so the day someone adds that helper, this test says what to expect.
+///
+/// It also unblocked Twig's `Lexer::getOperatorRegex()`, which `arsort()`s an `array_combine()`
+/// result the backend refused outright.
+///
+/// Oracle: `php -n` prints every asserted line except the `uasort` one, which reads `1|2|0`.
+#[test]
+fn test_key_preserving_sorts_carry_their_keys_on_a_list() {
+    let out = compile_and_run(
+        r#"<?php
+function show(string $label, array $a): void {
+    echo $label, ': ', implode('|', array_keys($a)), ' => ', implode('|', $a), "\n";
+}
+$a = [3, 1, 2]; asort($a); show('asort', $a);
+$b = [3, 1, 2]; arsort($b); show('arsort', $b);
+$f = [3, 1, 2]; ksort($f); show('ksort', $f);
+$g = [3, 1, 2]; krsort($g); show('krsort', $g);
+$h = [3, 1, 2]; sort($h); show('sort', $h);
+$i = [3, 1, 2]; rsort($i); show('rsort', $i);
+$j = [3, 1, 2]; usort($j, fn ($x, $y) => $x <=> $y); show('usort', $j);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "asort: 1|2|0 => 1|2|3\n",
+            "arsort: 0|2|1 => 3|2|1\n",
+            "ksort: 0|1|2 => 3|1|2\n",
+            "krsort: 2|1|0 => 2|1|3\n",
+            "sort: 0|1|2 => 1|2|3\n",
+            "rsort: 0|1|2 => 3|2|1\n",
+            "usort: 0|1|2 => 1|2|3\n",
+        )
+    );
+}
+
+
+/// An array literal's storage type merges a conditional value's BRANCHES.
+///
+/// The IR-side value type fell through to the syntactic guess for a ternary, and that guess reads
+/// the first branch — and its `Int` for an unknown is indistinguishable from a real one. So
+/// `'port' => isset($p['host']) ? 11211 : null` typed as `int`, the literal was stamped
+/// `array<string, int>` over a string, an `int|null` and an `int`, and the backend refused with
+/// `hash_set value PHP type TaggedScalar`.
+///
+/// The checker already merged these correctly; only the IR's own stamp disagreed, which is the
+/// divergence that turns into a corrupt read rather than a diagnostic.
+///
+/// Symfony's `MemcachedAdapter::createConnection` writes exactly this literal.
+///
+/// Oracle: `php -n` prints the asserted lines.
+#[test]
+fn test_a_conditional_array_value_merges_its_branches() {
+    let out = compile_and_run(
+        r#"<?php
+function build(array $params): string
+{
+    $params += [
+        'host' => $params['host'] ?? $params['path'],
+        'port' => isset($params['host']) ? 11211 : null,
+        'weight' => 0,
+    ];
+    return json_encode($params);
+}
+echo build(['path' => '/tmp/s']), "\n";
+echo build(['host' => 'h']), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "{\"path\":\"\\/tmp\\/s\",\"host\":\"\\/tmp\\/s\",\"port\":null,\"weight\":0}\n",
+            "{\"host\":\"h\",\"port\":11211,\"weight\":0}\n",
+        )
+    );
+}
+
+/// Verifies `array_reverse()` and `iterator_to_array()` accept a `preserve_keys` flag the caller
+/// only knows at run time.
+///
+/// Both refused a non-literal flag, and both are called that way by
+/// `twig/twig`'s `CoreExtension`: `reverse($charset, $item, $preserveKeys = false)` and
+/// `toArray($seq, $preserveKeys = true)` forward an UNTYPED parameter straight into the builtin, so
+/// no caller can make it literal and the whole file was refused. The two arms produce different
+/// shapes -- a dense array and a hash -- so the call answers with their union and the backend picks
+/// the arm at run time. Value-checked against `php -n`, which prints the same lines.
+#[test]
+fn test_array_reverse_takes_a_runtime_preserve_keys_flag() {
+    let out = compile_and_run(
+        r#"<?php
+function reverseList(array $items, $preserveKeys = false)
+{
+    $list = array_values($items);
+
+    return array_reverse($list, $preserveKeys);
+}
+
+function toArrayMaybeKeyed(\Traversable $seq, $preserveKeys = true)
+{
+    return iterator_to_array($seq, $preserveKeys);
+}
+
+echo implode(',', array_keys(reverseList([10, 20, 30]))), ':';
+echo implode(',', array_values(reverseList([10, 20, 30]))), ';';
+echo implode(',', array_keys(reverseList([10, 20, 30], true))), ':';
+echo implode(',', array_values(reverseList([10, 20, 30], true))), ';';
+echo implode(',', array_keys(reverseList([10, 20, 30], 1))), ';';
+$generator = (function () { yield 'a' => 1; yield 'b' => 2; })();
+echo implode(',', array_keys(toArrayMaybeKeyed($generator))), ';';
+$again = (function () { yield 'a' => 1; yield 'b' => 2; })();
+echo implode(',', array_keys(toArrayMaybeKeyed($again, false)));
+"#,
+    );
+    assert_eq!(out, "0,1,2:30,20,10;2,1,0:30,20,10;2,1,0;a,b;0,1");
+}
+
+/// Verifies `shuffle()` accepts a gradual array, like the rest of the by-reference sort family.
+///
+/// `shuffle()` alone demanded a statically concrete `Array`/`AssocArray` where `sort()` and its
+/// siblings use `array_arg_is_gradually_acceptable`, so `shuffle(self::toArray($item, false))` in
+/// twig's `CoreExtension` was refused for the shape every untyped helper returns. The count is
+/// value-checked against `php -n`; the ORDER is random in both.
+#[test]
+fn test_shuffle_accepts_a_gradual_array_like_the_sort_family() {
+    let out = compile_and_run(
+        r#"<?php
+function toArrayish($seq)
+{
+    if ($seq instanceof \Traversable) {
+        return iterator_to_array($seq, false);
+    }
+
+    return (array) $seq;
+}
+
+function shuffled($item): int
+{
+    $items = toArrayish($item);
+    shuffle($items);
+
+    return count($items);
+}
+
+echo shuffled([1, 2, 3]), ':';
+echo shuffled(['a' => 1, 'b' => 2]);
+"#,
+    );
+    assert_eq!(out, "3:2");
+}
+
+/// Verifies `array_reverse()` over a HASH renumbers integer keys and keeps string ones, with the
+/// flag literal, omitted, or known only at run time.
+///
+/// A hash had no `preserve_keys = false` arm at all: `__rt_hash_to_hash_reverse` preserves every
+/// key, and the indexed helper walks fixed-size slots a hash does not have, so
+/// `array_reverse($hash, false)` refused with `unsupported EIR backend feature: array_reverse for
+/// PHP type AssocArray`. `__rt_hash_reindex` supplies php's actual rule -- integer keys renumbered
+/// from zero in the NEW order, string keys untouched -- and the two compose. `twig/twig`'s
+/// `CoreExtension::reverse()` forwards an untyped parameter as the flag. Value-checked against
+/// `php -n`, which prints the same line.
+#[test]
+fn test_array_reverse_over_a_hash_renumbers_only_its_integer_keys() {
+    let out = compile_and_run(
+        r#"<?php
+function show(array $items): string
+{
+    $out = [];
+    foreach ($items as $key => $value) {
+        $out[] = var_export($key, true).'=>'.var_export($value, true);
+    }
+
+    return implode(',', $out);
+}
+
+function reverseHash(array $items, $preserveKeys = false): array
+{
+    return array_reverse($items, $preserveKeys);
+}
+
+$mixed = ['a' => 1, 5 => 'five', 'b' => 2, 9 => 'nine'];
+
+echo show(array_reverse($mixed, false)), ';';
+echo show(array_reverse($mixed, true)), ';';
+echo show(array_reverse($mixed)), ';';
+echo show(reverseHash($mixed)), ';';
+echo show(reverseHash($mixed, true)), ';';
+echo show(reverseHash(['x' => 10, 'y' => 20])), ';';
+echo show(reverseHash([3 => 'c', 7 => 'g']));
+"#,
+    );
+    assert_eq!(
+        out,
+        "0=>'nine','b'=>2,1=>'five','a'=>1;9=>'nine','b'=>2,5=>'five','a'=>1;0=>'nine','b'=>2,1=>'five','a'=>1;0=>'nine','b'=>2,1=>'five','a'=>1;9=>'nine','b'=>2,5=>'five','a'=>1;'y'=>20,'x'=>10;0=>'g',1=>'c'"
+    );
+}
+
+/// Verifies a string builtin still works as a callback when the array's element type is only known
+/// at run time.
+///
+/// A callable wrapper's parameters ARE the source element types, so a `Mixed` element used to reach
+/// `strtolower`'s lowering, which needs a concrete string. The policy therefore refused every
+/// gradual source, no descriptor case was emitted, and the call compiled into a runtime abort:
+/// `array_map callback string does not name a supported callable`. `twig/twig`'s
+/// `CoreExtension::getAttribute` does `array_map('strtolower', get_class_methods($object))` on every
+/// property access of a rendered template. The wrapper now casts the argument the way php does.
+#[test]
+fn test_a_string_builtin_callback_takes_a_gradual_array() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(int $which)
+{
+    if (0 === $which) {
+        return ['  Alpha  ', 'Beta'];
+    }
+
+    return ['x' => 'Gamma', 'y' => '  Delta  '];
+}
+
+function lowerAll($items): array
+{
+    return array_map('strtolower', $items);
+}
+
+function trimAll($items): array
+{
+    return array_map('trim', $items);
+}
+
+function lengths($items): array
+{
+    return array_map('strlen', $items);
+}
+
+function keepLong($items): array
+{
+    return array_filter($items, 'strlen');
+}
+
+echo implode(',', lowerAll(pick(0))), ';';
+echo implode(',', lowerAll(pick(1))), ';';
+echo implode(',', trimAll(pick(0))), ';';
+echo implode(',', trimAll(pick(1))), ';';
+echo implode(',', lengths(pick(0))), ';';
+echo implode(',', lengths(pick(1))), ';';
+echo implode(',', keepLong(pick(1)));
+"#,
+    );
+    assert_eq!(
+        out,
+        "  alpha  ,beta;gamma,  delta  ;Alpha,Beta;Gamma,Delta;9,4;5,9;Gamma,  Delta  "
+    );
+}
+
+/// Verifies a bare `array` return hint never promises a CONTAINER payload the body does not store.
+///
+/// The contract exists to name the storage a caller reads -- packed slots or a hash -- and that is
+/// all a bare `array` can promise. A container payload promises more: raw pointer slots, which only
+/// a writer of that same element type produces, while every other writer boxes. Symfony's
+/// `BufferingLogger::cleanLogs(): array` is the silent half of the disagreement --
+/// `$this->logs[] = [$level, $message, $context]` boxes each row, the contract said
+/// `array<array<mixed>>`, and reading `$log[1]` then took a boxed cell for a raw array: the
+/// compiled Symfony app printed `Warning: Undefined array key 1` on every request where `php -S`
+/// printed none. `twig/twig`'s `Template::getBlocks(): array` is the loud half: its base default is
+/// `[]`, its subclasses assign a hash of arrays, and the backend refused the conversion outright.
+/// A SCALAR payload keeps its precision -- one representation, no drift, and no unbox for the
+/// caller -- which `counts()` pins here.
+#[test]
+fn test_a_bare_array_return_hint_does_not_promise_a_container_payload() {
+    let out = compile_and_run(
+        r#"<?php
+class Buffer
+{
+    private $logs = [];
+
+    public function log($level, $message, array $context = []): void
+    {
+        $this->logs[] = [$level, $message, $context];
+    }
+
+    public function cleanLogs(): array
+    {
+        $logs = $this->logs;
+        $this->logs = [];
+
+        return $logs;
+    }
+}
+
+class Base
+{
+    protected $blocks = [];
+
+    public function getBlocks(): array
+    {
+        return $this->blocks;
+    }
+}
+
+final class Child extends Base
+{
+    public function __construct()
+    {
+        $this->blocks = ['title' => [$this, 'blockTitle']];
+    }
+
+    public function blockTitle(): string
+    {
+        return 'title';
+    }
+}
+
+function counts(): array
+{
+    return [1, 2, 3];
+}
+
+$buffer = new Buffer();
+$buffer->log('warning', 'first', ['exception' => 'boom']);
+$buffer->log('error', 'second', ['exception' => 'bang']);
+foreach ($buffer->cleanLogs() as $log) {
+    echo count($log), ':', $log[0], ',', $log[1], ',', $log[2]['exception'], ';';
+}
+echo count($buffer->cleanLogs()), ';';
+
+$child = new Child();
+foreach ($child->getBlocks() as $name => $callable) {
+    echo $name, '=', $callable[1], ';';
+}
+echo (new Base())->getBlocks() === [] ? 'empty' : 'not-empty', ';';
+echo array_sum(counts());
+"#,
+    );
+    assert_eq!(
+        out,
+        "3:warning,first,boom;3:error,second,bang;0;title=blockTitle;empty;6"
+    );
+}
+
+/// Verifies a hash literal stamped with a concrete value type widens when a later write stores a
+/// payload of another runtime shape.
+///
+/// A hash entry is a raw payload plus the tag its STORAGE type dictates, and every read
+/// materializes it through that same type. The write lowering decided whether to widen by first
+/// normalizing both sides -- a step that maps every refcounted non-string type to `Mixed` -- so an
+/// `array<string, Node>` looked like it already accepted anything: `$bag['count'] = 2` compiled and
+/// then read the integer back as an object pointer (SIGSEGV), while a `?Node` write stopped the
+/// backend with `hash_set value PHP type Mixed`. `twig/twig`'s `TestExpression::__construct` writes
+/// exactly that second shape, which is what made it the last blocker of the Symfony `--web` build.
+#[test]
+fn test_a_hash_literal_widens_when_a_later_write_stores_another_type() {
+    let out = compile_and_run(
+        r#"<?php
+class Node
+{
+    public function __construct(public string $tag) {}
+}
+
+function describe(array $nodes): string
+{
+    $out = [];
+    foreach ($nodes as $key => $value) {
+        $out[] = $key.'='.(is_object($value) ? $value->tag : var_export($value, true));
+    }
+
+    return implode(',', $out);
+}
+
+function build(Node $node, ?Node $arguments): array
+{
+    $nodes = ['node' => $node];
+    if (null !== $arguments) {
+        $nodes['arguments'] = $arguments;
+    }
+
+    return $nodes;
+}
+
+function mixedBag(Node $node): array
+{
+    $bag = ['node' => $node];
+    $bag['count'] = 2;
+    $bag['label'] = 'x';
+    $bag['none'] = null;
+
+    return $bag;
+}
+
+function nestedBag(Node $node): array
+{
+    $bag = ['node' => $node];
+    $bag['list'] = [1, 2];
+    $bag['map'] = ['k' => 'v'];
+
+    return $bag;
+}
+
+echo describe(build(new Node('a'), null)), ';';
+echo describe(build(new Node('a'), new Node('b'))), ';';
+echo describe(mixedBag(new Node('c'))), ';';
+echo count(nestedBag(new Node('d'))), ';';
+echo implode(',', nestedBag(new Node('d'))['list']), ';';
+echo nestedBag(new Node('d'))['map']['k'];
+"#,
+    );
+    assert_eq!(
+        out,
+        "node=a;node=a,arguments=b;node=c,count=2,label='x',none=NULL;3;1,2;v"
+    );
+}
+
+/// Verifies `array_slice()` and `array_chunk()` accept a `preserve_keys` flag the caller only knows
+/// at run time, over an indexed source.
+///
+/// Both refused a non-literal flag because it decides the RESULT SHAPE -- a dense array one way, an
+/// integer-keyed hash the other. Emitting both arms and boxing each one answers with their union,
+/// the shape `iterator_to_array()` and `array_reverse()` already use. `twig/twig`'s
+/// `CoreExtension::slice()` and `::batch()` forward an untyped parameter as the flag, so no caller
+/// can make it literal. Value-checked against `php -n`, which prints the same line.
+#[test]
+fn test_array_slice_and_chunk_take_a_runtime_preserve_keys_flag() {
+    let out = compile_and_run(
+        r#"<?php
+function show($items): string
+{
+    $out = [];
+    foreach ((array) $items as $key => $value) {
+        $out[] = var_export($key, true).'=>'.var_export($value, true);
+    }
+
+    return implode(',', $out);
+}
+
+function showChunks($chunks): string
+{
+    $parts = [];
+    foreach ((array) $chunks as $chunk) {
+        $parts[] = '['.show($chunk).']';
+    }
+
+    return implode('', $parts);
+}
+
+function sliceIt(array $items, int $start, ?int $length = null, $preserveKeys = false)
+{
+    return array_slice(array_values($items), $start, $length, $preserveKeys);
+}
+
+function chunkIt(array $items, int $size, $preserveKeys = false)
+{
+    return array_chunk(array_values($items), $size, $preserveKeys);
+}
+
+$source = [10, 20, 30, 40, 50];
+
+echo show(sliceIt($source, 1, 3)), ';';
+echo show(sliceIt($source, 1, 3, true)), ';';
+echo count(sliceIt($source, 1, 3)), ';';
+echo showChunks(chunkIt($source, 2)), ';';
+echo showChunks(chunkIt($source, 2, true)), ';';
+echo count(chunkIt($source, 2));
+"#,
+    );
+    assert_eq!(
+        out,
+        "0=>20,1=>30,2=>40;1=>20,2=>30,3=>40;3;[0=>10,1=>20][0=>30,1=>40][0=>50];[0=>10,1=>20][2=>30,3=>40][4=>50];3"
+    );
+}
+
+/// Verifies the three-argument `array_column()`, the gradual `array_rand()`, and a gradual
+/// `array_chunk()` whose `preserve_keys` is only known at run time.
+///
+/// All three answer through compatibility prelude helpers, because each produces a HASH the dense
+/// indexed backend cannot express: `array_column($rows, $col, $index)` re-keys from the data,
+/// `array_rand()` over a hash answers a string key, and a key-preserving chunk carries the source
+/// keys. `twig/twig`'s `CoreExtension` uses all three. Value-checked against `php -n`.
+#[test]
+fn test_prelude_backed_array_column_rand_and_chunk_shapes() {
+    let out = compile_and_run(
+        r#"<?php
+function show($items): string
+{
+    $out = [];
+    foreach ((array) $items as $key => $value) {
+        $out[] = var_export($key, true).'=>'.var_export($value, true);
+    }
+
+    return implode(',', $out);
+}
+
+function toArrayish($seq): array
+{
+    return (array) $seq;
+}
+
+$rows = [
+    ['id' => 7, 'name' => 'ada'],
+    ['name' => 'bob'],
+    ['id' => 9, 'name' => 'cyd'],
+];
+
+echo show(array_column($rows, 'name')), ';';
+echo show(array_column($rows, 'name', 'id')), ';';
+echo count(array_column($rows, 'name', 'id')), ';';
+
+$hash = ['a' => 1, 'b' => 2, 'c' => 3];
+$preserve = 0 === $argc % 1;
+$renumber = 1 === $argc % 1;
+$key = array_rand($hash);
+echo (is_string($key) ? 'string-key' : 'other-key'), ';';
+echo (array_key_exists($key, $hash) ? 'present' : 'absent'), ';';
+
+$parts = [];
+foreach ((array) array_chunk($hash, 2, $preserve) as $chunk) {
+    $parts[] = '['.show($chunk).']';
+}
+echo implode('', $parts), ';';
+
+$plain = [];
+foreach ((array) array_chunk($hash, 2, $renumber) as $chunk) {
+    $plain[] = '['.show($chunk).']';
+}
+echo implode('', $plain);
+"#,
+    );
+    assert_eq!(
+        out,
+        "0=>'ada',1=>'bob',2=>'cyd';7=>'ada',8=>'bob',9=>'cyd';3;string-key;present;['a'=>1,'b'=>2]['c'=>3];[0=>1,1=>2][0=>3]"
+    );
+}
+
+/// Verifies an UNTYPED array property keyed by a string is readable through a bare `array` return.
+///
+/// EIR gives an untyped array property one representation, because php makes its shape no
+/// contract: later assignments, casts and merges can change it. That one representation has to be
+/// the HASH. `array<mixed>` is not a runtime-dispatched "either" -- consumers read the STATIC type,
+/// so a hash parked in a packed slot is read as packed storage.
+///
+/// `twig/twig`'s `StagingExtension` is what the packed choice cost: `private $functions = []`
+/// normalized to `array<mixed>` while `$this->functions[$name] = $fn` had promoted the real
+/// property to a hash, so `getFunctions(): array` asked the backend to convert a packed vector
+/// into the hash of objects its contract had become. Five Twig accessors and `EscaperExtension`
+/// refused to lower, and with them every program containing Twig.
+#[test]
+fn test_an_untyped_string_keyed_property_survives_a_bare_array_return() {
+    let out = compile_and_run(
+        r#"<?php
+class Named
+{
+    public function __construct(private string $name) {}
+    public function getName(): string { return $this->name; }
+}
+
+class Registry
+{
+    private $byName = [];
+    private $byLiteral = [];
+
+    public function add(Named $item): void
+    {
+        $this->byName[$item->getName()] = $item;
+        $this->byLiteral['only'] = $item;
+    }
+
+    public function all(): array
+    {
+        return $this->byName;
+    }
+
+    public function literal(): array
+    {
+        return $this->byLiteral;
+    }
+}
+
+$r = new Registry();
+$r->add(new Named('alpha'));
+$r->add(new Named('beta'));
+foreach ($r->all() as $key => $item) {
+    echo $key, '=', $item->getName(), ';';
+}
+echo count($r->all()), ';';
+echo count($r->literal()), ';';
+echo array_key_exists('alpha', $r->all()) ? 'y' : 'n', ';';
+echo json_encode(array_keys($r->all())), "\n";
+"#,
+    );
+    assert_eq!(out, "alpha=alpha;beta=beta;2;1;y;[\"alpha\",\"beta\"]\n");
+}
+
+/// Verifies an `iterable` property holds both halves of that hint and converts back to `array`.
+///
+/// `iterable` is `array|Traversable` and keeps ONE representation for both: a raw heap pointer
+/// whose kind tag says which it is. Three things follow, and `twig/twig`'s `ChainLoader` needs all
+/// three in one method. A Traversable object is a value the slot takes as it is, not a conversion
+/// it has to refuse. `is_array()` on such a slot has to ask the heap rather than the static type.
+/// And an `array` return from it passes the pointer through only once the tag agrees -- while
+/// TAKING A REFERENCE, because the EIR result is owned and the pointer it forwards is the
+/// object's: without that the caller's release freed an array the property still pointed at, and
+/// the next `is_array($this->loaders)` read a dead block and answered false where
+/// `get_debug_type()` on the same value said `array`.
+#[test]
+fn test_an_iterable_property_round_trips_a_generator_and_an_array() {
+    let out = compile_and_run(
+        r#"<?php
+interface LoaderInterface
+{
+    public function name(): string;
+}
+
+final class FileLoader implements LoaderInterface
+{
+    public function __construct(private string $label) {}
+    public function name(): string { return $this->label; }
+}
+
+final class ChainLoader
+{
+    public function __construct(
+        private iterable $loaders = [],
+    ) {
+    }
+
+    public function addLoader(LoaderInterface $loader): void
+    {
+        $current = $this->loaders;
+
+        $this->loaders = (static function () use ($current, $loader): \Generator {
+            yield from $current;
+            yield $loader;
+        })();
+    }
+
+    public function probe(): string
+    {
+        return (\is_array($this->loaders) ? 'array' : 'not-array') . '/' . get_debug_type($this->loaders);
+    }
+
+    public function getLoaders(): array
+    {
+        if (!\is_array($this->loaders)) {
+            $this->loaders = iterator_to_array($this->loaders, false);
+        }
+
+        return $this->loaders;
+    }
+}
+
+$chain = new ChainLoader([new FileLoader('a')]);
+echo $chain->probe(), ';';
+$chain->addLoader(new FileLoader('b'));
+echo $chain->probe(), ';';
+foreach ($chain->getLoaders() as $loader) {
+    echo $loader->name();
+}
+echo ';', $chain->probe(), ';', count($chain->getLoaders()), "\n";
+"#,
+    );
+    assert_eq!(out, "array/array;not-array/Generator;ab;array/array;2\n");
+}
+
+/// Verifies `array_push()` appends to a HASH under the next free integer key, as php does.
+///
+/// php does not ask what storage an array has: `array_push()` appends under the next free integer
+/// key either way, beside whatever string keys are already there. elephc refused a hash receiver
+/// in both the checker and the backend, even though the backend already reached the hash append
+/// through its runtime heap-kind dispatch whenever a by-reference write had promoted a packed
+/// `array<mixed>`. `twig/twig`'s `ArrayExpression::addElement` writes
+/// `array_push($this->nodes, $key, $value)` against a string-keyed child map, and that one method
+/// was the last thing standing between elephc and compiling Twig.
+#[test]
+fn test_array_push_appends_to_a_string_keyed_hash() {
+    let out = compile_and_run(
+        r#"<?php
+class Node
+{
+    private $nodes = [];
+    private $index = -1;
+
+    public function named(string $key, $value): void
+    {
+        $this->nodes[$key] = $value;
+    }
+
+    public function addElement(string $value, ?string $key = null): void
+    {
+        if (null === $key) {
+            $key = 'k' . (string) (++$this->index);
+        }
+
+        array_push($this->nodes, $key, $value);
+    }
+
+    public function all(): array
+    {
+        return $this->nodes;
+    }
+}
+
+$n = new Node();
+$n->named('a', 'A');
+$n->named('n', 7);
+$n->addElement('V');
+$n->addElement('W', 'given');
+echo json_encode($n->all()), "\n";
+echo count($n->all()), "\n";
+foreach ($n->all() as $k => $v) {
+    echo $k, '=', $v, ';';
+}
+echo "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "{\"a\":\"A\",\"n\":7,\"0\":\"k0\",\"1\":\"V\",\"2\":\"given\",\"3\":\"W\"}\n",
+            "6\n",
+            "a=A;n=7;0=k0;1=V;2=given;3=W;\n",
+        )
+    );
 }

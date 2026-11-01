@@ -1555,3 +1555,47 @@ fn opaque_call_use_of_empty_array_local_disqualifies_slot_release() {
     );
     assert!(validate_function(&function).is_ok());
 }
+
+/// Builds `comparisons` numeric `PhpRelCmp` statements, each behind its own `ConcatReset`.
+fn numeric_comparison_statements(comparisons: usize) -> Function {
+    let mut function = Function::new("numeric_comparisons".to_string(), IrType::Void, PhpType::Void);
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        for index in 0..comparisons {
+            emit_concat_reset(&mut builder);
+            let lhs = builder.emit_const_i64(index as i64);
+            let rhs = builder.emit_const_i64(7);
+            builder.emit(
+                Op::PhpRelCmp,
+                vec![lhs, rhs],
+                Some(Immediate::CmpPredicate(CmpPredicate::Slt)),
+                IrType::I64,
+                PhpType::Bool,
+                Ownership::NonHeap,
+            );
+        }
+        emit_concat_reset(&mut builder);
+        builder.terminate(Terminator::Return { value: None });
+    }
+    function
+}
+
+/// Numeric comparisons are concat-inert, and proving it shares one numeric-domain proof per
+/// function: building a proof per comparison rescanned the whole body each time, quadratic on
+/// Symfony's largest functions.
+#[test]
+fn numeric_comparisons_share_one_proof_per_function() {
+    let mut builds = Vec::new();
+    for comparisons in [4, 64] {
+        let mut function = numeric_comparison_statements(comparisons);
+        let before = crate::ir_passes::numeric_domain::proof_builds_for_tests();
+        run_once(&mut function);
+        builds.push(crate::ir_passes::numeric_domain::proof_builds_for_tests() - before);
+        assert_eq!(count_concat_resets(&function), 0, "{comparisons} comparisons stay concat-inert");
+    }
+    assert_eq!(builds[0], builds[1], "proof constructions must not grow with the comparisons: {builds:?}");
+    assert_eq!(builds[0], 1, "one numeric proof per function and pass run: {builds:?}");
+}

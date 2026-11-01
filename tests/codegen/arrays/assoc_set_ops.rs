@@ -1,5 +1,6 @@
 //! Purpose:
-//! Integration tests for associative-array set/merge builtins: `array_replace`.
+//! Integration tests for associative-array set/merge builtins such as `array_replace` and
+//! `array_unique`.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -10,6 +11,154 @@
 //!   non-mutation of the source, string values, and case-insensitive calls.
 
 use crate::support::*;
+
+/// Verifies the two-hash set builtins promote a gradual operand only when it is not ALREADY a
+/// hash at runtime.
+///
+/// `array<mixed>` is what a declared `array` parameter carries, and it says nothing about keys.
+/// Reading it as "indexed, needs promoting" walked hash storage as if it were indexed, so
+/// `array_diff_key(['x'=>1,'y'=>2], ['x'=>1])` answered `2:0,1:7,1024` — invented keys AND
+/// invented values — where php answers `1:y:2`.
+#[test]
+fn test_two_hash_set_builtins_promote_a_gradual_operand_only_when_indexed() {
+    let output = compile_and_run(
+        r#"<?php
+function shape(array $a): string {
+    return count($a) . ":" . implode(",", array_keys($a)) . ":" . implode(",", array_values($a));
+}
+function diffKey(array $a): string {
+    return shape(array_diff_key($a, ["x" => 1]));
+}
+function intersectKey(array $a): string {
+    return shape(array_intersect_key($a, ["x" => 1]));
+}
+echo diffKey(["x" => 1, "y" => 2]), "|", diffKey([7, 8]), "|";
+echo intersectKey(["x" => 1, "y" => 2]), "|", intersectKey([7, 8]);
+"#,
+    );
+    assert_eq!(output, "1:y:2|2:0,1:7,8|1:x:1|0::");
+}
+
+/// Verifies null values can be stored in and strictly searched within a mixed associative array.
+#[test]
+fn test_assoc_mixed_null_storage_and_membership() {
+    let output = compile_and_run(
+        r#"<?php
+$values = ["present" => null, "other" => 1];
+echo in_array(null, $values, true) ? "yes" : "no";
+"#,
+    );
+    assert_eq!(output, "yes");
+}
+
+/// Verifies spread-only `array_merge()` retains its compiler-provided helper
+/// through declaration pruning and preserves PHP's integer-key renumbering.
+#[test]
+fn test_array_merge_spread_helper_survives_declaration_pruning() {
+    let out = compile_and_run(
+        r#"<?php
+$arrays = [[10, 11], [12], [13, 14]];
+foreach (array_merge(...$arrays) as $value) {
+    echo $value;
+}
+"#,
+    );
+
+    assert_eq!(out, "1011121314");
+}
+
+/// Verifies spread-only `array_merge()` flattens nested arrays held in a
+/// gradual associative outer value without dropping any integer-keyed entries.
+#[test]
+fn test_array_merge_spread_flattens_gradual_associative_nested_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+function preserve_as_mixed(mixed $value): mixed {
+    return $value;
+}
+
+$groups = preserve_as_mixed([0 => [10, 11], -2048 => [12]]);
+foreach (array_merge(...$groups) as $value) {
+    echo $value;
+}
+"#,
+    );
+
+    assert_eq!(out, "101112");
+}
+
+/// Verifies a typed property copied, key-sorted, and spread into `array_merge()`
+/// keeps its nested arrays visible through the gradual helper boundary.
+#[test]
+fn test_array_merge_spread_after_key_sort_of_typed_nested_array_property() {
+    let out = compile_and_run(
+        r#"<?php
+class PriorityGroups {
+    public array $groups;
+
+    public function __construct() {
+        $this->groups = [0 => [10, 11], -2048 => [12]];
+    }
+
+    public function flatten(): array {
+        $groups = $this->groups;
+        krsort($groups);
+        return array_merge(...$groups);
+    }
+}
+
+foreach ((new PriorityGroups())->flatten() as $value) {
+    echo $value;
+}
+"#,
+    );
+
+    assert_eq!(out, "101112");
+}
+
+/// Verifies a gradual `array_merge()` retains the runtime class identity of object elements.
+///
+/// The helper returns `array<mixed>`, so the subsequent foreach and method call exercise the
+/// boxed-object bridge instead of relying on a concrete array element representation.
+#[test]
+fn test_gradual_array_merge_preserves_object_method_dispatch() {
+    let out = compile_and_run(
+        r#"<?php
+class MergeDispatchProbe {
+    public function process(): string { return "processed"; }
+}
+function gradual(mixed $value): mixed { return $value; }
+$first = gradual([new MergeDispatchProbe()]);
+$result = array_merge($first, gradual([]));
+foreach ($result as $pass) {
+    echo get_class($pass), ":", $pass->process();
+}
+"#,
+    );
+
+    assert_eq!(out, "MergeDispatchProbe:processed");
+}
+
+/// Verifies `array_unique()` preserves the first associative keys for gradual Mixed values.
+#[test]
+fn test_array_unique_assoc_mixed_preserves_first_keys() {
+    let out = compile_and_run(
+        r#"<?php
+function gradual_unique_value(mixed $value): mixed { return $value; }
+$values = [
+    "first" => gradual_unique_value("alpha"),
+    "second" => gradual_unique_value("beta"),
+    "duplicate" => gradual_unique_value("alpha"),
+];
+$result = array_unique($values);
+echo count($result), ":";
+foreach ($result as $key => $value) {
+    echo $key, "=", $value, ";";
+}
+"#,
+    );
+    assert_eq!(out, "2:first=alpha;second=beta;");
+}
 
 /// Verifies array_replace() overwrites matching keys in place and appends new keys,
 /// preserving the first array's key order.
@@ -58,6 +207,106 @@ echo $r["role"];
 "#,
     );
     assert_eq!(out, "alice-admin");
+}
+
+/// Verifies `array_replace()` normalizes boxed gradual array operands to one Mixed-valued hash
+/// layout while preserving the source arrays and balanced temporary ownership.
+#[test]
+fn test_array_replace_gradual_mixed_operands() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function gradual_array(mixed $value): mixed { return $value; }
+$base = gradual_array(["name" => "alice", "role" => "user"]);
+$over = gradual_array(["role" => "admin", "count" => 2]);
+$result = array_replace($base, $over);
+echo $result["name"], "|", $result["role"], "|", $result["count"], "|", $base["role"];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "alice|admin|2|user");
+}
+
+/// Verifies `array_replace()` promotes an indexed Mixed-valued operand when another operand uses
+/// gradual associative storage.
+#[test]
+fn test_array_replace_mixed_hash_and_indexed_operand() {
+    let out = compile_and_run(
+        r#"<?php
+function gradual_replace_value(mixed $value): mixed { return $value; }
+function gradual_replace_array(mixed $value): mixed { return $value; }
+$base = gradual_replace_array(["name" => "alice"]);
+$indexed = [gradual_replace_value("first"), gradual_replace_value("second")];
+$result = array_replace($base, $indexed);
+echo $result["name"], "|", $result[0], "|", $result[1];
+"#,
+    );
+    assert_eq!(out, "alice|first|second");
+}
+
+/// Verifies `array_replace()` promotes two indexed Mixed-valued operands while retaining heap
+/// values and preserving numeric-key replacement semantics.
+#[test]
+fn test_array_replace_indexed_mixed_operands() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function gradual_replace_item(mixed $value): mixed { return $value; }
+$base = [gradual_replace_item("first"), gradual_replace_item(["keep" => 2])];
+$over = [gradual_replace_item("changed")];
+$result = array_replace($base, $over);
+echo $result[0], "|", $result[1]["keep"], "|", $base[0];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "changed|2|first");
+}
+
+/// Verifies `array_replace()` accepts indexed string arrays and preserves untouched heap values.
+#[test]
+fn test_array_replace_indexed_string_operands() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$result = array_replace(["first", "keep"], ["changed"]);
+echo $result[0], "|", $result[1];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "changed|keep");
+}
+
+/// Verifies key-set operations normalize gradual and indexed operands to associative storage.
+#[test]
+fn test_array_key_set_ops_with_gradual_and_indexed_operands() {
+    let out = compile_and_run(
+        r#"<?php
+function gradual_key_array(mixed $value): mixed { return $value; }
+$left = gradual_key_array([0 => "zero", 1 => "one", "name" => "alice"]);
+$mask = [gradual_key_array(true)];
+$diff = array_diff_key($left, $mask);
+$intersect = array_intersect_key($left, $mask);
+echo count($diff), "|", $diff[1], "|", $diff["name"], "|", count($intersect), "|", $intersect[0];
+"#,
+    );
+    assert_eq!(out, "2|one|alice|1|zero");
+}
+
+/// Verifies key-set operations convert indexed Mixed operands to hashes so removed integer keys
+/// retain their original positions instead of being renumbered.
+#[test]
+fn test_array_key_set_ops_with_indexed_mixed_operands() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function gradual_key_item(mixed $value): mixed { return $value; }
+$left = [gradual_key_item("zero"), gradual_key_item("one")];
+$mask = [gradual_key_item(true)];
+$diff = array_diff_key($left, $mask);
+$intersect = array_intersect_key($left, $mask);
+foreach ($diff as $key => $value) { echo $key, ":", $value; }
+echo "|";
+foreach ($intersect as $key => $value) { echo $key, ":", $value; }
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1:one|0:zero");
 }
 
 /// Verifies array_replace() result count reflects merged distinct keys.
@@ -180,6 +429,47 @@ echo $c["z"];
 "#,
     );
     assert_eq!(out, "193");
+}
+
+/// Verifies recursive replacement merges nested indexed arrays by their numeric keys.
+#[test]
+fn test_array_replace_recursive_nested_indexed_merge() {
+    let out = compile_and_run(
+        r#"<?php
+$base = ["cfg" => [1, 2]];
+$over = ["cfg" => [9]];
+$result = array_replace_recursive($base, $over);
+echo $result["cfg"][0], $result["cfg"][1];
+"#,
+    );
+    assert_eq!(out, "92");
+}
+
+/// Verifies recursive replacement accepts heap-valued indexed top-level arrays.
+#[test]
+fn test_array_replace_recursive_string_indexed_inputs() {
+    let out = compile_and_run(
+        r#"<?php
+$result = array_replace_recursive(["a", "keep"], ["b"]);
+echo $result[0], $result[1];
+"#,
+    );
+    assert_eq!(out, "bkeep");
+}
+
+/// Verifies recursive replacement descends into arrays crossing a gradual Mixed boundary.
+#[test]
+fn test_array_replace_recursive_nested_mixed_inputs() {
+    let out = compile_and_run(
+        r#"<?php
+function replace_nested(mixed $base, mixed $over): mixed {
+    return array_replace_recursive($base, $over);
+}
+$result = replace_nested(["cfg" => [1, 2]], ["cfg" => [9]]);
+echo $result["cfg"][0], $result["cfg"][1];
+"#,
+    );
+    assert_eq!(out, "92");
 }
 
 /// Verifies array_replace_recursive() overwrites non-array values like array_replace.
@@ -490,4 +780,37 @@ echo "done\n";
         "{}",
         out.stderr
     );
+}
+
+/// Verifies array_merge_recursive() accepts PHP string-element indexed arrays.
+#[test]
+fn test_array_merge_recursive_string_indexed_inputs() {
+    let out = compile_and_run(
+        r#"<?php
+$merged = array_merge_recursive(['a'], ['b']);
+echo implode(',', $merged);
+"#,
+    );
+    assert_eq!(out, "a,b");
+}
+
+/// Spreading an untyped method's result into a literal that is associative because of another
+/// spread: `[...$parser->getWarnings(), ...$this->warnings]` is how `egulias/email-validator`
+/// collects warnings. The `mixed` source was handed to `ArrayToHash`, which needs a static array
+/// layout, and the build stopped with an EIR validation error. It now goes through the runtime
+/// iterator; integer keys are renumbered and string keys kept. Expected output is php 8.5's.
+#[test]
+fn test_mixed_method_result_spreads_into_an_associative_literal() {
+    let out = compile_and_run(
+        r#"<?php
+class P { private $w = []; public function __construct($x) { $this->w = $x; } public function getWarnings() { return $this->w; } }
+class Q {
+    private array $warnings = ["k" => "v"];
+    public function run($p) { $this->warnings = [...$p->getWarnings(), ...$this->warnings]; return $this->warnings; }
+}
+$p = new P($argc > 0 ? [7 => "a", "s" => "b"] : []);
+foreach ((new Q)->run($p) as $key => $value) { echo $key, "=", $value, ";"; }
+"#,
+    );
+    assert_eq!(out, "0=a;s=b;k=v;");
 }

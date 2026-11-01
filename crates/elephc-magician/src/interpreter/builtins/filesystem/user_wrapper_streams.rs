@@ -428,7 +428,7 @@ fn eval_user_wrapper_seek_bool(
 }
 
 /// Builds the four PHP arguments passed to a wrapper `stream_open()` method.
-fn eval_user_wrapper_stream_open_args(
+pub(in crate::interpreter) fn eval_user_wrapper_stream_open_args(
     filename: &str,
     mode: &str,
     values: &mut impl RuntimeValueOps,
@@ -440,22 +440,22 @@ fn eval_user_wrapper_stream_open_args(
     Ok(vec![
         EvaluatedCallArg {
             name: None,
-            value: path,
+            value: path.borrowed(),
             ref_target: None,
         },
         EvaluatedCallArg {
             name: None,
-            value: mode,
+            value: mode.borrowed(),
             ref_target: None,
         },
         EvaluatedCallArg {
             name: None,
-            value: options,
+            value: options.borrowed(),
             ref_target: None,
         },
         EvaluatedCallArg {
             name: None,
-            value: opened_path,
+            value: opened_path.borrowed(),
             ref_target: Some(EvalReferenceTarget::Cell { cell: opened_path }),
         },
     ])
@@ -466,7 +466,7 @@ pub(in crate::interpreter) fn eval_user_wrapper_method(
     class_name: &str,
     method_name: &str,
     context: &ElephcEvalContext,
-) -> Option<(String, EvalClassMethod)> {
+) -> Option<(String, EvalClassMethodRef)> {
     let (declaring_class, method) = context.class_method(class_name, method_name)?;
     if method.visibility() != EvalVisibility::Public || method.is_static() || method.is_abstract() {
         return None;

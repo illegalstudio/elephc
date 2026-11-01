@@ -2,7 +2,7 @@
 title: "gmp_gcd()"
 description: "Greatest common divisor."
 sidebar:
-  order: 603
+  order: 616
 ---
 
 ## gmp_gcd()

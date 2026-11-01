@@ -42,6 +42,9 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::runtime::exceptions::deep_cleanup::Scope;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::callable_invoker_args::{
+    ARRAY_GLOBAL_REF_CELL_TAG, ARRAY_LOCAL_REF_CELL_TAG,
+};
 use crate::codegen_support::RuntimeFeatures;
 
 const CLEANUP: Scope = Scope { arm: 16, x86: 32 };
@@ -83,9 +86,21 @@ pub fn emit_mixed_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
 
     emitter.instruction("b.eq __rt_mixed_free_deep_callable");                  // callable descriptors release through the descriptor helper
 
+    emitter.instruction("cmp x9, #11");                                         // does the boxed payload hold a managed reference cell?
+
+    emitter.instruction("b.eq __rt_mixed_free_deep_value_any");                 // reference cells release through the uniform dispatcher
+
     emitter.instruction("cmp x9, #9");                                          // does the boxed payload hold a resource handle?
 
     emitter.instruction("b.eq __rt_mixed_free_deep_resource");                  // resources release through their kind-specific destructor
+
+    emitter.instruction(&format!("cmp x9, #{}", ARRAY_GLOBAL_REF_CELL_TAG));    // does this marker own a shared request-global ref-cell?
+
+    emitter.instruction("b.eq __rt_mixed_free_deep_global_ref_cell");           // release the marker's cell ownership share
+
+    emitter.instruction(&format!("cmp x9, #{}", ARRAY_LOCAL_REF_CELL_TAG));     // does this marker own a promoted local ref-cell?
+
+    emitter.instruction("b.eq __rt_mixed_free_deep_local_ref_cell");            // release the marker's local-cell ownership share
 
     emitter.instruction("cmp x9, #7");                                          // restore the heap-backed upper-bound comparison for array/hash/object tags
 
@@ -215,6 +230,41 @@ pub fn emit_mixed_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     }
 
 
+    emitter.label("__rt_mixed_free_deep_global_ref_cell");
+    emitter.instruction("ldr x0, [x0, #8]");                                    // load the shared global ref-cell pointer from the marker
+    emitter.instruction("bl __rt_global_ref_cell_decref");                      // release the marker's ownership share
+    emitter.instruction("b __rt_mixed_free_deep_box");                          // free the marker Mixed box itself
+
+
+    emitter.label("__rt_mixed_free_deep_local_ref_cell");
+    emitter.instruction("ldr x0, [x0, #8]");                                    // load the promoted local ref-cell pointer from the marker
+    emitter.instruction("bl __rt_ref_cell_release_claim");                      // release the marker share and claim typed destruction if it was final
+    emitter.instruction("cbz x0, __rt_mixed_free_deep_box");                    // another owner keeps the raw local cell and payload alive
+    emitter.instruction("str x0, [sp, #8]");                                    // preserve the final-owner cell pointer across payload destruction
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the marker carrying the source runtime tag
+    emitter.instruction("ldr x9, [x9, #16]");                                   // load the raw local cell's source runtime tag
+    emitter.instruction("cmp x9, #1");                                          // does the raw local cell own a string payload?
+    emitter.instruction("b.eq __rt_mixed_free_deep_local_ref_string");          // strings release their owned character storage
+    emitter.instruction("cmp x9, #10");                                         // does the raw local cell own a callable descriptor?
+    emitter.instruction("b.eq __rt_mixed_free_deep_local_ref_callable");        // callable descriptors use their dedicated release helper
+    emitter.instruction("cmp x9, #4");                                          // do only heap-backed PHP payloads need nested decref?
+    emitter.instruction("b.lo __rt_mixed_free_deep_local_ref_cell_free");       // scalars own no nested heap allocation
+    emitter.instruction("cmp x9, #7");                                          // arrays, hashes, objects, and Mixed are the refcounted tag range
+    emitter.instruction("b.hi __rt_mixed_free_deep_local_ref_cell_free");       // resources and internal scalar-like tags own no nested heap payload
+    emitter.instruction("ldr x0, [x0]");                                        // load the raw cell's refcounted child pointer
+    emitter.instruction("bl __rt_decref_any");                                  // release the final raw-cell ownership share of that child
+    emitter.instruction("b __rt_mixed_free_deep_local_ref_cell_free");          // continue with the raw cell allocation itself
+    emitter.label("__rt_mixed_free_deep_local_ref_string");
+    emitter.instruction("ldr x0, [x0]");                                        // load the raw cell's owned string pointer
+    emitter.instruction("bl __rt_heap_free_safe");                              // release the final string payload owner
+    emitter.instruction("b __rt_mixed_free_deep_local_ref_cell_free");          // continue with the raw cell allocation itself
+    emitter.label("__rt_mixed_free_deep_local_ref_callable");
+    emitter.instruction("ldr x0, [x0]");                                        // load the raw cell's callable descriptor pointer
+    emitter.instruction("bl __rt_callable_descriptor_release");                 // release the final callable descriptor owner
+    emitter.label("__rt_mixed_free_deep_local_ref_cell_free");
+    emitter.instruction("ldr x0, [sp, #8]");                                    // restore the final-owner raw cell pointer
+    emitter.instruction("bl __rt_heap_free");                                   // free the raw local reference-cell allocation
+    emitter.instruction("b __rt_mixed_free_deep_box");                          // free the marker Mixed box itself
     emitter.label("__rt_mixed_free_deep_resource_curl");
     emitter.instruction("ldr x0, [x0, #8]");                                    // load the libcurl handle id from the low payload word
 
@@ -292,9 +342,21 @@ fn emit_mixed_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFea
 
     emitter.instruction("je __rt_mixed_free_deep_callable");                    // callable descriptors release through the descriptor helper
 
+    emitter.instruction("cmp r10, 11");                                         // does the boxed payload hold a managed reference cell?
+
+    emitter.instruction("je __rt_mixed_free_deep_value_any");                   // reference cells release through the uniform dispatcher
+
     emitter.instruction("cmp r10, 9");                                          // does the boxed payload hold a resource handle?
 
     emitter.instruction("je __rt_mixed_free_deep_resource");                    // resources release through their kind-specific destructor
+
+    emitter.instruction(&format!("cmp r10, {}", ARRAY_GLOBAL_REF_CELL_TAG));    // does this marker own a shared request-global ref-cell?
+
+    emitter.instruction("je __rt_mixed_free_deep_global_ref_cell");             // release the marker's cell ownership share
+
+    emitter.instruction(&format!("cmp r10, {}", ARRAY_LOCAL_REF_CELL_TAG));     // does this marker own a promoted local ref-cell?
+
+    emitter.instruction("je __rt_mixed_free_deep_local_ref_cell");              // release the marker's local-cell ownership share
 
     emitter.instruction("cmp r10, 7");                                          // restore the heap-backed upper-bound comparison for array/hash/object tags
 
@@ -422,6 +484,42 @@ fn emit_mixed_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFea
     }
 
 
+    emitter.label("__rt_mixed_free_deep_global_ref_cell");
+    emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // load the shared global ref-cell pointer from the marker
+    emitter.instruction("call __rt_global_ref_cell_decref");                    // release the marker's ownership share
+    emitter.instruction("jmp __rt_mixed_free_deep_box");                        // free the marker Mixed box itself
+
+
+    emitter.label("__rt_mixed_free_deep_local_ref_cell");
+    emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // load the promoted local ref-cell pointer from the marker
+    emitter.instruction("call __rt_ref_cell_release_claim");                    // release the marker share and claim typed destruction if it was final
+    emitter.instruction("test rax, rax");                                       // did another owner keep the raw local cell alive?
+    emitter.instruction("jz __rt_mixed_free_deep_box");                         // skip typed destruction unless this marker was the final owner
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // preserve the final-owner cell pointer across payload destruction
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the marker carrying the source runtime tag
+    emitter.instruction("mov r10, QWORD PTR [r10 + 16]");                       // load the raw local cell's source runtime tag
+    emitter.instruction("cmp r10, 1");                                          // does the raw local cell own a string payload?
+    emitter.instruction("je __rt_mixed_free_deep_local_ref_string");            // strings release their owned character storage
+    emitter.instruction("cmp r10, 10");                                         // does the raw local cell own a callable descriptor?
+    emitter.instruction("je __rt_mixed_free_deep_local_ref_callable");          // callable descriptors use their dedicated release helper
+    emitter.instruction("cmp r10, 4");                                          // do only heap-backed PHP payloads need nested decref?
+    emitter.instruction("jl __rt_mixed_free_deep_local_ref_cell_free");         // scalars own no nested heap allocation
+    emitter.instruction("cmp r10, 7");                                          // arrays, hashes, objects, and Mixed are the refcounted tag range
+    emitter.instruction("jg __rt_mixed_free_deep_local_ref_cell_free");         // resources and internal scalar-like tags own no nested heap payload
+    emitter.instruction("mov rax, QWORD PTR [rax]");                            // load the raw cell's refcounted child pointer
+    emitter.instruction("call __rt_decref_any");                                // release the final raw-cell ownership share of that child
+    emitter.instruction("jmp __rt_mixed_free_deep_local_ref_cell_free");        // continue with the raw cell allocation itself
+    emitter.label("__rt_mixed_free_deep_local_ref_string");
+    emitter.instruction("mov rax, QWORD PTR [rax]");                            // load the raw cell's owned string pointer
+    emitter.instruction("call __rt_heap_free_safe");                            // release the final string payload owner
+    emitter.instruction("jmp __rt_mixed_free_deep_local_ref_cell_free");        // continue with the raw cell allocation itself
+    emitter.label("__rt_mixed_free_deep_local_ref_callable");
+    emitter.instruction("mov rax, QWORD PTR [rax]");                            // load the raw cell's callable descriptor pointer
+    emitter.instruction("call __rt_callable_descriptor_release");               // release the final callable descriptor owner
+    emitter.label("__rt_mixed_free_deep_local_ref_cell_free");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // restore the final-owner raw cell pointer
+    emitter.instruction("call __rt_heap_free");                                 // free the raw local reference-cell allocation
+    emitter.instruction("jmp __rt_mixed_free_deep_box");                        // free the marker Mixed box itself
     emitter.label("__rt_mixed_free_deep_resource_curl");
     emitter.instruction("mov rdi, QWORD PTR [rax + 8]");                        // load the libcurl handle id from the low payload word
 

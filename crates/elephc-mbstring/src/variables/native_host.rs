@@ -96,10 +96,32 @@ unsafe fn slot(handle: &MbVariableHandleV1) -> Option<Slot> {
     let pointer = handle.words[0] as usize as *mut u8;
     if pointer.is_null() { return None; }
     match handle.words[1] {
-        ROOT => unsafe { root_slot(pointer) },
+        ROOT => unsafe { root_slot(pointer) }.map(|slot| unsafe { through_reference_marker(slot) }),
         CHILD => Some(Slot { low: pointer, tag: handle.words[2] }),
         _ => None,
     }
+}
+
+/// Runtime tags of the boxes an array element holds once `$x = &$a[$k]` made it a reference:
+/// `{tag, cell, source_tag}`, owning a share of a request-global (12) or local (13) cell.
+const ELEMENT_REFERENCE_MARKERS: [u64; 2] = [12, 13];
+
+/// Redirects a ROOT slot holding an element reference marker to the cell the marker shares.
+///
+/// A root names the variable itself, so its conversion is written INSIDE the cell and every
+/// holder of the reference sees it, as in php (`$value = &$roots[0]; ...$roots`). A CHILD keeps
+/// its marker slot: `value` reads through the marker, and a string write replaces the marker,
+/// which detaches the element from the reference set exactly as php's conversion does. Read as a
+/// plain box, the marker's tag answered "not a string" and the element was silently skipped.
+unsafe fn through_reference_marker(slot: Slot) -> Slot {
+    if slot.tag != 7 { return slot; }
+    let marker = unsafe { word(slot.low, 0) } as usize as *mut u8;
+    if marker.is_null() || !ELEMENT_REFERENCE_MARKERS.contains(&unsafe { word(marker, 0) }) {
+        return slot;
+    }
+    let cell = unsafe { word(marker, 8) } as usize as *mut u8;
+    if cell.is_null() { return slot; }
+    Slot { low: cell, tag: unsafe { word(marker, 16) } }
 }
 
 /// Reads the dereferenced PHP value while retaining the first boxed cell for COW decisions.
@@ -121,6 +143,14 @@ unsafe fn value(slot: &Slot) -> Option<Value> {
         tag = unsafe { word(box_ptr, 0) };
         low = unsafe { word(box_ptr, 8) };
         high = unsafe { word(box_ptr, 16) };
+        if ELEMENT_REFERENCE_MARKERS.contains(&tag) {
+            // `low` is the shared cell and `high` the cell's payload tag.
+            let cell = low as usize as *mut u8;
+            if cell.is_null() { return None; }
+            tag = high;
+            low = unsafe { word(cell, 0) };
+            high = if tag == 1 { unsafe { word(cell, 8) } } else { 0 };
+        }
     }
     None
 }

@@ -23,6 +23,7 @@ pub(super) fn ensure_eval_context(ctx: &mut FunctionContext<'_>) -> Result<()> {
 
 /// Ensures an activation handle without yet demanding its module's native metadata.
 pub(super) fn ensure_eval_context_handle(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    crate::codegen::source_units::emit_state_install(ctx);
     let offset = ctx.local_offset(eval_context_slot(ctx)?)?;
     let ready = ctx.next_label("eval_context_ready");
     let result = abi::int_result_reg(ctx.emitter);
@@ -35,6 +36,8 @@ pub(super) fn ensure_eval_context_handle(ctx: &mut FunctionContext<'_>) -> Resul
     let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_context_new_with_native_catalog");
     abi::emit_call_label(ctx.emitter, &symbol);
     abi::store_at_offset(ctx.emitter, result, offset);
+    // -- the module's paired global transfer routines belong to every context it makes --
+    register_eval_global_sync_hooks_on_new_context(ctx, offset);
     // The shared runtime wrapper must follow the currently entered loaded module.
     let scratch = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_symbol_address(ctx.emitter, scratch,
@@ -150,7 +153,7 @@ mod tests {
                 let layout = frame::layout_for_function(&function, target, false, false, false);
                 let mut emitter = if pic { Emitter::new_pic(target) } else { Emitter::new(target) };
                 let mut data = DataSection::new();
-                let mut shared = SharedCodegenState::default();
+                let mut shared = SharedCodegenState::for_module(&module);
                 {
                     let mut context = FunctionContext::new(&module, &function, &mut emitter, &mut data,
                         &mut shared, layout, false, false, false, None);
@@ -187,7 +190,7 @@ mod tests {
                 let mut helper_emitter =
                     if pic { Emitter::new_pic(target) } else { Emitter::new(target) };
                 let mut helper_data = DataSection::new();
-                let mut helper_shared = SharedCodegenState::default();
+                let mut helper_shared = SharedCodegenState::for_module(&module);
                 crate::codegen::eval_inventory_helper::emit_eval_inventory_helper(
                     &module,
                     &mut helper_emitter,

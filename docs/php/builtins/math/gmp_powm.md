@@ -2,7 +2,7 @@
 title: "gmp_powm()"
 description: "Modular exponentiation."
 sidebar:
-  order: 623
+  order: 636
 ---
 
 ## gmp_powm()

@@ -19,3 +19,21 @@ function describe_run() {
 apply_bonus();
 echo "score=" . $score . "\n";
 describe_run();
+
+// A runtime-declared reader sees subsequent native writes after its loader returns.
+class EnvironmentReaderBase {}
+
+function declare_environment_reader(string $source): void {
+    eval($source);
+}
+
+$_ENV['EXAMPLE_LEVEL'] = 2;
+$readerSource = $argc > 0 ? 'class EnvironmentReader extends EnvironmentReaderBase {
+    public function level(): int { return (int) ($_ENV["EXAMPLE_LEVEL"] ?? 0); }
+}' : '';
+declare_environment_reader($readerSource);
+$readerClass = 'EnvironmentReader';
+$reader = new $readerClass();
+echo 'level=', $reader->level(), "\n";
+$_ENV['EXAMPLE_LEVEL'] = 3;
+echo 'level=', $reader->level(), "\n";

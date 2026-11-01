@@ -755,7 +755,11 @@ fn type_guard_subject(condition: &Expr) -> Option<(&str, PhpType)> {
                 "is_string" => PhpType::Str,
                 "is_bool" => PhpType::Bool,
                 "is_null" => PhpType::Void,
-                "is_callable" => PhpType::Callable,
+                // `is_callable` narrows to `callable|string`, not to the descriptor-shaped
+                // `Callable`: PHP accepts a function-name string, and `GuardTarget::AnyCallable`
+                // says so. Answering `Callable` here made `$a = 1; if (is_callable($a)) { $a = "x"; }`
+                // warn that `--strict-locals` would reject it while strict compiled it clean.
+                "is_callable" => PhpType::Union(vec![PhpType::Callable, PhpType::Str]),
                 // `is_array` narrows to the element-agnostic array FAMILY, which has no single
                 // `PhpType`. `Mixed` is what `GuardTarget::AnyArray::fallback_type` yields, and
                 // `narrow_to` reaches for that fallback whenever the guarded name is not ALREADY
@@ -925,13 +929,34 @@ fn collect_stmt_in_current_source_mode(checker: &Checker, stmt: &Stmt, depth: u3
             collect_expr(checker, index, depth, facts);
             collect_expr(checker, value, depth, facts);
         }
+        StmtKind::PropertyRefAssign { object, property: _, source } => {
+            collect_expr(checker, object, depth, facts);
+            collect_expr(checker, source, depth, facts);
+        }
+        StmtKind::StaticPropertyElementRefAssign { receiver: _, property: _, index, source } => {
+            collect_expr(checker, index, depth, facts);
+            collect_expr(checker, source, depth, facts);
+        }
+        StmtKind::DynamicStaticPropertyWrite {
+            receiver: _,
+            property,
+            index,
+            append: _,
+            value,
+        } => {
+            collect_expr(checker, property, depth, facts);
+            if let Some(index) = index {
+                collect_expr(checker, index, depth, facts);
+            }
+            collect_expr(checker, value, depth, facts);
+        }
         // Straight-line groupings: the statements inside run exactly when the group does.
         StmtKind::Synthetic(body) | StmtKind::NamespaceBlock { name: _, body } => {
             collect_block(checker, body, depth, facts)
         }
         // Conditional groups. The checker raises its depth for the whole statement, condition
         // included, so this does the same.
-        StmtKind::IncludeOnceGuard { label: _, body } => {
+        StmtKind::IncludeOnceGuard { body, .. } => {
             collect_block(checker, body, depth + 1, facts)
         }
         StmtKind::If { condition, then_body, elseif_clauses, else_body } => {
@@ -1016,6 +1041,7 @@ fn collect_stmt_in_current_source_mode(checker: &Checker, stmt: &Stmt, depth: u3
         | StmtKind::PackedClassDecl { .. }
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ClassLikeActivate { .. }
         | StmtKind::ExternGlobalDecl { .. }
         // Leaves: no sub-statements and no sub-expressions.
         | StmtKind::Break(_)
@@ -1232,6 +1258,13 @@ fn collect_expr(checker: &Checker, expr: &Expr, depth: u32, facts: &mut Facts) {
             if let CallableTarget::Method { object, method: _ } = target {
                 collect_expr(checker, object, depth, facts);
             }
+        }
+        ExprKind::ArrayReference(inner) => collect_expr(checker, inner, depth, facts),
+        ExprKind::DynamicStaticPropertyAccess { receiver: _, property } => {
+            collect_expr(checker, property, depth, facts)
+        }
+        ExprKind::DynamicScopedConstantAccess { receiver, name: _ } => {
+            collect_expr(checker, receiver, depth, facts)
         }
         // Leaves. A plain `Variable` is a READ, which never disqualifies.
         ExprKind::Variable(_)

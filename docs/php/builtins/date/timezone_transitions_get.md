@@ -2,7 +2,7 @@
 title: "timezone_transitions_get()"
 description: "Returns a timezone's DST transitions in a time range."
 sidebar:
-  order: 254
+  order: 265
 ---
 
 ## timezone_transitions_get()

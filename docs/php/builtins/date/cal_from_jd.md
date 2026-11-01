@@ -2,7 +2,7 @@
 title: "cal_from_jd()"
 description: "Converts a Julian Day count into a date array for the given calendar."
 sidebar:
-  order: 188
+  order: 199
 ---
 
 ## cal_from_jd()

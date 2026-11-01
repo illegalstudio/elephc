@@ -107,6 +107,8 @@ pub(super) fn reject_ambiguous_local_binding_decisions(
             .collect(),
         assigns: HashMap::new(),
         unset_args: HashMap::new(),
+        current_declaration: None,
+        site_declarations: HashMap::new(),
     };
     count_block(program, &mut tally);
     // Counted BY ROLE, matching how lowering consults each map: `lower_assign` reads the retype
@@ -146,12 +148,19 @@ pub(super) fn reject_ambiguous_local_binding_decisions(
     for (span, name, sites) in decisions {
         let count = sites.get(&(*span, name.clone())).copied().unwrap_or(0);
         if count > 1 {
+            // Name one declaration the colliding sites sit in — the LAST one, which the autoload
+            // pass spliced in latest — so the pipeline can map the error to a file and, when that
+            // file is an autoloaded class php would load lazily, leave it to the runtime.
+            let declaration = tally
+                .site_declarations
+                .get(&(*span, name.clone()))
+                .and_then(|declarations| declarations.iter().rev().flatten().next().cloned());
             // ONE message for both shapes, deliberately. Structural equality of the sites would
             // hint at "same file included twice", but it does not PROVE it — two different files
             // can hold identical code at identical positions — so a message that guessed would be
             // wrong exactly where it sounded most confident. Naming both causes is accurate in
             // every case and tells the reader what to look for.
-            return Err(CompileError::new(
+            let mut error = CompileError::new(
                 *span,
                 &format!(
                     "Cannot re-bind ${} here: {} statements in this program sit at line {} \
@@ -169,7 +178,9 @@ pub(super) fn reject_ambiguous_local_binding_decisions(
                     span.col,
                     name,
                 ),
-            ));
+            );
+            error.declaration = declaration;
+            return Err(error);
         }
     }
     Ok(())
@@ -231,6 +242,27 @@ fn count_stmt(stmt: &Stmt, tally: &mut Tally) {
             count_expr(index, tally);
             count_expr(value, tally);
         }
+        StmtKind::PropertyRefAssign { object, property: _, source } => {
+            count_expr(object, tally);
+            count_expr(source, tally);
+        }
+        StmtKind::StaticPropertyElementRefAssign { receiver: _, property: _, index, source } => {
+            count_expr(index, tally);
+            count_expr(source, tally);
+        }
+        StmtKind::DynamicStaticPropertyWrite {
+            receiver: _,
+            property,
+            index,
+            append: _,
+            value,
+        } => {
+            count_expr(property, tally);
+            if let Some(index) = index {
+                count_expr(index, tally);
+            }
+            count_expr(value, tally);
+        }
         StmtKind::Return(value) => {
             if let Some(value) = value {
                 count_expr(value, tally);
@@ -239,7 +271,7 @@ fn count_stmt(stmt: &Stmt, tally: &mut Tally) {
         StmtKind::Include { path, once: _, required: _ } => count_expr(path, tally),
         StmtKind::Synthetic(body)
         | StmtKind::NamespaceBlock { name: _, body }
-        | StmtKind::IncludeOnceGuard { label: _, body } => count_block(body, tally),
+        | StmtKind::IncludeOnceGuard { body, .. } => count_block(body, tally),
         StmtKind::While { condition, body } | StmtKind::DoWhile { body, condition } => {
             count_expr(condition, tally);
             count_block(body, tally);
@@ -305,34 +337,46 @@ fn count_stmt(stmt: &Stmt, tally: &mut Tally) {
         // is derived from the `StmtKind` definition rather than from memory, and the match stays
         // exhaustive so a new declaration variant has to be classified here rather than defaulting
         // to "contains nothing".
-        StmtKind::FunctionDecl { params, body, .. } => {
-            count_param_defaults(params, tally);
-            count_block(body, tally);
+        // A generic TEMPLATE is never lowered: only its instantiations are, and each of those is a
+        // declaration of its own here. Counting the template as well made every retype inside a
+        // generic body collide with its one instantiation (Symfony's `ErrorListener::
+        // getInheritedAttribute()`, `@template T` over `$class = new \ReflectionClass($class)`).
+        StmtKind::FunctionDecl { type_params, .. } if !type_params.is_empty() => {}
+        StmtKind::FunctionDecl { name, params, body, .. } => {
+            within_declaration(tally, name, |tally| {
+                count_param_defaults(params, tally);
+                count_block(body, tally);
+            });
         }
-        StmtKind::ClassDecl { properties, methods, constants, .. }
-        | StmtKind::InterfaceDecl { properties, methods, constants, .. }
-        | StmtKind::TraitDecl { properties, methods, constants, .. } => {
-            count_class_members(properties, methods, constants, tally);
+        StmtKind::ClassDecl { name, properties, methods, constants, .. }
+        | StmtKind::InterfaceDecl { name, properties, methods, constants, .. }
+        | StmtKind::TraitDecl { name, properties, methods, constants, .. } => {
+            within_declaration(tally, name, |tally| {
+                count_class_members(properties, methods, constants, tally);
+            });
         }
-        StmtKind::EnumDecl { cases, methods, constants, .. } => {
-            for case in cases {
-                if let Some(value) = &case.value {
-                    count_expr(value, tally);
+        StmtKind::EnumDecl { name, cases, methods, constants, .. } => {
+            within_declaration(tally, name, |tally| {
+                for case in cases {
+                    if let Some(value) = &case.value {
+                        count_expr(value, tally);
+                    }
                 }
-            }
-            count_class_members(&[], methods, constants, tally);
+                count_class_members(&[], methods, constants, tally);
+            });
         }
         // A packed class declares typed FIELDS only — no defaults, no bodies, no expressions.
         StmtKind::PackedClassDecl { name: _, fields: _ }
         // Externs are C declarations: types and names, never PHP statements.
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ClassLikeActivate { .. }
         | StmtKind::ExternGlobalDecl { .. }
         // Leaves: no sub-statements and no sub-expressions.
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
         | StmtKind::Global { vars: _ }
-        | StmtKind::IncludeOnceMark { label: _ }
+        | StmtKind::IncludeOnceMark { .. }
         | StmtKind::NamespaceDecl { name: _ }
         | StmtKind::UseDecl { imports: _ }
         // Variant groups/marks carry function NAMES; the bodies live in their own `FunctionDecl`s.
@@ -353,7 +397,8 @@ fn count_class_members(
             count_expr(default, tally);
         }
     }
-    for method in methods {
+    // A generic method template is never lowered (see the `FunctionDecl` arm above).
+    for method in methods.iter().filter(|method| method.type_params.is_empty()) {
         count_param_defaults(&method.params, tally);
         count_block(&method.body, tally);
     }
@@ -523,6 +568,11 @@ fn count_expr(expr: &Expr, tally: &mut Tally) {
                 count_expr(object, tally);
             }
         }
+        ExprKind::ArrayReference(inner) => count_expr(inner, tally),
+        ExprKind::DynamicStaticPropertyAccess { receiver: _, property } => {
+            count_expr(property, tally)
+        }
+        ExprKind::DynamicScopedConstantAccess { receiver, name: _ } => count_expr(receiver, tally),
         ExprKind::Variable(_)
         | ExprKind::PreIncrement(_)
         | ExprKind::PostIncrement(_)
@@ -555,6 +605,12 @@ fn bump_assign(tally: &mut Tally, span: Span, name: &str) {
         return;
     }
     *tally.assigns.entry((span, name.to_string())).or_insert(0) += 1;
+    let declaration = tally.current_declaration.clone();
+    tally
+        .site_declarations
+        .entry((span, name.to_string()))
+        .or_default()
+        .push(declaration);
 }
 
 /// Records one more `unset` argument naming `name` at `span`.
@@ -563,6 +619,19 @@ fn bump_unset_arg(tally: &mut Tally, span: Span, name: &str) {
         return;
     }
     *tally.unset_args.entry((span, name.to_string())).or_insert(0) += 1;
+    let declaration = tally.current_declaration.clone();
+    tally
+        .site_declarations
+        .entry((span, name.to_string()))
+        .or_default()
+        .push(declaration);
+}
+
+/// Walks `walk` with `name` as the enclosing declaration, restoring the outer one afterwards.
+fn within_declaration(tally: &mut Tally, name: &str, walk: impl FnOnce(&mut Tally)) {
+    let outer = tally.current_declaration.replace(name.to_string());
+    walk(tally);
+    tally.current_declaration = outer;
 }
 
 /// The watched spans plus the per-ROLE `(span, name)` node counts collected for them.
@@ -573,4 +642,8 @@ struct Tally {
     assigns: HashMap<(Span, String), usize>,
     /// `unset` arguments, the only nodes a KILL decision can name.
     unset_args: HashMap<(Span, String), usize>,
+    /// The class-like or function the walk is currently inside, if any.
+    current_declaration: Option<String>,
+    /// For every counted site, the declarations its nodes sit in, so a collision can name one.
+    site_declarations: HashMap<(Span, String), Vec<Option<String>>>,
 }

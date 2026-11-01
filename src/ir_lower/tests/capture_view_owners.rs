@@ -42,28 +42,30 @@ promoteCallArray();
 "#;
     for target in TARGETS {
         let (module, function) = lower_function(source, target, "promoteCallArray");
-        let (boxing, value, slot) = function.instructions.iter().enumerate()
+        // The by-reference parameter's local now lives in PHP-`array` (Mixed-rep) storage from the
+        // start, so the call needs no `mixed_box` of a concrete view: the normalization is an
+        // owned `acquire` of the loaded array view, a second `acquire` for the replacement store,
+        // and a `release` of the first. The invariant the test guards is unchanged -- the owned
+        // intermediate view is retired exactly once, AFTER the normalized value is stored and never
+        // doubled -- so a leaked view (no release) or a double release both still fail.
+        let defining_op = |value: crate::ir::ValueId| {
+            function.instructions.iter().find(|inst| inst.result == Some(value)).map(|inst| inst.op)
+        };
+        let (store, view) = function.instructions.iter().enumerate()
             .find_map(|(index, inst)| {
-                if inst.op != Op::MixedBox { return None; }
-                let value = *inst.operands.first()?;
-                let load = function.instructions.iter().find(|load| load.result == Some(value))?;
-                let Some(Immediate::LocalSlot(slot)) = load.immediate else { return None; };
-                (load.op == Op::LoadLocal).then_some((index, value, slot))
-            }).expect("array argument normalization boxes a concrete local view");
-        let release = function.instructions.iter().enumerate()
-            .find_map(|(index, inst)| {
-                (index > boxing && inst.op == Op::Release && inst.operands == [value])
-                    .then_some(index)
-            }).expect("the owned concrete view must retire after boxing");
-        let store = function.instructions.iter().enumerate()
-            .find_map(|(index, inst)| {
-                (index > boxing && inst.op == Op::StoreLocal
-                    && inst.immediate == Some(Immediate::LocalSlot(slot))).then_some(index)
-            }).expect("the normalized value replaces its source local");
-        assert!(boxing < release && release < store, "{target}");
-        assert_eq!(function.instructions.iter().filter(|inst| {
-            inst.op == Op::Release && inst.operands == [value]
-        }).count(), 1, "{target}: box_value_as_mixed already retires the owned input view");
+                if inst.op != Op::StoreLocal { return None; }
+                let stored = *inst.operands.first()?;
+                let outer = function.instructions.iter().find(|candidate| candidate.result == Some(stored))?;
+                if outer.op != Op::Acquire { return None; }
+                let view = *outer.operands.first()?;
+                (defining_op(view) == Some(Op::Acquire)).then_some((index, view))
+            }).expect("array argument normalization stores a re-acquired owned view");
+        let releases: Vec<usize> = function.instructions.iter().enumerate()
+            .filter(|(_, inst)| inst.op == Op::Release && inst.operands == [view])
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(releases.len(), 1, "{target}: the owned concrete view retires exactly once");
+        assert!(store < releases[0], "{target}: the view is retired after the normalized value is stored");
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{target}: {error:?}"));
     }

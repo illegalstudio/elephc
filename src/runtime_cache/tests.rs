@@ -70,27 +70,33 @@ use super::*;
             false,
             b"same-emitter",
         );
-        let variants = [
-            RuntimeFeatures { regex: true, ..RuntimeFeatures::none() },
-            RuntimeFeatures { mbstring: true, ..RuntimeFeatures::none() },
-            RuntimeFeatures { mbregex: true, ..RuntimeFeatures::none() },
-            RuntimeFeatures { mbstring_mime: true, ..RuntimeFeatures::none() },
-            RuntimeFeatures { phar_archive: true, ..RuntimeFeatures::none() },
-            RuntimeFeatures { descriptor_invoker: true, ..RuntimeFeatures::none() },
-            RuntimeFeatures { eval_bridge: true, ..RuntimeFeatures::none() },
-            RuntimeFeatures { eval_scope: true, ..RuntimeFeatures::none() },
-            RuntimeFeatures { web: true, ..RuntimeFeatures::none() },
-            RuntimeFeatures { pdo_udf: true, ..RuntimeFeatures::none() },
-            RuntimeFeatures { fiber: true, ..RuntimeFeatures::none() },
-            RuntimeFeatures { generator: true, ..RuntimeFeatures::none() },
-            RuntimeFeatures { popen_resource: true, ..RuntimeFeatures::none() },
-            RuntimeFeatures { directory_resource: true, ..RuntimeFeatures::none() },
-            RuntimeFeatures { handler_state: true, ..RuntimeFeatures::none() },
-            RuntimeFeatures { object_clone: true, ..RuntimeFeatures::none() },
-        ];
+        // The variants come from `RuntimeFeatures` itself, not from a list written here: the
+        // previous hand-written list omitted the four `*_introspection` switches, which is
+        // exactly the omission this test exists to catch, and it passed anyway. A field added to
+        // the struct now fails `RuntimeFeatures`' `size_of` assertion until it is given both a
+        // cache-key bit and a variant, so this loop cannot fall behind the definition.
+        let variants = RuntimeFeatures::single_feature_variants();
+        assert_eq!(
+            variants.len(),
+            std::mem::size_of::<RuntimeFeatures>(),
+            "one variant per RuntimeFeatures field",
+        );
 
         let mut keys = std::collections::HashSet::from([baseline]);
-        for features in variants {
+        let mut claimed_bits = 0_u64;
+        for (name, features) in variants {
+            let bits = features.cache_key_bits();
+            assert_eq!(
+                bits.count_ones(),
+                1,
+                "runtime feature {name} must own exactly one cache-key bit",
+            );
+            assert_eq!(
+                claimed_bits & bits,
+                0,
+                "runtime feature {name} shares its cache-key bit with another feature",
+            );
+            claimed_bits |= bits;
             let key = runtime_cache_key_with_build_identity(
                 8 * 1024 * 1024,
                 target,
@@ -99,9 +105,20 @@ use super::*;
                 false,
                 b"same-emitter",
             );
-            assert_ne!(key, baseline, "runtime feature was omitted from the cache identity");
-            assert!(keys.insert(key), "runtime features produced colliding cache identities");
+            assert_ne!(
+                key, baseline,
+                "runtime feature {name} was omitted from the cache identity",
+            );
+            assert!(
+                keys.insert(key),
+                "runtime feature {name} produced a colliding cache identity",
+            );
         }
+        assert_eq!(
+            claimed_bits,
+            (1_u64 << RuntimeFeatures::CACHE_KEY_BIT_COUNT) - 1,
+            "the feature bits must be a dense range with no gap and no retired bit reused",
+        );
         let pic = runtime_cache_key_with_build_identity(
             8 * 1024 * 1024,
             target,

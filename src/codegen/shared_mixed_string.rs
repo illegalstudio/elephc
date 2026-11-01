@@ -4,6 +4,10 @@
 //!
 //! Called from:
 //! - `crate::codegen::block_emit::emit_module()` before the module's own functions.
+//! - `crate::codegen::lower_inst::conversions` at boxed Mixed string sites, to learn
+//!   whether the site calls the helper or keeps the ladder inline.
+//! - `crate::codegen::frame` when deciding whether a function reserves the nested-call
+//!   register.
 //!
 //! Key details:
 //! - A boxed `Mixed` reaching a string context has to find `__toString` on whatever

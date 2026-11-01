@@ -80,6 +80,26 @@ pub fn internal_declarations(build: impl FnOnce() -> Program) -> Program {
     crate::source::with_parse_mode(SourceProfile::new(SourceMode::Internal), build)
 }
 
+/// Builds prelude FUNCTIONS that stand in for a PHP builtin, typed the way user code is.
+///
+/// The checker resolves `array` by where it was written: a user declaration accepts both packed
+/// and hash storage (`PhpType::php_array()`), while a compiler-synthesized one, recognized by its
+/// dummy span, keeps an explicit `array<mixed>` ABI. A helper that replaces `array_walk()` or
+/// `array_sum()` receives whatever the PHP caller holds, so it must be typed like user code: as an
+/// `array<mixed>`, a by-reference `foreach` promoted the caller's packed array to a hash through
+/// the reference while the caller kept reading it as packed, and a hash argument was read with
+/// the packed layout. Each top-level function gets its own synthetic span, which the checker
+/// treats as written source.
+pub fn php_semantics_declarations(build: impl FnOnce() -> Program) -> Program {
+    let mut program = internal_declarations(build);
+    for stmt in &mut program {
+        if matches!(stmt.kind, StmtKind::FunctionDecl { .. }) && !stmt.span.identifies_a_node() {
+            stmt.span = Span::synthetic();
+        }
+    }
+    program
+}
+
 // ---------------------------------------------------------------------------
 // Type helpers
 // ---------------------------------------------------------------------------
@@ -366,7 +386,12 @@ pub fn e_prop(object: Expr, property: &str) -> Expr {
             object: Box::new(object),
             property: property.to_string(),
         },
-        Span::dummy(),
+        // A property read's span is a KEY: `flow_typed_property_accesses` is `(scope, span) ->
+        // type`, filed for a receiver the checker narrowed and read back by lowering for EVERY
+        // property access that carries the span. Under the shared `dummy()` one narrowed
+        // `$target->localName` handed its `string` to `$this->foster` in the same method, and a
+        // `bool` property was read as a string.
+        Span::synthetic(),
     )
 }
 
@@ -521,6 +546,21 @@ pub fn e_index(array: Expr, index: Expr) -> Expr {
 /// `$name++` in expression position.
 pub fn e_post_inc(name: &str) -> Expr {
     Expr::new(ExprKind::PostIncrement(name.to_string()), Span::dummy())
+}
+
+/// `$name--` in expression position.
+pub fn e_post_dec(name: &str) -> Expr {
+    Expr::new(ExprKind::PostDecrement(name.to_string()), Span::dummy())
+}
+
+/// `++$name` in expression position.
+pub fn e_pre_inc(name: &str) -> Expr {
+    Expr::new(ExprKind::PreIncrement(name.to_string()), Span::dummy())
+}
+
+/// `--$name` in expression position.
+pub fn e_pre_dec(name: &str) -> Expr {
+    Expr::new(ExprKind::PreDecrement(name.to_string()), Span::dummy())
 }
 
 /// A list array literal `[a, b, c]`.
@@ -691,6 +731,7 @@ pub fn e_closure_call(var: &str, args: Vec<Expr>) -> Expr {
 /// by-reference form, so the two are separate calls rather than one with a flag.
 pub struct ClosureBuilder {
     params: Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
+    variadic: Option<String>,
     return_type: Option<TypeExpr>,
     body: Vec<Stmt>,
     captures: Vec<String>,
@@ -701,6 +742,7 @@ pub struct ClosureBuilder {
 pub fn closure() -> ClosureBuilder {
     ClosureBuilder {
         params: Vec::new(),
+        variadic: None,
         return_type: None,
         body: Vec::new(),
         captures: Vec::new(),
@@ -725,6 +767,12 @@ impl ClosureBuilder {
     pub fn param_default(mut self, name: &str, ty: TypeExpr, default: Expr) -> Self {
         self.params
             .push((name.to_string(), Some(ty), Some(default), false));
+        self
+    }
+
+    /// Declares the closure's untyped variadic parameter (`...$name`).
+    pub fn variadic(mut self, name: &str) -> Self {
+        self.variadic = Some(name.to_string());
         self
     }
 
@@ -762,7 +810,7 @@ impl ClosureBuilder {
         Expr::new(
             ExprKind::Closure {
                 params: self.params,
-                variadic: None,
+                variadic: self.variadic,
                 variadic_by_ref: false,
                 variadic_type: None,
                 return_type: self.return_type,
@@ -874,6 +922,20 @@ pub fn s_prop_assign(object: Expr, property: &str, value: Expr) -> Stmt {
     )
 }
 
+/// `$object->prop = &<source>;` — binds a declared property to the reference cell another
+/// property owns, so both names read and write one value. The classic DOM prelude uses it to make
+/// `data`, `nodeValue` and `textContent` a single storage cell.
+pub fn s_prop_ref_assign(object: Expr, property: &str, source: Expr) -> Stmt {
+    Stmt::new(
+        StmtKind::PropertyRefAssign {
+            object: Box::new(object),
+            property: property.to_string(),
+            source,
+        },
+        Span::dummy(),
+    )
+}
+
 /// `static $name = <init>;` — a function-local whose value survives across calls.
 ///
 /// The initializer runs once, on the first call, so `init` must be a constant expression;
@@ -901,7 +963,8 @@ pub fn s_const(name: &str, value: Expr) -> Stmt {
 
 /// `throw <value>;`
 pub fn s_throw(value: Expr) -> Stmt {
-    Stmt::new(StmtKind::Throw(value), Span::dummy())
+    // Keys `throw_access_sites` like a loop keys `loop_storage_types`: one span per throw.
+    Stmt::new(StmtKind::Throw(value), Span::synthetic())
 }
 
 /// An expression evaluated for its effect.
@@ -1001,6 +1064,24 @@ pub fn s_foreach(array: Expr, key_var: Option<&str>, value_var: &str, body: Vec<
             key_var: key_var.map(str::to_string),
             value_var: value_var.to_string(),
             value_by_ref: false,
+            body,
+        },
+        Span::synthetic(), // a loop span keys `loop_storage_types`; see `s_for`
+    )
+}
+
+/// `foreach ($array as [$key =>] &$value) { body }`.
+///
+/// A separate builder rather than a flag on [`s_foreach`], for the reason `ClosureBuilder` keeps
+/// `use ($v)` and `use (&$v)` apart: the binding aliases the container's storage for the whole
+/// loop, and writing through it mutates the source. `array_walk()` is defined in those terms.
+pub fn s_foreach_by_ref(array: Expr, key_var: Option<&str>, value_var: &str, body: Vec<Stmt>) -> Stmt {
+    Stmt::new(
+        StmtKind::Foreach {
+            array,
+            key_var: key_var.map(str::to_string),
+            value_var: value_var.to_string(),
+            value_by_ref: true,
             body,
         },
         Span::synthetic(), // a loop span keys `loop_storage_types`; see `s_for`
@@ -1123,6 +1204,10 @@ fn walk_stmt(stmt: &Stmt, out: &mut Vec<String>) {
         StmtKind::PropertyAssign { object, value, .. } => {
             walk_expr(object, out);
             walk_expr(value, out);
+        }
+        StmtKind::PropertyRefAssign { object, source, .. } => {
+            walk_expr(object, out);
+            walk_expr(source, out);
         }
         StmtKind::ArrayAssign { array, index, value } => {
             out.push(array.clone());
@@ -1645,7 +1730,7 @@ impl MethodBuilder {
     }
 
     /// Builds the method, prepending the `$_unused` consumption when it is needed.
-    fn build(mut self) -> ClassMethod {
+    pub(crate) fn build(mut self) -> ClassMethod {
         let param_attributes = std::mem::take(&mut self.param_attributes);
         let variadic = self.signature.variadic.take();
         let variadic_by_ref = self.signature.variadic_by_ref;
@@ -1875,6 +1960,10 @@ fn audit_stmt(stmt: &Stmt, out: &mut Vec<String>) {
         StmtKind::PropertyAssign { object, value, .. } => {
             audit_expr(object, out);
             audit_expr(value, out);
+        }
+        StmtKind::PropertyRefAssign { object, source, .. } => {
+            audit_expr(object, out);
+            audit_expr(source, out);
         }
         StmtKind::ArrayAssign { index, value, .. } => {
             audit_expr(index, out);
@@ -2161,8 +2250,11 @@ fn audit_expr(expr: &Expr, out: &mut Vec<String>) {
             }
         }
         ExprKind::Spread(inner) => audit_expr(inner, out),
-        // Leaves: nothing to descend into. A class-constant read names no function.
-        ExprKind::ScopedConstantAccess { .. } | ExprKind::ClassConstant { .. } => {}
+        // Leaves: nothing to descend into. A class-constant read names no function, and a magic
+        // constant is substituted for a literal by `magic_constants` before anything runs.
+        ExprKind::ScopedConstantAccess { .. }
+        | ExprKind::ClassConstant { .. }
+        | ExprKind::MagicConstant(_) => {}
         ExprKind::Variable(_)
         | ExprKind::This
         | ExprKind::Null
@@ -2491,7 +2583,9 @@ impl ClassBuilder {
         Stmt::new(
             StmtKind::ClassDecl {
                 generics: None,
-            name: self.name,
+                name: self.name,
+                // A synthetic class has no PHP source, so there is no doc comment to carry.
+                doc_comment: None,
                 extends: self.extends,
                 implements: self.implements,
                 is_abstract: self.is_abstract,

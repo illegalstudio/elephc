@@ -18,6 +18,7 @@ pub mod boolval;
 pub mod floatval;
 pub mod get_resource_id;
 pub mod get_resource_type;
+pub mod get_debug_type;
 pub mod gettype;
 pub mod intval;
 pub mod is_array;

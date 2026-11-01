@@ -2,7 +2,7 @@
 title: "pdo_drivers() - internals"
 description: "Compiler internals for pdo_drivers(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 186
+  order: 197
 ---
 
 ## `pdo_drivers()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/pdo_prelude/build.rs`:7668](https://github.com/illegalstudio/elephc/blob/main/src/pdo_prelude/build.rs#L7668) (`pdo_drivers`)
+- **Lowering**: [`src/pdo_prelude/build.rs`:7670](https://github.com/illegalstudio/elephc/blob/main/src/pdo_prelude/build.rs#L7670) (`pdo_drivers`)
 - **Function symbol**: `pdo_drivers()`
 
 

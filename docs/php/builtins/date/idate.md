@@ -2,7 +2,7 @@
 title: "idate()"
 description: "Formats a timestamp with a single format character and returns it as an integer."
 sidebar:
-  order: 230
+  order: 241
 ---
 
 ## idate()

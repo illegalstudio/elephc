@@ -58,8 +58,16 @@ pub(super) fn lower_closure_bind_method(
         None => lower_null(ctx, expr),
     };
     let (new_this, receiver_owner) = root_closure_bind_operand(ctx, new_this, expr.span);
+    // `Closure::call($newThis, ...)` runs the closure with `$newThis`'s class as its scope, which
+    // is what lets `(fn () => $this->secret)->call($object)` read a private member (Laravel's
+    // `Signals`); `bindTo` without a scope keeps the closure's own.
+    let (call_scope, call_scope_operand) = if method == "call" {
+        (Some(Immediate::ClosureBindObjectScope(None)), Some(new_this.value))
+    } else {
+        (None, None)
+    };
     let bound = emit_closure_bind_with_scope(
-        ctx, closure.value, new_this.value, None, None, expr,
+        ctx, closure.value, new_this.value, call_scope, call_scope_operand, expr,
     );
     let result = if method == "call" {
         let call_args = &args[args.len().min(1)..];
@@ -144,7 +152,27 @@ pub(super) fn plan_scoped_closure_bind(
 pub(super) fn lower_static_closure_bind(
     ctx: &mut LoweringContext<'_, '_>, args: &[Expr], expr: &Expr,
 ) -> LoweredValue {
+    let args = &*crate::types::call_args::closure_bind_args_with_object_scope(args);
+    // A closure LITERAL is lowered in the bind's scope, so its member accesses resolve their
+    // visibility against it, and with the TARGET's class as its `$this`, never the enclosing
+    // class's. Both are set before the literal is lowered because the capture's type is decided
+    // there; the matching checker rule is `closure_bind_property_receiver_type`. Only the literal
+    // is lowered in that scope: left in place, it leaked into the rest of the enclosing body
+    // (Symfony's `ContractsTrait::doGet()` binds a closure to `CacheItem::class` and then lowered
+    // its own `$this->computing` as if written inside `CacheItem`).
+    let saved_class = ctx.current_class.clone();
+    if let Some(scope) = closure_bind_scope_class(ctx, args) {
+        ctx.current_class = Some(scope);
+    }
+    match bound_this_capture(ctx, args) {
+        Some(BoundThis::Class(class_name)) => ctx.set_bound_closure_this_class(class_name),
+        Some(BoundThis::Gradual) => ctx.set_bound_closure_this_gradual(),
+        None => {}
+    }
     let closure = lower_expr(ctx, &args[0]);
+    ctx.take_bound_closure_this_class();
+    ctx.take_bound_closure_this_gradual();
+    ctx.current_class = saved_class;
     if ctx.has_eval_barrier() && matches!(
         ctx.builder.value_php_type(closure.value).codegen_repr(),
         PhpType::Mixed | PhpType::Union(_)
@@ -310,14 +338,17 @@ fn classify_closure_bind_scope(
                 return (Some(Immediate::ClosureBindScope(Some(id))), None);
             }
         }
-    } else {
+        // A literal naming a class this program does not declare (or an internal one) is a
+        // runtime scope like any other string: php resolves the name when the bind executes.
+    }
+    {
         match original_type.codegen_repr() {
             PhpType::Void => return (Some(Immediate::ClosureBindScope(None)), None),
             PhpType::Object(name) => {
                 let base = ctx.classes.get(&name).and_then(|class| u32::try_from(class.class_id).ok());
                 return (Some(Immediate::ClosureBindObjectScope(base)), Some(value.value));
             }
-            PhpType::Mixed | PhpType::Union(_) => {
+            PhpType::Str | PhpType::Mixed | PhpType::Union(_) => {
                 return (Some(Immediate::ClosureBindObjectScope(None)), Some(value.value));
             }
             _ => {}

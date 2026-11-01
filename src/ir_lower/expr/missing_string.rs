@@ -353,6 +353,21 @@ fn collect_stmt(
             collect_expr(index, carried, ctx, found);
             collect_expr(value, carried, ctx, found);
         }
+        StmtKind::PropertyRefAssign { object, source, .. } => {
+            collect_expr(object, carried, ctx, found);
+            collect_expr(source, carried, ctx, found);
+        }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            collect_expr(index, carried, ctx, found);
+            collect_expr(source, carried, ctx, found);
+        }
+        StmtKind::DynamicStaticPropertyWrite { property, index, value, .. } => {
+            collect_expr(property, carried, ctx, found);
+            if let Some(index) = index {
+                collect_expr(index, carried, ctx, found);
+            }
+            collect_expr(value, carried, ctx, found);
+        }
         StmtKind::Include { path, .. } => collect_expr(path, carried, ctx, found),
         StmtKind::ListUnpack { value, .. } => collect_expr(value, carried, ctx, found),
         StmtKind::Return(None)
@@ -372,6 +387,7 @@ fn collect_stmt(
         | StmtKind::TraitDecl { .. }
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ClassLikeActivate { .. }
         | StmtKind::ExternGlobalDecl { .. } => {}
     }
 }
@@ -537,6 +553,11 @@ fn collect_expr(
             }
         }
         ExprKind::BufferNew { len, .. } => collect_expr(len, carried, ctx, found),
+        ExprKind::ArrayReference(inner)
+        | ExprKind::DynamicStaticPropertyAccess { property: inner, .. }
+        | ExprKind::DynamicScopedConstantAccess { receiver: inner, .. } => {
+            collect_expr(inner, carried, ctx, found)
+        }
         ExprKind::ObjectClassName { object } => collect_expr(object, carried, ctx, found),
         ExprKind::Yield { key, value } => {
             if let Some(key) = key {

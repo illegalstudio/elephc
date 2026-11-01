@@ -100,6 +100,7 @@ impl EvalStreamResources {
             filter_resources,
             hash_contexts,
             process_children,
+            process_handles,
             resource_types: _,
             socket_listeners,
             stream_contexts,
@@ -122,6 +123,7 @@ impl EvalStreamResources {
             || hash_contexts.contains_key(&id)
             || stream_contexts.contains_key(&id)
             || process_children.contains_key(&id)
+            || process_handles.contains_key(&id)
             || {
                 #[cfg(feature = "curl")]
                 {
@@ -450,6 +452,24 @@ impl EvalStreamResources {
         length: Option<usize>,
         offset: Option<i64>,
     ) -> Option<Vec<u8>> {
+        // Payload zero is the host's reserved STDIN, outside the eval-owned id namespace.
+        // Read through a duplicate so eval and native calls share the cursor but not ownership.
+        if id == 0 {
+            let mut input = duplicate_standard_descriptor(0).ok()?;
+            if let Some(offset) = offset.filter(|offset| *offset >= 0) {
+                if let Err(error) = input.seek(SeekFrom::Start(offset as u64)) {
+                    if error.raw_os_error() != Some(libc::ESPIPE) {
+                        return None;
+                    }
+                }
+            }
+            let mut bytes = Vec::new();
+            match length {
+                Some(length) => (&mut input).take(length as u64).read_to_end(&mut bytes).ok()?,
+                None => input.read_to_end(&mut bytes).ok()?,
+            };
+            return Some(bytes);
+        }
         if let Some(offset) = offset {
             if !self.seek(id, offset, 0) {
                 return None;

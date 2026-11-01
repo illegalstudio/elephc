@@ -2,7 +2,7 @@
 title: "gmp_perfect_power()"
 description: "Checks whether a GMP number is a perfect power."
 sidebar:
-  order: 619
+  order: 632
 ---
 
 ## gmp_perfect_power()

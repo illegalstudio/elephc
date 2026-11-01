@@ -13,27 +13,37 @@ use super::*;
 /// Emits AArch64 concat, comparison, and spaceship wrappers.
 pub(super) fn emit_aarch64_compare(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_concat");
-    emitter.instruction("sub sp, sp, #64");                                     // allocate wrapper frame for the right operand and string pairs
+    // A STRING operand is concatenated straight from its box: `__rt_concat` copies both
+    // operands into a fresh reservation and never touches them, and the boxes outlive the call.
+    // Casting it instead went through `__rt_str_persist`, whose copy nobody freed (two blocks per
+    // `.` in eval code) -- and which is NOT always a copy: a `.` temporary is taken over in place,
+    // so the cast result cannot be freed safely either. Other operands still cast, into the
+    // shared scratch.
+    emitter.instruction("sub sp, sp, #64");                                     // allocate wrapper frame for both operands and the left string pair
     emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address across helper calls
     emitter.instruction("add x29, sp, #48");                                    // establish a stable wrapper frame pointer
-    emitter.instruction("str x1, [sp, #0]");                                    // save the right boxed operand while casting the left operand
+    emitter.instruction("str x1, [sp, #0]");                                    // save the right boxed operand while reading the left operand
+    emitter.instruction("str x0, [sp, #24]");                                   // save the left boxed operand for a non-string cast
+    emitter.instruction("bl __rt_mixed_unbox");                                 // x0=tag, x1=ptr, x2=len for a boxed string
+    emitter.instruction("cmp x0, #1");                                          // is the left operand already a string?
+    emitter.instruction("b.eq __elephc_eval_value_concat_left_ready");          // borrow its bytes directly
+    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the left boxed operand for string casting
     emitter.instruction("bl __rt_mixed_cast_string");                           // cast the left boxed operand to a PHP string pair
+    emitter.label("__elephc_eval_value_concat_left_ready");
     emitter.instruction("stp x1, x2, [sp, #8]");                                // save the left string pointer and length
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the right boxed operand
+    emitter.instruction("bl __rt_mixed_unbox");                                 // x0=tag, x1=ptr, x2=len for a boxed string
+    emitter.instruction("cmp x0, #1");                                          // is the right operand already a string?
+    emitter.instruction("b.eq __elephc_eval_value_concat_right_ready");         // borrow its bytes directly
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the right boxed operand for string casting
     emitter.instruction("bl __rt_mixed_cast_string");                           // cast the right boxed operand to a PHP string pair
-    emitter.instruction("str x1, [sp, #24]");                                   // preserve the right cast allocation until concatenation has consumed it
+    emitter.label("__elephc_eval_value_concat_right_ready");
     emitter.instruction("mov x3, x1");                                          // move the right string pointer into concat's right pointer register
     emitter.instruction("mov x4, x2");                                          // move the right string length into concat's right length register
     emitter.instruction("ldp x1, x2, [sp, #8]");                                // reload the left string pair for concat
     emitter.instruction("bl __rt_concat");                                      // concatenate the two PHP string pairs
     emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string for boxing the concat result
     emitter.instruction("bl __rt_mixed_from_value");                            // persist and box the concatenated string
-    emitter.instruction("str x0, [sp, #32]");                                   // preserve the independent result while releasing cast temporaries
-    emitter.instruction("ldr x0, [sp, #8]");                                    // recover the left string cast result
-    emitter.instruction("bl __rt_heap_free");                                   // release owned string copies while ignoring scalar scratch results
-    emitter.instruction("ldr x0, [sp, #24]");                                   // recover the right string cast result
-    emitter.instruction("bl __rt_heap_free");                                   // release its owned copy or ignore borrowed scratch
-    emitter.instruction("ldr x0, [sp, #32]");                                   // transfer only the concatenated Mixed result to the caller
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release the concat wrapper frame
     emitter.instruction("ret");                                                 // return the boxed concat result to Rust

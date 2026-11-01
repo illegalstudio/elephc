@@ -21,6 +21,45 @@
 
 use super::*;
 
+/// Verifies boolean-subject match arms narrow an object parameter on the matching `instanceof`
+/// edge before validating the arm's typed function call.
+#[test]
+fn test_match_true_instanceof_arms_narrow_object_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+        class First {}
+        class Second {}
+        function first(First $value): string { return "first"; }
+        function second(Second $value): string { return "second"; }
+        function describe(object $value): string {
+            return match (true) {
+                $value instanceof First => first($value),
+                $value instanceof Second => second($value),
+                default => "other",
+            };
+        }
+        echo describe(new First()), "|", describe(new Second());
+        "#,
+    );
+    assert_eq!(out, "first|second");
+}
+
+/// Verifies a trailing comma after match conditions still reaches the assignment result arm.
+#[test]
+fn test_match_condition_list_with_trailing_comma() {
+    let out = compile_and_run(
+        r#"<?php
+$value = 0;
+match ('b') {
+    'a', 'b', => $value = 7,
+    default => null,
+};
+echo $value;
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
 /// Verifies the builtin `UnhandledMatchError` class can be constructed in a
 /// match default arm, thrown, caught by its fully-qualified name, and queried
 /// through the `getMessage()` method inherited from `Error`.
@@ -309,6 +348,25 @@ echo pick(0), "|", pick(1);
 "#,
     );
     assert_eq!(out, "zero|one");
+}
+
+/// Tests that assignment-aware return inference also treats a throw-only match arm as
+/// non-yielding instead of widening an integer return to a nullable integer.
+#[test]
+fn test_match_throw_default_arm_keeps_declared_integer_return_type() {
+    let out = compile_and_run(
+        r#"<?php
+function choose_number(int $n): int {
+    return match($n) {
+        0 => 10,
+        1 => 20,
+        default => throw new Exception("no number"),
+    };
+}
+echo choose_number(0), "|", choose_number(1);
+"#,
+    );
+    assert_eq!(out, "10|20");
 }
 
 /// Regression test for the gettype() dispatch on a match-produced nullable
@@ -790,4 +848,49 @@ echo $s, $is[0], $a[1], $h["k"], "\n";
         "expected clean heap summary, got: {}",
         out.stderr
     );
+}
+
+/// Carries assignments from an earlier failed match condition into later conditions.
+#[test]
+fn test_match_fallthrough_preserves_condition_assignment() {
+    let out = compile_and_run(
+        r#"<?php
+$result = match (true) {
+    !($length = strlen('abc')) => 'empty',
+    $length < 4 => 'short',
+    default => 'long',
+};
+echo $result;
+"#,
+    );
+    assert_eq!(out, "short");
+}
+
+/// A `match` statement whose arms assign an `int` property in one arm, a `string` property in
+/// another and call a `void` method in a third (Laravel Prompts' `TypedValue` key handler). An
+/// assignment arm was merged with the scalar-biased syntactic guess `int`, so the string arm had
+/// no representation in the `?int` temp and the backend refused the closure.
+#[test]
+fn test_match_arms_assigning_differently_typed_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class Cursor {
+    public string $value = "abc";
+    public int $position = 3;
+    private function wipe(): void { $this->value = ""; }
+    public function key(string $key): string {
+        match ($key) {
+            "left" => $this->position = max(0, $this->position - 1),
+            "delete" => $this->value = substr($this->value, 0, $this->position) . substr($this->value, $this->position + 1),
+            "wipe" => $this->wipe(),
+            default => null,
+        };
+        return $this->value . "@" . $this->position;
+    }
+}
+$c = new Cursor();
+echo $c->key("left"), " ", $c->key("delete"), " ", $c->key("other"), " ", $c->key("wipe");
+"#,
+    );
+    assert_eq!(out, "abc@2 ab@2 ab@2 @2");
 }

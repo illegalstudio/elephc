@@ -26,13 +26,16 @@ macro_rules! impl_fake_lifecycle_scalar_ops {
         &mut self,
         value: RuntimeCellHandle,
     ) -> Result<Option<u64>, EvalStatus> {
-        if self.cell_owners.get(&(value.as_ptr() as usize)) == Some(&1)
-            && self.runtime_type_tag(value)? == EVAL_TAG_OBJECT
-        {
-            self.runtime_object_identity(value).map(Some)
-        } else {
-            Ok(None)
+        if self.runtime_type_tag(value)? != EVAL_TAG_OBJECT {
+            return Ok(None);
         }
+        // The caller asks this BEFORE releasing, so the release is final when exactly one
+        // reference is left. Uncounted fixtures keep the old answer -- every release is final --
+        // because the suite's existing destructor expectations were written against it.
+        if self.counting_enforced() && self.refcount(value) > 1 {
+            return Ok(None);
+        }
+        self.runtime_object_identity(value).map(Some)
     }
     /// Records fake releases without freeing handles needed for assertions.
     fn release(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus> {

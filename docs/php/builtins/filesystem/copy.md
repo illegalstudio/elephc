@@ -2,13 +2,13 @@
 title: "copy()"
 description: "Copies a file."
 sidebar:
-  order: 263
+  order: 274
 ---
 
 ## copy()
 
 ```php
-function copy(string $from, string $to): bool
+function copy(string $from, string $to, mixed $context = null): bool
 ```
 
 Copies a file.
@@ -16,6 +16,7 @@ Copies a file.
 **Parameters**:
 - `$from` (`string`)
 - `$to` (`string`)
+- `$context` (`mixed`), default `null`, optional
 
 **Returns**: `bool`
 

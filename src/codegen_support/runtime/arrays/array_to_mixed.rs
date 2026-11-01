@@ -152,6 +152,25 @@ pub fn emit_array_to_mixed(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #32");                                    // establish the helper frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the runtime value tag
     emitter.instruction("stp x1, x2, [sp, #8]");                                // save the payload words that transfer into the Mixed box
+    // An array slot's box tag follows the element's HEAP KIND: an `Array(Mixed)` value a mixed-key
+    // write promoted to a hash is still stored under the list tag 4, and boxing it as a list made
+    // every Mixed reader walk list indices through a hash (see `__rt_mixed_from_value`).
+    emitter.instruction("cmp x0, #4");                                          // an indexed-array slot?
+    emitter.instruction("b.eq __rt_array_to_mixed_box_owned_kind");             // confirm it against the heap
+    emitter.instruction("cmp x0, #5");                                          // a hash slot?
+    emitter.instruction("b.ne __rt_array_to_mixed_box_owned_alloc");            // other tags are boxed as given
+    emitter.label("__rt_array_to_mixed_box_owned_kind");
+    emitter.instruction("mov x0, x1");                                          // probe the element's own heap kind
+    emitter.instruction("bl __rt_heap_kind");                                   // x0 = 2 for an indexed array, 3 for a hash
+    emitter.instruction("cmp x0, #3");                                          // is the element really a hash?
+    emitter.instruction("mov x9, #5");                                          // tag 5 = associative array
+    emitter.instruction("b.eq __rt_array_to_mixed_box_owned_tag");              // box a hash under the hash tag
+    emitter.instruction("cmp x0, #2");                                          // is the element really an indexed array?
+    emitter.instruction("mov x9, #4");                                          // tag 4 = indexed array
+    emitter.instruction("b.ne __rt_array_to_mixed_box_owned_alloc");            // anything else keeps its tag
+    emitter.label("__rt_array_to_mixed_box_owned_tag");
+    emitter.instruction("str x9, [sp, #0]");                                    // the normalized tag is the one boxed
+    emitter.label("__rt_array_to_mixed_box_owned_alloc");
     emitter.instruction("mov x0, #24");                                         // Mixed cells store tag plus two payload words
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate the boxed Mixed cell
     emitter.instruction("mov x9, #5");                                          // low byte 5 = boxed Mixed heap kind
@@ -294,6 +313,23 @@ fn emit_array_to_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the runtime value tag
     emitter.instruction("mov QWORD PTR [rbp - 16], rdi");                       // save the low payload word
     emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // save the high payload word
+    // The box tag follows the element's heap kind: see the ARM64 twin.
+    emitter.instruction("cmp rax, 4");                                          // an indexed-array slot?
+    emitter.instruction("je __rt_array_to_mixed_x86_box_owned_kind");           // confirm it against the heap
+    emitter.instruction("cmp rax, 5");                                          // a hash slot?
+    emitter.instruction("jne __rt_array_to_mixed_x86_box_owned_alloc");         // other tags are boxed as given
+    emitter.label("__rt_array_to_mixed_x86_box_owned_kind");
+    emitter.instruction("mov rax, rdi");                                        // probe the element's own heap kind
+    emitter.instruction("call __rt_heap_kind");                                 // eax = 2 for an indexed array, 3 for a hash
+    emitter.instruction("mov r10, 5");                                          // tag 5 = associative array
+    emitter.instruction("cmp rax, 3");                                          // is the element really a hash?
+    emitter.instruction("je __rt_array_to_mixed_x86_box_owned_tag");            // box a hash under the hash tag
+    emitter.instruction("mov r10, 4");                                          // tag 4 = indexed array
+    emitter.instruction("cmp rax, 2");                                          // is the element really an indexed array?
+    emitter.instruction("jne __rt_array_to_mixed_x86_box_owned_alloc");         // anything else keeps its tag
+    emitter.label("__rt_array_to_mixed_x86_box_owned_tag");
+    emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // the normalized tag is the one boxed
+    emitter.label("__rt_array_to_mixed_x86_box_owned_alloc");
     emitter.instruction("mov rax, 24");                                         // Mixed cells store tag plus two payload words
     emitter.instruction("call __rt_heap_alloc");                                // allocate the boxed Mixed cell
     emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(5))); // materialize the x86_64 Mixed heap kind word

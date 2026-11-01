@@ -241,9 +241,49 @@ impl Checker {
             }
             CallableTarget::Method { object, method } => {
                 let method_key = crate::names::php_symbol_key(method);
+                if method == "__invoke" {
+                    if let ExprKind::Variable(_) = &object.kind {
+                        if let Some(signature) = self.resolve_expr_callable_sig(object, env)? {
+                            return Ok(signature);
+                        }
+                    }
+                }
                 let object_ty = self.infer_type(object, env)?;
                 match object_ty {
+                    PhpType::Callable if method == "__invoke" => {
+                        Ok(dynamic_first_class_callable_sig())
+                    }
+                    // The generic `object` names no class either (`$o->me()->m(...)` over an
+                    // untyped `return $this`): it was looked up as the class "" and refused.
+                    PhpType::Object(class_name) if class_name.is_empty() => {
+                        Ok(dynamic_first_class_callable_sig())
+                    }
+                    // A receiver typed by a class nothing declares (a package or an extension the
+                    // build does not have: `$this->conn->executeStatement(...)` on a
+                    // `Doctrine\DBAL\Connection` property, `$this->getConnection()->exec(...)` on
+                    // `\PDO`) can only hold what php would answer at run time; it names no
+                    // signature, so the callable is resolved when it runs, as for `object`.
+                    PhpType::Object(class_name)
+                        if !self.classes.contains_key(&class_name)
+                            && !self.interfaces.contains_key(&class_name) =>
+                    {
+                        Ok(dynamic_first_class_callable_sig())
+                    }
                     PhpType::Object(class_name) => {
+                        if let Some(interface_info) = self.interfaces.get(&class_name) {
+                            let sig = interface_info.methods.get(&method_key).ok_or_else(|| {
+                                CompileError::new(
+                                    span,
+                                    &format!(
+                                        "Undefined method for first-class callable: {}::{}",
+                                        class_name, method
+                                    ),
+                                )
+                            })?;
+                            let effective_sig =
+                                Self::callable_sig_for_declared_params(sig, &sig.declared_params);
+                            return Ok(Self::callable_wrapper_sig(&effective_sig));
+                        }
                         // See the static-method arm: promote before publishing the wrapper, so
                         // the descriptor and the method frame agree on one collector container.
                         self.promote_descriptor_variadic_container_for_method(
@@ -254,16 +294,57 @@ impl Checker {
                         let class_info = self.classes.get(&class_name).ok_or_else(|| {
                             CompileError::new(span, &format!("Undefined class: {}", class_name))
                         })?;
-                        let sig = class_info.methods.get(&method_key).ok_or_else(|| {
-                            CompileError::new(
+                        let Some(sig) = class_info.methods.get(&method_key) else {
+                            if let Some(sig) = class_info.static_methods.get(&method_key) {
+                                if let Some(visibility) =
+                                    class_info.static_method_visibilities.get(&method_key)
+                                {
+                                    let declaring_class = class_info
+                                        .static_method_declaring_classes
+                                        .get(&method_key)
+                                        .map(String::as_str)
+                                        .unwrap_or(class_name.as_str());
+                                    if !self.can_access_member(declaring_class, visibility) {
+                                        return Err(CompileError::new(
+                                            span,
+                                            &format!(
+                                                "Cannot access {} method: {}::{}",
+                                                Self::visibility_label(visibility),
+                                                class_name,
+                                                method
+                                            ),
+                                        ));
+                                    }
+                                }
+                                let declared_flags = Self::declared_method_param_flags(
+                                    class_info,
+                                    &method_key,
+                                    true,
+                                );
+                                let effective_sig =
+                                    Self::callable_sig_for_declared_params(sig, &declared_flags);
+                                return Ok(Self::callable_wrapper_sig(&effective_sig));
+                            }
+                            if method == "__invoke" {
+                                return Ok(dynamic_first_class_callable_sig());
+                            }
+                            // A subclass method the body asked about first: Laravel's
+                            // `FormRequest` does `method_exists($this, 'validator')` and then
+                            // `$this->validator(...)`, which only an application request declares.
+                            if self.method_exists_capability_guarded(object, &method_key) {
+                                return Ok(dynamic_first_class_callable_sig());
+                            }
+                            return Err(CompileError::new(
                                 span,
                                 &format!(
                                     "Undefined method for first-class callable: {}::{}",
                                     class_name, method
                                 ),
-                            )
-                        })?;
-                        if let Some(visibility) = class_info.method_visibilities.get(&method_key) {
+                            ));
+                        };
+                        if let Some(visibility) =
+                            class_info.method_visibilities.get(&method_key)
+                        {
                             let declaring_class = class_info
                                 .method_declaring_classes
                                 .get(&method_key)
@@ -281,14 +362,33 @@ impl Checker {
                                 ));
                             }
                         }
-                        let declared_flags = Self::declared_method_param_flags(
-                            class_info,
-                            &method_key,
-                            false,
-                        );
+                        let declared_flags =
+                            Self::declared_method_param_flags(class_info, &method_key, false);
                         let effective_sig =
                             Self::callable_sig_for_declared_params(sig, &declared_flags);
                         Ok(Self::callable_wrapper_sig(&effective_sig))
+                    }
+                    // A receiver with no single class names its method the same way an ordinary
+                    // `$mixed->method()` call does — at run time, from the descriptor. `__invoke`
+                    // was already allowed here; every other method name needs the same answer,
+                    // because Symfony's generated container factories take
+                    // `$container->getService(...)` off an UNTYPED `$container` parameter that
+                    // nothing in sight narrows (the container reaches them through
+                    // `$this->{$this->methodMap[$id]}($this)`).
+                    PhpType::Mixed | PhpType::Union(_) => Ok(dynamic_first_class_callable_sig()),
+                    // The receiver variable now holds the callable itself: Carbon's `Units::add()`
+                    // does `$unit = Closure::fromCallable([$unit, 'convertDate']); … $unit(...)`,
+                    // and the target recorded by NAME re-reads `$unit` after the rebinding. The
+                    // value being called is the closure, which the descriptor resolves at run time.
+                    PhpType::Callable => Ok(dynamic_first_class_callable_sig()),
+                    PhpType::Array(element)
+                        if method == "__invoke"
+                            && matches!(
+                                element.codegen_repr(),
+                                PhpType::Mixed | PhpType::Str
+                            ) =>
+                    {
+                        Ok(dynamic_first_class_callable_sig())
                     }
                     _ => Err(CompileError::new(
                         span,
@@ -436,6 +536,8 @@ impl Checker {
             if promoted {
                 self.functions.remove(name);
                 self.completed_function_signatures.remove(name);
+                // The one removal from these tables: the folded-name index must not keep it.
+                *self.canonical_function_names.borrow_mut() = None;
                 self.ensure_function_variant_group_signature(name, crate::span::Span::dummy())?;
             }
             return Ok(());
@@ -670,6 +772,30 @@ impl Checker {
         Ok(self
             .resolve_first_class_callable_sig(target, span, env)?
             .return_type)
+    }
+}
+
+/// Returns the conservative variadic contract for a runtime-selected callable value.
+fn dynamic_first_class_callable_sig() -> FunctionSig {
+    FunctionSig {
+        params: vec![(
+            "args".to_string(),
+            PhpType::Array(Box::new(PhpType::Mixed)),
+        )],
+        param_type_exprs: vec![None],
+        param_attributes: vec![Vec::new()],
+        defaults: vec![Some(Expr::new(
+            ExprKind::ArrayLiteral(Vec::new()),
+            crate::span::Span::dummy(),
+        ))],
+        return_type: PhpType::Mixed,
+        declared_return: false,
+        by_ref_return: false,
+        ref_params: vec![false],
+        declared_params: vec![true],
+        variadic: Some("args".to_string()),
+        deprecation: None,
+        is_generator: false,
     }
 }
 

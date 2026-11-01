@@ -158,6 +158,87 @@ echo $demo->reveal();
     assert_eq!(out, "hello");
 }
 
+/// Verifies a private trait alias retains its declared array return representation.
+#[test]
+fn test_trait_private_alias_preserves_declared_array_return() {
+    let out = compile_and_run(
+        r#"<?php
+trait KernelParameters {
+    public function parameters(?string $directory): array {
+        return ['kernel.debug' => false]
+            + (null !== $directory ? ['kernel.logs_dir' => $directory] : []);
+    }
+}
+
+class KernelLike {
+    use KernelParameters {
+        parameters as private doGetParameters;
+    }
+
+    public function debug(): bool {
+        $parameters = $this->doGetParameters(null);
+
+        return $parameters['kernel.debug'];
+    }
+}
+
+var_dump((new KernelLike())->debug());
+"#,
+    );
+    assert_eq!(out, "bool(false)\n");
+}
+
+/// Verifies layered trait aliases preserve an array return through inheritance.
+#[test]
+fn test_layered_trait_aliases_preserve_declared_array_return() {
+    let out = compile_and_run(
+        r#"<?php
+trait KernelParameterTrait {
+    private function getKernelParameters(?string $directory): array {
+        return ['kernel.debug' => false]
+            + (null !== $directory ? ['kernel.logs_dir' => $directory] : []);
+    }
+}
+
+class BaseKernel {
+    use KernelParameterTrait {
+        getKernelParameters as private doGetKernelParameters;
+    }
+
+    protected function getKernelParameters(): array {
+        return $this->doGetKernelParameters(null) + ['kernel.charset' => 'UTF-8'];
+    }
+}
+
+trait MicroKernelTrait {
+    use KernelParameterTrait {
+        getKernelParameters as private doGetKernelParameters;
+    }
+
+    protected function getKernelParameters(): array {
+        $parameters = $this->doGetKernelParameters(null);
+        $parameters['kernel.charset'] = 'UTF-8';
+
+        return $parameters;
+    }
+}
+
+class ApplicationKernel extends BaseKernel {
+    use MicroKernelTrait;
+
+    public function debug(): bool {
+        $parameters = $this->getKernelParameters();
+
+        return $parameters['kernel.debug'];
+    }
+}
+
+var_dump((new ApplicationKernel())->debug());
+"#,
+    );
+    assert_eq!(out, "bool(false)\n");
+}
+
 /// Verifies that a child class can satisfy an abstract property declaration from a trait it inherits via an abstract class.
 #[test]
 fn test_abstract_trait_property_can_be_satisfied_by_concrete_child() {

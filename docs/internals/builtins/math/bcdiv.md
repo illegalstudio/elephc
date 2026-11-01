@@ -2,7 +2,7 @@
 title: "bcdiv() - internals"
 description: "Compiler internals for bcdiv(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 564
+  order: 577
 ---
 
 ## `bcdiv()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/bcdiv.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/bcdiv.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -57,6 +57,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [File information](php/fileinfo.md) - MIME types, encodings, custom magic databases and the complete PHP fileinfo surface
 - [Tokenizer](php/tokenizer.md): PHP source inspection, lossless tokens, `PhpToken` and `TOKEN_PARSE`.
 - [XML](php/xml.md) — the `ext/xml` SAX parser (`XMLParser`, handlers, `xml_parse_into_struct()`, error codes) and `ext/xmlwriter` (`XMLWriter`, memory and URI output, DTDs, namespaces) on a statically pinned libxml2 2.15.3 from the native catalog (`elephc native add libxml2`)
+- [DOM](php/dom.md) — the classic DOM extension: `DOMDocument`/`DOMNode`/`DOMElement` and friends, `loadXML`/`loadHTML` (libxml2's HTML 4 parser), `saveXML`/`saveHTML`, the `LIBXML_*` constants, and the documented differences from PHP
 - [Classes](php/classes.md) — inheritance, interfaces, abstract/final classes, typed/final/static properties, static property redeclarations, constructor promotion, methods, traits, enums, magic methods
 - [SPL](php/spl.md) — SPL interfaces, exceptions, autoload/introspection helpers, and runtime-backed containers
 - [Namespaces](php/namespaces.md) — namespace, use, include/require/include_once/require_once, Composer/SPL autoloading, class introspection, constants, superglobals

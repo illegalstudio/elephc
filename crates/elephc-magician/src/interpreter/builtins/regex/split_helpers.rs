@@ -52,27 +52,36 @@ pub(in crate::interpreter) fn eval_preg_split_flags(
 }
 
 /// Returns whether `preg_split()` should stop splitting and emit the remaining subject.
+///
+/// `segments` counts only the pieces BETWEEN separators that were actually kept, as php's
+/// `php_pcre_split_impl` does: a piece `PREG_SPLIT_NO_EMPTY` dropped and a delimiter
+/// `PREG_SPLIT_DELIM_CAPTURE` added both leave the limit untouched. Counting every output piece
+/// stopped `preg_split('/(\X)/u', "\r\n    a", 5, NO_EMPTY | DELIM_CAPTURE)` two graphemes early,
+/// and the grapheme polyfill's `grapheme_extract()` built on it returned three spaces for four.
 pub(in crate::interpreter) fn eval_preg_split_reached_limit(
-    pieces: &[EvalPregSplitPiece],
+    segments: usize,
     limit: Option<usize>,
 ) -> bool {
-    matches!(limit, Some(limit) if limit > 0 && pieces.len() + 1 >= limit)
+    matches!(limit, Some(limit) if limit > 0 && segments + 1 >= limit)
 }
 
 /// Pushes one `preg_split()` output piece, honoring `PREG_SPLIT_NO_EMPTY`.
+///
+/// Returns whether the piece was kept, which is what counts toward the split limit.
 pub(in crate::interpreter) fn eval_preg_split_push_piece(
     pieces: &mut Vec<EvalPregSplitPiece>,
     piece: &[u8],
     offset: usize,
     no_empty: bool,
-) {
+) -> bool {
     if no_empty && piece.is_empty() {
-        return;
+        return false;
     }
     pieces.push(EvalPregSplitPiece {
         bytes: piece.to_vec(),
         offset,
     });
+    true
 }
 
 /// Pushes captured delimiters for `PREG_SPLIT_DELIM_CAPTURE`.
@@ -84,7 +93,7 @@ pub(in crate::interpreter) fn eval_preg_split_push_captures(
 ) {
     for index in 1..captures.len() {
         if let Some(matched) = captures.get(index) {
-            eval_preg_split_push_piece(
+            let _ = eval_preg_split_push_piece(
                 pieces,
                 &subject[matched.start()..matched.end()],
                 matched.start(),

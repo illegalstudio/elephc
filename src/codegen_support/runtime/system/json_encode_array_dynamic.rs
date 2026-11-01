@@ -220,19 +220,22 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_json_encode_bool");                            // encode the bool element as true/false
     emitter.instruction("b __rt_json_arr_dyn_copy");                            // copy the encoded element into concat_buf
 
+    // A nested array's encoder follows its HEAP KIND, not the element tag: an `Array(Mixed)`
+    // value promoted to a hash by a mixed-key write keeps the list tag it was stored under.
     emitter.label("__rt_json_arr_dyn_value_array");
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the source array pointer
-    emitter.instruction("ldr x4, [sp, #40]");                                   // reload the loop index
-    emitter.instruction("add x4, x4, #3");                                      // skip the 24-byte array header
-    emitter.instruction("ldr x0, [x0, x4, lsl #3]");                            // load the nested array pointer from the 8-byte array slot
-    emitter.instruction("bl __rt_json_encode_array_dynamic");                   // encode the nested indexed array recursively
-    emitter.instruction("b __rt_json_arr_dyn_copy");                            // copy the encoded nested array into concat_buf
-
     emitter.label("__rt_json_arr_dyn_value_assoc");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the source array pointer
     emitter.instruction("ldr x4, [sp, #40]");                                   // reload the loop index
     emitter.instruction("add x4, x4, #3");                                      // skip the 24-byte array header
-    emitter.instruction("ldr x0, [x0, x4, lsl #3]");                            // load the nested associative-array pointer from the 8-byte array slot
+    emitter.instruction("ldr x0, [x0, x4, lsl #3]");                            // load the nested container pointer from the 8-byte array slot
+    emitter.instruction("mov x11, x0");                                         // keep the container across the heap-kind probe (it clobbers x0, x9, x10)
+    emitter.instruction("bl __rt_heap_kind");                                   // x0 = 3 for a hash, 2 for an indexed array
+    emitter.instruction("cmp x0, #3");                                          // is the nested container a hash?
+    emitter.instruction("mov x0, x11");                                         // restore the nested container pointer
+    emitter.instruction("b.eq __rt_json_arr_dyn_value_hash");                   // hashes encode through the assoc helper
+    emitter.instruction("bl __rt_json_encode_array_dynamic");                   // encode the nested indexed array recursively
+    emitter.instruction("b __rt_json_arr_dyn_copy");                            // copy the encoded nested array into concat_buf
+    emitter.label("__rt_json_arr_dyn_value_hash");
     emitter.instruction("bl __rt_json_encode_assoc");                           // encode the nested associative array recursively
     emitter.instruction("b __rt_json_arr_dyn_copy");                            // copy the encoded nested hash into concat_buf
 
@@ -469,19 +472,21 @@ fn emit_json_encode_array_dynamic_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_json_encode_bool");                          // encode the bool element as the JSON literals true/false
     emitter.instruction("jmp __rt_json_arr_dyn_copy");                          // copy the encoded JSON element into concat_buf
 
+    // A nested array's encoder follows its heap kind, not the element tag: see the ARM64 twin.
     emitter.label("__rt_json_arr_dyn_value_array");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source indexed-array pointer before loading the nested indexed-array payload
-    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current indexed-array element index before computing the nested-array slot address
+    emitter.label("__rt_json_arr_dyn_value_assoc");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source indexed-array pointer before loading the nested container
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current indexed-array element index before computing the nested slot address
     emitter.instruction("add r10, 3");                                          // skip the 24-byte indexed-array header to land on the first payload slot
-    emitter.instruction("mov rax, QWORD PTR [rax + r10 * 8]");                  // load the nested indexed-array pointer from the indexed-array storage slot
+    emitter.instruction("mov rax, QWORD PTR [rax + r10 * 8]");                  // load the nested container pointer from the indexed-array storage slot
+    emitter.instruction("mov r11, rax");                                        // keep the container across the heap-kind probe (it clobbers rax, rcx, rdx)
+    emitter.instruction("call __rt_heap_kind");                                 // eax = 3 for a hash, 2 for an indexed array
+    emitter.instruction("cmp rax, 3");                                          // is the nested container a hash?
+    emitter.instruction("mov rax, r11");                                        // restore the nested container pointer
+    emitter.instruction("je __rt_json_arr_dyn_value_hash_linux_x86_64");        // hashes encode through the assoc helper
     emitter.instruction("call __rt_json_encode_array_dynamic");                 // encode the nested indexed-array recursively into a JSON slice
     emitter.instruction("jmp __rt_json_arr_dyn_copy");                          // copy the encoded nested JSON element into concat_buf
-
-    emitter.label("__rt_json_arr_dyn_value_assoc");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source indexed-array pointer before loading the nested associative-array payload
-    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current indexed-array element index before computing the nested-hash slot address
-    emitter.instruction("add r10, 3");                                          // skip the 24-byte indexed-array header to land on the first payload slot
-    emitter.instruction("mov rax, QWORD PTR [rax + r10 * 8]");                  // load the nested associative-array pointer from the indexed-array storage slot
+    emitter.label("__rt_json_arr_dyn_value_hash_linux_x86_64");
     emitter.instruction("call __rt_json_encode_assoc");                         // encode the nested associative array recursively into a JSON slice
     emitter.instruction("jmp __rt_json_arr_dyn_copy");                          // copy the encoded nested JSON element into concat_buf
 

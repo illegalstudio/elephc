@@ -107,13 +107,13 @@ pub(super) fn emit(emitter: &mut Emitter) {
 fn invoke_body(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("ldr x9, [sp, #224]");                          // recover the cleanup routine pointer after setjmp
-            emitter.instruction("ldr x0, [sp, #232]");                          // provide the retained child value to its native release helper
+            emitter.instruction(&format!("ldr x9, [sp, #{}]", crate::codegen_support::runtime::exceptions::PROTECTED_INPUT_OFFSET));                          // recover the cleanup routine pointer after setjmp
+            emitter.instruction(&format!("ldr x0, [sp, #{}]", crate::codegen_support::runtime::exceptions::PROTECTED_INPUT_OFFSET + 8));                          // provide the retained child value to its native release helper
             emitter.instruction("blr x9");                                      // contain every PHP exception raised by this child cleanup
         },
         Arch::X86_64 => {
-            emitter.instruction("mov r11, QWORD PTR [rsp + 224]");              // recover the protected routine pointer
-            emitter.instruction("mov rax, QWORD PTR [rsp + 232]");              // install the native unary value convention
+            emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", crate::codegen_support::runtime::exceptions::PROTECTED_INPUT_OFFSET));              // recover the protected routine pointer
+            emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", crate::codegen_support::runtime::exceptions::PROTECTED_INPUT_OFFSET + 8));              // install the native unary value convention
             emitter.instruction("mov rdi, rax");                                // also provide the C convention used by object destructor calls
             emitter.instruction("call r11");                                    // catch an escaping destructor before its parent skips later children
         },

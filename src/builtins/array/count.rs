@@ -5,8 +5,8 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - `check` validates the argument type (Array, AssocArray, Mixed, Union-of-countable, or
-//!   Countable Object) and returns `Int`. The Countable interface check delegates to
+//! - `check` validates the argument type (Array, AssocArray, Iterable, Mixed, an array-capable
+//!   Union, or Countable Object) and returns `Int`. The Countable interface check delegates to
 //!   `cx.checker.class_implements_interface`.
 //! - `$mode` accepts `COUNT_NORMAL` (`0`) and `COUNT_RECURSIVE` (`1`); anything else raises
 //!   PHP's catchable `ValueError`. The guard lives in the backend
@@ -55,8 +55,9 @@ fn effects(input: &BuiltinSemanticInput<'_>) -> crate::ir::Effects {
 
 /// Validates the argument type and returns `Int`.
 ///
-/// Accepts Array, AssocArray, Mixed (heterogeneous arrays), a Union with at least one
-/// countable member, or an Object that implements the `Countable` interface. Arity
+/// Accepts Array, AssocArray, Iterable (runtime-checked for arrays/Countable objects), Mixed
+/// (heterogeneous arrays), a Union with at least one countable array member, or an Object that
+/// implements the `Countable` interface. Arity
 /// enforcement (1 or 2 arguments) is handled by the registry's `check_arity`; `$mode`'s
 /// value range is a runtime `ValueError`, not a compile-time error, exactly like PHP.
 /// Returns a `CompileError` for non-countable types or non-Countable objects.
@@ -72,8 +73,25 @@ fn effects(input: &BuiltinSemanticInput<'_>) -> crate::ir::Effects {
 pub(super) fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     match &ty {
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed => Ok(PhpType::Int),
-        PhpType::Union(members) if members.iter().any(union_member_is_countable_array) => {
+        PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Iterable
+        | PhpType::Mixed => Ok(PhpType::Int),
+        // An object member counts too: `?SplStack` and `Countable|null` are ordinary PHP, and the
+        // null arm raises the run-time `TypeError` like any other non-countable value. So does an
+        // `iterable` one (`string|iterable|null`), which a bare `iterable` already is.
+        PhpType::Union(members)
+            if members.iter().any(|member| {
+                union_member_is_countable_array(member)
+                    || matches!(member, PhpType::Object(_) | PhpType::Iterable)
+            }) =>
+        {
+            Ok(PhpType::Int)
+        }
+        // `$document->body->childNodes`: a property read through a nullable receiver is
+        // `NodeList|null`, and the object member may well be Countable. The lowering checks the
+        // value at run time and raises PHP's own TypeError, as it does for a bare object.
+        PhpType::Union(members) if members.iter().any(|member| matches!(member, PhpType::Object(_))) => {
             Ok(PhpType::Int)
         }
         // A non-Countable object is accepted here and REFUSED AT RUN TIME, the way PHP does it.

@@ -1,6 +1,6 @@
 //! Purpose:
 //! Defines the argument block compiled programs fill in before calling into the
-//! iconv bridge, and the safe accessors the dispatcher reads it through.
+//! iconv bridge (which also hosts mbstring's case mapping), and the safe accessors the dispatcher reads it through.
 //!
 //! Called from:
 //! - `crate::abi::dispatch` while decoding one call.
@@ -101,3 +101,7 @@ pub const OP_MIME_DECODE_HEADERS: i64 = 7;
 pub const OP_GET_ENCODING: i64 = 8;
 /// `iconv_set_encoding(string $type, string $encoding)`.
 pub const OP_SET_ENCODING: i64 = 9;
+/// `mb_strtoupper(string $string, ?string $encoding = null)`.
+pub const OP_MB_STRTOUPPER: i64 = 10;
+/// `mb_strtolower(string $string, ?string $encoding = null)`.
+pub const OP_MB_STRTOLOWER: i64 = 11;

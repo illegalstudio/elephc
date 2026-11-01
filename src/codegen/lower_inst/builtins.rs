@@ -27,9 +27,9 @@ use super::super::context::FunctionContext;
 use super::{
     class_implements_interface, exceptions, expect_data, expect_operand,
     instruction_strict_php_profile, load_value_to_first_int_arg,
-    lower_instance_runtime_intrinsic, lower_runtime_object_method_call,
-    object_name_satisfies_interface, predicates, runtime_backed_instance_intrinsic,
-    store_if_result,
+    lower_instance_runtime_intrinsic, lower_narrowed_interface_method_call_or_type_error,
+    lower_runtime_object_method_call, object_name_satisfies_interface, predicates,
+    runtime_backed_instance_intrinsic, store_if_result,
 };
 use crate::codegen::{CodegenIrError, Result};
 
@@ -38,25 +38,29 @@ pub(crate) mod arrays;
 pub(crate) mod bcmath;
 pub(crate) mod buffers;
 pub(crate) mod class_relations;
+pub(crate) mod get_class_methods;
 pub(crate) mod clone_with;
 pub(crate) mod ctype;
 pub(crate) mod curl;
+pub(crate) mod internal_warning;
 pub(crate) mod debug;
-pub(super) mod eval;
+pub(crate) mod eval;
 /// Installing the compiled OPcache configuration is a STARTUP concern rather than an eval
 /// one, so `crate::codegen::frame` reaches it from the prologue. Re-exported here because
 /// `frame` sits a level above this module's parent, which `pub(super)` does not reach.
 pub(crate) use eval::configure_eval_opcache;
 mod eval_facade;
+mod filter;
 pub(crate) mod iconv;
 pub(crate) mod io;
 mod isset;
 mod count_empty;
 mod function_queries;
+mod member_exists;
 mod member_queries;
 mod scalar_metadata;
 mod shared;
-mod type_predicates;
+pub(in crate::codegen::lower_inst) mod type_predicates;
 pub(crate) mod is_numeric;
 pub(crate) mod json;
 pub(crate) mod math;
@@ -79,6 +83,7 @@ pub(crate) mod system;
 pub(crate) mod strings;
 pub(crate) mod tokenizer;
 pub(crate) mod types;
+pub(crate) mod unpack;
 
 pub(crate) use count_empty::*;
 pub(in crate::codegen::lower_inst) use eval_facade::*;
@@ -105,6 +110,22 @@ pub(super) fn lower_language_construct_call(ctx: &mut FunctionContext<'_>, inst:
         "unset" => types::lower_unset_builtin(ctx, inst),
         "isset" => isset::lower_isset(ctx, inst),
         "exit" | "die" => system::lower_exit(ctx, inst),
+        "filter_var$default" => filter::lower_filter_var_default(ctx, inst, false),
+        "filter_var$default_nof" => filter::lower_filter_var_default(ctx, inst, true),
+        "filter_var$int" => filter::lower_filter_var_int(ctx, inst, false),
+        "filter_var$int_nof" => filter::lower_filter_var_int(ctx, inst, true),
+        "filter_var$int_range" => filter::lower_filter_var_int_range(ctx, inst, false),
+        "filter_var$int_range_nof" => filter::lower_filter_var_int_range(ctx, inst, true),
+        "filter_var$float" => filter::lower_filter_var_float(ctx, inst, false),
+        "filter_var$float_nof" => filter::lower_filter_var_float(ctx, inst, true),
+        "filter_var$bool" => filter::lower_filter_var_bool(ctx, inst, false),
+        "filter_var$bool_nof" => filter::lower_filter_var_bool(ctx, inst, true),
+        "filter_var$ip" => filter::lower_filter_var_ip(ctx, inst, false),
+        "filter_var$ip_nof" => filter::lower_filter_var_ip(ctx, inst, true),
+        "filter_var$ip4" => filter::lower_filter_var_ip4(ctx, inst, false),
+        "filter_var$ip4_nof" => filter::lower_filter_var_ip4(ctx, inst, true),
+        "filter_var$ip6" => filter::lower_filter_var_ip6(ctx, inst, false),
+        "filter_var$ip6_nof" => filter::lower_filter_var_ip6(ctx, inst, true),
         _ => Err(CodegenIrError::unsupported(format!("language construct {}", name))),
     }
 }

@@ -275,8 +275,16 @@ fn emit_print_r_loaded_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Res
             ctx.emitter.label(&skip_label);
             Ok(())
         }
-        PhpType::Array(_) => emit_print_r_array(ctx, "__rt_print_r_indexed"),
-        PhpType::AssocArray { .. } => emit_print_r_array(ctx, "__rt_print_r_hash"),
+        // A bare `array` contract carries either representation, so the walker is chosen
+        // from the heap header rather than from the declared type.
+        PhpType::Array(_) => emit_print_r_array(
+            ctx,
+            PrintRWalker::ByRuntimeKind {
+                indexed: "__rt_print_r_indexed",
+                hash: "__rt_print_r_hash",
+            },
+        ),
+        PhpType::AssocArray { .. } => emit_print_r_array(ctx, PrintRWalker::Fixed("__rt_print_r_hash")),
         PhpType::Iterable => {
             // Iterable's runtime representation is ambiguous (a direct indexed
             // array or a hash), so render only the `Array\n` header rather than
@@ -333,7 +341,37 @@ fn emit_print_r_tagged_scalar(ctx: &mut FunctionContext<'_>) -> Result<()> {
 /// is what makes all three modes correct at once — echo mode prints nothing and
 /// still returns `true`, and the capture modes leave the buffer empty so
 /// `print_r($null, true)` finalizes to `""`.
-fn emit_print_r_array(ctx: &mut FunctionContext<'_>, walker: &str) -> Result<()> {
+
+/// Branches to `label` when the container in the integer result register is HASH storage.
+///
+/// A bare `array` contract carries either representation, so a dumper that has only the static
+/// type has to ask. `__rt_heap_kind` answers 3 for hash storage and returns it in the same
+/// register the container occupies, so the pointer is stashed across the call and the kind is
+/// moved into a scratch before the pointer is restored — comparing after the restore would
+/// otherwise read the pointer back as the kind.
+fn emit_branch_if_hash_storage(ctx: &mut FunctionContext<'_>, label: &str) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("mov x9, x0");                              // stash the kind before the pointer comes back
+            abi::emit_pop_reg(ctx.emitter, result_reg);
+            ctx.emitter.instruction("cmp x9, #3");                              // 3 = hash storage
+            ctx.emitter.instruction(&format!("b.eq {}", label));                // walk a promoted hash as a hash
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // container pointer → SysV first argument register
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("mov r10, rax");                            // stash the kind before the pointer comes back
+            abi::emit_pop_reg(ctx.emitter, result_reg);
+            ctx.emitter.instruction("cmp r10, 3");                              // 3 = hash storage
+            ctx.emitter.instruction(&format!("je {}", label));                  // walk a promoted hash as a hash
+        }
+    }
+}
+
+fn emit_print_r_array(ctx: &mut FunctionContext<'_>, walker: PrintRWalker) -> Result<()> {
     let result_reg = abi::int_result_reg(ctx.emitter);
     let skip_label = ctx.next_label("print_r_skip_null_array");
     let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
@@ -346,6 +384,41 @@ fn emit_print_r_array(ctx: &mut FunctionContext<'_>, walker: &str) -> Result<()>
     abi::emit_push_reg(ctx.emitter, result_reg);
     emit_write_literal(ctx, b"Array\n");
     abi::emit_pop_reg(ctx.emitter, result_reg);
+    if let PrintRWalker::Fixed(_) = walker {
+        emit_print_r_walk_argument(ctx);
+    }
+    match walker {
+        PrintRWalker::Fixed(label) => abi::emit_call_label(ctx.emitter, label),
+        PrintRWalker::ByRuntimeKind { indexed, hash } => {
+            let hash_label = ctx.next_label("print_r_hash_storage");
+            let done_label = ctx.next_label("print_r_walk_done");
+            emit_branch_if_hash_storage(ctx, &hash_label);
+            emit_print_r_walk_argument(ctx);
+            abi::emit_call_label(ctx.emitter, indexed);
+            ctx.emit_branch(&done_label);
+            ctx.emitter.label(&hash_label);
+            emit_print_r_walk_argument(ctx);
+            abi::emit_call_label(ctx.emitter, hash);
+            ctx.emitter.label(&done_label);
+        }
+    }
+    ctx.emitter.label(&skip_label);
+    Ok(())
+}
+
+/// Which runtime walker renders the container `print_r` has loaded.
+enum PrintRWalker {
+    /// The static type already names the representation.
+    Fixed(&'static str),
+    /// A bare `array` contract carries either representation; ask the heap header.
+    ByRuntimeKind {
+        indexed: &'static str,
+        hash: &'static str,
+    },
+}
+
+/// Places the loaded container and a base indent of 0 in the walker's argument registers.
+fn emit_print_r_walk_argument(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x1, #0");                              // base indent = 0 for the top-level array
@@ -355,9 +428,6 @@ fn emit_print_r_array(ctx: &mut FunctionContext<'_>, walker: &str) -> Result<()>
             ctx.emitter.instruction("mov esi, 0");                              // base indent = 0 for the top-level array
         }
     }
-    abi::emit_call_label(ctx.emitter, walker);
-    ctx.emitter.label(&skip_label);
-    Ok(())
 }
 
 /// Emits `print_r` output for a boxed Mixed payload by delegating to the runtime
@@ -732,10 +802,29 @@ fn emit_var_dump_array(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Result<()
     abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, "_vd_indent", 0);
     abi::emit_pop_reg(ctx.emitter, result_reg);
     if let Some(walker) = var_dump_array_walker(ty) {
+        // A bare `array` contract carries either representation, so an indexed walker is only
+        // correct once the heap header says the storage really is indexed.
+        let hash_label = matches!(ty, PhpType::Array(_))
+            .then(|| ctx.next_label("var_dump_hash_storage"));
+        let walk_done = hash_label
+            .as_ref()
+            .map(|_| ctx.next_label("var_dump_walk_done"));
+        if let Some(hash_label) = &hash_label {
+            emit_branch_if_hash_storage(ctx, hash_label);
+        }
         if matches!(ctx.emitter.target.arch, Arch::X86_64) {
             ctx.emitter.instruction("mov rdi, rax");                            // move the array pointer into the SysV first argument register
         }
         abi::emit_call_label(ctx.emitter, walker);
+        if let (Some(hash_label), Some(walk_done)) = (&hash_label, &walk_done) {
+            ctx.emit_branch(walk_done);
+            ctx.emitter.label(hash_label);
+            if matches!(ctx.emitter.target.arch, Arch::X86_64) {
+                ctx.emitter.instruction("mov rdi, rax");                        // move the hash pointer into the SysV first argument register
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_var_dump_hash");
+            ctx.emitter.label(walk_done);
+        }
     }
     // -- the closing brace aligns with the header, so drop back to column 0 --
     abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);

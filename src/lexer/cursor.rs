@@ -25,13 +25,17 @@ pub struct Cursor<'a> {
 }
 
 impl<'a> Cursor<'a> {
-    /// Constructs a cursor whose spans identify one included physical source file.
-    pub(super) fn new_in_source(source: &'a str, source_id: u32) -> Self {
+    /// Constructs a cursor starting on `line` whose spans identify one physical source file.
+    ///
+    /// Bytes removed before scanning must not renumber what follows them: PHP's CLI drops a
+    /// leading `#!` line but still reports a `throw` on physical line 3 as line 3. The scan gets
+    /// the remainder and the line it starts on, so the two stay consistent.
+    pub(super) fn new_at_line_in_source(source: &'a str, line: usize, source_id: u32) -> Self {
         Self {
             bytes: source.as_bytes(),
             text: Some(source),
             pos: 0,
-            line: 1,
+            line,
             col: 1,
             source_id,
         }
@@ -74,10 +78,7 @@ impl<'a> Cursor<'a> {
             // Decode the next full UTF-8 codepoint. On a malformed byte yield the U+FFFD
             // replacement char rather than None, so callers always observe a character
             // while bytes remain and a scan loop can never spin on a non-advancing None.
-            std::str::from_utf8(&self.bytes[self.pos..])
-                .ok()
-                .and_then(|s| s.chars().next())
-                .or(Some('\u{FFFD}'))
+            self.decode_char().or(Some('\u{FFFD}'))
         }
     }
 
@@ -94,10 +95,7 @@ impl<'a> Cursor<'a> {
             self.pos += 1;
             b as char
         } else {
-            match std::str::from_utf8(&self.bytes[self.pos..])
-                .ok()
-                .and_then(|s| s.chars().next())
-            {
+            match self.decode_char() {
                 Some(ch) => {
                     self.pos += ch.len_utf8();
                     ch
@@ -118,6 +116,21 @@ impl<'a> Cursor<'a> {
             self.col += 1;
         }
         Some(ch)
+    }
+
+    /// Decodes the codepoint starting at `pos`, or `None` on a malformed byte.
+    ///
+    /// Looks at the next four bytes at most: validating the whole tail per non-ASCII character
+    /// made lexing quadratic in the distance to the end of the file (see [`Self::remaining`]).
+    fn decode_char(&self) -> Option<char> {
+        let window = &self.bytes[self.pos..self.bytes.len().min(self.pos + 4)];
+        let valid = match std::str::from_utf8(window) {
+            Ok(text) => text,
+            // The window may cut the character after this one; its valid prefix still holds
+            // this one whole.
+            Err(error) => std::str::from_utf8(&window[..error.valid_up_to()]).ok()?,
+        };
+        valid.chars().next()
     }
 
     /// Returns true if the cursor has reached the end of source.
@@ -177,6 +190,23 @@ mod tests {
     fn advance_decodes_valid_multibyte_codepoint() {
         let mut cursor = Cursor::from_bytes("é".as_bytes());
         assert_eq!(cursor.advance(), Some('é'));
+        assert!(cursor.is_eof());
+    }
+
+    /// Decoding reads only the character at the cursor: a valid codepoint followed by a
+    /// malformed tail still decodes, and adjacent multi-byte codepoints whose four-byte window
+    /// cuts the next one decode whole. Validating the whole remaining tail per character made
+    /// lexing quadratic, and it also turned every valid character before a bad byte into U+FFFD.
+    #[test]
+    fn decoding_looks_only_at_the_current_character() {
+        let mut bytes = "é😀€".as_bytes().to_vec();
+        bytes.push(0xff);
+        let mut cursor = Cursor::from_bytes(&bytes);
+        assert_eq!(cursor.peek(), Some('é'));
+        assert_eq!(cursor.advance(), Some('é'));
+        assert_eq!(cursor.advance(), Some('😀'));
+        assert_eq!(cursor.advance(), Some('€'));
+        assert_eq!(cursor.advance(), Some('\u{FFFD}'));
         assert!(cursor.is_eof());
     }
 }

@@ -242,7 +242,7 @@ class Quiet { public function __destruct() { echo 'q'; } }
 function buildResult(Quiet $marker): Payload { return new Payload(); }
 function run(): string {
     try { buildResult(new Quiet()); return 'no'; }
-    catch (TypeError $error) { return 'caught'; }
+    catch (LogicException $error) { return 'caught'; }
 }
 echo run();
 "#,
@@ -290,7 +290,7 @@ function makePayload(): Payload { return new Payload(); }
 function run(): string {
     $marker = makePayload();
     try { makePayload(); unset($marker); return 'no'; }
-    catch (TypeError $error) { return 'caught'; }
+    catch (LogicException $error) { return 'caught'; }
 }
 echo run();
 "#,

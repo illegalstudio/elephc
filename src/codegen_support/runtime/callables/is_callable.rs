@@ -27,6 +27,7 @@ pub(crate) fn emit_is_callable_runtime(emitter: &mut Emitter) {
 fn emit_aarch64(emitter: &mut Emitter) {
     emit_string_aarch64(emitter);
     emit_method_name_aarch64(emitter);
+    emit_method_name_or_magic_aarch64(emitter);
     emit_static_method_name_aarch64(emitter);
     emit_object_aarch64(emitter);
     emit_array_aarch64(emitter);
@@ -228,6 +229,32 @@ fn emit_method_name_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return boolean result in x0
 }
 
+/// Emits the ARM64 runtime helper for `[$object, 'name']` callable arrays.
+/// php calls the pair callable when the class has the method OR a public `__call()`, so this asks
+/// `__rt_is_callable_method_name` for the name first and for `"__call"` second. Only the array
+/// forms use it: an invokable object (`__invoke`) is not made callable by `__call()`.
+/// Input: x0=object pointer, x1=method name pointer, x2=method name length. Output: x0=1 or 0.
+fn emit_method_name_or_magic_aarch64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: is_callable_method_name_or_magic ---");
+    emitter.label_global("__rt_is_callable_method_name_or_magic");
+
+    emitter.instruction("sub sp, sp, #32");                                     // reserve frame for the receiver across the first lookup
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save caller frame pointer and return address
+    emitter.instruction("add x29, sp, #16");                                    // establish this helper's frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // keep the receiver for the __call() retry
+    abi::emit_call_label(emitter, "__rt_is_callable_method_name");              // does the class expose the named public method?
+    emitter.instruction("cbnz x0, __rt_is_callable_method_name_or_magic_done"); // a real public method is callable
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the receiver object
+    abi::emit_symbol_address(emitter, "x1", "_callable_call_name");
+    emitter.instruction("mov x2, #6");                                          // method string length for "__call"
+    abi::emit_call_label(emitter, "__rt_is_callable_method_name");              // a public __call() makes every name callable
+    emitter.label("__rt_is_callable_method_name_or_magic_done");
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore caller frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the retry frame
+    emitter.instruction("ret");                                                 // return the boolean result in x0
+}
+
 /// Emits the ARM64 runtime helper for static method callable lookup.
 /// Compares the given class name and method name against the global static method table
 /// (both compared case-insensitively). Handles leading backslash normalization.
@@ -401,7 +428,7 @@ fn emit_array_aarch64(emitter: &mut Emitter) {
 
     emitter.label("__rt_is_callable_array_dispatch_object");
     emitter.instruction("ldr x0, [sp, #8]");                                    // pass saved receiver object to method-name lookup
-    abi::emit_call_label(emitter, "__rt_is_callable_method_name");              // x1/x2 already hold method pointer and length from mixed unbox
+    abi::emit_call_label(emitter, "__rt_is_callable_method_name_or_magic");     // x1/x2 already hold method pointer and length from mixed unbox
     emitter.instruction("b __rt_is_callable_array_done");                       // keep method lookup result and restore frame
 
     emitter.label("__rt_is_callable_array_false");
@@ -504,7 +531,7 @@ fn emit_assoc_aarch64(emitter: &mut Emitter) {
 
     emitter.label("__rt_is_callable_assoc_dispatch_object");
     emitter.instruction("ldr x0, [sp, #8]");                                    // pass saved receiver object to method-name lookup
-    abi::emit_call_label(emitter, "__rt_is_callable_method_name");              // x1/x2 already hold method pointer and length from hash or mixed lookup
+    abi::emit_call_label(emitter, "__rt_is_callable_method_name_or_magic");     // x1/x2 already hold method pointer and length from hash or mixed lookup
     emitter.instruction("b __rt_is_callable_assoc_done");                       // keep method lookup result and restore frame
 
     emitter.label("__rt_is_callable_assoc_false");
@@ -628,6 +655,7 @@ fn emit_heap_aarch64(emitter: &mut Emitter) {
 fn emit_x86_64(emitter: &mut Emitter) {
     emit_string_x86_64(emitter);
     emit_method_name_x86_64(emitter);
+    emit_method_name_or_magic_x86_64(emitter);
     emit_static_method_name_x86_64(emitter);
     emit_object_x86_64(emitter);
     emit_array_x86_64(emitter);
@@ -834,6 +862,30 @@ fn emit_method_name_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return boolean result in rax
 }
 
+/// Emits the x86_64 runtime helper for `[$object, 'name']` callable arrays; see the ARM64 twin.
+/// Input: rdi=object pointer, rsi=method name pointer, rdx=method name length. Output: rax=1 or 0.
+fn emit_method_name_or_magic_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: is_callable_method_name_or_magic ---");
+    emitter.label_global("__rt_is_callable_method_name_or_magic");
+
+    emitter.instruction("push rbp");                                            // preserve caller frame pointer around the two lookups
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved receiver
+    emitter.instruction("sub rsp, 16");                                         // reserve an aligned slot for the receiver
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // keep the receiver for the __call() retry
+    abi::emit_call_label(emitter, "__rt_is_callable_method_name");              // does the class expose the named public method?
+    emitter.instruction("test rax, rax");                                       // did the named public method match?
+    emitter.instruction("jne __rt_is_callable_method_name_or_magic_done_x86_64"); // a real public method is callable
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the receiver object
+    abi::emit_symbol_address(emitter, "rsi", "_callable_call_name");
+    emitter.instruction("mov edx, 6");                                          // method string length for "__call"
+    abi::emit_call_label(emitter, "__rt_is_callable_method_name");              // a public __call() makes every name callable
+    emitter.label("__rt_is_callable_method_name_or_magic_done_x86_64");
+    emitter.instruction("add rsp, 16");                                         // release the receiver slot
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return the boolean result in rax
+}
+
 /// Emits the x86_64 runtime helper for static method callable lookup.
 /// Compares the given class name and method name against the global static method table
 /// (both compared case-insensitively). Handles leading backslash normalization.
@@ -1006,7 +1058,7 @@ fn emit_array_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_is_callable_array_dispatch_object_x86_64");
     emitter.instruction("mov rsi, rdi");                                        // move method string pointer to second argument register
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload receiver object pointer into first argument register
-    abi::emit_call_label(emitter, "__rt_is_callable_method_name");              // rdx already holds method string length from mixed unbox
+    abi::emit_call_label(emitter, "__rt_is_callable_method_name_or_magic");     // rdx already holds method string length from mixed unbox
     emitter.instruction("jmp __rt_is_callable_array_done_x86_64");              // keep method lookup result and restore frame
 
     emitter.label("__rt_is_callable_array_false_x86_64");
@@ -1110,7 +1162,7 @@ fn emit_assoc_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, rsi");                                        // move method string length to third argument register
     emitter.instruction("mov rsi, rdi");                                        // move unboxed method string pointer to second argument register
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload receiver object pointer into first argument register
-    abi::emit_call_label(emitter, "__rt_is_callable_method_name");              // check whether the method string names a public receiver method
+    abi::emit_call_label(emitter, "__rt_is_callable_method_name_or_magic");     // check whether the method string names a public receiver method or the class has __call()
     emitter.instruction("jmp __rt_is_callable_assoc_done_x86_64");              // keep method lookup result and restore frame
 
     emitter.label("__rt_is_callable_assoc_false_x86_64");

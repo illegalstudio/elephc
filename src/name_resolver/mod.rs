@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Builtin fallback and case-insensitive symbol lookup must match PHP visibility rules.
+//! - Static class-string aliases are materialized only after every name in their call is canonical.
 
 mod expressions;
 mod function_fallbacks;
@@ -100,7 +101,8 @@ fn resolve_on_compiler_stack(
             );
         }
     }
-    statements::resolve_stmt_list(&program, None, &Imports::default(), &symbols)
+    let resolved = statements::resolve_stmt_list(&program, None, &Imports::default(), &symbols)?;
+    Ok(crate::autoload::collect_resolved_aliases(resolved))
 }
 
 /// Returns whether `name` was bound to an additional global fallback named `symbol` by
@@ -135,8 +137,42 @@ fn rewrite_callback_literal_args(
     args.iter()
         .enumerate()
         .map(|(idx, arg)| {
+            // `ob_start([$shell, 'writeStdout'], 1)` (psysh's execution closures): the output
+            // handler is the bound method, which the backend runs as the closure
+            // `$shell->writeStdout(...)` (an array pair is no handler shape it can call).
+            if idx == 0 && function_name.eq_ignore_ascii_case("ob_start") {
+                if let ExprKind::ArrayLiteral(items) = &arg.kind {
+                    if let [object, method] = items.as_slice() {
+                        if let ExprKind::StringLiteral(method) = &method.kind {
+                            if matches!(
+                                object.kind,
+                                ExprKind::Variable(_)
+                                    | ExprKind::This
+                                    | ExprKind::PropertyAccess { .. }
+                            ) {
+                                return Expr::new(
+                                    ExprKind::FirstClassCallable(
+                                        crate::parser::ast::CallableTarget::Method {
+                                            object: Box::new(object.clone()),
+                                            method: method.clone(),
+                                        },
+                                    ),
+                                    arg.span,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
             if callback_positions.contains(&idx) {
                 if let ExprKind::StringLiteral(raw_name) = &arg.kind {
+                    // A function alias names the function it stands for (`array_map('sizeof', ...)`).
+                    let bare = raw_name.strip_prefix('\\').unwrap_or(raw_name);
+                    if let Some(canonical) = canonical_function_alias(bare) {
+                        if !symbols.declares_function(bare) {
+                            return Expr::new(ExprKind::StringLiteral(canonical.to_string()), arg.span);
+                        }
+                    }
                     let resolved = names::resolve_function_name(
                         &parse_callback_name(raw_name),
                         current_namespace,
@@ -197,6 +233,101 @@ pub(crate) fn canonical_builtin_function_name(name: &str) -> Option<String> {
     crate::types::checker::builtins::canonical_builtin_function_name(name)
 }
 
+/// Returns the canonical global name of a function supplied by the late compatibility prelude.
+///
+/// Autoloaded files are name-resolved before that prelude is injected, so namespaced bare calls
+/// need the same PHP global fallback that registry builtins receive.
+pub(crate) fn canonical_compat_prelude_function_name(name: &str) -> Option<String> {
+    const FUNCTIONS: &[&str] = &[
+        "levenshtein",
+        "strip_tags",
+        "is_countable",
+        "random_bytes",
+        "http_build_query",
+        "escapeshellarg",
+        "cli_set_process_title",
+        "setproctitle",
+        "str_getcsv",
+        "error_reporting",
+        // `error_get_last` and `error_clear_last` join their family for the reason
+        // `ini_get_all` below documents: Symfony's `ErrorHandler` lives in
+        // `namespace Symfony\Component\ErrorHandler` and calls `error_get_last()` BARE from
+        // its shutdown handler. Without the global fallback that call stays
+        // `Symfony\Component\ErrorHandler\error_get_last` and dies at run time while
+        // `error_reporting()` in the same file resolves.
+        "error_get_last",
+        "error_clear_last",
+        // `trigger_error` was MISSING from this list, and had been since the family landed —
+        // found by `compat_prelude_gate_tests::an_autoloaded_shutdown_function_reads_the_last_error`,
+        // which died with `Call to undefined function App\trigger_error()`. It belongs here for
+        // exactly the same reason as its neighbours and is NOT covered by the ordinary builtin
+        // fallback: that one is driven by the compiler's registry-derived name set, and a
+        // `BuiltinKind::PreludeProvided` contract is deliberately absent from it. `error_log`
+        // is the one family member that does NOT need an entry, because its contract is an
+        // ordinary `BuiltinKind::Function` and the registry fallback already answers it.
+        "trigger_error",
+        "set_error_handler",
+        "get_error_handler",
+        "restore_error_handler",
+        "register_shutdown_function",
+        "set_exception_handler",
+        "restore_exception_handler",
+        "ini_get",
+        "ini_set",
+        // `ini_get_all` joins its two neighbours now that the CLI INI wrappers have a second,
+        // POST-AUTOLOAD injection site (`opcache_prelude::inject_cli_ini_if_used`). Without it
+        // a namespaced bare `ini_get_all()` in an autoloaded class stayed `Probe\ini_get_all`
+        // and died at run time while `ini_get()` one line above resolved — measured.
+        "ini_get_all",
+        "get_cfg_var",
+        "gc_enabled",
+        "gc_enable",
+        "gc_disable",
+        "gc_collect_cycles",
+        "flush",
+        "strnatcmp",
+        "strnatcasecmp",
+        "parse_str",
+        // `get_class_vars` is an eval-only contract, absent from the registry fallback, and
+        // Eloquent's `Model` calls it bare from `namespace Illuminate\Database\Eloquent`.
+        "get_class_vars",
+        "hash_init",
+        "hash_update",
+        "hash_final",
+        "hash_copy",
+        // `var_export` is not injected by the LATE prelude at all — `var_export_prelude` runs in
+        // its own phase before `autoload-run` — but it needs this entry for the same reason
+        // `ini_get_all` does, and the shape is measured rather than assumed: an entry that names
+        // `var_export` gets the prelude injected, and an AUTOLOADED class in `namespace App;`
+        // that calls the bare `var_export($v, true)` still died with `Call to undefined function
+        // App\var_export()`. Autoloaded files are name-resolved individually, and without a
+        // global fallback here `App\var_export` is simply an unknown function.
+        //
+        // The fallback is consulted only after the declared-function lookup in
+        // `symbols::canonical_function`, so a user's own `App\var_export()` still wins — which is
+        // the hijack `rewrite_var_export_return_flag`'s first guard exists to prevent, and it
+        // stays prevented. Once the name folds to the global one that rewrite also fires, so the
+        // autoloaded call is typed `string` rather than `string|null`, exactly as the entry
+        // file's call already was.
+        "var_export",
+        // A `BuiltinKind::PreludeProvided` contract like `trigger_error` above, and called bare
+        // from namespaced library code (Symfony's password hasher, Composer's platform check).
+        "version_compare",
+        "hash_pbkdf2",
+        "array_change_key_case",
+        // `assert()` has no registry contract: `assert_prelude` supplies its one-argument form and
+        // `compat_preludes::lower_single_arg_assert` routes the call by its GLOBAL name. A bare
+        // `assert($x)` inside a namespace stayed `A\assert` and died with `Call to undefined
+        // function A\assert()` (Termwind's `HtmlRenderer` asserts `instanceof DOMNode` that way).
+        "assert",
+    ];
+    let bare = name.trim_start_matches('\\');
+    FUNCTIONS
+        .iter()
+        .find(|candidate| bare.eq_ignore_ascii_case(candidate))
+        .map(|candidate| (*candidate).to_string())
+}
+
 /// Reports whether `name` matches one of PHP's procedural date/time aliases
 /// (e.g. `date_create`, `idate`, `gmstrftime`). The name set is the same as the one
 /// rewritten by `expressions::rewrite_date_procedural_alias`, minus the per-arity guards,
@@ -204,6 +335,19 @@ pub(crate) fn canonical_builtin_function_name(name: &str) -> Option<String> {
 /// resolver rewrites.
 pub(crate) fn is_date_procedural_alias(name: &str) -> bool {
     expressions::is_date_procedural_alias(name)
+}
+
+/// Returns the function a global PHP function alias (`sizeof`, `pos`, ...) names, if `name` is one.
+pub(crate) fn canonical_function_alias(name: &str) -> Option<&'static str> {
+    if name.contains('\\') {
+        return None;
+    }
+    expressions::canonical_function_alias(name)
+}
+
+/// Returns every PHP function alias name the resolver rewrites.
+pub(crate) fn function_alias_names() -> impl Iterator<Item = &'static str> {
+    expressions::FUNCTION_ALIASES.iter().map(|(alias, _)| *alias)
 }
 
 /// Recognizes an exact global date alias without giving explicitly namespaced strings fallback.

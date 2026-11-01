@@ -1,0 +1,13 @@
+[package]
+name = "elephc-proc"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "PHP proc_open process spawning bridge and stable C ABI for elephc"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+libc = "0.2"

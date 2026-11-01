@@ -15,7 +15,7 @@
 //! - elephc indexed-array layout: `length@0`, `capacity@8`, `elem_size@16`,
 //!   elements at `+24`; the element `value_type` is byte 1 of the kind word at
 //!   `arr - 8` (0=int, 1=string, 2=float, 3=bool, 7=mixed cell ptr, 11=tagged,
-//!   13=raw `?ptr<T>` word, packed as null for 0 and as an integer otherwise).
+//!   14=raw `?ptr<T>` word, packed as null for 0 and as an integer otherwise).
 //! - Emits both ARM64 and x86_64 variants gated on `emitter.target.arch`.
 
 use crate::codegen_support::emit::Emitter;
@@ -105,7 +105,7 @@ pub fn emit_zval_pack_array_packed(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_zval_pack_array_packed_vt_hasharr");         // stage the nested associative array for pack_element
     emitter.instruction("cmp x15, #11");                                        // value_type 11 = tagged scalar
     emitter.instruction("b.eq __rt_zval_pack_array_packed_vt_tagged");          // stage the tagged scalar for pack_element
-    emitter.instruction(&format!("cmp x15, #{}", crate::codegen_support::sentinels::POINTER_ARRAY_VALUE_TYPE)); // value_type 13 = raw ?ptr<T> word
+    emitter.instruction(&format!("cmp x15, #{}", crate::codegen_support::sentinels::POINTER_ARRAY_VALUE_TYPE)); // value_type 14 = raw ?ptr<T> word
     emitter.instruction("b.eq __rt_zval_pack_array_packed_vt_pointer");         // stage the pointer word as null or an integer
     emitter.instruction("b __rt_zval_pack_array_packed_vt_null");               // unknown kinds pack as null
 
@@ -297,7 +297,7 @@ fn emit_zval_pack_array_packed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_zval_pack_array_packed_vt_hasharr");           // stage the nested associative array for pack_element
     emitter.instruction("cmp r15, 11");                                         // value_type 11 = tagged scalar
     emitter.instruction("je __rt_zval_pack_array_packed_vt_tagged");            // stage the tagged scalar for pack_element
-    emitter.instruction(&format!("cmp r15, {}", crate::codegen_support::sentinels::POINTER_ARRAY_VALUE_TYPE)); // value_type 13 = raw ?ptr<T> word
+    emitter.instruction(&format!("cmp r15, {}", crate::codegen_support::sentinels::POINTER_ARRAY_VALUE_TYPE)); // value_type 14 = raw ?ptr<T> word
     emitter.instruction("je __rt_zval_pack_array_packed_vt_pointer");           // stage the pointer word as null or an integer
     emitter.instruction("jmp __rt_zval_pack_array_packed_vt_null");             // unknown kinds pack as null
 

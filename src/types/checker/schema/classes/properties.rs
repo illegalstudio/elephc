@@ -11,7 +11,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
-use crate::parser::ast::{ClassProperty, Expr, ExprKind, Visibility};
+use crate::parser::ast::{ClassProperty, Expr, ExprKind, StaticReceiver, Visibility};
 use crate::span::Span;
 use crate::types::traits::FlattenedClass;
 use crate::types::PhpType;
@@ -21,6 +21,20 @@ use super::super::validation::visibility_rank;
 use super::super::interfaces::{build_property_contract, merge_property_contract};
 use super::state::ClassBuildState;
 use super::{collect_attribute_args, collect_attribute_names};
+
+/// Returns whether an inherited property of the same name is an ANCESTOR's private one.
+///
+/// A private property is not inherited in PHP, so a subclass may declare its own property of
+/// that name with the other staticness: `symfony/mime`'s `AbstractHeader` has a
+/// `private static $encoder` and its subclass `ParameterizedHeader` a `private $encoder`.
+/// Only a conflict with a visible (or same-class) declaration is a redeclaration error.
+fn is_ancestor_private(
+    declaring_class: &str,
+    visibility: Option<&Visibility>,
+    class: &FlattenedClass,
+) -> bool {
+    visibility == Some(&Visibility::Private) && !declaring_class.eq_ignore_ascii_case(&class.name)
+}
 
 /// Applies property schema validation and metadata for all static and instance
 /// properties declared in `class`. Static properties are validated for PHP
@@ -138,8 +152,8 @@ pub(super) fn apply_properties(
 /// Validates a static property declaration against PHP inheritance rules and
 /// records it in `state`. Rejects by-reference static properties, final private
 /// combinations, and property type/redeclare conflicts. Computes the property
-/// type from the declared hint, the default value, or defaults to `PhpType::Void`
-/// (an untyped property with no default implicitly holds null).
+/// type from the declared hint, the default value, or defaults to `PhpType::Mixed`
+/// (an untyped property with no default implicitly holds null but remains freely writable).
 /// Updates `state.static_prop_types`, `state.static_property_declaring_classes`,
 /// `state.final_static_properties`, and attribute maps.
 fn apply_static_property(
@@ -172,7 +186,13 @@ fn apply_static_property(
             ),
         ));
     }
-    if state.property_declaring_classes.contains_key(&prop.name) {
+    if state
+        .property_declaring_classes
+        .get(&prop.name)
+        .is_some_and(|declaring| {
+            !is_ancestor_private(declaring, state.property_visibilities.get(&prop.name), class)
+        })
+    {
         return Err(CompileError::new(
             prop.span,
             &format!(
@@ -200,10 +220,10 @@ fn apply_static_property(
         refine_declared_array_type_from_default(declared_ty, prop.default.as_ref())
     } else if let Some(default) = &prop.default {
         state.declared_static_properties.remove(&prop.name);
-        infer_untyped_property_default_type(default)
+        infer_untyped_property_default_type(checker, class, default)
     } else {
         state.declared_static_properties.remove(&prop.name);
-        PhpType::Void
+        PhpType::Mixed
     };
 
     if let Some(slot) = state
@@ -314,7 +334,13 @@ fn apply_instance_property(
         ));
     }
     validate_asymmetric_visibility(prop)?;
-    if state.static_property_declaring_classes.contains_key(&prop.name) {
+    if state
+        .static_property_declaring_classes
+        .get(&prop.name)
+        .is_some_and(|declaring| {
+            !is_ancestor_private(declaring, state.static_property_visibilities.get(&prop.name), class)
+        })
+    {
         return Err(CompileError::new(
             prop.span,
             &format!(
@@ -357,9 +383,9 @@ fn apply_instance_property(
         is_declared_slot = true;
         refine_declared_array_type_from_default(declared_ty, prop.default.as_ref())
     } else if let Some(default) = &prop.default {
-        infer_untyped_property_default_type(default)
+        infer_untyped_property_default_type(checker, class, default)
     } else {
-        PhpType::Void
+        PhpType::Mixed
     };
 
     let slot_index = state.prop_types.len();
@@ -372,6 +398,7 @@ fn apply_instance_property(
         .insert(prop.name.clone(), class.name.clone());
     state.property_declared_slots.push(is_declared_slot);
     state.property_reference_slots.push(prop.by_ref);
+    state.property_slot_declaring_classes.push(class.name.clone());
     state
         .property_attribute_names
         .insert(prop.name.clone(), collect_attribute_names(&prop.attributes));
@@ -390,6 +417,11 @@ fn apply_instance_property(
     }
     if class.is_readonly_class || prop.readonly {
         state.readonly_properties.insert(prop.name.clone());
+    }
+    // A hooked property whose hooks touch `$this-><prop>` keeps its backing slot; PHP only
+    // refuses a write to a VIRTUAL one, whose hooks never name it.
+    if prop.hooks.backed {
+        state.backed_hooked_properties.insert(prop.name.clone());
     }
     if prop.by_ref {
         state.reference_properties.insert(prop.name.clone());
@@ -468,9 +500,9 @@ fn apply_instance_property_redeclaration(
         state.declared_properties.insert(prop.name.clone());
         refine_declared_array_type_from_default(declared_ty, prop.default.as_ref())
     } else if let Some(default) = &prop.default {
-        infer_untyped_property_default_type(default)
+        infer_untyped_property_default_type(checker, class, default)
     } else {
-        PhpType::Void
+        PhpType::Mixed
     };
 
     let slot = find_instance_property_slot(state, &prop.name);
@@ -481,6 +513,9 @@ fn apply_instance_property_redeclaration(
     }
     if let Some(slot_reference) = state.property_reference_slots.get_mut(slot) {
         *slot_reference = prop.by_ref;
+    }
+    if let Some(slot_declaring) = state.property_slot_declaring_classes.get_mut(slot) {
+        *slot_declaring = class.name.clone();
     }
     state
         .property_declaring_classes
@@ -494,6 +529,11 @@ fn apply_instance_property_redeclaration(
     }
     if class.is_readonly_class || prop.readonly {
         state.readonly_properties.insert(prop.name.clone());
+    }
+    // A hooked property whose hooks touch `$this-><prop>` keeps its backing slot; PHP only
+    // refuses a write to a VIRTUAL one, whose hooks never name it.
+    if prop.hooks.backed {
+        state.backed_hooked_properties.insert(prop.name.clone());
     }
     if prop.is_abstract {
         state.abstract_properties.insert(prop.name.clone());
@@ -549,7 +589,10 @@ fn apply_private_parent_property_shadowing(
     let declared_ty = resolve_property_declared_type(checker, &class.name, prop)?;
     let is_declared_slot = declared_ty.is_some();
     let ty = if let Some(declared_ty) = declared_ty {
-        checker.validate_declared_default_type(
+        // The SCHEMA-time validator, as every other property path uses: a class-constant default
+        // (`private int $s = CascadingStrategy::NONE;`) cannot be typed until class constants
+        // exist, and the plain validator read it syntactically as a string.
+        checker.validate_schema_declared_default_type(
             &declared_ty,
             prop.default.as_ref(),
             prop.span,
@@ -559,10 +602,10 @@ fn apply_private_parent_property_shadowing(
         refine_declared_array_type_from_default(declared_ty, prop.default.as_ref())
     } else if let Some(default) = &prop.default {
         state.declared_properties.remove(&prop.name);
-        infer_expr_type_syntactic(default)
+        infer_untyped_property_default_type(checker, class, default)
     } else {
         state.declared_properties.remove(&prop.name);
-        PhpType::Void
+        PhpType::Mixed
     };
 
     let slot_index = state.prop_types.len();
@@ -573,6 +616,7 @@ fn apply_private_parent_property_shadowing(
     state.defaults.push(untyped_property_schema_default(prop));
     state.property_declared_slots.push(is_declared_slot);
     state.property_reference_slots.push(prop.by_ref);
+    state.property_slot_declaring_classes.push(class.name.clone());
     state
         .property_declaring_classes
         .insert(prop.name.clone(), class.name.clone());
@@ -605,6 +649,11 @@ fn replace_active_property_flags(
     }
     if class.is_readonly_class || prop.readonly {
         state.readonly_properties.insert(prop.name.clone());
+    }
+    // A hooked property whose hooks touch `$this-><prop>` keeps its backing slot; PHP only
+    // refuses a write to a VIRTUAL one, whose hooks never name it.
+    if prop.hooks.backed {
+        state.backed_hooked_properties.insert(prop.name.clone());
     } else {
         state.readonly_properties.remove(&prop.name);
     }
@@ -995,12 +1044,17 @@ fn php_property_types_invariant(parent: &PhpType, child: &PhpType) -> bool {
 /// Refines a declared generic `array` property type using its default value. PHP's `array` hint is
 /// ambiguous between list and hash storage; an associative literal default (`['a' => 1]`) is stored
 /// as `AssocArray` so string-key access type-checks, mirroring how untyped associative-default
-/// properties are inferred. Non-array hints, missing defaults, and positional/empty array defaults
-/// keep the declared type unchanged.
+/// properties are inferred. Its key and value storage are both widened to `Mixed`: the PHP
+/// `array` hint constrains only the container, so specializing either dimension from the default
+/// would reject a later valid whole-array assignment. Non-array hints, missing defaults, and
+/// positional/empty array defaults keep the declared type unchanged.
 fn refine_declared_array_type_from_default(declared_ty: PhpType, default: Option<&Expr>) -> PhpType {
     if let (PhpType::Array(_), Some(default)) = (&declared_ty, default) {
         if matches!(default.kind, ExprKind::ArrayLiteralAssoc(_)) {
-            return infer_untyped_property_default_type(default);
+            return PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(PhpType::Mixed),
+            };
         }
     }
     declared_ty
@@ -1009,8 +1063,212 @@ fn refine_declared_array_type_from_default(declared_ty: PhpType, default: Option
 /// Infers storage for an untyped property default while widening the literal `false` subtype.
 /// Mutable untyped properties initialized with `false` must continue accepting later boolean
 /// writes; explicit `false` property declarations retain their narrower contract.
-fn infer_untyped_property_default_type(default: &Expr) -> PhpType {
-    widen_false_literal_storage_type(infer_expr_type_syntactic(default))
+///
+/// A constant in the default (`self::K`, `GREETING`) is first replaced by its value: the
+/// syntactic guess types a class constant `string` and a global one `int` whatever they hold, and
+/// propinit then stored `9` into a `string` slot -- `public $c = self::K;` failed the build. A
+/// constant resolved nowhere here (an enum case, a runtime `define()`) is read as `mixed` in
+/// place, so an array of enum cases stays an array.
+fn infer_untyped_property_default_type(
+    checker: &Checker,
+    class: &FlattenedClass,
+    default: &Expr,
+) -> PhpType {
+    let ty = match resolve_default_constants(checker, ConstantScope::Declaring(class), default, 0) {
+        Some(resolved) => infer_expr_type_syntactic(&resolved),
+        // A constant no schema resolves (an enum case, a runtime `define()`) keeps the default's
+        // container shape with that element read as `mixed`.
+        None => infer_property_default_syntactic(default),
+    };
+    widen_false_literal_storage_type(ty)
+}
+
+/// How deep constant-to-constant references are followed before the slot falls back to `mixed`.
+const MAX_DEFAULT_CONSTANT_DEPTH: usize = 8;
+
+/// The class a `self::` / `parent::` reference in a constant expression names.
+#[derive(Clone, Copy)]
+enum ConstantScope<'a> {
+    /// The class whose schema is being built: its own constants are not in `checker.classes` yet.
+    Declaring(&'a FlattenedClass),
+    /// An already built class, by name.
+    Built(&'a str),
+}
+
+/// Returns `expr` with each constant reference replaced by its value, or by a literal of the
+/// constant's type, so the syntactic guess sees what the slot will hold; `None` when a constant
+/// cannot be resolved from the schema built so far.
+///
+/// Only the constant-expression forms a property default may use are rebuilt; any other node is
+/// returned as it is.
+fn resolve_default_constants(
+    checker: &Checker,
+    scope: ConstantScope<'_>,
+    expr: &Expr,
+    depth: usize,
+) -> Option<Expr> {
+    if depth > MAX_DEFAULT_CONSTANT_DEPTH {
+        return None;
+    }
+    let resolve = |inner: &Expr| resolve_default_constants(checker, scope, inner, depth);
+    let boxed = |inner: &Expr| resolve(inner).map(Box::new);
+    let kind = match &expr.kind {
+        ExprKind::ConstRef(name) => {
+            let ty = checker
+                .constants
+                .get(name.as_str())
+                .or_else(|| checker.constants.get(name.as_str().trim_start_matches('\\')))?;
+            return type_placeholder(ty, expr.span);
+        }
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            let (value, value_scope) = class_constant_value(checker, scope, receiver, name)?;
+            return resolve_default_constants(checker, value_scope, &value, depth + 1);
+        }
+        ExprKind::ArrayLiteral(elements) => ExprKind::ArrayLiteral(
+            elements.iter().map(resolve).collect::<Option<Vec<_>>>()?,
+        ),
+        ExprKind::ArrayLiteralAssoc(entries) => ExprKind::ArrayLiteralAssoc(
+            entries
+                .iter()
+                .map(|(key, value)| Some((resolve(key)?, resolve(value)?)))
+                .collect::<Option<Vec<_>>>()?,
+        ),
+        ExprKind::Negate(inner) => ExprKind::Negate(boxed(inner)?),
+        ExprKind::Not(inner) => ExprKind::Not(boxed(inner)?),
+        ExprKind::BitNot(inner) => ExprKind::BitNot(boxed(inner)?),
+        ExprKind::BinaryOp { left, op, right } => ExprKind::BinaryOp {
+            left: boxed(left)?,
+            op: op.clone(),
+            right: boxed(right)?,
+        },
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => ExprKind::Ternary {
+            condition: boxed(condition)?,
+            then_expr: boxed(then_expr)?,
+            else_expr: boxed(else_expr)?,
+        },
+        ExprKind::ShortTernary { value, default } => ExprKind::ShortTernary {
+            value: boxed(value)?,
+            default: boxed(default)?,
+        },
+        ExprKind::NullCoalesce { value, default } => ExprKind::NullCoalesce {
+            value: boxed(value)?,
+            default: boxed(default)?,
+        },
+        ExprKind::Cast { target, expr: inner } => ExprKind::Cast {
+            target: target.clone(),
+            expr: boxed(inner)?,
+        },
+        _ => return Some(expr.clone()),
+    };
+    Some(Expr::new(kind, expr.span))
+}
+
+/// Returns a class constant's value expression and the scope its own `self::` names, or `None`
+/// for an enum case, an unknown class, or a constant not declared where the schema can see it.
+fn class_constant_value<'a>(
+    checker: &'a Checker,
+    scope: ConstantScope<'a>,
+    receiver: &'a StaticReceiver,
+    name: &str,
+) -> Option<(Expr, ConstantScope<'a>)> {
+    let owner: ConstantScope<'a> = match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
+        // `static::` is refused in a constant expression; reading it as `self::` is harmless.
+        StaticReceiver::Self_ | StaticReceiver::Static => scope,
+        StaticReceiver::Parent => ConstantScope::Built(match scope {
+            ConstantScope::Declaring(class) => class.extends.as_deref()?,
+            ConstantScope::Built(class_name) => checker.classes.get(class_name)?.parent.as_deref()?,
+        }),
+        StaticReceiver::Named(class_name) => ConstantScope::Built(class_name.as_str()),
+    };
+    match owner {
+        ConstantScope::Declaring(class) => {
+            if let Some(constant) = class.constants.iter().find(|constant| constant.name == name) {
+                return Some((constant.value.clone(), owner));
+            }
+            let parent = class.extends.as_deref()?;
+            class_constant_value(checker, ConstantScope::Built(parent), &StaticReceiver::Self_, name)
+        }
+        ConstantScope::Built(class_name) => {
+            let class_name = class_name.trim_start_matches('\\');
+            if checker.enums.contains_key(class_name) {
+                return None;
+            }
+            if let Some(info) = checker.classes.get(class_name) {
+                return info.constants.get(name).map(|value| (value.clone(), owner));
+            }
+            checker
+                .interfaces
+                .get(class_name)?
+                .constants
+                .get(name)
+                .map(|value| (value.clone(), owner))
+        }
+    }
+}
+
+/// A literal of `ty` for the syntactic guess, or `None` when no literal carries the type.
+fn type_placeholder(ty: &PhpType, span: Span) -> Option<Expr> {
+    let kind = match ty {
+        PhpType::Int => ExprKind::IntLiteral(0),
+        PhpType::Float => ExprKind::FloatLiteral(0.0),
+        PhpType::Str => ExprKind::StringLiteral(String::new()),
+        PhpType::Bool => ExprKind::BoolLiteral(true),
+        PhpType::False => ExprKind::BoolLiteral(false),
+        PhpType::Void => ExprKind::Null,
+        _ => return None,
+    };
+    Some(Expr::new(kind, span))
+}
+
+/// Syntactic type of an untyped property default, with every constant (`Class::NAME`, `NAME`)
+/// read as `mixed`.
+///
+/// `infer_expr_type_syntactic` has no class tables, so it answers `string` for ANY scoped
+/// constant. For an enum case, or a constant of another type, that is a fabricated type: an
+/// untyped `protected $levels = ['debug' => Level::Debug, ...]` became `array<string, string>`,
+/// and `return $this->levels[$key]` cast the enum object to a string -- "Object of class
+/// Monolog\Level could not be converted to string" in Laravel's `LogManager`. The element (or the
+/// property itself, for a bare constant) is `mixed`; the container shape is unchanged.
+fn infer_property_default_syntactic(default: &Expr) -> PhpType {
+    if matches!(
+        default.kind,
+        ExprKind::ScopedConstantAccess { .. } | ExprKind::ConstRef(_)
+    ) {
+        return PhpType::Mixed;
+    }
+    let inferred = infer_expr_type_syntactic(default);
+    if !default_array_holds_scoped_constant(default) {
+        return inferred;
+    }
+    match inferred {
+        PhpType::Array(_) => PhpType::Array(Box::new(PhpType::Mixed)),
+        PhpType::AssocArray { key, .. } => PhpType::AssocArray {
+            key,
+            value: Box::new(PhpType::Mixed),
+        },
+        other => other,
+    }
+}
+
+/// Whether an array-literal default holds a scoped constant (`Class::NAME`) at any depth.
+fn default_array_holds_scoped_constant(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::ScopedConstantAccess { .. } | ExprKind::ConstRef(_) => true,
+        ExprKind::ArrayLiteral(items) => items.iter().any(default_array_holds_scoped_constant),
+        ExprKind::ArrayLiteralAssoc(pairs) => pairs
+            .iter()
+            .any(|(_, value)| default_array_holds_scoped_constant(value)),
+        _ => false,
+    }
 }
 
 /// PHP treats a plain untyped property with no explicit default as `= null`: the slot

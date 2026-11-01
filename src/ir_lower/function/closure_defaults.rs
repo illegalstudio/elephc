@@ -29,7 +29,7 @@ pub(super) fn lower_helpers(
         };
         let body = [Stmt::new(StmtKind::Return(Some(default.clone())), default.span)];
         super::lower_closure_function_with_signature(
-            parent, &name, &[], helper_signature, &body, &[], None, name.clone(),
+            parent, &name, &[], helper_signature, &body, &[], None, false, name.clone(),
             Some(default.clone()),
         );
     }

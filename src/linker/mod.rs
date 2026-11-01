@@ -11,7 +11,12 @@
 //! - Dependency resolution stays outside this module; the linker consumes typed paths only.
 
 mod archive_dedup;
+mod aarch64_encode;
+mod asm_cache;
+mod asm_split;
+
 mod bridges;
+mod inhouse;
 mod command;
 mod pdo;
 mod sdk;
@@ -205,11 +210,395 @@ pub(crate) fn assembler_command(target: Target) -> Command {
     assembler
 }
 
+/// Whether `ELEPHC_ASM=inhouse` asks for the in-tree assembler (`crate::linker::inhouse`) on a
+/// target it handles: macOS arm64.
+fn inhouse_enabled(target: Target) -> bool {
+    target.platform == Platform::MacOS
+        && target.apple_variant == AppleVariant::MacOS
+        && target.arch == crate::codegen::platform::Arch::AArch64
+        && matches!(std::env::var("ELEPHC_ASM").as_deref(), Ok("inhouse"))
+}
+
+/// Assembles `asm_path` with the in-tree assembler when it is enabled and handles the text,
+/// reporting whether `obj_path` was written. A slice it does not handle is left to `as`.
+fn assemble_inhouse(target: Target, asm_path: &Path, obj_path: &Path) -> bool {
+    if !inhouse_enabled(target) {
+        return false;
+    }
+    let Ok(text) = std::fs::read_to_string(asm_path) else {
+        return false;
+    };
+    match inhouse::assemble(&text) {
+        Ok(object) => std::fs::write(obj_path, object).is_ok(),
+        Err(inhouse::Unsupported(reason)) => {
+            if trace_enabled() {
+                eprintln!("asm-trace inhouse fallback {}: {reason}", asm_path.display());
+            }
+            false
+        }
+    }
+}
+
 /// Invokes the target assembler for one generated assembly source file.
 pub(crate) fn assemble(target: Target, asm_path: &Path, obj_path: &Path) {
+    if assemble_inhouse(target, asm_path, obj_path) {
+        return;
+    }
     let mut assembler = assembler_command(target);
     assembler.arg("-o").arg(obj_path).arg(asm_path);
     command::run_tool("Assembler", &mut assembler);
+}
+
+/// Ceiling on concurrent `as` processes for one user object.
+///
+/// The default is one per core. It used to stop at eight, where the curve had flattened while
+/// the slices were rendered one after another before any assembler started; with every slice
+/// rendered and assembled by its own worker, the Symfony `--web` assembly phase measured 11.7 s
+/// at 12 jobs, 8.5 s at 18 (this machine's core count) and 8.4 s at 24 and 36. Assembler memory
+/// is proportional to the slice, so more, smaller slices do not add to it.
+const MAX_ASSEMBLER_JOBS: usize = 64;
+
+/// Largest slice of assembly text one `as` run is handed, whatever the job count.
+///
+/// An AArch64 `bl` reaches +-128 MB, and the assembler resolves a call to a symbol defined in the
+/// SAME object itself instead of leaving the linker a relocation it could route through a branch
+/// island. The Symfony demo's preload build wrote 27 GB of assembly, which 18 jobs cut into
+/// 1.5 GB slices of about 150 MB of code each, and every far call inside one failed with "fixup
+/// value out of range".
+///
+/// The bound must hold for the DENSEST text, not the average. Commented code runs about ten
+/// source bytes per code byte, but the eval-bridge dispatch ladders carry no comments: the demo
+/// console's 18 GB of assembly ran 2.6 bytes per code byte, so 768 MB slices held ~300 MB of code
+/// each. A slice is also one Mach-O atom (user objects carry no `.subsections_via_symbols`), and
+/// the linker cannot put a branch island inside an atom: `ld` failed with "atom ... is larger than
+/// the max code size between branch island clusters" and an `arm64_b26` fixup out of range. At
+/// 192 MB a slice stays under ~77 MB of code even at that density.
+const MAX_SLICE_SOURCE_BYTES: usize = 192 << 20;
+
+/// Returns how many slices to cut `source_len` bytes of assembly into: one per job, and more when
+/// the text is large enough that a job-sized slice would exceed [`MAX_SLICE_SOURCE_BYTES`].
+fn slice_parts(jobs: usize, source_len: usize) -> usize {
+    jobs.max(source_len.div_ceil(MAX_SLICE_SOURCE_BYTES))
+}
+
+/// Large inputs need safe object boundaries even when only one assembler may run at a time.
+fn needs_slices(jobs: usize, source_len: usize) -> bool {
+    jobs > 1 || source_len > MAX_SLICE_SOURCE_BYTES
+}
+
+/// Processes slices with a bounded worker pool, preserving per-slice order and panic outcomes.
+///
+/// Slice count is a size-safety decision, not permission to spawn that many assemblers. Catching
+/// each slice's panic preserves the caller's existing fail-closed policy without losing the other
+/// queued outcomes. Results are published only after work completes, outside the work closure.
+fn run_slice_workers<T: Send>(
+    count: usize,
+    jobs: usize,
+    work: impl Fn(usize) -> T + Sync,
+) -> Vec<std::thread::Result<T>> {
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let outcomes: std::sync::Mutex<Vec<Option<std::thread::Result<T>>>> =
+        std::sync::Mutex::new((0..count).map(|_| None).collect());
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..count.min(jobs.max(1)))
+            .map(|_| {
+                let (next, outcomes, work) = (&next, &outcomes, &work);
+                scope.spawn(move || loop {
+                    let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if index >= count {
+                        break;
+                    }
+                    let outcome =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(index)));
+                    outcomes.lock().expect("assembler outcomes mutex poisoned")[index] = Some(outcome);
+                })
+            })
+            .collect();
+        for worker in workers {
+            // An unexpected failure outside the slice's catch boundary leaves a missing outcome,
+            // which is returned as a panic below rather than silently omitting an object.
+            let _ = worker.join();
+        }
+    });
+    outcomes
+        .into_inner()
+        .expect("assembler outcomes mutex poisoned")
+        .into_iter()
+        .map(|outcome| {
+            outcome.unwrap_or_else(|| Err(Box::new("assembler worker did not publish its result")))
+        })
+        .collect()
+}
+
+/// Objects produced from one user assembly file, in slice order, plus a note for `--timings`.
+pub(crate) struct AssembledObjects {
+    /// Object paths in the order the slices must reach the link line. The first
+    /// entry is always the caller's `obj_path`, so every existing cleanup and
+    /// debug-map path keeps working unchanged.
+    pub(crate) objects: Vec<PathBuf>,
+    /// What the split had to publish, when it split at all.
+    pub(crate) note: Option<String>,
+}
+
+/// Returns how many `as` processes may assemble one user object.
+///
+/// `ELEPHC_ASM_JOBS` overrides the host-derived default. One job preserves the single-object
+/// path for small inputs, but still processes large inputs as safe, sequential slices.
+fn assembler_jobs() -> usize {
+    if let Ok(value) = std::env::var("ELEPHC_ASM_JOBS") {
+        return value.trim().parse::<usize>().unwrap_or(1).clamp(1, 64);
+    }
+    std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(1)
+        .clamp(1, MAX_ASSEMBLER_JOBS)
+}
+
+/// Assembles one user assembly file, splitting it across parallel `as` runs when
+/// the target supports it, and returns the objects in slice order.
+///
+/// Every fallback path here produces exactly today's single object: an
+/// unsupported target or artifact, a small input with one worker, `--debug-info` (whose
+/// dSYM debug map has to name one object per compilation unit and is not worth
+/// re-deriving for a build the developer is about to step through), an
+/// unreadable `.s`, an assembly with no legal cut, or a failed slice write.
+///
+/// The source text is freed as soon as the split is done, and each slice once it is written, so
+/// the assemblers run beside the compiler's residual heap instead of the text plus every slice.
+pub(crate) fn assemble_parallel(
+    target: Target,
+    emit: Emit,
+    debug_info: bool,
+    asm_path: &Path,
+    obj_path: &Path,
+) -> AssembledObjects {
+    let single = || AssembledObjects {
+        objects: vec![obj_path.to_path_buf()],
+        note: None,
+    };
+    let jobs = assembler_jobs();
+    if debug_info || !asm_split::supports_split(target, emit) {
+        assemble(target, asm_path, obj_path);
+        return single();
+    }
+    let source_len = std::fs::metadata(asm_path)
+        .map(|metadata| usize::try_from(metadata.len()).unwrap_or(usize::MAX))
+        .unwrap_or(0);
+    if !needs_slices(jobs, source_len) {
+        assemble(target, asm_path, obj_path);
+        return single();
+    }
+    // Map the `.s` instead of reading it: the pages are clean and file-backed, so the kernel can
+    // drop them under pressure instead of the build holding a 1.5 GB private copy of the text.
+    let Some(mapped) = crate::mapped_file::MappedFile::open(asm_path) else {
+        assemble(target, asm_path, obj_path);
+        return single();
+    };
+    let Ok(source) = std::str::from_utf8(mapped.bytes()) else {
+        drop(mapped);
+        assemble(target, asm_path, obj_path);
+        return single();
+    };
+
+    let slice_asm = |index: usize| obj_path.with_extension(format!("slice{index}.s"));
+    let slice_obj = |index: usize| match index {
+        0 => obj_path.to_path_buf(),
+        _ => obj_path.with_extension(format!("slice{index}.o")),
+    };
+
+    let parts = slice_parts(jobs, source.len());
+    let plan_started = std::time::Instant::now();
+    let Some(mut plan) = asm_split::plan_split(
+        source,
+        parts,
+        target.platform.local_label_prefix(),
+        // Kept for the in-tree assembler too: the split's encoder is the fast path for the common
+        // symbol-free forms, and a `.inst` word costs the in-tree assembler almost nothing to take.
+        target.arch == crate::codegen::platform::Arch::AArch64 && encode_enabled(),
+    ) else {
+        drop(mapped);
+        assemble(target, asm_path, obj_path);
+        return single();
+    };
+    if compact_enabled() {
+        plan.compact(target.line_comment_prefix());
+    }
+    let slice_count = plan.slices();
+    if trace_enabled() {
+        eprintln!("asm-trace plan: {:.2}s, {slice_count} slices", plan_started.elapsed().as_secs_f64());
+    }
+
+    // Every slice is rendered, keyed, written and -- unless the cache already holds its object --
+    // assembled by a bounded worker pool. Rendering every slice before starting any assembler, as
+    // this did, left the assemblers idle for the whole serial render; now the first `as` starts
+    // as soon as its own slice is on disk, and no slice ever exists in memory whole: its cache
+    // key is folded from the same chunks that are written.
+    let caching = asm_cache::is_enabled();
+    let identity = caching.then(|| asm_cache::assembler_identity(&assembler_command(target)));
+    let outcomes = run_slice_workers(slice_count, jobs, |index| -> std::io::Result<SliceOutcome> {
+        let asm = slice_asm(index);
+        let started = std::time::Instant::now();
+        let mut key = identity.as_deref().map(asm_cache::slice_key_seed);
+        // The in-tree assembler takes the slice straight from memory: writing it to disk only to
+        // read it back cost a copy of the whole listing. A slice it does not handle is written
+        // out and handed to `as` as before.
+        if inhouse_enabled(target) {
+            let mut text = String::new();
+            plan.render_slice(index, &mut |chunk| {
+                if let Some(key) = key.as_mut() {
+                    *key = asm_cache::extend_slice_key(*key, chunk.as_bytes());
+                }
+                text.push_str(chunk);
+                Ok(())
+            })?;
+            if let Some(key) = key {
+                if asm_cache::reuse(key, &slice_obj(index)) {
+                    return Ok(SliceOutcome { key: Some(key), assembled: false });
+                }
+            }
+            let rendered = started.elapsed();
+            match inhouse::assemble(&text) {
+                Ok(object) => {
+                    std::fs::write(slice_obj(index), object)?;
+                    if trace_enabled() {
+                        eprintln!(
+                            "asm-trace slice {index}: {} bytes, render {:.2}s, inhouse {:.2}s",
+                            text.len(),
+                            rendered.as_secs_f64(),
+                            (started.elapsed() - rendered).as_secs_f64()
+                        );
+                    }
+                    return Ok(SliceOutcome { key, assembled: true });
+                }
+                Err(inhouse::Unsupported(reason)) => {
+                    if trace_enabled() {
+                        eprintln!("asm-trace inhouse fallback slice {index}: {reason}");
+                    }
+                    std::fs::write(&asm, &text)?;
+                    let mut assembler = assembler_command(target);
+                    assembler.arg("-o").arg(slice_obj(index)).arg(&asm);
+                    command::run_tool("Assembler", &mut assembler);
+                    return Ok(SliceOutcome { key, assembled: true });
+                }
+            }
+        }
+        let file = std::fs::File::create(&asm)?;
+        let mut writer = std::io::BufWriter::with_capacity(1 << 20, file);
+        plan.render_slice(index, &mut |text| {
+            if let Some(key) = key.as_mut() {
+                *key = asm_cache::extend_slice_key(*key, text.as_bytes());
+            }
+            std::io::Write::write_all(&mut writer, text.as_bytes())
+        })?;
+        std::io::Write::flush(&mut writer)?;
+        drop(writer);
+        // A restored object is a HARDLINK to the cache entry, so anything that writes to it in
+        // place would write through into the cache; `reuse` first unlinks the destination name.
+        if let Some(key) = key {
+            if asm_cache::reuse(key, &slice_obj(index)) {
+                let _ = std::fs::remove_file(&asm);
+                return Ok(SliceOutcome { key: Some(key), assembled: false });
+            }
+        }
+        let rendered = started.elapsed();
+        assemble(target, &asm, &slice_obj(index));
+        if trace_enabled() {
+            eprintln!(
+                "asm-trace slice {index}: {} bytes, render {:.2}s, as {:.2}s",
+                std::fs::metadata(&asm).map(|m| m.len()).unwrap_or(0),
+                rendered.as_secs_f64(),
+                (started.elapsed() - rendered).as_secs_f64()
+            );
+        }
+        Ok(SliceOutcome { key, assembled: true })
+    });
+    let summary = plan.summary;
+    drop(mapped);
+
+    let mut keys: Vec<u64> = Vec::with_capacity(slice_count);
+    let mut misses: Vec<usize> = Vec::new();
+    let mut failed_write = false;
+    for (index, outcome) in outcomes.into_iter().enumerate() {
+        match outcome {
+            Ok(Ok(outcome)) => {
+                keys.extend(outcome.key);
+                if outcome.assembled {
+                    misses.push(index);
+                }
+            }
+            Ok(Err(_)) => failed_write = true,
+            Err(_) => {
+                // A worker that failed the tool call already exited the process; a
+                // panicking one has to be reported here rather than linked around.
+                eprintln!("Assembler: a parallel slice panicked");
+                process::exit(1);
+            }
+        }
+    }
+    if failed_write {
+        // A slice that could not be written leaves nothing to link; assemble the file whole.
+        for index in 0..slice_count {
+            let _ = std::fs::remove_file(slice_asm(index));
+            let _ = std::fs::remove_file(slice_obj(index));
+        }
+        assemble(target, asm_path, obj_path);
+        return single();
+    }
+    let cached = slice_count - misses.len();
+
+    // Publish only what this build actually assembled. A hit was already published
+    // by whoever produced it, and re-publishing it would only move its mtime.
+    if caching {
+        for &index in &misses {
+            asm_cache::publish(keys[index], &slice_obj(index));
+        }
+        asm_cache::prune(&keys);
+    }
+
+    // The slice sources are derived files: the `.s` the developer asked for is
+    // still on disk untouched. A failing `as` exits before this point, so a
+    // slice that could not be assembled is always left behind for inspection.
+    let objects: Vec<PathBuf> = (0..slice_count).map(|index| slice_obj(index)).collect();
+    for &index in &misses {
+        let _ = std::fs::remove_file(slice_asm(index));
+    }
+    let note = format!(
+        "Assembler: {} slices, {} workers ({} temporaries promoted, {} locals published, {} reused from cache)",
+        objects.len(),
+        jobs.min(slice_count),
+        summary.promoted.len(),
+        summary.published,
+        cached
+    );
+    AssembledObjects {
+        objects,
+        note: Some(note),
+    }
+}
+
+/// Whether slices may carry pre-encoded instructions. `ELEPHC_ASM_ENCODE=0` hands `as` the
+/// generated text unchanged, which is also what the object-identity check compares against.
+/// Whether slices are written compact (`asm_split::SplitPlan::compact`). `ELEPHC_ASM_COMPACT=0`
+/// writes them as the `.s` has them, which keeps a failing slice readable.
+fn compact_enabled() -> bool {
+    !matches!(std::env::var("ELEPHC_ASM_COMPACT").as_deref(), Ok("0") | Ok("off"))
+}
+
+/// `ELEPHC_ASM_TRACE=1` prints each slice's size and render/assemble times to stderr.
+fn trace_enabled() -> bool {
+    std::env::var_os("ELEPHC_ASM_TRACE").is_some()
+}
+
+fn encode_enabled() -> bool {
+    !matches!(std::env::var("ELEPHC_ASM_ENCODE").as_deref(), Ok("0") | Ok("off"))
+}
+
+/// What one slice worker did.
+struct SliceOutcome {
+    /// The slice's cache key, when the cache is on.
+    key: Option<u64>,
+    /// Whether the slice went through `as` (a miss) rather than being restored from the cache.
+    assembled: bool,
 }
 
 /// Packs the compiled objects into a static library with `ar`.
@@ -297,6 +686,7 @@ pub(crate) fn link(
         emit,
         bin_path,
         obj_path,
+        &[],
         runtime_object_path,
         &plan,
         forced_whole_archive,
@@ -307,17 +697,23 @@ pub(crate) fn link(
 }
 
 /// Resolves bridge inputs and executes a linker command from an already typed plan.
+///
+/// `extra_objects` carries the second and later slices of a parallel-assembled
+/// user object. They are appended immediately after `obj_path`, in slice order,
+/// which is the emission order: `ld` concatenates section contents in input
+/// order, and an emitted `__data` record's meaning depends on its neighbours.
 pub(crate) fn link_with_plan(
     target: Target,
     emit: Emit,
     bin_path: &Path,
     obj_path: &Path,
+    extra_objects: &[PathBuf],
     runtime_object_path: &Path,
     plan: &LinkPlan,
     forced_whole_archive: &[String],
 ) -> Result<(), LinkError> {
-    link_with_plan_and_inputs(target, emit, bin_path, obj_path, runtime_object_path,
-        plan, forced_whole_archive).map(|_| ())
+    link_with_plan_and_inputs(target, emit, bin_path, obj_path, extra_objects,
+        runtime_object_path, plan, forced_whole_archive).map(|_| ())
 }
 
 /// Links normally and returns exact archive paths plus bridge names for executable caches.
@@ -326,6 +722,7 @@ pub(crate) fn link_with_plan_and_inputs(
     emit: Emit,
     bin_path: &Path,
     obj_path: &Path,
+    extra_objects: &[PathBuf],
     runtime_object_path: &Path,
     plan: &LinkPlan,
     forced_whole_archive: &[String],
@@ -372,6 +769,7 @@ pub(crate) fn link_with_plan_and_inputs(
         LinkPaths {
             bin: bin_path,
             object: obj_path,
+            extra_objects,
             runtime: runtime_object_path,
         },
         render_plan,
@@ -390,4 +788,96 @@ pub(crate) fn link_with_plan_and_inputs(
 /// Rejects a cached host when an auto-built bridge has newer local source inputs.
 pub(crate) fn cached_bridge_is_current(name: &str, archive: &Path) -> bool {
     bridges::cached_archive_is_current(name, archive)
+}
+
+#[cfg(test)]
+mod slice_parts_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Small text keeps one slice per job; text past the cap gets enough slices to stay under it,
+    /// so no slice holds more code than an AArch64 `bl` reaches.
+    #[test]
+    fn large_assembly_gets_more_slices_than_jobs() {
+        assert_eq!(slice_parts(18, 100 << 20), 18);
+        assert_eq!(slice_parts(18, 18 * MAX_SLICE_SOURCE_BYTES), 18);
+        let large = 27usize << 30;
+        let parts = slice_parts(18, large);
+        assert!(parts > 18);
+        assert!(large.div_ceil(parts) <= MAX_SLICE_SOURCE_BYTES);
+    }
+
+    /// A worker limit must not bypass the object-size safety policy.
+    #[test]
+    fn one_worker_still_slices_large_inputs() {
+        assert!(!needs_slices(1, MAX_SLICE_SOURCE_BYTES));
+        assert!(needs_slices(1, MAX_SLICE_SOURCE_BYTES + 1));
+        assert_eq!(slice_parts(1, MAX_SLICE_SOURCE_BYTES + 1), 2);
+        assert!(needs_slices(2, 1));
+    }
+
+    /// More slices than workers must neither oversubscribe nor reorder the link inputs.
+    #[test]
+    fn slice_workers_respect_the_limit_and_preserve_order() {
+        let active = AtomicUsize::new(0);
+        let peak = AtomicUsize::new(0);
+        let first_workers = std::sync::Barrier::new(2);
+        let outcomes = run_slice_workers(17, 2, |index| {
+            let now = active.fetch_add(1, Ordering::Relaxed) + 1;
+            peak.fetch_max(now, Ordering::Relaxed);
+            if index < 2 {
+                first_workers.wait();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(4));
+            active.fetch_sub(1, Ordering::Relaxed);
+            index * 3
+        });
+        let values: Vec<_> = outcomes.into_iter().map(Result::unwrap).collect();
+        assert_eq!(values, (0..17).map(|index| index * 3).collect::<Vec<_>>());
+        assert_eq!(peak.load(Ordering::Relaxed), 2);
+        assert_eq!(active.load(Ordering::Relaxed), 0);
+    }
+
+    /// Sequential work processes every slice, including fallible and panicking callbacks.
+    #[test]
+    fn slice_workers_keep_failures_at_their_original_indices() {
+        let outcomes = run_slice_workers(7, 1, |index| -> Result<usize, &'static str> {
+            match index {
+                2 => panic!("slice worker panic fixture"),
+                4 => Err("slice write fixture"),
+                _ => Ok(index),
+            }
+        });
+        assert_eq!(outcomes.len(), 7);
+        for (index, outcome) in outcomes.into_iter().enumerate() {
+            match index {
+                2 => assert!(outcome.is_err()),
+                4 => assert_eq!(outcome.unwrap(), Err("slice write fixture")),
+                _ => assert_eq!(outcome.unwrap(), Ok(index)),
+            }
+        }
+        assert!(run_slice_workers(0, 1, |_| 0usize).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod probe {
+    #[test]
+    #[ignore]
+    fn probe_assemble_existing_s() {
+        let src = std::env::var("ELEPHC_PROBE_ASM").unwrap();
+        let dir = std::env::var("ELEPHC_PROBE_DIR").unwrap();
+        let s = std::path::Path::new(&dir).join("probe.s");
+        let _ = std::fs::remove_file(&s);
+        std::os::unix::fs::symlink(&src, &s).unwrap();
+        let t = std::time::Instant::now();
+        let r = super::assemble_parallel(
+            crate::codegen::platform::Target::detect_host(),
+            crate::codegen::Emit::Executable,
+            false,
+            &s,
+            &std::path::Path::new(&dir).join("probe.o"),
+        );
+        eprintln!("total {:.2}s {:?}", t.elapsed().as_secs_f64(), r.note);
+    }
 }

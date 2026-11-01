@@ -350,10 +350,7 @@ fn recursive_iterator_iterator_advance_self_first_body() -> Vec<Stmt> {
             ],
             None,
         ),
-        assign_stmt(
-            "hasChildren",
-            method_call(var_expr("iterator"), "hasChildren", Vec::new()),
-        ),
+        assign_stmt("hasChildren", recursive_iterator_iterator_can_descend_expr()),
         if_stmt(
             var_expr("hasChildren"),
             vec![
@@ -384,10 +381,7 @@ fn recursive_iterator_iterator_advance_children_first_or_leaves_body() -> Vec<St
             ],
             None,
         ),
-        assign_stmt(
-            "hasChildren",
-            method_call(var_expr("iterator"), "hasChildren", Vec::new()),
-        ),
+        assign_stmt("hasChildren", recursive_iterator_iterator_can_descend_expr()),
         if_stmt(
             var_expr("hasChildren"),
             vec![
@@ -404,6 +398,27 @@ fn recursive_iterator_iterator_advance_children_first_or_leaves_body() -> Vec<St
         property_assign_stmt(this_expr(), "currentValid", bool_expr(true)),
         return_void_stmt(),
     ]
+}
+
+/// Returns whether the current recursive frame may descend below the configured maximum depth.
+fn recursive_iterator_iterator_can_descend_expr() -> Expr {
+    binary_expr(
+        binary_expr(
+            binary_expr(
+                property_access(this_expr(), "maxDepth"),
+                BinOp::Lt,
+                int_expr(0),
+            ),
+            BinOp::Or,
+            binary_expr(
+                recursive_iterator_iterator_depth_expr(),
+                BinOp::Lt,
+                property_access(this_expr(), "maxDepth"),
+            ),
+        ),
+        BinOp::And,
+        method_call(var_expr("iterator"), "hasChildren", Vec::new()),
+    )
 }
 
 /// Builds the synthetic method body for recursive iterator iterator non self child.

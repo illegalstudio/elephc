@@ -39,9 +39,12 @@ fn declared_builtin_registry_derives_filesystem_metadata() {        assert_eq!(
             eval_declared_builtin_param_names("getcwd"),
             Some([].as_slice())
         );
+        // `php -n` 8.5.6: `glob(string $pattern, int $flags = 0)`. The expectation here was
+        // written against a one-parameter registry entry and went stale when the signature was
+        // completed; the registry is the side that matches PHP.
         assert_eq!(
             eval_declared_builtin_param_names("glob"),
-            Some(["pattern"].as_slice())
+            Some(["pattern", "flags"].as_slice())
         );
         assert_eq!(
             eval_declared_builtin_param_names("linkinfo"),
@@ -69,7 +72,7 @@ fn declared_builtin_registry_derives_filesystem_metadata() {        assert_eq!(
         );
         assert_eq!(
             eval_declared_builtin_param_names("file"),
-            Some(["filename", "flags"].as_slice())
+            Some(["filename", "flags", "context"].as_slice())
         );
         assert_eq!(
             eval_declared_builtin_param_names("file_get_contents"),
@@ -77,11 +80,16 @@ fn declared_builtin_registry_derives_filesystem_metadata() {        assert_eq!(
         );
         assert_eq!(
             eval_declared_builtin_param_names("file_put_contents"),
-            Some(["filename", "data", "flags"].as_slice())
+            Some(["filename", "data", "flags", "context"].as_slice())
         );
+        // The gap this used to pin is CLOSED: the contract now carries all three parameters
+        // `php -n` 8.5.6 declares. `scandir` above had gone the same way earlier, which is the
+        // reason for the standing rule in this file -- every one of these assertions records
+        // where elephc stands, not where php does, so each has to be re-measured against php
+        // rather than assumed to be the contract.
         assert_eq!(
             eval_declared_builtin_param_names("readfile"),
-            Some(["filename"].as_slice())
+            Some(["filename", "use_include_path", "context"].as_slice())
         );
         assert_eq!(
             eval_declared_builtin_param_names("filemtime"),
@@ -129,11 +137,11 @@ fn declared_builtin_registry_derives_filesystem_metadata() {        assert_eq!(
         );
         assert_eq!(
             eval_declared_builtin_param_names("rename"),
-            Some(["from", "to"].as_slice())
+            Some(["from", "to", "context"].as_slice())
         );
         assert_eq!(
             eval_declared_builtin_param_names("scandir"),
-            Some(["directory"].as_slice())
+            Some(["directory", "sorting_order", "context"].as_slice())
         );
         assert_eq!(
             eval_declared_builtin_param_names("tempnam"),

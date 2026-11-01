@@ -74,7 +74,12 @@ fn emit_weekdays_arm64(emitter: &mut Emitter) {
     emitter.instruction("b.gt __rt_strtotime_fail");                            // out of weekday range
     emitter.instruction("add x3, x3, x10");                                     // advance past weekday
     emitter.instruction("cmp x3, x4");                                          // consumed the whole input ?
-    emitter.instruction("b.ne __rt_strtotime_fail");                            // trailing junk after weekday → fail
+    emitter.instruction("b.eq __rt_strtotime_weekdays_whole");                  // yes → plain `<modifier> <weekday>`
+    emitter.instruction("ldr x13, [sp, #48]");                                  // trimmed pointer
+    emitter.instruction("sub x10, x3, x13");                                    // head length = everything through the weekday word
+    emitter.instruction("ldr x8, [sp, #56]");                                   // trimmed length
+    emitter.instruction("b __rt_strtotime_kw_trailing");                        // a time of day, a keyword or an offset may follow, as after a bare keyword
+    emitter.label("__rt_strtotime_weekdays_whole");
     emitter.instruction("sub w11, w9, #10");                                    // target_wday = kind - 10
     emitter.instruction("ldr w12, [sp, #84]");                                  // reload modifier kind
     emitter.instruction("b __rt_strtotime_weekdays_compute");                   // continue to delta computation
@@ -198,7 +203,11 @@ fn emit_weekdays_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 80]");                       // reload trimmed pointer
     emitter.instruction("add r10, QWORD PTR [rbp - 72]");                       // recompute end pointer
     emitter.instruction("cmp rdi, r10");                                        // consumed the whole input ?
-    emitter.instruction("jne __rt_strtotime_fail_linux_x86_64");                // trailing junk after weekday → fail
+    emitter.instruction("je __rt_strtotime_weekdays_whole_linux_x86_64");       // yes → plain `<modifier> <weekday>`
+    emitter.instruction("mov rax, rdi");                                        // cursor after the weekday word
+    emitter.instruction("sub rax, QWORD PTR [rbp - 80]");                       // head length = everything through the weekday word
+    emitter.instruction("jmp __rt_strtotime_kw_trailing_linux_x86_64");         // a time of day, a keyword or an offset may follow, as after a bare keyword
+    emitter.label("__rt_strtotime_weekdays_whole_linux_x86_64");
     emitter.instruction("sub edx, 10");                                         // target_wday
     emitter.instruction("mov DWORD PTR [rsp + 80], edx");                       // save target_wday
     emitter.instruction("jmp __rt_strtotime_weekdays_compute_linux_x86_64");    // continue

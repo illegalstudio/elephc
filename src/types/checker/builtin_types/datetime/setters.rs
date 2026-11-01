@@ -9,14 +9,17 @@
 
 use super::*;
 
-/// `setTimestamp(int $timestamp)` — sets the stored UNIX timestamp.
+/// `setTimestamp(int $timestamp)` — sets the stored UNIX timestamp. Like PHP it also clears the
+/// sub-second component: the constructor now stamps the current microseconds on `"now"`, and an
+/// explicit whole-second instant must not inherit them.
 pub(super) fn make_set_timestamp(mutable: bool, class_name: &str) -> ClassMethod {
     method(
         "setTimestamp",
         vec![("timestamp".to_string(), Some(TypeExpr::Int), None, false)],
-        Some(TypeExpr::Named(Name::unqualified(class_name))),
-        result_tail(
+        Some(TypeExpr::Named(Name::unqualified("static"))),
+        result_tail_micro(
             Expr::new(ExprKind::Variable("timestamp".to_string()), dummy()),
+            Some(Expr::new(ExprKind::IntLiteral(0), dummy())),
             mutable,
             class_name,
         ),
@@ -26,7 +29,7 @@ pub(super) fn make_set_timestamp(mutable: bool, class_name: &str) -> ClassMethod
 /// `setMicrosecond(int $microsecond): static` — sets the sub-second component. Mutable updates
 /// `$this` in place; immutable returns a fresh instance carrying the same instant/zone with the new
 /// micros (the instant in seconds is unchanged).
-pub(super) fn make_set_microsecond(mutable: bool, class_name: &str) -> ClassMethod {
+pub(super) fn make_set_microsecond(mutable: bool, _class_name: &str) -> ClassMethod {
     let us = || Expr::new(ExprKind::Variable("microsecond".to_string()), dummy());
     let body = if mutable {
         vec![
@@ -42,12 +45,11 @@ pub(super) fn make_set_microsecond(mutable: bool, class_name: &str) -> ClassMeth
             )
         };
         vec![
+            // php clones the receiver: a subclass (CarbonImmutable) keeps its class and its own
+            // properties, and its `__clone` runs.
             Stmt::assign(
                 "__new",
-                Expr::new(
-                    ExprKind::NewObject { class_name: Name::unqualified(class_name), args: Vec::new() },
-                    dummy(),
-                ),
+                Expr::new(ExprKind::Clone(Box::new(Expr::new(ExprKind::This, dummy()))), dummy()),
             ),
             prop_assign("timestamp", this_property("timestamp")),
             prop_assign("timezone_name", this_property("timezone_name")),
@@ -58,7 +60,7 @@ pub(super) fn make_set_microsecond(mutable: bool, class_name: &str) -> ClassMeth
     method(
         "setMicrosecond",
         vec![("microsecond".to_string(), Some(TypeExpr::Int), None, false)],
-        Some(TypeExpr::Named(Name::unqualified(class_name))),
+        Some(TypeExpr::Named(Name::unqualified("static"))),
         body,
     )
 }
@@ -95,7 +97,7 @@ pub(super) fn make_set_time(mutable: bool, class_name: &str) -> ClassMethod {
                 false,
             ),
         ],
-        Some(TypeExpr::Named(Name::unqualified(class_name))),
+        Some(TypeExpr::Named(Name::unqualified("static"))),
         body,
     )
 }
@@ -119,7 +121,7 @@ pub(super) fn make_set_date(mutable: bool, class_name: &str) -> ClassMethod {
             ("month".to_string(), Some(TypeExpr::Int), None, false),
             ("day".to_string(), Some(TypeExpr::Int), None, false),
         ],
-        Some(TypeExpr::Named(Name::unqualified(class_name))),
+        Some(TypeExpr::Named(Name::unqualified("static"))),
         body,
     )
 }
@@ -186,7 +188,7 @@ pub(super) fn make_set_timezone(mutable: bool, class_name: &str) -> ClassMethod 
             None,
             false,
         )],
-        Some(TypeExpr::Named(Name::unqualified(class_name))),
+        Some(TypeExpr::Named(Name::unqualified("static"))),
         body,
     )
 }
@@ -302,7 +304,7 @@ pub(super) fn make_add_sub(name: &str, mutable: bool, class_name: &str, is_add: 
             None,
             false,
         )],
-        Some(TypeExpr::Named(Name::unqualified(class_name))),
+        Some(TypeExpr::Named(Name::unqualified("static"))),
         body,
     )
 }
@@ -351,7 +353,7 @@ pub(super) fn make_modify(mutable: bool, class_name: &str) -> ClassMethod {
     method(
         "modify",
         vec![("modifier".to_string(), Some(TypeExpr::Str), None, false)],
-        Some(TypeExpr::Named(Name::unqualified(class_name))),
+        Some(TypeExpr::Named(Name::unqualified("static"))),
         body,
     )
 }

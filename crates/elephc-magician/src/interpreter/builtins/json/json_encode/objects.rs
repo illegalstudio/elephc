@@ -5,7 +5,7 @@
 //! - `super::traversal::EvalJsonTraversal::encode_object()`.
 //!
 //! Key details:
-//! - Enum `jsonSerialize()` takes precedence over backing scalars and unit enum errors.
+//! - `jsonSerialize()` of a `JsonSerializable` object, enum or not, takes precedence over backing scalars and unit enum errors.
 //! - Native enum metadata uses property initialization when implicit interfaces are absent.
 
 use super::*;
@@ -13,6 +13,8 @@ use super::*;
 /// Selects the PHP JSON representation for one object value.
 pub(super) enum EvalJsonObjectEncoding {
     Properties,
+    /// A plain (non-enum) `JsonSerializable`: encoded as its `jsonSerialize()` result.
+    Serializable,
     SerializableEnum,
     BackedEnum(RuntimeCellHandle),
     UnitEnum,
@@ -32,12 +34,15 @@ pub(super) fn eval_json_object_encoding(
             values.enum_exists(&class_name)?
         }
     };
-    if !is_enum {
-        return Ok(EvalJsonObjectEncoding::Properties);
-    }
-
     let is_serializable = dynamic_object_is_a(value, "JsonSerializable", false, context, values)?
         .map_or_else(|| values.object_is_a(value, "JsonSerializable", false), Ok)?;
+    if !is_enum {
+        return Ok(if is_serializable {
+            EvalJsonObjectEncoding::Serializable
+        } else {
+            EvalJsonObjectEncoding::Properties
+        });
+    }
     if is_serializable {
         return Ok(EvalJsonObjectEncoding::SerializableEnum);
     }

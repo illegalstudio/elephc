@@ -85,6 +85,16 @@ pub(super) struct ExceptionFlowAnalysis {
     function_returns: HashMap<String, PhpType>,
     static_method_returns: HashMap<String, PhpType>,
     instance_method_returns: HashMap<String, PhpType>,
+    /// Callables the compiler gives a runtime NOMINAL OBJECT BOUNDARY, keyed the same way as
+    /// the summary maps.
+    ///
+    /// These throw a `TypeError` that no AST node spells: `ir_lower` inserts the check from the
+    /// DECLARATION when a wider object crosses into a narrower declared class — at a parameter,
+    /// at a return, or at a typed property write. This analysis runs on the AST, so without this
+    /// seed such a callable summarises as "throws nothing" and `catch (TypeError)` around a call
+    /// to it is pruned as unreachable. The program then dies with an UNCAUGHT TypeError at the
+    /// exact line that has a handler for it.
+    nominal_boundary_callables: HashSet<String>,
     /// Throws any destructor reachable in this program may raise, for the current round.
     ///
     /// Derived from `instance_method_throws` plus the hierarchy's destructor-enumeration
@@ -98,6 +108,139 @@ pub(super) struct ExceptionFlowAnalysis {
     /// program that also contains an unrelated throwing destructor; absence is the
     /// conservative answer and reproduces the previous behavior.
     scalar_frame_callables: HashSet<String>,
+}
+
+/// Returns whether a declared type makes the compiler insert a runtime nominal object check.
+///
+/// Deliberately over-approximate: a spurious member only keeps a `catch` that would otherwise be
+/// pruned, which costs a comparison, while a missing one loses the handler entirely.
+fn declares_nominal_object_boundary(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(_) => true,
+        PhpType::Union(members) => members.iter().any(declares_nominal_object_boundary),
+        _ => false,
+    }
+}
+
+/// Returns whether a declared parameter type can make a weak-mode argument coercion throw.
+///
+/// A string bound to an `int` parameter converts when the call runs and raises a `TypeError` for
+/// `"abc"`; the checker accepts the call, so the callee's summary must
+/// carry that throw or a caller's `catch (TypeError)` is pruned.
+fn declares_int_coercion_boundary(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Int => true,
+        PhpType::Union(members) => members.iter().any(declares_int_coercion_boundary),
+        _ => false,
+    }
+}
+
+/// [`declares_int_coercion_boundary`] for a declaration's type expression.
+fn type_expr_declares_int_coercion_boundary(ty: &TypeExpr) -> bool {
+    match ty {
+        TypeExpr::Int => true,
+        TypeExpr::Nullable(inner) => type_expr_declares_int_coercion_boundary(inner),
+        TypeExpr::Union(members) => members.iter().any(type_expr_declares_int_coercion_boundary),
+        _ => false,
+    }
+}
+
+/// Returns whether a signature's parameters or return can force a nominal object coercion.
+fn signature_has_nominal_object_boundary(signature: &FunctionSig) -> bool {
+    declares_nominal_object_boundary(&signature.return_type)
+        || signature.params.iter().enumerate().any(|(index, (_, ty))| {
+            declares_nominal_object_boundary(ty)
+                || (signature.declared_params.get(index).copied().unwrap_or(false)
+                    && declares_int_coercion_boundary(ty))
+        })
+}
+
+/// Returns whether a DECLARED type expression names a class, so the boundary is inserted.
+///
+/// The AST is the only source available when the caller supplies no checker metadata — which is
+/// every hand-built pipeline in the test tree, and the reason this cannot rely on `FunctionSig`
+/// alone. `Named` covers class, interface, enum, `self`, `static` and `parent`; the scalar and
+/// container spellings are their own variants, so anything left is nominal.
+fn type_expr_declares_nominal_object_boundary(ty: &TypeExpr) -> bool {
+    match ty {
+        TypeExpr::Named(_) => true,
+        TypeExpr::Nullable(inner) => type_expr_declares_nominal_object_boundary(inner),
+        TypeExpr::Union(members) | TypeExpr::Intersection(members) => members
+            .iter()
+            .any(type_expr_declares_nominal_object_boundary),
+        _ => false,
+    }
+}
+
+/// Collects the callables whose DECLARATION forces a nominal object boundary, from the AST.
+fn collect_ast_nominal_boundary_callables(program: &[Stmt], names: &mut HashSet<String>) {
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::FunctionDecl {
+                name,
+                params,
+                return_type,
+                ..
+            } => {
+                // Keyed by the RAW declared name, exactly as `collect_exception_bodies` keys the
+                // function summaries. Lowercasing it here silently missed every camelCase
+                // function — `nominalReturn` had a seed nothing could ever look up.
+                if declaration_has_nominal_boundary(params, return_type.as_ref()) {
+                    names.insert(name.clone());
+                }
+            }
+            StmtKind::ClassDecl {
+                name,
+                methods,
+                ..
+            }
+            | StmtKind::InterfaceDecl {
+                name,
+                methods,
+                ..
+            }
+            | StmtKind::TraitDecl {
+                name,
+                methods,
+                ..
+            }
+            | StmtKind::EnumDecl {
+                name,
+                methods,
+                ..
+            } => {
+                for method in methods {
+                    if declaration_has_nominal_boundary(
+                        &method.params,
+                        method.return_type.as_ref(),
+                    ) {
+                        names.insert(method_effect_key(name, &method.name));
+                    }
+                }
+            }
+            // Groupings whose children are ordinary top-level declarations.
+            StmtKind::Synthetic(body)
+            | StmtKind::NamespaceBlock { body, .. }
+            | StmtKind::IncludeOnceGuard { body, .. } => {
+                collect_ast_nominal_boundary_callables(body, names)
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Returns whether a declaration's parameter or return type expressions name a class.
+fn declaration_has_nominal_boundary(
+    params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
+    return_type: Option<&TypeExpr>,
+) -> bool {
+    return_type.is_some_and(type_expr_declares_nominal_object_boundary)
+        || params.iter().any(|(_, param_type, _, _)| {
+            param_type.as_ref().is_some_and(|ty| {
+                type_expr_declares_nominal_object_boundary(ty)
+                    || type_expr_declares_int_coercion_boundary(ty)
+            })
+        })
 }
 
 /// Returns whether argument binding can throw before entering an otherwise clean body.
@@ -262,7 +405,7 @@ impl ExceptionFlowAnalysis {
         program: &[Stmt],
         type_metadata: Option<(
             &HashMap<String, FunctionSig>,
-            &HashMap<String, ClassInfo>,
+            &crate::fast_hash::FastMap<String, ClassInfo>,
             &HashMap<String, InterfaceInfo>,
         )>,
     ) -> Self {
@@ -358,6 +501,29 @@ impl ExceptionFlowAnalysis {
                     .collect()
             })
             .unwrap_or_default();
+        // Seeded from the same checker metadata the return maps use, and keyed identically, so a
+        // callable's declaration alone puts it in the set — the boundary is inserted later, by
+        // `ir_lower`, from exactly this declaration.
+        let mut nominal_boundary_callables: HashSet<String> = HashSet::new();
+        // The AST pass runs unconditionally: the compiler binary supplies checker metadata, but
+        // every hand-built pipeline in the test tree calls the free functions, which pass `None`.
+        // Seeding only from the metadata left those paths pruning the handler, so the CLI was
+        // right and the test harness was wrong about the same program.
+        collect_ast_nominal_boundary_callables(program, &mut nominal_boundary_callables);
+        if let Some((functions, classes, _)) = type_metadata {
+            for (name, signature) in functions {
+                if signature_has_nominal_object_boundary(signature) {
+                    nominal_boundary_callables.insert(name.clone());
+                }
+            }
+            for (class_name, class) in classes {
+                for (method, signature) in class.static_methods.iter().chain(class.methods.iter()) {
+                    if signature_has_nominal_object_boundary(signature) {
+                        nominal_boundary_callables.insert(method_effect_key(class_name, method));
+                    }
+                }
+            }
+        }
         let declared_classes = class_contexts.keys().cloned().collect();
         let mut hierarchy = if let Some((_, classes, interfaces)) = type_metadata {
             ExceptionHierarchy::from_type_metadata(classes, interfaces, declared_classes)
@@ -378,7 +544,7 @@ impl ExceptionFlowAnalysis {
         }
         let mut analysis = Self {
             has_internal_object_operators: class_contexts.keys().any(|name|
-                elephc_builtin_contract::lookup_class(name).is_some_and(|class| class.operators.is_some())),
+                elephc_builtin_contract::is_operator_class_name(name)),
             hierarchy,
             function_throws: empty_summaries(function_bodies.keys()),
             static_method_throws: empty_summaries(static_method_bodies.keys()),
@@ -408,6 +574,7 @@ impl ExceptionFlowAnalysis {
             function_returns,
             static_method_returns,
             instance_method_returns,
+            nominal_boundary_callables,
             destructor_throws: ThrownTypes::default(),
             scalar_frame_callables: HashSet::new(),
         };
@@ -464,11 +631,14 @@ impl ExceptionFlowAnalysis {
         bodies
             .iter()
             .map(|(name, body)| {
-                (
-                    name.clone(),
-                    self.block_throws(body.body, &HashMap::new(), body.class_context)
-                        .combined(self.scope_cleanup_throws(name)),
-                )
+                let mut thrown = self
+                    .block_throws(body.body, &HashMap::new(), body.class_context)
+                    .combined(self.scope_cleanup_throws(name));
+                // The declaration's own nominal boundary, which no statement in the body spells.
+                if self.nominal_boundary_callables.contains(name) {
+                    thrown = thrown.combined(ThrownTypes::exact("TypeError"));
+                }
+                (name.clone(), thrown)
             })
             .collect()
     }
@@ -950,7 +1120,18 @@ impl ExceptionFlowAnalysis {
                 .combined(self.temporary_destruction_throws(value, class_context))
                 .combined(self.callable_value_retirement_throws(callable, class_context))
                 .combined(self.callable_expr_throws(callable, bindings, class_context)),
-            ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_) => ThrownTypes::default(),
+            ExprKind::Closure { .. } => ThrownTypes::default(),
+            // Creating a callable resolves its target now, not on invocation.
+            // Function lookup can fail with Error; method lookup may additionally
+            // evaluate a receiver or run an autoloader that throws any Throwable.
+            ExprKind::FirstClassCallable(CallableTarget::Function(_)) => ThrownTypes::exact("Error"),
+            // `$object->method(...)`: the receiver expression is evaluated (its own throws) and the
+            // lookup of a missing or inaccessible method raises `Error`; an object receiver never
+            // reaches an autoloader here, so nothing else can escape.
+            ExprKind::FirstClassCallable(CallableTarget::Method { object, .. }) => self
+                .expr_throws(object, bindings, class_context)
+                .combined(ThrownTypes::exact("Error")),
+            ExprKind::FirstClassCallable(_) => ThrownTypes::unknown(),
             ExprKind::ArrayLiteral(items) => self.expr_list_throws(items, bindings, class_context),
             ExprKind::ArrayLiteralAssoc(items) => items.iter().fold(
                 ThrownTypes::default(),

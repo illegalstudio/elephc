@@ -136,8 +136,7 @@ fn branch_if_tag(emitter: &mut Emitter, tag: usize, label: &str) {
 fn emit_invalid_result(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
     let scratch = abi::secondary_scratch_reg(emitter);
-    abi::emit_load_int_immediate(emitter, result, 56);
-    abi::emit_call_label(emitter, "__rt_heap_alloc");
+    crate::codegen_support::throwable_layout::emit_allocate(emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
     let kind = match emitter.target.arch {
         Arch::AArch64 => 6,
         Arch::X86_64 => crate::codegen_support::sentinels::x86_64_heap_kind_word(6) as i64,

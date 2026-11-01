@@ -11,7 +11,13 @@
 
 use crate::support::*;
 
-/// AOT and eval finish every unset operand before collecting a separate cyclic owner.
+/// AOT and eval finish every unset operand before a separate cyclic owner is collected.
+///
+/// php 8.5 prints `drop:B:afterdrop:A:`: `unset($a, $b)` destroys the acyclic `$b` at once, while
+/// the self-referencing `$a` only becomes a possible root and is reclaimed when the collector
+/// runs (at shutdown here), after `after` was printed. The compiled program matches. The
+/// INTERPRETED one still collects at the `unset()` (`drop:B:drop:A:after`): a cycle created by
+/// eval is not reachable by the shutdown pass, so deferring it would never run its destructor.
 #[test]
 fn test_eval_cycle_multi_operand_unset_order_matches_aot() {
     let body = r#"
@@ -32,7 +38,8 @@ echo "after";
         } else {
             format!("<?php {body}")
         };
-        assert_eq!(compile_and_run(&source), "drop:B:drop:A:after", "eval={eval}");
+        let expected = if eval { "drop:B:drop:A:after" } else { "drop:B:afterdrop:A:" };
+        assert_eq!(compile_and_run(&source), expected, "eval={eval}");
     }
 }
 

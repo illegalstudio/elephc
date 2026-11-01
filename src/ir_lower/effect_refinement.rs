@@ -24,10 +24,52 @@ use static_calls::static_call_effects;
 
 const MAX_EFFECT_ITERATIONS: usize = 64;
 
+/// Class-hierarchy answers every refinement iteration asks, computed once per module.
+///
+/// `receiver_runtime_classes` used to walk every class's parent chain per receiver, per
+/// instruction, per fixpoint iteration (a fifth of a Symfony build's lowering phase).
+struct ClassIndex {
+    /// Each class name as it appears in a parent chain -> the concrete classes whose chain
+    /// reaches it (the class itself included), in the class table's iteration order.
+    concrete_descendants: crate::fast_hash::FastMap<String, Vec<String>>,
+    /// Folded class key -> the class table's spelling.
+    by_symbol_key: crate::fast_hash::FastMap<String, String>,
+}
+
+impl ClassIndex {
+    /// Builds the index from the checked class table.
+    fn new(classes: &crate::fast_hash::FastMap<String, ClassInfo>) -> Self {
+        let mut concrete_descendants: crate::fast_hash::FastMap<String, Vec<String>> =
+            crate::fast_hash::FastMap::default();
+        let mut by_symbol_key = crate::fast_hash::FastMap::default();
+        for (candidate, class) in classes {
+            by_symbol_key.entry(php_symbol_key(candidate)).or_insert_with(|| candidate.clone());
+            if class.is_abstract {
+                continue;
+            }
+            let mut current = Some(candidate.as_str());
+            let mut hops = 0usize;
+            while let Some(class_name) = current {
+                let entry = concrete_descendants.entry(class_name.to_string()).or_default();
+                if entry.last() != Some(candidate) {
+                    entry.push(candidate.clone());
+                }
+                hops += 1;
+                if hops > classes.len() {
+                    break;
+                }
+                current = classes.get(class_name).and_then(|class| class.parent.as_deref());
+            }
+        }
+        Self { concrete_descendants, by_symbol_key }
+    }
+}
+
 /// Read-only module facts used while summarizing and rewriting instructions.
 struct RefinementContext<'a> {
     data: &'a crate::ir::DataPool,
-    classes: &'a HashMap<String, ClassInfo>,
+    classes: &'a crate::fast_hash::FastMap<String, ClassInfo>,
+    index: &'a ClassIndex,
     summaries: &'a HashMap<String, Effects>,
     parameters: &'a HashMap<String, Vec<CallParameter>>,
     /// True when the runtime eval bridge can register subclasses absent from `classes`.
@@ -43,10 +85,11 @@ struct CallParameter {
 /// Refines every eligible instruction from whole-module callable and class metadata.
 pub(super) fn refine_module(module: &mut Module) {
     let has_dynamic_class_barrier = module.required_runtime_features.eval_bridge;
-    let mut summaries = all_functions(module)
+    let index = ClassIndex::new(&module.class_infos);
+    let mut summaries = call_targets(module)
         .map(|function| (callable_key(&function.name), Effects::PURE))
         .collect::<HashMap<_, _>>();
-    let parameters = all_functions(module)
+    let parameters = call_targets(module)
         .map(|function| {
             let hidden_prefix = usize::from(function.flags.is_static);
             let parameters = function
@@ -66,11 +109,12 @@ pub(super) fn refine_module(module: &mut Module) {
         let context = RefinementContext {
             data: &module.data,
             classes: &module.class_infos,
+            index: &index,
             summaries: &summaries,
             parameters: &parameters,
             has_dynamic_class_barrier,
         };
-        let next = all_functions(module)
+        let next = call_targets(module)
             .map(|function| {
                 (
                     callable_key(&function.name),
@@ -94,6 +138,7 @@ pub(super) fn refine_module(module: &mut Module) {
     let context = RefinementContext {
         data,
         classes,
+        index: &index,
         summaries: &summaries,
         parameters: &parameters,
         has_dynamic_class_barrier,
@@ -121,11 +166,17 @@ pub(super) fn refine_module(module: &mut Module) {
     }
 }
 
-/// Iterates every function-like EIR body stored in a module.
-fn all_functions(module: &Module) -> impl Iterator<Item = &Function> {
+/// Iterates every function-like EIR body a call can name, keyed by name in the summaries.
+///
+/// The entry function is left out: it is named `main` like a user `function main()`, and no
+/// call reaches it. Keyed with it, the entry's summary replaced the user function's, so a
+/// file-scope `main();` whose only effect was that call proved itself pure and was deleted:
+/// the program printed nothing.
+fn call_targets(module: &Module) -> impl Iterator<Item = &Function> {
     module
         .functions
         .iter()
+        .filter(|function| !function.flags.is_main)
         .chain(module.class_methods.iter())
         .chain(module.closures.iter())
         .chain(module.fiber_wrappers.iter())
@@ -495,7 +546,7 @@ fn receiver_runtime_classes_for_value(
         return None;
     }
     let receiver_type = function.value(receiver)?.php_type.clone();
-    receiver_runtime_classes(&receiver_type, context.classes)
+    receiver_runtime_classes(&receiver_type, context.classes, context.index)
 }
 
 /// Traces identity-like ownership instructions to a statically fixed `object_new`.
@@ -540,7 +591,8 @@ fn method_summary_for_class(
 /// Expands an object or nullable-object type to all concrete checked runtime classes.
 fn receiver_runtime_classes(
     receiver_type: &PhpType,
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
+    index: &ClassIndex,
 ) -> Option<Vec<String>> {
     let mut bases = Vec::new();
     match receiver_type {
@@ -567,34 +619,13 @@ fn receiver_runtime_classes(
         if !classes.contains_key(&base) {
             return None;
         }
-        for (candidate, class) in classes {
-            if !class.is_abstract
-                && class_is_same_or_subclass(classes, candidate, &base)
-                && !runtime_classes.contains(candidate)
-            {
+        for candidate in index.concrete_descendants.get(&base).into_iter().flatten() {
+            if !runtime_classes.contains(candidate) {
                 runtime_classes.push(candidate.clone());
             }
         }
     }
     (!runtime_classes.is_empty()).then_some(runtime_classes)
-}
-
-/// Returns true when one class is the requested base or inherits from it.
-fn class_is_same_or_subclass(
-    classes: &HashMap<String, ClassInfo>,
-    candidate: &str,
-    base: &str,
-) -> bool {
-    let mut current = Some(candidate);
-    while let Some(class_name) = current {
-        if class_name == base {
-            return true;
-        }
-        current = classes
-            .get(class_name)
-            .and_then(|class| class.parent.as_deref());
-    }
-    false
 }
 
 /// Returns a constant string operand from its defining EIR instruction.
@@ -685,7 +716,60 @@ mod tests {
     }
 
     /// Type-checks a fixture and hands back its flattened class metadata.
-    fn checked_classes(source: &str) -> HashMap<String, ClassInfo> {
+    /// The per-receiver scan the class index replaced: every concrete class whose parent chain
+    /// reaches `base`, in class-table order. Kept as the oracle the index must reproduce.
+    fn scanned_runtime_classes(
+        classes: &crate::fast_hash::FastMap<String, ClassInfo>,
+        base: &str,
+    ) -> Vec<String> {
+        let mut out = Vec::new();
+        for (candidate, class) in classes {
+            let mut current = Some(candidate.as_str());
+            let mut reaches = false;
+            while let Some(class_name) = current {
+                if class_name == base {
+                    reaches = true;
+                    break;
+                }
+                current = classes.get(class_name).and_then(|class| class.parent.as_deref());
+            }
+            if reaches && !class.is_abstract {
+                out.push(candidate.clone());
+            }
+        }
+        out
+    }
+
+    /// The class index answers exactly what the per-receiver scan answered, order included,
+    /// for every class of a hierarchy with abstract levels, siblings and an unrelated root.
+    #[test]
+    fn class_index_matches_the_per_receiver_scan() {
+        let classes = checked_classes(
+            "<?php abstract class A {} class B extends A {} abstract class C extends B {} class D extends C {} class E extends A {} class F {} class G extends D {}",
+        );
+        let index = ClassIndex::new(&classes);
+        for base in ["A", "B", "C", "D", "E", "F", "G"] {
+            let expected = scanned_runtime_classes(&classes, base);
+            let indexed = receiver_runtime_classes(&PhpType::Object(base.to_string()), &classes, &index)
+                .unwrap_or_default();
+            assert_eq!(indexed, expected, "{base}");
+        }
+        let union = PhpType::Union(vec![
+            PhpType::Object("E".to_string()),
+            PhpType::Object("B".to_string()),
+            PhpType::Void,
+        ]);
+        let mut expected = scanned_runtime_classes(&classes, "E");
+        for class in scanned_runtime_classes(&classes, "B") {
+            if !expected.contains(&class) {
+                expected.push(class);
+            }
+        }
+        assert_eq!(receiver_runtime_classes(&union, &classes, &index), Some(expected));
+        assert_eq!(receiver_runtime_classes(&PhpType::Object("Missing".to_string()), &classes, &index), None);
+    }
+
+    fn checked_classes(source: &str) -> crate::fast_hash::FastMap<String, ClassInfo> {
         let tokens = crate::lexer::tokenize(source).expect("tokenize failed");
         let program = crate::parser::parse(&tokens).expect("parse failed");
         crate::types::check_with_target(
@@ -712,9 +796,11 @@ mod tests {
         let data = crate::ir::DataPool::default();
         let summaries = HashMap::new();
         let parameters = HashMap::new();
+        let index = ClassIndex::new(&classes);
         let context = RefinementContext {
             data: &data,
             classes: &classes,
+            index: &index,
             summaries: &summaries,
             parameters: &parameters,
             has_dynamic_class_barrier: false,
@@ -759,10 +845,11 @@ mod tests {
                 builder.terminate(Terminator::Return { value: None });
             }
             crate::ir::validate_function(&function).unwrap();
-            let classes = HashMap::new(); let summaries = HashMap::new();
+            let classes = crate::fast_hash::FastMap::default(); let summaries = HashMap::new();
             let parameters = HashMap::new();
-            let context = RefinementContext { data: &data, classes: &classes, summaries: &summaries,
-                parameters: &parameters, has_dynamic_class_barrier: false };
+            let index = ClassIndex::new(&classes);
+            let context = RefinementContext { data: &data, classes: &classes, index: &index,
+                summaries: &summaries, parameters: &parameters, has_dynamic_class_barrier: false };
             let store = function.instructions.iter().find(|inst| inst.op == Op::PropSet).unwrap();
             let effects = refined_instruction_effects(&function, store, &context);
             assert_eq!(effects, if php_type == PhpType::Mixed { Op::PropSet.default_effects() }

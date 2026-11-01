@@ -16,7 +16,9 @@
 //!   always a boxed `Mixed` pointer in the target result register (caller owns it).
 
 use crate::codegen_support::abi;
-use crate::codegen_support::callable_invoker_args::INVOKER_ARG_REF_CELL_TAG;
+use crate::codegen_support::callable_invoker_args::{
+    ARRAY_GLOBAL_REF_CELL_TAG, ARRAY_LOCAL_REF_CELL_TAG, INVOKER_ARG_REF_CELL_TAG,
+};
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -96,12 +98,25 @@ pub fn emit_array_get_mixed_key(emitter: &mut Emitter) {
     emitter.label("__rt_array_get_mixed_key_indexed_boxed");
     emitter.instruction("ldr x0, [x10, x12, lsl #3]");                          // load the boxed Mixed pointer from the indexed slot
     emitter.instruction("cbz x0, __rt_array_get_mixed_key_null");               // empty slot → null Mixed
+    // A reference marker is followed before any detach: a write fetch through `$a[0]['k'] = v`
+    // must reach the referenced value, and detaching cloned the marker and wrote into the copy.
+    emitter.instruction("ldr x9, [x0]");                                        // inspect the stored Mixed tag before splitting the slot
+    emitter.instruction(&format!("cmp x9, #{}", INVOKER_ARG_REF_CELL_TAG));     // is this slot a by-reference variadic marker?
+    emitter.instruction("b.eq __rt_array_get_mixed_key_clone_ref_cell");        // follow the marker to the referenced storage
+    emitter.instruction(&format!("cmp x9, #{}", ARRAY_GLOBAL_REF_CELL_TAG));    // is this slot an owning global-reference marker?
+    emitter.instruction("b.eq __rt_array_get_mixed_key_clone_ref_cell");        // follow the marker to the referenced storage
+    emitter.instruction(&format!("cmp x9, #{}", ARRAY_LOCAL_REF_CELL_TAG));     // is this slot an owning local-reference marker?
+    emitter.instruction("b.eq __rt_array_get_mixed_key_clone_ref_cell");        // follow the marker to the referenced storage
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the warning/fetch mode flags
     emitter.instruction("tbnz x9, #1, __rt_array_get_mixed_key_detach_indexed"); // split the selected zval after outer-array COW
     emitter.label("__rt_array_get_mixed_key_clone_boxed");
     emitter.instruction("ldr x9, [x0]");                                        // inspect the stored Mixed tag before cloning the cell
     emitter.instruction(&format!("cmp x9, #{}", INVOKER_ARG_REF_CELL_TAG));     // is this slot a by-reference variadic marker?
     emitter.instruction("b.eq __rt_array_get_mixed_key_clone_ref_cell");        // dereference marker slots instead of returning the marker itself
+    emitter.instruction(&format!("cmp x9, #{}", ARRAY_GLOBAL_REF_CELL_TAG));    // is this slot an owning global-reference marker?
+    emitter.instruction("b.eq __rt_array_get_mixed_key_clone_ref_cell");        // both marker kinds expose the same referenced-cell layout
+    emitter.instruction(&format!("cmp x9, #{}", ARRAY_LOCAL_REF_CELL_TAG));     // is this slot an owning local-reference marker?
+    emitter.instruction("b.eq __rt_array_get_mixed_key_clone_ref_cell");        // every marker kind exposes the same referenced-cell layout
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the warning/fetch mode flags
     emitter.instruction("tbnz x9, #1, __rt_array_get_mixed_key_retain_boxed");  // write fetches must preserve the stored mutable cell identity
     emitter.instruction("bl __rt_mixed_clone");                                 // detach values while preserving shared PHP resource identity
@@ -312,12 +327,24 @@ fn emit_array_get_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [r10 + r8 * 8]");                   // load the boxed Mixed pointer from the indexed slot
     emitter.instruction("test rax, rax");                                       // empty slot → null Mixed
     emitter.instruction("je __rt_array_get_mixed_key_null");                    // return null for an empty boxed slot
+    // A reference marker is followed before any detach (see the AArch64 arm).
+    emitter.instruction("mov r11, QWORD PTR [rax]");                            // inspect the stored Mixed tag before splitting the slot
+    emitter.instruction(&format!("cmp r11, {}", INVOKER_ARG_REF_CELL_TAG));     // is this slot a by-reference variadic marker?
+    emitter.instruction("je __rt_array_get_mixed_key_clone_ref_cell");          // follow the marker to the referenced storage
+    emitter.instruction(&format!("cmp r11, {}", ARRAY_GLOBAL_REF_CELL_TAG));    // is this slot an owning global-reference marker?
+    emitter.instruction("je __rt_array_get_mixed_key_clone_ref_cell");          // follow the marker to the referenced storage
+    emitter.instruction(&format!("cmp r11, {}", ARRAY_LOCAL_REF_CELL_TAG));     // is this slot an owning local-reference marker?
+    emitter.instruction("je __rt_array_get_mixed_key_clone_ref_cell");          // follow the marker to the referenced storage
     emitter.instruction("test QWORD PTR [rbp - 32], 2");                        // does this read feed an imminent nested write?
     emitter.instruction("jnz __rt_array_get_mixed_key_detach_indexed");         // split the selected zval after outer-array COW
     emitter.label("__rt_array_get_mixed_key_clone_boxed");
     emitter.instruction("mov r11, QWORD PTR [rax]");                            // inspect the stored Mixed tag before cloning the cell
     emitter.instruction(&format!("cmp r11, {}", INVOKER_ARG_REF_CELL_TAG));     // is this slot a by-reference variadic marker?
     emitter.instruction("je __rt_array_get_mixed_key_clone_ref_cell");          // dereference marker slots instead of returning the marker itself
+    emitter.instruction(&format!("cmp r11, {}", ARRAY_GLOBAL_REF_CELL_TAG));    // is this slot an owning global-reference marker?
+    emitter.instruction("je __rt_array_get_mixed_key_clone_ref_cell");          // both marker kinds expose the same referenced-cell layout
+    emitter.instruction(&format!("cmp r11, {}", ARRAY_LOCAL_REF_CELL_TAG));     // is this slot an owning local-reference marker?
+    emitter.instruction("je __rt_array_get_mixed_key_clone_ref_cell");          // every marker kind exposes the same referenced-cell layout
     emitter.instruction("test QWORD PTR [rbp - 32], 2");                        // does this read feed an imminent nested write?
     emitter.instruction("jnz __rt_array_get_mixed_key_retain_boxed");           // preserve the stored mutable cell identity for the writer
     emitter.instruction("call __rt_mixed_clone");                               // detach values while preserving shared PHP resource identity

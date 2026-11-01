@@ -35,6 +35,7 @@
 //!   caller-saved scratch only; the name helper's dynamic path and
 //!   `__rt_obj_prop_value` set up a frame because they call other runtime helpers.
 
+use crate::codegen_support::sentinels::emit_deref_reference_property_slot;
 use super::dump_dynamic_props::emit_load_dump_dyn_hash;
 use crate::codegen_support::abi;
 use crate::codegen_support::sentinels::{
@@ -201,6 +202,83 @@ pub fn emit_obj_prop_name(emitter: &mut Emitter) {
     }
 }
 
+/// Emits the visibility-mangled key for one initialized declared property.
+///
+/// Input: AArch64 x0=object x1=index / x86_64 rdi=object rsi=index.
+/// Output: the platform string result pair. An absent, out-of-range, or uninitialized
+/// property yields an empty string. Private and protected names retain PHP's NUL mangling.
+pub fn emit_obj_prop_cast_name(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: obj_prop_cast_name ---");
+    emitter.label_global("__rt_obj_prop_cast_name");
+
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cbz x0, __rt_obj_prop_cast_name_none");        // a non-object value has no cast property names
+            emitter.instruction("cmp x1, #0");                                  // reject negative property indexes before row scaling
+            emitter.instruction("b.lt __rt_obj_prop_cast_name_none");           // an invalid index yields the empty name
+            emitter.instruction("ldr x9, [x0]");                                // load the runtime class id from the object header
+            abi::emit_symbol_address(emitter, "x10", "_class_gc_desc_count");   // materialize the class descriptor table extent
+            emitter.instruction("ldr x10, [x10]");                              // load the registered class count
+            emitter.instruction("cmp x9, x10");                                 // is this runtime class id valid?
+            emitter.instruction("b.hs __rt_obj_prop_cast_name_none");           // unknown class ids expose no declared properties
+            abi::emit_symbol_address(emitter, "x11", "_class_serprop_ptrs");    // materialize the serialize-property descriptor table
+            emitter.instruction("ldr x11, [x11, x9, lsl #3]");                  // select this class's visibility-mangled descriptor
+            emitter.instruction("ldr x12, [x11]");                              // load the declared property row count
+            emitter.instruction("cmp x1, x12");                                 // is the requested property index in range?
+            emitter.instruction("b.hs __rt_obj_prop_cast_name_none");           // indexes past the descriptor yield an empty name
+            emitter.instruction("add x13, x11, #8");                            // skip the leading property count word
+            emitter.instruction("add x13, x13, x1, lsl #5");                    // select the 32-byte property descriptor row
+            emitter.instruction("ldr x14, [x13, #16]");                         // load the property slot byte offset
+            emitter.instruction("add x14, x0, x14");                            // resolve the absolute property slot address
+            emitter.instruction("ldr x15, [x14, #8]");                          // load the slot high word containing the init marker
+            emit_uninit_sentinel_aarch64(emitter, "x16");                       // materialize the typed-property uninitialized sentinel
+            emitter.instruction("cmp x15, x16");                                // has this property received a value?
+            emitter.instruction("b.eq __rt_obj_prop_cast_name_none");           // PHP omits uninitialized typed properties from casts
+            emitter.instruction("ldr x1, [x13]");                               // return the visibility-mangled key pointer
+            emitter.instruction("ldr x2, [x13, #8]");                           // return the visibility-mangled key length
+            emitter.instruction("ret");                                         // return the initialized property key
+            emitter.label("__rt_obj_prop_cast_name_none");
+            abi::emit_symbol_address(emitter, "x1", "_class_name_missing");     // reuse the shared empty-name storage
+            emitter.instruction("mov x2, #0");                                  // zero length signals an omitted property
+            emitter.instruction("ret");                                         // return the empty key
+        }
+        Arch::X86_64 => {
+            emitter.instruction("test rdi, rdi");                               // a non-object value has no cast property names
+            emitter.instruction("jz __rt_obj_prop_cast_name_none_x86");         // return the empty key for null pointers
+            emitter.instruction("cmp rsi, 0");                                  // reject negative property indexes before row scaling
+            emitter.instruction("jl __rt_obj_prop_cast_name_none_x86");         // an invalid index yields the empty key
+            emitter.instruction("mov r9, QWORD PTR [rdi]");                     // load the runtime class id from the object header
+            abi::emit_symbol_address(emitter, "r10", "_class_gc_desc_count");   // materialize the class descriptor table extent
+            emitter.instruction("mov r10, QWORD PTR [r10]");                    // load the registered class count
+            emitter.instruction("cmp r9, r10");                                 // is this runtime class id valid?
+            emitter.instruction("jae __rt_obj_prop_cast_name_none_x86");        // unknown class ids expose no declared properties
+            abi::emit_symbol_address(emitter, "r11", "_class_serprop_ptrs");    // materialize the serialize-property descriptor table
+            emitter.instruction("mov r11, QWORD PTR [r11 + r9 * 8]");           // select this class's visibility-mangled descriptor
+            emitter.instruction("mov r10, QWORD PTR [r11]");                    // load the declared property row count
+            emitter.instruction("cmp rsi, r10");                                // is the requested property index in range?
+            emitter.instruction("jae __rt_obj_prop_cast_name_none_x86");        // indexes past the descriptor yield an empty key
+            emitter.instruction("mov rax, rsi");                                // copy the property index for row scaling
+            emitter.instruction("shl rax, 5");                                  // convert the index to a 32-byte row offset
+            emitter.instruction("add rax, r11");                                // advance to the selected row
+            emitter.instruction("add rax, 8");                                  // skip the leading property count word
+            emitter.instruction("mov r10, QWORD PTR [rax + 16]");               // load the property slot byte offset
+            emitter.instruction("add r10, rdi");                                // resolve the absolute property slot address
+            emitter.instruction("mov r10, QWORD PTR [r10 + 8]");                // load the slot high word containing the init marker
+            emitter.instruction("movabs r8, 0x7ffffffffffffffd");               // materialize the typed-property uninitialized sentinel
+            emitter.instruction("cmp r10, r8");                                 // has this property received a value?
+            emitter.instruction("je __rt_obj_prop_cast_name_none_x86");         // PHP omits uninitialized typed properties from casts
+            emitter.instruction("mov rdx, QWORD PTR [rax + 8]");                // return the visibility-mangled key length
+            emitter.instruction("mov rax, QWORD PTR [rax]");                    // return the visibility-mangled key pointer
+            emitter.instruction("ret");                                         // return the initialized property key
+            emitter.label("__rt_obj_prop_cast_name_none_x86");
+            abi::emit_symbol_address(emitter, "rax", "_class_name_missing");    // reuse the shared empty-name storage
+            emitter.instruction("xor edx, edx");                                // zero length signals an omitted property
+            emitter.instruction("ret");                                         // return the empty key
+        }
+    }
+}
+
 /// Materializes the uninitialized-typed-property sentinel into an AArch64 register.
 ///
 /// Must match `codegen_support::sentinels::UNINITIALIZED_TYPED_PROPERTY_SENTINEL`
@@ -258,6 +336,7 @@ pub fn emit_obj_prop_value(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_obj_prop_value_null");                       // PHP omits it, so report PHP null
     emitter.instruction("ldr x1, [x14]");                                       // load the slot low word (the payload)
     emitter.instruction("ldr x0, [x13, #24]");                                  // load the property's runtime value tag
+    emit_deref_reference_property_slot(emitter, "x0", "x1", "x2", "x9");
     emit_resolve_tagged_scalar_property_tag(emitter, "x0", "x2");
 
     emitter.label("__rt_obj_prop_value_tagged");
@@ -330,6 +409,7 @@ fn emit_obj_prop_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_obj_prop_value_null_x86");                     // PHP omits it, so report PHP null
     emitter.instruction("mov rdi, QWORD PTR [r10]");                            // load the slot low word (the payload)
     emitter.instruction("mov rax, QWORD PTR [rax + 24]");                       // load the property's runtime value tag
+    emit_deref_reference_property_slot(emitter, "rax", "rdi", "rsi", "r8");
     emit_resolve_tagged_scalar_property_tag(emitter, "rax", "rsi");
 
     emitter.label("__rt_obj_prop_value_tagged_x86");

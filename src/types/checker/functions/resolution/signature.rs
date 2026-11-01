@@ -10,7 +10,6 @@
 //! - Callable-array target provenance is local-frame state. A body check starts with empty target
 //!   maps and restores the caller's maps before call-site validation resumes.
 
-use std::collections::HashMap;
 
 use crate::errors::CompileError;
 use crate::types::{FunctionSig, PhpType, TypeEnv};
@@ -28,6 +27,10 @@ impl Checker {
     ///
     /// Returns the resolved return type, or a `CompileError` if the body fails to type-check
     /// or return types are incompatible with any declared annotation.
+    ///
+    /// A recursive self-call that widens the parameters (`recursive_param_widenings`) re-runs the
+    /// body with the widened types until they stop changing. A round that failed is retried the
+    /// same way, since its error may only exist under the narrower types.
     pub(crate) fn resolve_function_signature(
         &mut self,
         name: &str,
@@ -35,9 +38,87 @@ impl Checker {
         param_types: Vec<(String, PhpType)>,
     ) -> Result<PhpType, CompileError> {
         self.completed_function_signatures.remove(name);
-        let mut local_env: TypeEnv = HashMap::new();
+        let result = self.resolve_function_signature_rounds(name, decl, param_types.clone());
+        // A call-site-specialized parameter type is an optimization, not PHP semantics: the
+        // parameter is untyped, so php reads `$o->secret` at run time and raises the catchable
+        // `Error` for an inaccessible name only when that call executes. Specializing the
+        // parameter to the one class a call passes turned that into a compile error -- or, when
+        // the failing round ran inside a loop's storage pre-pass (which drops its errors), into a
+        // silently poisoned signature whose placeholder `int` return type read a string as `0`.
+        // So a visibility refusal retries with the specialized parameters read as `mixed`.
+        match result {
+            Err(error) if Self::is_member_visibility_refusal(&error) => {
+                let mut widened = param_types.clone();
+                let mut changed = false;
+                for (idx, (_, param_ty)) in widened.iter_mut().enumerate() {
+                    let undeclared = decl.param_types.get(idx).map_or(true, |ann| ann.is_none());
+                    let by_ref = decl.ref_params.get(idx).copied().unwrap_or(false);
+                    if undeclared
+                        && !by_ref
+                        && matches!(param_ty, PhpType::Object(_) | PhpType::Union(_))
+                    {
+                        *param_ty = PhpType::Mixed;
+                        changed = true;
+                    }
+                }
+                if !changed {
+                    return Err(error);
+                }
+                self.resolve_function_signature_rounds(name, decl, widened)
+                    .or(Err(error))
+            }
+            other => other,
+        }
+    }
+
+    /// Returns whether every diagnostic is php's runtime visibility refusal for a property.
+    fn is_member_visibility_refusal(error: &CompileError) -> bool {
+        error.flatten().iter().all(|error| {
+            error.message.starts_with("Cannot access ") && error.message.contains(" property")
+        })
+    }
+
+    /// The body-check rounds of `resolve_function_signature`, without the visibility retry.
+    fn resolve_function_signature_rounds(
+        &mut self,
+        name: &str,
+        decl: &FnDecl,
+        param_types: Vec<(String, PhpType)>,
+    ) -> Result<PhpType, CompileError> {
+        // Types only widen, so a handful of rounds reaches the fixpoint; the bound only guards
+        // against a widening that oscillates.
+        const MAX_RECURSIVE_WIDENING_ROUNDS: usize = 8;
+        let mut param_types = param_types;
+        for _ in 0..MAX_RECURSIVE_WIDENING_ROUNDS {
+            self.recursive_param_widenings.remove(name);
+            let result = self.resolve_function_signature_once(name, decl, param_types.clone());
+            match self.recursive_param_widenings.remove(name) {
+                Some(widened) if widened != param_types => param_types = widened,
+                _ => return result,
+            }
+        }
+        self.resolve_function_signature_once(name, decl, param_types)
+    }
+
+    /// One body check of `resolve_function_signature` with fixed parameter types.
+    fn resolve_function_signature_once(
+        &mut self,
+        name: &str,
+        decl: &FnDecl,
+        param_types: Vec<(String, PhpType)>,
+    ) -> Result<PhpType, CompileError> {
+        let mut local_env: TypeEnv = TypeEnv::default();
         for (pname, pty) in &param_types {
-            local_env.insert(pname.clone(), pty.clone());
+            // A by-reference parameter this body widens is bound `mixed` for the whole body,
+            // which is the representation its cell really has once `scan_widened_ref_params` has
+            // decided so. Binding it at the DECLARED type instead would make the very store that
+            // caused the decision the hard `cannot reassign` error the decision exists to remove.
+            // Only the ENVIRONMENT is widened — `param_types` still builds the signature below,
+            // so the call boundary keeps validating arguments against the declared type.
+            local_env.insert(
+                pname.clone(),
+                self.widened_ref_param_env_type(name, pname, pty),
+            );
         }
         // Seed the request superglobals so a function body can read/write
         // `$_SERVER`/`$_GET`/`$_POST` without a `global` declaration. `or_insert`
@@ -47,6 +128,7 @@ impl Checker {
                 .entry((*name).to_string())
                 .or_insert_with(crate::superglobals::superglobal_type);
         }
+        Self::seed_vivified_array_locals(&mut local_env, &decl.body);
         let function_key = name.to_string();
         let callable_param_names: Vec<String> = param_types
             .iter()
@@ -83,6 +165,21 @@ impl Checker {
                     pname.clone(),
                     self.callable_sigs.get(pname).cloned(),
                     self.closure_return_types.get(pname).cloned(),
+                )
+            })
+            .collect();
+        // The callable TARGETS recorded for a variable (`$cb = [$obj, 'm']`, `$cb = f(...)`) are
+        // keyed by name alone. Every parameter is a fresh binding, so a caller's `$callback`
+        // must not describe this body's `$callback`: it did, and the preg prelude's own
+        // `preg_replace_callback($regex, $callback, ...)` re-checked the caller's
+        // `[$first, 'replace']` inside the prelude, where `$first` is undefined.
+        let hidden_callable_targets: Vec<_> = param_types
+            .iter()
+            .map(|(pname, _)| {
+                (
+                    pname.clone(),
+                    self.callable_array_targets.remove(pname),
+                    self.first_class_callable_targets.remove(pname),
                 )
             })
             .collect();
@@ -162,7 +259,12 @@ impl Checker {
                     .map(|(_, name)| name.clone()));
                 for stmt in &decl.body {
                     if let Err(error) = checker.check_stmt(stmt, &mut local_env) {
-                        errors.extend(error.flatten());
+                        // Naming the enclosing function is what lets `pipeline` recover the FILE:
+                        // after autoload expansion every spliced file shares one line-number
+                        // space, so `line:col` alone identifies nothing.
+                        errors.extend(
+                            error.within_declaration(function_key.as_str()).flatten(),
+                        );
                     }
                     checker.collect_return_infos(stmt, &local_env, &mut all_return_infos);
                     checker.collect_return_callable_sigs(
@@ -184,6 +286,24 @@ impl Checker {
         self.current_loop_storage_scope = previous_loop_storage_scope;
         self.current_by_ref_return = prev_by_ref_return;
         self.callable_param_names = saved_callable_param_names;
+        for (pname, array_target, first_class_target) in hidden_callable_targets {
+            match array_target {
+                Some(target) => {
+                    self.callable_array_targets.insert(pname.clone(), target);
+                }
+                None => {
+                    self.callable_array_targets.remove(&pname);
+                }
+            }
+            match first_class_target {
+                Some(target) => {
+                    self.first_class_callable_targets.insert(pname, target);
+                }
+                None => {
+                    self.first_class_callable_targets.remove(&pname);
+                }
+            }
+        }
         self.callable_array_targets = saved_callable_array_targets;
         self.callable_array_target_versions = saved_callable_array_target_versions;
         body_check_result?;
@@ -224,6 +344,7 @@ impl Checker {
                         &declared_ret,
                         &generator_ty,
                         true,
+                        true,
                         decl.span,
                         &format!("Function '{}' return type", name),
                     )?;
@@ -256,15 +377,15 @@ impl Checker {
                         &declared_ret,
                         &return_info.ty,
                         return_info.has_value,
+                        return_info.strict_types,
                         decl.span,
                         &format!("Function '{}' return type", name),
                     )?;
                 }
             }
-            return_type = if Self::is_generic_array_hint(&declared_ret)
-                && matches!(inferred_specific_array_type_from_infos(&all_return_infos), Some(_))
-            {
-                inferred_specific_array_type_from_infos(&all_return_infos).unwrap()
+            return_type = if Self::is_generic_array_hint(&declared_ret) {
+                Self::generic_array_return_contract(&all_return_infos)
+                .unwrap_or(declared_ret)
             } else {
                 declared_ret
             };
@@ -272,6 +393,9 @@ impl Checker {
             return_type = all_return_infos[0].ty.clone();
             for return_info in &all_return_infos[1..] {
                 return_type = Self::wider_type(&return_type, &return_info.ty);
+            }
+            if !decl.by_ref_return {
+                return_type = self.widen_return_for_fall_off(&decl.body, return_type);
             }
         }
 
@@ -417,52 +541,6 @@ impl Checker {
     }
 }
 
-/// Infers a concrete array type from return info when the declared return type is a generic `array` hint.
-///
-/// Returns the exact packed-or-keyed union when any branch already uses that storage and every
-/// other branch is array-shaped. Otherwise returns a concrete array type only when every
-/// non-void, non-empty return has the same shape. An empty indexed array is neutral because it
-/// can be materialized in either concrete storage family at the return boundary.
-fn inferred_specific_array_type_from_infos(
-    return_types: &[super::super::returns::ReturnInfo],
-) -> Option<PhpType> {
-    let has_php_array = return_types
-        .iter()
-        .any(|return_info| return_info.ty.is_php_array());
-    let all_array_family = return_types.iter().all(|return_info| {
-        return_info.ty.is_php_array()
-            || matches!(
-                return_info.ty,
-                PhpType::Void | PhpType::Array(_) | PhpType::AssocArray { .. }
-            )
-    });
-    if has_php_array && all_array_family {
-        return Some(PhpType::php_array());
-    }
-    let mut specific: Option<PhpType> = None;
-    let mut empty_array: Option<PhpType> = None;
-    for return_info in return_types {
-        let return_ty = &return_info.ty;
-        if matches!(return_ty, PhpType::Void) {
-            continue;
-        }
-        if !return_ty.is_php_array()
-            && !matches!(return_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
-        {
-            return None;
-        }
-        if matches!(return_ty, PhpType::Array(elem) if elem.as_ref() == &PhpType::Never) {
-            empty_array = Some(return_ty.clone());
-            continue;
-        }
-        match &specific {
-            None => specific = Some(return_ty.clone()),
-            Some(existing) if existing == return_ty => {}
-            _ => return None,
-        }
-    }
-    specific.or(empty_array)
-}
 
 /// Returns true when a function return type is a homogeneous array of callables.
 fn is_callable_array_return_type(return_type: &PhpType) -> bool {
@@ -484,14 +562,12 @@ fn matching_callable_sig(return_sigs: &[FunctionSig]) -> Option<FunctionSig> {
 }
 
 /// Computes the callable signature metadata for callable return codegen.
-fn callable_return_codegen_sig(mut sig: FunctionSig) -> FunctionSig {
-    for (idx, (_, ty)) in sig.params.iter_mut().enumerate() {
-        if !sig.declared_params.get(idx).copied().unwrap_or(false)
-            && !sig.ref_params.get(idx).copied().unwrap_or(false)
-            && matches!(ty, PhpType::Mixed)
-        {
-            *ty = PhpType::Int;
-        }
-    }
+///
+/// An undeclared parameter of the returned closure stays `mixed`, which is what the closure is
+/// compiled with (`__eir_closure_*(x: Heap(Mixed))`) and what a call through the descriptor boxes
+/// every argument to. It used to be rewritten to `int`, a contract the closure never had:
+/// `$f = make(); $f("str")` was refused "callable $f parameter $x expects Int, got Str", and so was
+/// Laravel's `array_reduce($pipes, $this->carry(), $destination)` with its closure carry.
+fn callable_return_codegen_sig(sig: FunctionSig) -> FunctionSig {
     sig
 }

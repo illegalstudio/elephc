@@ -19,6 +19,8 @@ use crate::value::RuntimeCell;
 unsafe extern "C" {
     /// Boxes a borrowed persistent native descriptor for a lazy Reflection default factory.
     pub(super) fn __elephc_eval_value_callable_from_raw(descriptor: usize) -> *mut RuntimeCell;
+    /// Moves the realpath cache epoch after an interpreted builtin changed a path.
+    pub(super) fn __rt_realpath_cache_invalidate();
     /// Wraps a PHP value in an independently owned runtime reference cell.
     pub(super) fn __elephc_eval_value_reference_new(value: *mut RuntimeCell) -> *mut RuntimeCell;
     /// Reports whether a boxed value is a runtime reference cell.
@@ -33,8 +35,23 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_resource_state(resource: *mut RuntimeCell, subtype: i64);
     /// Writes an already-dispatched diagnostic without invoking the user handler again.
     pub(super) fn __elephc_eval_warning_raw(message: *const u8, length: u64);
+    /// Records a diagnostic no user handler took as `error_get_last()`'s answer.
+    pub(super) fn __elephc_eval_record_last_error(
+        level: i64,
+        message: *const u8,
+        message_length: u64,
+        file: *const u8,
+        file_length: u64,
+        line: i64,
+    );
     /// Returns one owned boxed native backtrace frame or null after the final visible frame.
     pub(super) fn __elephc_eval_backtrace_entry(index: u64, options: i64) -> *mut RuntimeCell;
+    /// Publishes the interpreter's current file descriptor (`{ptr, len}`) and line as the call
+    /// site the next compiled callee records for its own frame.
+    pub(super) fn __elephc_eval_publish_native_call_site(descriptor: *const usize, line: i64);
+    /// Publishes the interpreter's current file descriptor (`{ptr, len}`) and line as the
+    /// location the next runtime warning names.
+    pub(super) fn __elephc_eval_publish_diagnostic_site(descriptor: *const usize, line: i64);
     /// Returns an owned boxed snapshot of the shared native resource inventory.
     pub(super) fn __elephc_eval_resource_inventory(selector: i64) -> *mut RuntimeCell;
     /// Gets or replaces the native PHP error-reporting mask.
@@ -98,6 +115,11 @@ unsafe extern "C" {
         value_ptr: *const u8,
         value_len: u64,
     ) -> *mut RuntimeCell;
+    pub(super) fn __elephc_eval_value_object_array_new(capacity: u64) -> *mut RuntimeCell;
+    pub(super) fn __elephc_eval_value_object_array_push(
+        array: *mut RuntimeCell,
+        object: *mut RuntimeCell,
+    ) -> *mut RuntimeCell;
     /// Allocates a boxed associative array with the requested initial capacity.
     pub(super) fn __elephc_eval_value_assoc_new(capacity: u64) -> *mut RuntimeCell;
     /// Reads a boxed array element after normalizing the supplied PHP key.
@@ -147,6 +169,9 @@ unsafe extern "C" {
         value: *mut RuntimeCell,
         scope_ptr: *const u8,
         scope_len: u64,
+        // A `\Closure`-typed property slot holds a descriptor, and converting a boxed eval
+        // callback into one needs the active eval context for the dynamic fallback.
+        context: *const c_void,
     ) -> u64;
     /// Registers a receiver/property guard and reports whether the magic setter may be entered.
     pub(super) fn __elephc_eval_magic_set_guard_push(
@@ -157,6 +182,14 @@ unsafe extern "C" {
     ) -> u64;
     /// Removes the supplied magic-setter guard from the native guard chain.
     pub(super) fn __elephc_eval_magic_set_guard_pop(node: *mut u64);
+    /// Stores one serialized property on the class-like's DECLARED slot, ignoring visibility.
+    pub(super) fn __elephc_eval_value_hydrate_property(
+        object: *mut RuntimeCell,
+        key_ptr: *const u8,
+        key_len: u64,
+        value: *mut RuntimeCell,
+    );
+
     /// Clears a native typed slot and returns any escaping exception through the owned output box.
     #[link_name = "__elephc_eval_value_typed_property_unset_v2"]
     pub(super) fn __elephc_eval_value_typed_property_unset(
@@ -214,6 +247,8 @@ unsafe extern "C" {
     ) -> *mut RuntimeCell;
     /// Returns the number of enumerable properties in the boxed object.
     pub(super) fn __elephc_eval_value_object_property_len(object: *mut RuntimeCell) -> u64;
+    /// Returns the compiled `(array)` cast of a boxed object, or null for a non-object.
+    pub(super) fn __elephc_eval_value_object_to_array(object: *mut RuntimeCell) -> *mut RuntimeCell;
     /// Returns the boxed property name at an enumeration position.
     pub(super) fn __elephc_eval_value_object_property_iter_key(
         object: *mut RuntimeCell,
@@ -254,6 +289,10 @@ unsafe extern "C" {
         args: *mut RuntimeCell,
         target: u64,
         repeated: u64,
+        // PHP's `ReflectionAttribute::__toString()` rendering: only the interpreter knows the
+        // literal arguments a runtime-declared class carries, so it renders and hands it over.
+        string_ptr: *const u8,
+        string_len: u64,
     ) -> *mut RuntimeCell;
     /// Constructs a boxed reflection owner from prepared member and hierarchy metadata.
     pub(super) fn __elephc_eval_reflection_owner_new(
@@ -296,11 +335,23 @@ unsafe extern "C" {
     ) -> *mut RuntimeCell;
     /// Returns the boxed source-file path recorded by generated reflection metadata.
     pub(super) fn __elephc_eval_reflection_source_file() -> *mut RuntimeCell;
+    pub(super) fn __elephc_eval_reflection_class_source_file(
+        class_name_ptr: *const u8,
+        class_name_len: u64,
+    ) -> *mut RuntimeCell;
     /// Returns flags from the generated metadata for a named native class.
     pub(super) fn __elephc_eval_reflection_class_flags(
         class_ptr: *const u8,
         class_len: u64,
     ) -> u64;
+    pub(super) fn __elephc_eval_reflection_class_name(
+        class_ptr: *const u8,
+        class_len: u64,
+    ) -> *mut RuntimeCell;
+    pub(super) fn __elephc_eval_reflection_class_doc_comment(
+        class_ptr: *const u8,
+        class_len: u64,
+    ) -> *mut RuntimeCell;
     /// Returns generated flags for the named native property.
     pub(super) fn __elephc_eval_reflection_property_flags(
         class_ptr: *const u8,
@@ -378,6 +429,8 @@ unsafe extern "C" {
         scope_ptr: *const u8,
         scope_len: u64,
         context: *const c_void,
+        target_class_ptr: *const u8,
+        target_class_len: u64,
     ) -> u64;
     #[link_name = "__elephc_eval_value_take_pending_throwable_v2"]
     /// Transfers the pending native Throwable box to the caller, clearing its pending slot.
@@ -409,6 +462,19 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_trait_exists(name_ptr: *const u8, name_len: u64) -> u64;
     /// Returns whether generated enum metadata contains the requested PHP name.
     pub(super) fn __elephc_eval_enum_exists(name_ptr: *const u8, name_len: u64) -> u64;
+    /// Returns the request-scoped load flag of a class the closed world carries only so an
+    /// existence probe can be answered, or null when the name is not one of those.
+    ///
+    /// The name must be LOWERCASE: php class names are case-insensitive and the generated table
+    /// stores them folded.
+    pub(super) fn __elephc_eval_class_deferred_lookup(
+        name_ptr: *const u8,
+        name_len: u64,
+    ) -> *mut u64;
+    /// Raises the load state of every class-like one compiler-included source declares: its
+    /// interfaces' activation cells and its probe-only classes' load flags. The path must be the
+    /// canonical spelling the generated source table stores.
+    pub(super) fn __elephc_eval_source_activate(path_ptr: *const u8, path_len: u64) -> u64;
     /// Returns the element count of a boxed array.
     pub(super) fn __elephc_eval_value_array_len(array: *mut RuntimeCell) -> u64;
     /// Tests whether the boxed value uses a supported array representation.
@@ -417,6 +483,12 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_value_is_null(value: *mut RuntimeCell) -> u64;
     /// Returns the runtime tag of the current dereferenced PHP value.
     pub(super) fn __elephc_eval_value_type_tag(value: *mut RuntimeCell) -> u64;
+    /// Rebinds a compiled closure descriptor to a new `$this` (null keeps the captures) and
+    /// returns the boxed copy.
+    pub(super) fn __elephc_eval_value_closure_bind(
+        closure: *mut RuntimeCell,
+        new_this: *mut RuntimeCell,
+    ) -> *mut RuntimeCell;
     /// Wraps a caller-owned boxed pointer slot for native callable reference binding.
     pub(super) fn __elephc_eval_value_invoker_ref_cell(
         slot: *mut *mut crate::value::RuntimeCell,
@@ -461,8 +533,17 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_fatal(message_ptr: *const u8, message_len: u64);
     /// Mirrors Magician's signal-dispatch region into the generated runtime Fiber guard.
     pub(super) fn __elephc_eval_set_pcntl_dispatching(active: u64);
+    /// Asks the next descriptor invoker to catch native throws for this interpreter call.
+    pub(super) fn __elephc_eval_request_invoker_boundary();
+    /// Enters (non-zero) or leaves (zero) one runtime `@` diagnostic-suppression scope.
+    pub(super) fn __elephc_eval_diag_suppression(enter: u64);
+    /// Returns the compiled runtime's userspace stream-wrapper table: 64 entries of
+    /// `(protocol_ptr, protocol_len, class_ptr, class_len)`, free when `protocol_ptr` is null.
+    pub(super) fn __elephc_eval_user_wrapper_table() -> *const u64;
     /// Allocates a boxed PHP null value.
     pub(super) fn __elephc_eval_value_null() -> *mut RuntimeCell;
+    /// Boxes the running `Fiber` object, or null on the main thread.
+    pub(super) fn __elephc_eval_value_fiber_current() -> *mut RuntimeCell;
     /// Allocates a boxed PHP boolean from the supplied truth value.
     pub(super) fn __elephc_eval_value_bool(value: u64) -> *mut RuntimeCell;
     /// Allocates a boxed PHP signed integer.
@@ -619,11 +700,58 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_value_release_v3(value: *mut RuntimeCell, throwable: *mut *mut RuntimeCell) -> i32;
     /// Retains a boxed native value and returns the same pointer.
     pub(super) fn __elephc_eval_value_retain(value: *mut RuntimeCell) -> *mut RuntimeCell;
+    /// Reads the generated runtime's live-heap byte counter (`$real_usage` selects the arena
+    /// bump offset instead). The counters live in generated-runtime storage, so eval has to ask
+    /// the compiled side rather than describe a heap of its own.
+    pub(super) fn __elephc_eval_memory_get_usage(real_usage: i64) -> i64;
+    /// Reads the generated runtime's peak live-heap byte counter, with the same flag.
+    pub(super) fn __elephc_eval_memory_get_peak_usage(real_usage: i64) -> i64;
     /// Retains the original boxed handler value installed by compiled AOT code.
     pub(super) fn __elephc_eval_pcntl_aot_signal_handler(signal: i64) -> *mut RuntimeCell;
-    /// Installs a callback with the v2 owned-Throwable output and 0/1/2 status protocol.
+    /// Installs the eval destructor callback (v2 owned-Throwable protocol) and the owner filter.
+    ///
+    /// The filter is ours: generated code reads it before calling into the registry. The callback
+    /// protocol and the symbol name are main's `_v2`.
     #[link_name = "__elephc_eval_install_dynamic_object_destructor_hook_v2"]
-    pub(super) fn __elephc_eval_install_dynamic_object_destructor_hook(callback: usize);
+    pub(super) fn __elephc_eval_install_dynamic_object_destructor_hook(
+        callback: usize,
+        owner_filter: usize,
+    );
+    /// Installs the optional eval `Generator` protocol callback.
+    pub(super) fn __elephc_eval_install_generator_protocol_hook(callback: usize);
+    /// Installs the optional eval class-autoload callback.
+    pub(super) fn __elephc_eval_install_class_autoload_hook(callback: usize);
+    /// Installs the optional eval unserialize-object callback.
+    pub(super) fn __elephc_eval_install_unserialize_object_hook(callback: usize);
+    /// Installs the optional compiled-clone adoption callback.
+    pub(super) fn __elephc_eval_install_object_clone_hook(callback: usize);
+    /// Installs the optional eval `ArrayAccess` read callback.
+    pub(super) fn __elephc_eval_install_array_access_hook(callback: usize);
+    /// Installs the optional eval object class-relation callback.
+    pub(super) fn __elephc_eval_install_object_relation_hook(callback: usize);
+    /// Installs the optional eval serialize-object callback.
+    pub(super) fn __elephc_eval_install_serialize_object_hook(callback: usize);
+    /// Installs the optional eval Throwable-trace callback.
+    pub(super) fn __elephc_eval_install_throwable_trace_hook(callback: usize);
+    /// Records the live interpreter frames into the trace slot of a Throwable eval created.
+    pub(super) fn __elephc_eval_value_capture_throwable_trace(object: *mut RuntimeCell);
+    /// Reports whether one COMPILED generator can still produce a value.
+    ///
+    /// These four are the other half of `__elephc_eval_install_generator_protocol_hook`: that one
+    /// lets compiled code drive an interpreted generator, and these let the interpreter drive a
+    /// compiled one. Both directions are needed the moment a compiled class and an eval-declared
+    /// subclass each own one end of a `yield from`. `generators::emit_generator_runtime` is
+    /// emitted unconditionally, so the symbols are always there to link against. Each probes for
+    /// an eval owner first, so calling one on an interpreter-owned generator is still correct.
+    pub(super) fn __elephc_eval_gen_valid(generator: *mut RuntimeCell) -> i64;
+    /// Returns an owned copy of one COMPILED generator's current value.
+    pub(super) fn __elephc_eval_gen_current(generator: *mut RuntimeCell) -> *mut RuntimeCell;
+    /// Returns an owned copy of one COMPILED generator's current key.
+    pub(super) fn __elephc_eval_gen_key(generator: *mut RuntimeCell) -> *mut RuntimeCell;
+    /// Advances one COMPILED generator to its next yield.
+    pub(super) fn __elephc_eval_gen_next(generator: *mut RuntimeCell);
+    /// Returns an owned copy of one COMPILED generator's `getReturn()` value.
+    pub(super) fn __elephc_eval_gen_get_return(generator: *mut RuntimeCell) -> *mut RuntimeCell;
     /// Installs eval object-edge, final-release, and boxed array-reference retirement callbacks.
     /// Installs child traversal, boxed-Throwable final release, and array reference retirement callbacks.
     #[link_name = "__elephc_eval_install_object_owner_hooks_v2"]

@@ -82,6 +82,43 @@ echo count($m);
     assert_eq!(out, "2");
 }
 
+/// Verifies `array_combine()` accepts gradual keys and associative values while retaining its
+/// runtime array type check.
+#[test]
+fn test_array_combine_generic_layouts_and_runtime_guards() {
+    let out = compile_and_run(
+        r#"<?php
+function maybeKeys(bool $available): array|false {
+    return $available ? ["left", "right"] : false;
+}
+$values = ["first" => 10, "second" => 20];
+$combined = array_combine(maybeKeys(true), $values);
+echo $combined["left"], ",", $combined["right"], "|";
+try {
+    array_combine(maybeKeys(false), $values);
+} catch (TypeError) {
+    echo "type";
+}
+"#,
+    );
+    assert_eq!(out, "10,20|type");
+}
+
+/// Verifies `array_combine()` rejects arrays with different cardinalities using `ValueError`.
+#[test]
+fn test_array_combine_mismatched_lengths_throw_value_error() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    array_combine(["only"], [1, 2]);
+} catch (ValueError) {
+    echo "length";
+}
+"#,
+    );
+    assert_eq!(out, "length");
+}
+
 /// Tests `array_flip($array)` — inverts values-to-keys on `[10, 20, 30]`, producing a map
 /// with 3 entries. Verifies count only.
 #[test]

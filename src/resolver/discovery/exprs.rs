@@ -136,6 +136,9 @@ pub(super) fn discover_expr(
                 discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
             }
         }
+        ExprKind::ArrayReference(value) => {
+            discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
+        }
         ExprKind::ArrayLiteralMixed(entries) => {
             for entry in entries.iter() {
                 for expr in entry.exprs() {
@@ -212,6 +215,9 @@ pub(super) fn discover_expr(
         ExprKind::ObjectClassName { object } => {
             discover_expr(object, base_dir, loaded_paths, include_chain, state, output)?;
         }
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+            discover_expr(property, base_dir, loaded_paths, include_chain, state, output)?;
+        }
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)
@@ -229,6 +235,9 @@ pub(super) fn discover_expr(
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. }
         | ExprKind::MagicConstant(_) => {}
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => {
+            discover_expr(receiver, base_dir, loaded_paths, include_chain, state, output)?;
+        }
         ExprKind::Yield { key, value } => {
             if let Some(k) = key {
                 discover_expr(k, base_dir, loaded_paths, include_chain, state, output)?;

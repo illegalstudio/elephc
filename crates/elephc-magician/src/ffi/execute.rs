@@ -14,7 +14,9 @@ use super::util::clear_result;
 #[cfg(not(test))]
 use super::util::write_outcome;
 use crate::abi::{ElephcEvalContext, ElephcEvalResult, ElephcEvalScope, ABI_VERSION};
-use crate::errors::EvalStatus;
+#[cfg(not(test))]
+use crate::context::EvalCallFrame;
+use crate::errors::{report_fatal_diagnostic, EvalParseDiagnostic, EvalStatus};
 use crate::eval_ir;
 use crate::eval_ir::EVAL_SCOPE_ACCESS_ALL;
 #[cfg(not(test))]
@@ -104,6 +106,7 @@ pub unsafe extern "C" fn __elephc_eval_execute(
     code_len: u64,
     out: *mut ElephcEvalResult,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_execute");
     std::panic::catch_unwind(|| unsafe { execute_eval_inner(ctx, scope, code_ptr, code_len, out, false) })
         .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
 }
@@ -154,9 +157,120 @@ unsafe fn execute_eval_inner(
     } else {
         slice::from_raw_parts(code_ptr, code_len)
     };
-    let program = parse_cache::parse_fragment_cached(code).map_err(|error| error.status());
+    trace_eval_input(ctx, code);
+    let parsed = parse_cache::parse_fragment_cached(code);
+    let program = parsed.as_deref().map_err(|error| error.status());
+    if let Err(err) = &parsed {
+        trace_eval_parse_error(ctx, code, err, err.status().code());
+    }
     clear_result(out);
-    execute_parsed_eval(ctx, scope, program.as_deref().map_err(|status| *status), out, allow_deferred_catalog)
+    let status = execute_parsed_eval(ctx, scope, program, out, allow_deferred_catalog);
+    // A parse failure is reported once, after the REPL has had its chance to recover the
+    // submission: the status still being the parse error's own means nothing recovered it.
+    if let Err(err) = &parsed {
+        if status == err.status().code() {
+            report_eval_parse_error(ctx, err);
+        }
+    }
+    status
+}
+
+/// Prints the eval bridge fatal for a non-zero status the generated handler cannot describe.
+///
+/// WHY THE BRIDGE PRINTS THIS AND THE ASSEMBLY NO LONGER DOES, which is the same argument the
+/// parse-error path already won. The generated handler carries a fixed string in the data
+/// section; it cannot name the file, the line, or what the interpreter was doing, because none
+/// of those exist until the fragment runs. So the side that owns the interpreter prints, and
+/// `codegen::lower_inst::builtins::eval::status` is left with the exit.
+///
+/// The prefixes are unchanged so this is a strict addition: with nothing recorded, the bytes
+/// written are exactly the constants the assembly used to emit. `status` is the ABI code, and
+/// any code other than the two anonymous fatals prints nothing — a parse error has already
+/// printed its own diagnostic, and an uncaught Throwable is reported by the runtime unwinder.
+///
+/// # Safety
+/// Called from generated assembly with no arguments beyond the ABI status code.
+#[no_mangle]
+pub extern "C" fn __elephc_eval_report_runtime_fatal(status: i64) {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_report_runtime_fatal");
+    let _ = std::panic::catch_unwind(|| {
+        let prefix = if status == i64::from(EvalStatus::RuntimeFatal.code()) {
+            "Fatal error: eval() runtime failed"
+        } else if status == i64::from(EvalStatus::UnsupportedConstruct.code()) {
+            "Fatal error: eval() fragment uses an unsupported construct"
+        } else {
+            return;
+        };
+        let clause = crate::errors::take_eval_runtime_failure()
+            .map(|failure| failure.clause())
+            .unwrap_or_default();
+        crate::errors::report_bridge_fatal_diagnostic(&format!("{prefix}{clause}\n"));
+    });
+}
+
+/// Returns whether opt-in eval bridge tracing is enabled for this process.
+fn eval_trace_enabled() -> bool {
+    crate::eval_trace::enabled()
+}
+
+/// Emits the exact eval input and propagated call-site metadata before cache lookup.
+///
+/// # Safety
+/// `ctx` must be null or a valid eval context handle supplied to the FFI entry point.
+unsafe fn trace_eval_input(ctx: *const ElephcEvalContext, code: &[u8]) {
+    if !eval_trace_enabled() {
+        return;
+    }
+    let _ = std::panic::catch_unwind(|| {
+        let (file, dir, line, file_override) = unsafe { ctx.as_ref() }
+            .map(ElephcEvalContext::call_site)
+            .unwrap_or_else(|| (String::new(), String::new(), 0, None));
+        eprintln!(
+            "[elephc-eval-trace] phase=input ctx={ctx:p} code_ptr={:p} len={} file={file:?} dir={dir:?} line={line} file_override={file_override:?}",
+            code.as_ptr(),
+            code.len(),
+        );
+    });
+}
+
+/// Prints the PHP parse diagnostic for a fragment the interpreter could not parse.
+///
+/// The generated status handler cannot name the file, the line or the token — the assembly it
+/// emits carries a fixed string — so the side that owns the parser prints the diagnostic and
+/// the generated code only exits.
+///
+/// # Safety
+/// `ctx` must be null or a valid eval context handle supplied to the FFI entry point.
+unsafe fn report_eval_parse_error(ctx: *const ElephcEvalContext, error: &EvalParseDiagnostic) {
+    let (file, _, line, _) = unsafe { ctx.as_ref() }
+        .map(ElephcEvalContext::call_site)
+        .unwrap_or_else(|| (String::new(), String::new(), 0, None));
+    report_fatal_diagnostic(&error.eval_message(&file, line));
+}
+
+/// Emits the precise parser failure while preserving the original ABI status.
+///
+/// # Safety
+/// `ctx` must be null or a valid eval context handle supplied to the FFI entry point.
+unsafe fn trace_eval_parse_error(
+    ctx: *const ElephcEvalContext,
+    code: &[u8],
+    error: &EvalParseDiagnostic,
+    status: i32,
+) {
+    if !eval_trace_enabled() {
+        return;
+    }
+    let _ = std::panic::catch_unwind(|| {
+        let (file, dir, line, file_override) = unsafe { ctx.as_ref() }
+            .map(ElephcEvalContext::call_site)
+            .unwrap_or_else(|| (String::new(), String::new(), 0, None));
+        eprintln!(
+            "[elephc-eval-trace] phase=parse_error ctx={ctx:p} code_ptr={:p} len={} status={status} error={error:?} file={file:?} dir={dir:?} line={line} file_override={file_override:?}",
+            code.as_ptr(),
+            code.len(),
+        );
+    });
 }
 
 /// Executes a parsed eval program in production builds using elephc runtime hooks.
@@ -176,6 +290,7 @@ unsafe fn execute_parsed_eval(
         ctx
     } else {
         fallback_context = ElephcEvalContext::new();
+        crate::context::sync_global_eval_aot_metadata(&mut fallback_context);
         &mut fallback_context
     };
     let mut fallback_scope;
@@ -202,9 +317,17 @@ unsafe fn execute_parsed_eval(
         context.sync_global_eval_classes();
     }
     let outcome = program.and_then(|program| {
+        // php describes `eval()` as a frame too, named `eval` and carrying no arguments -- the code
+        // it ran is not one. Without it a function defined in evaluated code reported its caller as
+        // whatever lay below the eval.
+        let frame = EvalCallFrame::function("eval", None, context);
+        context.push_call_frame(frame);
         context.push_eval_backtrace_boundary();
+        let previous_site = context.enter_eval_code_site();
         let outcome = interpreter::execute_program_outcome_with_context(context, program, scope, &mut values);
+        context.leave_eval_code_site(previous_site);
         context.pop_eval_backtrace_boundary();
+        context.pop_call_frame();
         outcome
     });
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -217,7 +340,17 @@ unsafe fn execute_parsed_eval(
             Ok(outcome) => write_outcome(outcome, out).code(),
             Err(status) => status.code(),
         },
-        Err(status) => status.code(),
+        Err(status) => {
+            if eval_trace_enabled() {
+                let call_site = context.call_site();
+                eprintln!(
+                    "[elephc-eval-trace] phase=runtime_error status={status:?} file={:?} line={}",
+                    call_site.0,
+                    call_site.2,
+                );
+            }
+            status.code()
+        }
     }
 }
 

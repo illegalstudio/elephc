@@ -33,6 +33,23 @@ impl Checker {
             ExprKind::IntLiteral(_) => Ok(PhpType::Int),
             ExprKind::FloatLiteral(_) => Ok(PhpType::Float),
             ExprKind::Variable(name) => self.variable_type_or_eval_dynamic(name, expr.span, env),
+            ExprKind::ArrayReference(inner) => {
+                self.infer_type(inner, env)?;
+                // `[&$this->pauseExpiry, ...]` (Symfony's `NativeResponse`): the literal's slot
+                // shares the property's cell, which must then hold a boxed value.
+                if let ExprKind::PropertyAccess { object, property } = &inner.kind {
+                    if !crate::types::checker::stmt_check::widen_property_for_element_reference(
+                        self, object, property, env,
+                    )? {
+                        return Err(CompileError::new(
+                            expr.span,
+                            "A reference to a typed property in an array literal is not supported \
+                             by the native backend",
+                        ));
+                    }
+                }
+                Ok(PhpType::Mixed)
+            }
             ExprKind::Negate(inner) => {
                 let ty = self.infer_type(inner, env)?;
                 if crate::types::object_operators::binary_plan(&crate::parser::ast::BinOp::Sub, &PhpType::Int, &ty).is_some() {
@@ -54,6 +71,11 @@ impl Checker {
                     // `-5` in php — and the union stays the union: negation cannot turn a float
                     // into an int or the other way round.
                     ref ty if ty.is_int_float_union() => Ok(ty.clone()),
+                    PhpType::Union(members)
+                        if members.iter().all(is_numeric_negate_member_type) =>
+                    {
+                        Ok(PhpType::Mixed)
+                    }
                     _ => Err(CompileError::new(
                         expr.span,
                         "Cannot negate a non-numeric value",
@@ -90,6 +112,9 @@ impl Checker {
                 // overflow boundary. Incrementing it again stays `int|float`, and refusing it
                 // would make the second `$i++` in a row a compile error.
                 Some(ty) if ty.is_int_float_union() => Ok(ty.clone()),
+                Some(PhpType::Union(members)) if members.iter().all(is_inc_dec_member_type) => {
+                    Ok(PhpType::Mixed)
+                }
                 Some(other) => Err(CompileError::new(
                     expr.span,
                     &increment_type_error(name, other),
@@ -118,6 +143,9 @@ impl Checker {
                 Some(PhpType::Float) => Ok(PhpType::Float),
                 // See the pre-form arm: this is the type a previous `++` produced.
                 Some(ty) if ty.is_int_float_union() => Ok(ty.clone()),
+                Some(PhpType::Union(members)) if members.iter().all(is_inc_dec_member_type) => {
+                    Ok(PhpType::Mixed)
+                }
                 Some(other) => Err(CompileError::new(
                     expr.span,
                     &increment_type_error(name, other),
@@ -204,7 +232,8 @@ impl Checker {
                     for c in conditions {
                         self.infer_type(c, env)?;
                     }
-                    let ty = self.match_arm_result_type(result, env)?;
+                    let arm_env = self.match_arm_narrowed_env(subject, conditions, env)?;
+                    let ty = self.match_arm_result_type(result, &arm_env)?;
                     arm_types.push((result, ty.clone()));
                     result_ty = Some(match result_ty {
                         Some(acc) => merge_match_arm_result_type(self, acc, ty),
@@ -240,10 +269,13 @@ impl Checker {
                         continue;
                     };
                     let source_ty = self.infer_type(inner, env);
-                    has_hash_spread = matches!(
-                        source_ty.as_ref().map(|ty| ty.codegen_repr()),
-                        Ok(PhpType::AssocArray { .. } | PhpType::Mixed)
-                    );
+                    // An `iterable` source (a variadic that received named arguments) and an object
+                    // that is iterable can carry string keys too, so they make the literal a hash.
+                    has_hash_spread = match source_ty.as_ref().map(|ty| ty.codegen_repr()) {
+                        Ok(PhpType::AssocArray { .. } | PhpType::Iterable | PhpType::Mixed) => true,
+                        Ok(PhpType::Object(name)) => self.object_type_implements_iterable(&name),
+                        _ => false,
+                    };
                     scanned_sources.push(source_ty);
                     if has_hash_spread {
                         break;
@@ -296,14 +328,23 @@ impl Checker {
                 let (then_ty, else_ty) = if let Some(guard) =
                     self.guard_narrowing(condition, env)?
                 {
+                    // A branch the guard rules out cannot run for this binding: league/commonmark's
+                    // `is_int($stackBottom) ? $stackBottom : self::getIndex($stackBottom)` over an
+                    // `int` specialization. It is checked with the binding `mixed`, so nothing it
+                    // does with it is refused, and only the live branch types the result.
                     let mut then_env = env.clone();
-                    then_env.insert(guard.var.clone(), guard.then_ty);
+                    let then_ty = if guard.then_dead { PhpType::Mixed } else { guard.then_ty };
+                    then_env.insert(guard.var.clone(), then_ty);
                     let mut else_env = env.clone();
-                    else_env.insert(guard.var, guard.else_ty);
-                    (
-                        self.match_arm_result_type(then_expr, &then_env)?,
-                        self.match_arm_result_type(else_expr, &else_env)?,
-                    )
+                    let else_ty = if guard.else_dead { PhpType::Mixed } else { guard.else_ty };
+                    else_env.insert(guard.var, else_ty);
+                    let then_result = self.match_arm_result_type(then_expr, &then_env)?;
+                    let else_result = self.match_arm_result_type(else_expr, &else_env)?;
+                    match (guard.then_dead, guard.else_dead) {
+                        (false, true) => (then_result.clone(), then_result),
+                        (true, false) => (else_result.clone(), else_result),
+                        _ => (then_result, else_result),
+                    }
                 } else {
                     (
                         self.match_arm_result_type(then_expr, env)?,
@@ -329,20 +370,33 @@ impl Checker {
                 let [(_, value_ty), (_, default_ty)] = arms;
                 Ok(merge_match_arm_result_type(self, value_ty, default_ty))
             }
+            // A `throw` EXPRESSION never produces a value: it is the bottom type, accepted wherever
+            // a value is wanted (`new LogicException(throw new RuntimeException(..))`, an argument
+            // of a call, the arm of a `??`), and it must not read as a `null` of type `void`.
             ExprKind::Throw(inner) => {
                 let thrown_ty = self.infer_type(inner, env)?;
                 match thrown_ty {
                     PhpType::Object(type_name)
                         if self.object_type_implements_throwable(&type_name)
+                            || self.unresolved_new_object_defers_to_runtime(inner, &type_name)
+                            || self.absent_class_defers_to_runtime(&type_name)
                             || self.object_type_may_be_eval_declared(&type_name) =>
                     {
-                        Ok(PhpType::Void)
+                        Ok(PhpType::Never)
                     }
-                    PhpType::Mixed if self.eval_barrier_active => Ok(PhpType::Void),
+                    PhpType::Mixed if self.eval_barrier_active => Ok(PhpType::Never),
                     PhpType::Object(_) => Err(CompileError::new(
                         expr.span,
                         "Type error: throw requires an object implementing Throwable",
                     )),
+                    // `Never` reaches here only from a guard the checker has just proven
+                    // cannot be taken, so the statement is unreachable rather than wrong.
+                    PhpType::Never => Ok(PhpType::Never),
+                    ref ty
+                        if crate::types::checker::type_compat::type_is_gradual_object_family(ty) =>
+                    {
+                        Ok(PhpType::Never)
+                    }
                     _ => Err(CompileError::new(
                         expr.span,
                         "Type error: throw requires an object value",
@@ -388,6 +442,33 @@ impl Checker {
             _ => unreachable!("non-basic expression routed to basic inference"),
         }
     }
+}
+
+/// Returns whether one union member supports PHP numeric unary negation.
+fn is_numeric_negate_member_type(ty: &PhpType) -> bool {
+    matches!(
+        ty,
+        PhpType::Int
+            | PhpType::Float
+            | PhpType::Bool
+            | PhpType::False
+            | PhpType::Void
+            | PhpType::Mixed
+    )
+}
+
+/// Returns whether one union member supports PHP's local increment/decrement operators.
+fn is_inc_dec_member_type(ty: &PhpType) -> bool {
+    matches!(
+        ty,
+        PhpType::Int
+            | PhpType::Float
+            | PhpType::Bool
+            | PhpType::False
+            | PhpType::Void
+            | PhpType::Str
+            | PhpType::Mixed
+    )
 }
 
 /// Formats the diagnostic for `++`/`--` applied to a local elephc cannot update in place.

@@ -60,7 +60,7 @@ pub(super) fn reflection_class_is_cloneable(
     class_name: &str,
     info: &crate::types::ClassInfo,
     is_enum: bool,
-    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, crate::types::ClassInfo>,
 ) -> bool {
     if !crate::types::builtin_classes::class_allows_clone(class_name, classes) { return false; }
     if info.is_abstract || is_enum || reflection_class_has_runtime_managed_storage(class_name) {
@@ -130,7 +130,13 @@ pub(super) fn reflection_class_has_runtime_managed_storage(class_name: &str) -> 
 /// user code never declares.
 pub(super) fn reflection_class_like_is_internal(class_name: &str) -> bool {
     let trimmed = class_name.trim_start_matches('\\');
-    elephc_builtin_contract::lookup_class(trimmed).is_some()
+    // A class php adds after the compile profile (`SortDirection` is 8.6) is a user class here:
+    // an 8.5 program declares it itself, through a polyfill stub.
+    elephc_builtin_contract::lookup_class(trimmed).is_some_and(|class| {
+        class
+            .since
+            .is_none_or(|since| crate::codegen_support::compile_php_version() >= since)
+    })
         || php_symbol_key(trimmed) == php_symbol_key(UNCATALOGUED_INTERNAL_CLASS)
 }
 
@@ -147,7 +153,7 @@ mod internal_class_tests {
     fn internal_predicate_follows_the_class_catalog() {
         for name in [
             "Iterator", "\\Exception", "ReflectionClass", "Fiber", "DateTime", "PDO", "mysqli",
-            "CurlHandle", "SessionHandler", "SortDirection",
+            "CurlHandle", "SessionHandler",
         ] {
             assert!(reflection_class_like_is_internal(name), "{name}");
         }

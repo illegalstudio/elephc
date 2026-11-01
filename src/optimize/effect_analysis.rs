@@ -69,9 +69,13 @@ pub(super) fn compute_program_callable_effects(
                             let mut instance_method_updates = Vec::new();
 
                             for (name, function) in &function_bodies {
-                                let effect = never_declared_effect(
+                                let effect = callable_boundary_effect(
                                     function.declared_never,
-                                    parameter_guard_effect(function.parameter_guard_may_throw, block_effect(&function.body)),
+                                    function.has_typed_parameters,
+                                    parameter_guard_effect(
+                                        function.parameter_guard_may_throw,
+                                        block_effect(&function.body),
+                                    ),
                                 );
                                 if function_effects.get(name).copied() != Some(effect) {
                                     function_updates.push((name.clone(), effect));
@@ -83,8 +87,11 @@ pub(super) fn compute_program_callable_effects(
                                     Some(method.context.clone()),
                                     || block_effect(&method.body),
                                 );
-                                let effect = never_declared_effect(method.declared_never,
-                                    parameter_guard_effect(method.parameter_guard_may_throw, effect));
+                                let effect = callable_boundary_effect(
+                                    method.declared_never,
+                                    method.has_typed_parameters,
+                                    parameter_guard_effect(method.parameter_guard_may_throw, effect),
+                                );
                                 if static_method_effects.get(name).copied() != Some(effect) {
                                     static_method_updates.push((name.clone(), effect));
                                 }
@@ -95,8 +102,11 @@ pub(super) fn compute_program_callable_effects(
                                     Some(method.context.clone()),
                                     || block_effect(&method.body),
                                 );
-                                let effect = never_declared_effect(method.declared_never,
-                                    parameter_guard_effect(method.parameter_guard_may_throw, effect));
+                                let effect = callable_boundary_effect(
+                                    method.declared_never,
+                                    method.has_typed_parameters,
+                                    parameter_guard_effect(method.parameter_guard_may_throw, effect),
+                                );
                                 if instance_method_effects.get(name).copied() != Some(effect) {
                                     instance_method_updates.push((name.clone(), effect));
                                 }
@@ -153,8 +163,9 @@ fn collect_program_function_bodies<'a>(
         match &stmt.kind {
             StmtKind::FunctionDecl {
                 name,
-                body,
                 params,
+                variadic_type,
+                body,
                 return_type,
                 ..
             } => {
@@ -164,6 +175,10 @@ fn collect_program_function_bodies<'a>(
                         body,
                         declared_never: is_never_return_type(return_type),
                         parameter_guard_may_throw: params.iter().any(|(_, ty, _, _)| type_guard_may_throw(ty.as_ref())),
+                        has_typed_parameters: callable_has_typed_parameters(
+                            params,
+                            variadic_type.as_ref(),
+                        ),
                     },
                 );
             }
@@ -199,6 +214,10 @@ fn collect_program_static_method_bodies<'a>(
                                 body: &method.body,
                                 declared_never: is_never_return_type(&method.return_type),
                                 parameter_guard_may_throw: method.params.iter().any(|(_, ty, _, _)| type_guard_may_throw(ty.as_ref())),
+                                has_typed_parameters: callable_has_typed_parameters(
+                                    &method.params,
+                                    method.variadic_type.as_ref(),
+                                ),
                             },
                         );
                     }
@@ -236,6 +255,10 @@ fn collect_program_instance_method_bodies<'a>(
                                 body: &method.body,
                                 declared_never: is_never_return_type(&method.return_type),
                                 parameter_guard_may_throw: method.params.iter().any(|(_, ty, _, _)| type_guard_may_throw(ty.as_ref())),
+                                has_typed_parameters: callable_has_typed_parameters(
+                                    &method.params,
+                                    method.variadic_type.as_ref(),
+                                ),
                             },
                         );
                     }
@@ -276,8 +299,7 @@ fn collect_instance_dispatch_metadata_into(
                 methods,
                 ..
             } => {
-                metadata.has_internal_object_operators |= elephc_builtin_contract::lookup_class(name)
-                    .is_some_and(|class| class.operators.is_some());
+                metadata.has_internal_object_operators |= elephc_builtin_contract::is_operator_class_name(name);
                 let private_methods = methods
                     .iter()
                     .filter(|method| {
@@ -350,15 +372,32 @@ fn is_never_return_type(return_type: &Option<TypeExpr>) -> bool {
     matches!(return_type, Some(TypeExpr::Never))
 }
 
-/// Adjusts an effect when the callable has a `never` return type. A `never` function is
-/// considered to have side effects because it exits abruptly (e.g., via exit/die or an
-/// infinite loop) and the PHP-visible control flow never continues past it.
-fn never_declared_effect(declared_never: bool, effect: Effect) -> Effect {
+/// Returns whether parameter binding can enforce a declared runtime type at the call boundary.
+fn callable_has_typed_parameters(
+    params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
+    variadic_type: Option<&TypeExpr>,
+) -> bool {
+    variadic_type.is_some() || params.iter().any(|(_, ty, _, _)| ty.is_some())
+}
+
+/// Adds effects imposed by the callable declaration rather than by its body.
+///
+/// A `never` callable exits abruptly, so it is considered to have side effects because the
+/// PHP-visible control flow never continues past it. A typed parameter may raise a catchable
+/// `TypeError` while binding a runtime value before the body begins, so pure bodies do not make
+/// such calls exception-free.
+fn callable_boundary_effect(
+    declared_never: bool,
+    has_typed_parameters: bool,
+    mut effect: Effect,
+) -> Effect {
     if declared_never {
-        effect.with_side_effects()
-    } else {
-        effect
+        effect = effect.with_side_effects();
     }
+    if has_typed_parameters {
+        effect = effect.with_may_throw();
+    }
+    effect
 }
 
 /// Returns whether binding this declared parameter can raise before the body runs.

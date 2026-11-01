@@ -48,6 +48,16 @@ pub fn parse_block(tokens: &[SpannedToken], pos: &mut usize) -> Result<Vec<Stmt>
     }
 }
 
+/// Parses and normalizes a complete function-like executable body.
+pub(crate) fn parse_executable_block(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+) -> Result<Vec<Stmt>, CompileError> {
+    let mut body = parse_block(tokens, pos)?;
+    crate::parser::terminal_goto::desugar_scope(&mut body)?;
+    Ok(body)
+}
+
 /// Parses either a braced block or one braceless statement body.
 pub fn parse_body(tokens: &[SpannedToken], pos: &mut usize) -> Result<Vec<Stmt>, CompileError> {
     if *pos < tokens.len() && tokens[*pos].0 == Token::LBrace {

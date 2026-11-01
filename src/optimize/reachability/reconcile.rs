@@ -18,13 +18,20 @@ use crate::types::{CheckResult, ClassInfo};
 use super::graph::{ClassKind, DeclarationIndex, Reachability};
 
 /// Mutates checker metadata so every declaration table agrees with the pruned AST.
-pub(super) fn check_result(
+pub(super) fn check_result<S1, S2>(
     check: &mut CheckResult,
     reachability: &Reachability,
     declarations: &DeclarationIndex,
-    original_builtin_libraries: &HashSet<String>,
-    remaining_builtin_libraries: &HashSet<String>,
-) {
+    // Hasher-generic for the same reason as `retain_function_keyed_map`: these two sets are built
+    // by the reachability phase, which keys with `crate::fast_hash`, while everything they are
+    // compared against belongs to `CheckResult` and is std-hashed.
+    original_builtin_libraries: &std::collections::HashSet<String, S1>,
+    remaining_builtin_libraries: &std::collections::HashSet<String, S2>,
+)
+where
+    S1: std::hash::BuildHasher,
+    S2: std::hash::BuildHasher,
+{
     let declared_extern_libraries: HashSet<String> = check
         .extern_functions
         .iter()
@@ -78,11 +85,21 @@ fn retain_free_function_metadata(
 }
 
 /// Filters a function-keyed checker map only when its key belongs to a source declaration.
-fn retain_function_keyed_map<T>(
+/// Generic over the two sets' HASHERS, not just their contents.
+///
+/// The map being trimmed belongs to `CheckResult` and is std-hashed; the keep-set and the
+/// declaration index come from `reachability::graph`, which keys with the fast hasher
+/// (`crate::fast_hash`). Naming the hasher parameters is what lets one helper serve both without
+/// rebuilding either side into the other's hasher just to satisfy the signature.
+fn retain_function_keyed_map<T, S1, S2>(
     map: &mut HashMap<String, T>,
-    reachable: &HashSet<String>,
-    declared: &HashMap<String, super::usage::Usage>,
-) {
+    reachable: &std::collections::HashSet<String, S1>,
+    declared: &std::collections::HashMap<String, super::usage::Usage, S2>,
+)
+where
+    S1: std::hash::BuildHasher,
+    S2: std::hash::BuildHasher,
+{
     map.retain(|name, _| {
         let key = php_symbol_key(name);
         !declared.contains_key(&key) || reachable.contains(&key)
@@ -143,7 +160,7 @@ fn retain_class_metadata(
 /// every method NAME on an instantiated class for exactly this reason; this is the guard that
 /// says so out loud if that ever stops being true.
 #[cfg(debug_assertions)]
-fn assert_instantiation_vtable_slots_aligned(classes: &HashMap<String, ClassInfo>) {
+fn assert_instantiation_vtable_slots_aligned(classes: &crate::fast_hash::FastMap<String, ClassInfo>) {
     // `Box<int>` and `Box<string>` share the template `box`; an ordinary class has no `<` and
     // is never grouped with anything.
     let mut by_template: HashMap<&str, Vec<(&String, &ClassInfo)>> = HashMap::new();
@@ -183,7 +200,7 @@ fn assert_instantiation_vtable_slots_aligned(classes: &HashMap<String, ClassInfo
 
 /// Asserts shared virtual methods retain one slot number across each live inheritance edge.
 #[cfg(debug_assertions)]
-fn assert_inherited_vtable_slots_aligned(classes: &HashMap<String, ClassInfo>) {
+fn assert_inherited_vtable_slots_aligned(classes: &crate::fast_hash::FastMap<String, ClassInfo>) {
     let by_key: HashMap<_, _> = classes
         .iter()
         .map(|(name, info)| (php_symbol_key(name), info))
@@ -331,12 +348,12 @@ fn prune_class_methods(
 }
 
 /// Returns whether a method is reachable through its visible, implementing, or declaring class.
-fn method_is_live(
+fn method_is_live<S1: std::hash::BuildHasher, S2: std::hash::BuildHasher>(
     class_key: &str,
     method: &str,
     is_static: bool,
-    implementations: &HashMap<String, String>,
-    declaring: &HashMap<String, String>,
+    implementations: &std::collections::HashMap<String, String, S1>,
+    declaring: &std::collections::HashMap<String, String, S2>,
     reachability: &Reachability,
 ) -> bool {
     let visible = (
@@ -361,7 +378,10 @@ fn method_is_live(
 }
 
 /// Retains string-keyed map entries selected by one canonical method keep-set.
-fn retain_keys<T>(map: &mut HashMap<String, T>, keep: &HashSet<String>) {
+fn retain_keys<T, S: std::hash::BuildHasher>(
+    map: &mut std::collections::HashMap<String, T, S>,
+    keep: &HashSet<String>,
+) {
     map.retain(|key, _| keep.contains(key));
 }
 
@@ -416,12 +436,17 @@ fn retain_callable_parameter_metadata(
 }
 
 /// Removes libraries contributed exclusively by declarations and builtin calls that no longer survive.
-fn recompute_required_libraries(
+fn recompute_required_libraries<S1, S2>(
     check: &mut CheckResult,
     declared_extern_libraries: &HashSet<String>,
-    original_builtin_libraries: &HashSet<String>,
-    remaining_builtin_libraries: &HashSet<String>,
-) {
+    // Hasher-generic, forwarded straight from `check_result`; see its comment.
+    original_builtin_libraries: &std::collections::HashSet<String, S1>,
+    remaining_builtin_libraries: &std::collections::HashSet<String, S2>,
+)
+where
+    S1: std::hash::BuildHasher,
+    S2: std::hash::BuildHasher,
+{
     let remaining_extern_libraries: HashSet<String> = check
         .extern_functions
         .values()

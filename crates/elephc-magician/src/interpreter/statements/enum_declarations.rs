@@ -38,7 +38,9 @@ pub(in crate::interpreter) fn execute_enum_decl_stmt(
     let enum_decl = expand_eval_enum_traits(enum_decl, context)?;
     let enum_decl = &enum_decl;
     validate_eval_enum_decl(enum_decl, context, values)?;
+    let declaration_file = eval_declaration_source_file(context);
     if context.define_enum(enum_decl.clone()) {
+        context.set_class_source_file(enum_decl.name(), declaration_file);
         initialize_eval_declared_constants(
             enum_decl.name(),
             enum_decl.constants(),
@@ -131,7 +133,7 @@ pub(super) fn insert_eval_enum_synthetic_method_names(
 /// Validates enum metadata before it is inserted into the dynamic context.
 pub(super) fn validate_eval_enum_decl(
     enum_decl: &EvalEnum,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     validate_eval_enum_attribute_targets(enum_decl)?;
@@ -141,11 +143,11 @@ pub(super) fn validate_eval_enum_decl(
     let enum_class = enum_decl.as_class_metadata();
     validate_eval_class_modifiers(&enum_class, context, values)?;
     validate_eval_enum_interfaces(enum_decl, &enum_class, context, values)?;
-    validate_declared_class_builtin_interface_members(&enum_class, context)?;
+    validate_declared_class_builtin_interface_members(&enum_class, context, values)?;
     validate_declared_class_aot_interface_members(&enum_class, context, values)?;
-    validate_concrete_class_builtin_interface_requirements(&enum_class, context)?;
+    validate_concrete_class_builtin_interface_requirements(&enum_class, context, values)?;
     validate_concrete_class_aot_interface_requirements(&enum_class, context, values, true)?;
-    validate_concrete_class_requirements(&enum_class, context)
+    validate_concrete_class_requirements(&enum_class, context, values)
 }
 
 /// Validates PHP's special enum interface rules for one eval enum declaration.
@@ -163,7 +165,7 @@ pub(super) fn validate_eval_enum_interfaces(
             return Err(EvalStatus::RuntimeFatal);
         }
     }
-    validate_eval_class_does_not_implement_throwable_interfaces(enum_class, context)?;
+    validate_eval_class_does_not_implement_throwable_interfaces(enum_class, context, values)?;
     if enum_decl.backing_type().is_none()
         && pending_class_interface_names(enum_class, context)
             .iter()
@@ -259,7 +261,18 @@ pub(super) fn initialize_eval_enum_cases(
     let mut backing_values = Vec::new();
     for case in enum_decl.cases() {
         let backing_value = if let Some(value_expr) = case.value() {
-            let value = eval_expr(value_expr, context, scope, values)?;
+            // Routed through `eval_class_like_member_default` (like constant initializers and
+            // property defaults) so `self::CONST`/`parent::CONST` resolve against the enum's own
+            // class scope instead of finding no live method frame -- a case value is php's same
+            // compile-time-constant position, so `static::` is refused there too.
+            let value = eval_class_like_member_default(
+                enum_decl.name(),
+                None,
+                value_expr,
+                context,
+                scope,
+                values,
+            )?;
             validate_eval_enum_backing_value(enum_decl.backing_type(), value, values)?;
             for existing in &backing_values {
                 let equal = values.compare(EvalBinOp::StrictEq, value, *existing)?;
@@ -344,7 +357,78 @@ pub(super) fn initialize_eval_declared_constants(
     Ok(())
 }
 
+/// Returns one class-like constant's runtime cell, building it on first read when needed.
+///
+/// Constant cells belong to the context that executed the declaration. A class-like declared
+/// inside a nested eval invocation — the `include` an autoloader performs, say — reaches every
+/// other context through `sync_global_eval_classes`, which copies the declaration and not the
+/// cells, so a later read there found the declaration with nothing behind it: `self::CONST` in a
+/// reflected parameter default killed the eval bridge and `ReflectionClass::getConstant()`
+/// answered `false`. A constant initializer is a constant expression, so evaluating it here under
+/// the declaring class's magic scope reproduces exactly what the declaring context stored; the
+/// result is cached under the declaring class, so every later read is a lookup again.
+pub(in crate::interpreter) fn eval_class_like_constant_cell(
+    declaring_class: &str,
+    constant: &EvalClassConstant,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(cell) = context.class_constant_cell(declaring_class, constant.name()) {
+        return Ok(cell);
+    }
+    // A constant's initializer is only evaluated on first read (or the eager pass at
+    // declaration time, which reaches the same cache-on-miss path for a forward reference), so
+    // `self::A` referencing `self::B` referencing `self::A` recurses through this exact function
+    // without ever finding a cached cell. php detects the cycle and raises a catchable `Error`
+    // (`Cannot declare self-referencing constant self::X`); marking the pair in progress here
+    // reproduces that instead of overflowing the stack.
+    if !context.begin_class_constant_evaluation(declaring_class, constant.name()) {
+        return eval_throw_error(
+            &format!(
+                "Cannot declare self-referencing constant self::{}",
+                constant.name()
+            ),
+            context,
+            values,
+        );
+    }
+    let mut scope = ElephcEvalScope::new();
+    let value = eval_class_like_member_default(
+        declaring_class,
+        constant.trait_origin(),
+        constant.value(),
+        context,
+        &mut scope,
+        values,
+    );
+    context.end_class_constant_evaluation(declaring_class, constant.name());
+    // The cache owns the cell and every read borrows it, the first one included: handing the
+    // freshly evaluated cell to this caller as OWNED let its release free the cached value, and
+    // the next read returned whatever reused the memory -- Laravel's `DateFactory` read
+    // `static::DEFAULT_CLASS_NAME` back as a Carbon translation string.
+    let value = value?;
+    let owned = if value.is_borrowed() { values.retain(value)? } else { value };
+    if let Some(replaced) =
+        context.set_class_constant_cell(declaring_class, constant.name(), owned)
+    {
+        values.release(replaced)?;
+    }
+    Ok(RuntimeCellHandle::borrowed(owned))
+}
+
 /// Evaluates a class-like constant or property initializer with PHP magic scope.
+///
+/// Constant initializers, property defaults, and enum case values are php's "compile-time
+/// constant" positions: `self::`/`parent::` resolve to the DECLARING class regardless of which
+/// subclass triggered evaluation, and `static::` has no meaning at all (php refuses it as an
+/// uncatchable compile error). Pushing the class scope here — not just the magic-constant scope
+/// — is what lets `resolve_eval_static_class_name`'s `self`/`parent` arms see the right class:
+/// before this, `self::CONST` used inside one of these positions found `current_class_scope()`
+/// empty (that stack is populated only by a live METHOD call frame) and failed with `unsupported
+/// ClassConstantFetch expression` for every caller, `symfony/http-foundation/Request.php`'s
+/// `self::HEADER_X_FORWARDED_FOR`-keyed constant array included. The compile-time-constant depth
+/// counter is what lets `static::` be refused instead of silently falling back to the newly
+/// working `self::` answer.
 pub(super) fn eval_class_like_member_default(
     owner_name: &str,
     trait_origin: Option<&str>,
@@ -355,7 +439,11 @@ pub(super) fn eval_class_like_member_default(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let trait_name = trait_origin.or_else(|| context.has_trait(owner_name).then_some(owner_name));
     context.push_class_like_member_magic_scope(owner_name, trait_name);
+    context.push_class_scope(owner_name.to_string());
+    context.push_compile_time_constant_context();
     let result = eval_expr(default, context, scope, values);
+    context.pop_compile_time_constant_context();
+    context.pop_class_scope();
     context.pop_magic_scope();
     result
 }
@@ -386,6 +474,15 @@ pub(super) fn initialize_eval_static_properties(
         } else {
             None
         };
+        if crate::eval_trace::enabled() {
+            eprintln!(
+                "[elephc-eval-trace] phase=static_property_seed class={:?} property={:?} has_default={} seeded={}",
+                class.name(),
+                property.name(),
+                property.default().is_some(),
+                value.is_some(),
+            );
+        }
         if let Some(value) = value {
             store_static_property_value(class.name(), property.name(), value, context, values)?;
         }

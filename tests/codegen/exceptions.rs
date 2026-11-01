@@ -67,6 +67,35 @@ try {
     assert_eq!(out, "Error|dynamic:payload");
 }
 
+/// Verifies PHP's internal Exception fields remain constructible through ReflectionProperty.
+#[test]
+fn test_exception_reflection_declares_internal_properties() {
+    let out = compile_and_run(
+        r#"<?php
+$trace = new ReflectionProperty(Exception::class, 'trace');
+$previous = new ReflectionProperty(Exception::class, 'previous');
+$message = new ReflectionProperty(Exception::class, 'message');
+echo $trace->getName(), '|', $previous->getName(), '|', $message->getName();
+"#,
+    );
+    assert_eq!(out, "trace|previous|message");
+}
+
+/// Verifies a compact builtin Throwable still exposes an array through `getTrace()`.
+#[test]
+fn test_exception_get_trace_returns_array_after_internal_property_metadata() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    throw new Exception('trace probe');
+} catch (Exception $exception) {
+    echo gettype($exception->getTrace());
+}
+"#,
+    );
+    assert_eq!(out, "array");
+}
+
 /// Verifies exception try catch same function.
 #[test]
 fn test_exception_try_catch_same_function() {
@@ -77,6 +106,26 @@ fn test_exception_try_catch_same_function() {
         "<?php class MyException extends Exception {} try { throw new MyException(); } catch (MyException $e) { echo 42; }",
     );
     assert_eq!(out, "42");
+}
+
+/// Verifies throwing a direct construction whose class is unavailable at AOT time preserves
+/// PHP's runtime ordering: class lookup raises a catchable `Error` before the throw consumes it.
+#[test]
+fn test_throw_runtime_only_class_reports_class_not_found_error() {
+    let out = compile_and_run(
+        r#"<?php
+function fail_at_runtime(): void {
+    throw new RuntimeOnlyFailure();
+}
+
+try {
+    fail_at_runtime();
+} catch (Error $error) {
+    echo get_class($error), ":", $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "Error:Class \"RuntimeOnlyFailure\" not found");
 }
 
 /// Verifies builtin exception try catch.
@@ -127,7 +176,11 @@ fn test_builtin_exception_get_message_does_not_consume_payload() {
     let out = compile_and_run(
         "<?php $e = new Exception(\"boom\"); echo $e->getMessage(); echo \":\"; echo $e->getMessage(); echo \":\"; echo $e->__toString();",
     );
-    assert_eq!(out, "boom:boom:boom");
+    // `__toString()` is php's full rendering, which starts with the class and the message.
+    assert!(
+        out.starts_with("boom:boom:Exception: boom in ") && out.ends_with("\nStack trace:\n#0 {main}"),
+        "unexpected getMessage/__toString output: {out:?}"
+    );
 }
 
 /// Checks that Exception messages built from temporary string results survive the throw.
@@ -203,14 +256,30 @@ try {
 /// every run. `getLine()` is `1` because the whole probe is one line — and it is the line of the
 /// `new`, which is what PHP records; the two coincide here only because they are the same line.
 ///
-/// `getTrace()`/`getTraceAsString()` stay empty: elephc keeps no call stack to render, where
-/// reference PHP would report `#0 {main}`.
+/// Oracle: `php -n` 8.5 — a top-level exception has no trace frame, `getTraceAsString()` is
+/// `#0 {main}`, and `__toString()` is `Exception: caught in FILE:1`, `Stack trace:` and that
+/// listing. elephc used to answer an empty listing and the bare message.
 #[test]
 fn test_builtin_throwable_catch_exposes_standard_api() {
     let out = compile_and_run(
         "<?php try { throw new Exception(\"caught\", 42); } catch (Throwable $e) { echo $e->getMessage(); echo \":\"; echo $e->getCode(); echo \":\"; echo $e->getFile() === __FILE__ ? \"file\" : \"BAD(\" . $e->getFile() . \")\"; echo \":\"; echo $e->getLine(); echo \":\"; echo count($e->getTrace()); echo \":\"; echo $e->getTraceAsString(); echo \":\"; echo $e->getPrevious() === null ? \"none\" : \"some\"; echo \":\"; echo $e->__toString(); }",
     );
-    assert_eq!(out, "caught:42:file:1:0::none:caught");
+    assert!(
+        out.starts_with("caught:42:file:1:0:#0 {main}:none:Exception: caught in ")
+            && out.ends_with("test.php:1\nStack trace:\n#0 {main}"),
+        "unexpected Throwable API output: {out:?}"
+    );
+}
+
+/// A user subclass that forwards to `parent::__construct`, and an `ErrorException` built with an
+/// explicit file and line, report the same location through getFile/getLine as a builtin throwable.
+/// Every Throwable keeps its creation line in the declared `line` slot, whatever its heap kind.
+#[test]
+fn test_user_subclass_and_error_exception_report_file_and_line() {
+    let out = compile_and_run(
+        "<?php\nclass MyEx extends RuntimeException {\n    public function __construct(string $m) { parent::__construct($m, 7); }\n}\n$a = new MyEx('x');\necho $a->getFile() === __FILE__ ? 'file' : 'BAD(' . $a->getFile() . ')', '|', $a->getLine(), '|', $a->getCode(), \"\\n\";\n$b = new ErrorException('err', 1, E_WARNING, 'some/file.php', 42);\necho $b->getFile(), '|', $b->getLine(), \"\\n\";\n$c = clone $a;\necho $c->getLine(), \"\\n\";\ntry { throw new MyEx('y'); } catch (MyEx $e) { echo $e->getLine(), \"\\n\"; }\n",
+    );
+    assert_eq!(out, "file|5|7\nsome/file.php|42\n5\n11\n");
 }
 
 /// Tests a user-defined interface (AppThrowable) that extends Throwable and an
@@ -288,6 +357,29 @@ fn test_exception_multi_catch_matches_each_type() {
     assert_eq!(out, "12");
 }
 
+/// Verifies an unresolved catch type never matches and later known handlers still receive errors.
+#[test]
+fn test_exception_unresolved_catch_type_is_a_non_matching_arm() {
+    let out = compile_and_run(
+        r#"<?php
+function describeThrowable(Throwable $e): string {
+    return $e->getMessage();
+}
+
+try {
+    echo "try:";
+    throw new Exception("ok");
+} catch (MissingRuntimeException $e) {
+    echo describeThrowable($e);
+    throw $e;
+} catch (Exception $e) {
+    echo $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "try:ok");
+}
+
 /// Verifies exception catch without variable.
 #[test]
 fn test_exception_catch_without_variable() {
@@ -330,6 +422,99 @@ fn test_throw_expression_in_ternary() {
     assert_eq!(out, "23");
 }
 
+/// Verifies a terminating operand of logical negation does not emit a dead condition branch.
+#[test]
+fn test_throw_expression_under_not_in_if_condition() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    if (!(throw new Exception("stop"))) {
+        echo "unreachable";
+    }
+} catch (Exception $error) {
+    echo $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "stop");
+}
+
+/// Verifies a terminating assignment receiver inside `return` does not emit a stale result load.
+///
+/// The operand that terminates is a `throw` in the receiver call's argument: these three tests
+/// used `newInstanceArgs()` on a run-time array, which lowered to a fatal until it became an
+/// ordinary call. Any expression that ends the block exercises the same guard.
+#[test]
+fn test_terminating_returned_assignment_receiver_stops_lowering() {
+    let out = compile_and_run(
+        r#"<?php
+class AssignedAfterTermination {
+    public int $value = 0;
+}
+
+function receiver(mixed $unused): AssignedAfterTermination {
+    return new AssignedAfterTermination();
+}
+
+function assign_after_termination(): int {
+    return receiver(throw new Exception("receiver"))->value = 1;
+}
+
+try {
+    assign_after_termination();
+} catch (Exception $error) {
+    echo $error->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(out, "receiver\n");
+}
+
+/// Verifies a terminating foreach source does not emit an iterator in the dead block.
+#[test]
+fn test_terminating_foreach_source_stops_lowering() {
+    let out = compile_and_run(
+        r#"<?php
+function iterate_after_termination(): void {
+    foreach ((throw new Exception("source")) as $value) {
+        echo $value;
+    }
+}
+
+try {
+    iterate_after_termination();
+} catch (Exception $error) {
+    echo $error->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(out, "source\n");
+}
+
+/// Verifies a terminating property RHS does not emit the property store in the dead block.
+#[test]
+fn test_terminating_property_assignment_value_stops_lowering() {
+    let out = compile_and_run(
+        r#"<?php
+class PropertyValueAfterTermination {
+    public mixed $value = null;
+}
+
+function write_after_termination(): void {
+    $target = new PropertyValueAfterTermination();
+    $target->value = throw new Exception("value");
+}
+
+try {
+    write_after_termination();
+} catch (Exception $error) {
+    echo $error->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(out, "value\n");
+}
+
 /// Throws a custom exception from a callee and catches it in the caller.
 /// Verifies the unwind across function boundaries and that the catch runs.
 #[test]
@@ -338,6 +523,96 @@ fn test_exception_try_catch_cross_function() {
         "<?php class MyException extends Exception {} function boom() { throw new MyException(); } try { boom(); } catch (MyException $e) { echo 7; }",
     );
     assert_eq!(out, "7");
+}
+
+/// Verifies protected returns and loop exits unlink their handler before a later outer throw.
+///
+/// A handler record lives in its owner's native frame. Returning, breaking, or continuing out of
+/// a protected block must therefore restore the previous record; otherwise a subsequent throw
+/// can longjmp into a frame that has already been reused.
+#[test]
+fn test_try_handler_unlinks_on_return_break_and_continue_exits() {
+    let out = compile_and_run(
+        r#"<?php
+function leaveByReturn(): string {
+    try {
+        return 'return';
+    } catch (RuntimeException $exception) {
+        return 'wrong-return-catch';
+    }
+}
+
+function leaveConditionalTry(bool $early): string {
+    try {
+        if ($early) {
+            return 'if-return';
+        }
+        return 'else-return';
+    } catch (RuntimeException $exception) {
+        return 'wrong-conditional-catch';
+    }
+}
+
+function leaveLoopTry(bool $run): string {
+    try {
+        while ($run) {
+            return 'loop-return';
+        }
+        return 'after-loop';
+    } catch (RuntimeException $exception) {
+        return 'wrong-loop-catch';
+    }
+}
+
+function leaveByBreak(): void {
+    while (true) {
+        try {
+            break;
+        } catch (RuntimeException $exception) {
+            echo 'wrong-break-catch';
+        }
+    }
+}
+
+function leaveByContinue(): void {
+    $iteration = 0;
+    while ($iteration++ === 0) {
+        try {
+            continue;
+        } catch (RuntimeException $exception) {
+            echo 'wrong-continue-catch';
+        }
+    }
+}
+
+function breakInnerLoopInsideTry(): string {
+    try {
+        while (true) {
+            break;
+        }
+        throw new RuntimeException('inside');
+    } catch (RuntimeException $exception) {
+        return 'inner-break-kept-handler:' . $exception->getMessage();
+    }
+}
+
+echo leaveByReturn(), '|';
+echo leaveConditionalTry(true), ':', leaveConditionalTry(false), '|';
+echo leaveLoopTry(true), ':', leaveLoopTry(false), '|';
+leaveByBreak();
+leaveByContinue();
+echo breakInnerLoopInsideTry(), '|';
+try {
+    throw new RuntimeException('outer');
+} catch (RuntimeException $exception) {
+    echo 'outer-catch:', $exception->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "return|if-return:else-return|loop-return:after-loop|inner-break-kept-handler:inside|outer-catch:outer"
+    );
 }
 
 /// Verifies nested try-catch where the inner catch handles InnerException and
@@ -955,6 +1230,106 @@ echo '|', intdiv(7, 2), '|', fdiv(1, 0), '|', (1 * $n) << (3 * $n), '|', (-8 * $
     assert_eq!(out, "1|1|4|3|3|INF|8|-4");
 }
 
+/// Verifies a Throwable subclass with additional instance storage keeps the general object layout
+/// while its inherited builtin constructor initializes the canonical message, code, and previous
+/// slots consumed by the Throwable intrinsics.
+#[test]
+fn test_inherited_builtin_exception_constructor_with_own_property() {
+    let out = compile_and_run(
+        r#"<?php
+class DetailedException extends RuntimeException {
+    public string $path = "unset";
+}
+$previous = new Exception("cause");
+$error = new DetailedException("boom", 17, $previous);
+$error->path = "config";
+echo $error->getMessage(), ":", $error->getCode(), ":", $error->path, ":", $error->getPrevious()->getMessage();
+"#,
+    );
+    assert_eq!(out, "boom:17:config:cause");
+}
+
+/// Verifies an otherwise-empty Throwable subclass with a user-defined parent constructor and
+/// storage reaches the general object backend instead of the compact builtin Throwable path.
+#[test]
+fn test_throwable_child_inherits_user_constructor_and_property_layout() {
+    let out = compile_and_run(
+        r#"<?php
+class ContextError extends Error {
+    public array $context;
+
+    public function __construct(
+        string $message,
+        array $context,
+        int $code = 0,
+        ?Throwable $previous = null,
+    ) {
+        parent::__construct($message, $code, $previous);
+        $this->context = $context;
+    }
+}
+
+class ChildContextError extends ContextError {}
+
+$error = new ChildContextError("boom", ["source" => "child"]);
+echo $error->getMessage(), ":", $error->context["source"];
+"#,
+    );
+    assert_eq!(out, "boom:child");
+}
+
+/// Verifies gradual `mixed` throws transfer valid Throwables and raise PHP's dynamic Errors for
+/// scalar or non-Throwable object payloads.
+#[test]
+fn test_throw_mixed_runtime_validation() {
+    let out = compile_and_run(
+        r#"<?php
+function throw_mixed(mixed $value): void { throw $value; }
+
+try {
+    throw_mixed(new RuntimeException("ok"));
+} catch (Throwable $error) {
+    echo $error->getMessage();
+}
+
+try {
+    throw_mixed(42);
+} catch (Error $error) {
+    echo ":", $error->getMessage();
+}
+
+class NotThrowable {}
+try {
+    throw_mixed(new NotThrowable());
+} catch (Error $error) {
+    echo ":", $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "ok:Can only throw objects:Cannot throw objects that do not implement Throwable"
+    );
+}
+
+/// Verifies builtin throwable construction applies ordinary weak string coercion to gradual messages.
+#[test]
+fn test_builtin_throwable_coerces_mixed_message() {
+    let out = compile_and_run(
+        r#"<?php
+function fail_with(mixed $message): void {
+    throw new RuntimeException($message);
+}
+try {
+    fail_with(42);
+} catch (RuntimeException $error) {
+    echo $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
 /// The caught exception shadows whatever its name held before the `try`.
 ///
 /// A catch binds its variable from the handler's first statement. The constant
@@ -1099,6 +1474,89 @@ echo overwritten();
 "#,
     );
     assert_eq!(out, "9");
+}
+
+/// A module that throws and catches but never reads a trace used to emit print-only frame
+/// readers while `new` still asked every reader to materialize its frame (print index -1), so
+/// each caught exception wrote `#-1 file(line): fn(args)` lines to stdout. php prints nothing.
+#[test]
+fn test_a_caught_exception_writes_nothing_to_stdout_when_no_trace_is_read() {
+    let out = compile_and_run(
+        r#"<?php
+function inner(string $h, string $n, int $o = 0): int { throw new RuntimeException('x'); }
+function outer(string $h): int { return inner($h, 'c'); }
+try { outer('abc'); } catch (RuntimeException $e) { echo "caught"; }
+"#,
+    );
+    assert_eq!(out, "caught");
+}
+
+/// A function bound under `if (!function_exists(...))` is compiled under an internal variant
+/// symbol; its trace frame must show the public name, and (like php) omit a defaulted argument
+/// the caller did not pass. The expected text is what `php -n` printed for this program.
+#[test]
+fn test_a_conditionally_declared_function_shows_its_public_name_in_a_trace() {
+    let out = compile_and_run(
+        r#"<?php
+if (!function_exists('gpos')) {
+    function gpos(string $h, string $n, int $o = 0): string {
+        throw new RuntimeException('x');
+    }
+}
+function plain(string $h, string $n, int $o = 0): string { return gpos($h, $n); }
+try { plain('abc', 'c'); } catch (RuntimeException $e) {
+    echo str_replace(__FILE__, 'F', $e->getTraceAsString()), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "#0 F(7): gpos('abc', 'c')\n#1 F(8): plain('abc', 'c')\n#2 {main}\n"
+    );
+}
+
+/// A `continue`/`break` that stays inside a `try` must not run its `finally`, and every exit
+/// that does leave it must. Each jump used to inline the innermost finalizer whatever loop it
+/// targeted, then drop the frame for the rest of the protected body: Symfony's
+/// `InlineServiceDefinitionsPass` nulled its graph on the first skipped definition, and a later
+/// `break` out of a `try` skipped the finalizer entirely.
+#[test]
+fn test_loop_jumps_run_finally_only_when_they_leave_the_try() {
+    let out = compile_and_run(
+        r#"<?php
+final class P {
+    private ?string $graph = null;
+    public function inside(): void {
+        try {
+            $this->graph = 'g';
+            foreach (['a' => 1, 'b' => 2, 'c' => 3] as $id => $v) {
+                if ($v === 1) { continue; }
+                if ($v === 3) { break; }
+                echo $id, ':', $this->graph ?? 'null', "\n";
+            }
+        } finally {
+            $this->graph = null;
+            echo "fin\n";
+        }
+    }
+    public function outside(): void {
+        foreach ([1, 2, 3] as $v) {
+            try {
+                if ($v === 1) { continue; }
+                if ($v === 3) { break; }
+                echo "o$v\n";
+            } finally {
+                echo "f$v\n";
+            }
+        }
+    }
+}
+$p = new P();
+$p->inside();
+$p->outside();
+"#,
+    );
+    assert_eq!(out, "b:g\nfin\nf1\no2\nf2\nf3\n");
 }
 
 /// Exception's seven accessors are final, while its constructor and string conversion stay overridable.
@@ -1284,4 +1742,203 @@ echo "n=$n\n";
          iter CAUGHT:iter2\n\
          n=3\n"
     );
+}
+
+/// A subclass writing `$this->message` from a value of another type keeps `getMessage()` working.
+///
+/// The builtin Throwable payload holds `message` as a raw string. One subclass assigning an
+/// untyped value (Twig's `Error::updateRepr()` copies its untyped `rawMessage`) widened the
+/// untyped slot to `mixed` for the whole hierarchy: writes were boxed while the native
+/// constructor and `getMessage()` kept the raw shape, so every subclass reported "" -- Twig's
+/// "Unable to find template" reached the log as an empty LoaderError.
+#[test]
+fn test_subclass_message_writes_keep_the_builtin_message_slot() {
+    let out = compile_and_run(
+        r#"<?php
+class A extends Exception {
+    public function __construct(string $m) { parent::__construct(''); $this->message = $m; }
+}
+class B extends Exception {
+    public function __construct(string $m) { parent::__construct(''); $this->set($m); }
+    private function set(string $m): void { $this->message = $m; }
+}
+class C extends Exception {
+    public function __construct(string $m) { $this->message = $m; }
+}
+class D extends Exception {
+    private $raw;
+    public function __construct(string $m) { parent::__construct(''); $this->raw = $m; $this->message = $this->raw; }
+}
+foreach ([new A('a'), new B('b'), new C('c'), new D('d')] as $e) {
+    echo get_class($e), '=[', $e->getMessage(), '] ';
+}
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "A=[a] B=[b] C=[c] D=[d] \n");
+}
+
+/// A frame's trace `args` list a variadic's surplus arguments after the fixed ones, as php does:
+/// `collect(1, 2, 3)` reports `[1,2,3]`. The surplus used to be left out, which also let the
+/// objects passed through `...$rest` die before a same-frame catch instead of living in the trace.
+/// Output captured from php 8.5.
+#[test]
+fn test_native_trace_args_include_the_variadic_surplus() {
+    let out = compile_and_run(
+        r#"<?php
+function collect(int $first, ...$rest) { return (new Exception("x"))->getTrace()[0]["args"]; }
+echo json_encode(collect(1, 2, 3)), json_encode(collect(1)), "\n";
+"#,
+    );
+    assert_eq!(out, "[1,2,3][1]\n");
+}
+
+/// A declared return type the body can fall off the end of is php's run-time `TypeError`, not a
+/// compile error: php compiles all of these and raises only when a call really falls off.
+/// Symfony's `TagAwareAdapter::getItem(): CacheItem` returns from inside a `foreach` with nothing
+/// after it, and the compile-time refusal kept the cache component out of the build.
+#[test]
+fn test_falling_off_a_declared_return_type_throws_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public function first(array $xs): ?C { foreach ($xs as $x) { return $x; } } }
+function g(bool $ok): int { if ($ok) { return 1; } }
+function h(): string|int {}
+foreach ([fn() => (new C)->first([]), fn() => g(false), fn() => h()] as $call) {
+    try { $call(); echo "no|"; } catch (TypeError $e) { echo $e->getMessage(), "|"; }
+}
+echo g(true), " ", get_class((new C)->first([new C])), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "C::first(): Return value must be of type ?C, none returned|g(): Return value must be of type int, none returned|h(): Return value must be of type string|int, none returned|1 C\n"
+    );
+}
+
+/// A method call whose receiver is an owning temporary (`(new X())->m()`) and whose callee lets an
+/// exception propagate used to strand the receiver: its release followed the call in SSA, which a
+/// throw never reaches, so the object and everything it held leaked once per caught throw.
+#[test]
+fn test_exception_out_of_method_on_temporary_receiver_leaves_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Thrower {
+    public function __construct(protected array $items = []) {}
+    public function boom(callable $f): int { $x = array_map($f, $this->items); throw new LogicException('no'); }
+    public function plain(): int { throw new LogicException('plain'); }
+}
+for ($i = 0; $i < 10; $i++) {
+    try {
+        (new Thrower(['a', 'b']))->boom(fn($x) => $x);
+    } catch (LogicException $e) {
+        $m = $e->getMessage();
+    }
+    try {
+        (new Thrower(['c']))->plain();
+    } catch (LogicException $e) {
+        $m .= $e->getMessage();
+    }
+}
+echo $m, "\n";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "noplain\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// The receiver is also pinned while the ARGUMENTS are evaluated, and on the chained, nullable and
+/// nullsafe call paths, which each release their temporary receiver after the call.
+#[test]
+fn test_exception_from_argument_or_chained_call_releases_temporary_receiver() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Thrower {
+    public function __construct(protected array $items = []) {}
+    public function boom(): int { throw new LogicException('boom'); }
+    public function me(): static { return $this; }
+    public function other(): Thrower { return new Thrower(['q', 'r']); }
+    public function maybe(): ?Thrower { return new Thrower(['q']); }
+    public function take(int $v): int { return $v; }
+}
+function bad(): int { throw new LogicException('bad'); }
+$m = '';
+for ($i = 0; $i < 10; $i++) {
+    try { (new Thrower(['a', 'b']))->take(bad()); } catch (LogicException $e) { $m = $e->getMessage(); }
+    try { (new Thrower(['a']))->other()->boom(); } catch (LogicException $e) { $m = $e->getMessage(); }
+    try { (new Thrower(['a']))->maybe()->boom(); } catch (LogicException $e) { $m = $e->getMessage(); }
+    try { (new Thrower(['a']))->maybe()?->boom(); } catch (LogicException $e) { $m = $e->getMessage(); }
+    try { (new Thrower(['a']))?->me()->boom(); } catch (LogicException $e) { $m = $e->getMessage(); }
+}
+echo $m, (new Thrower([1]))->other()->me()->take(3), "\n";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "boom3\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// An array or hash literal is the only owner of the elements already stored in it, so an element
+/// expression that throws mid-construction must release the half-built container.
+#[test]
+fn test_exception_while_building_array_literal_leaves_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function bad(): int { throw new LogicException('no'); }
+$m = '';
+for ($i = 0; $i < 10; $i++) {
+    try { $r = ['a' . $i, ['n' . $i], bad()]; } catch (LogicException $e) { $m = $e->getMessage(); }
+    try { $r = [1, bad()]; } catch (LogicException $e) { $m = $e->getMessage(); }
+    try { $r = ['k' => 'a' . $i, 'j' => bad()]; } catch (LogicException $e) { $m = $e->getMessage(); }
+}
+echo $m, "\n";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "no\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// An exception thrown by a method reached through a spread call
+/// (`static function (...$args) use (&$listener) { return $listener(...$args); }`, how Symfony's
+/// event dispatcher calls a lazy listener) with more arguments than the method declares. The
+/// surplus collector arrives as a HASH: the trace builder read it as packed boxed slots (a
+/// segfault, then `0, 12` as arguments) and read the leading optional-argument count from hash
+/// metadata, slicing the list past its end. Symfony's 404 page died rendering that trace.
+/// Arguments and rendering are php's; the heap stays clean.
+#[test]
+fn test_trace_of_a_method_reached_through_a_spread_call_lists_its_arguments() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Listener {
+    public function exact(object $event): void { throw new RuntimeException("exact"); }
+    public function optional(object $event, string $name = 'none'): void { throw new RuntimeException("optional " . $name); }
+}
+$l = new Listener();
+foreach (['exact', 'optional'] as $method) {
+    $listener = [$l, $method];
+    $wrapped = static function (...$args) use (&$listener) { return $listener(...$args); };
+    foreach ([[new stdClass()], [new stdClass(), 'kernel.request', 42]] as $args) {
+        try {
+            $wrapped(...$args);
+        } catch (RuntimeException $e) {
+            $frame = $e->getTrace()[0];
+            echo $e->getMessage(), ":", count($frame['args']), ":";
+            echo strstr(strstr($e->getTraceAsString(), 'Listener->'), "\n", true), "|";
+        }
+    }
+}
+if ($argc > 5) { eval('echo 1;'); }
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "exact:1:Listener->exact(Object(stdClass))|\
+         exact:3:Listener->exact(Object(stdClass), 'kernel.request', 42)|\
+         optional none:1:Listener->optional(Object(stdClass))|\
+         optional kernel.request:3:Listener->optional(Object(stdClass), 'kernel.request', 42)|"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

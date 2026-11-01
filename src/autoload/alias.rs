@@ -8,6 +8,8 @@
 //! - `crate::autoload::collect_aliases()` after include/autoload expansion
 //!
 //! Key details:
+//! - A post-name-resolution pass also recognizes `Original::class` and `Alias::class`
+//!   in nested statement lists while leaving the defensive call in place.
 //! - A class-name argument may be a string literal, a `Name::class` constant, or a `.`
 //!   concatenation of those. `Name::class` is resolved here, before the name resolver runs,
 //!   against the namespace and class imports in effect at the call, tracked with the name
@@ -17,9 +19,8 @@
 //! - Resolver-created include wrappers still count as top-level for included-file aliases.
 //! - The alias is a subclass, not a true PHP runtime alias, so identity checks differ in documented cases.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use crate::errors::CompileError;
 
 use crate::names::{php_symbol_key, Name, NameKind};
 use crate::parser::ast::{
@@ -51,6 +52,128 @@ pub fn collect_aliases(program: Program) -> Program {
         collect_aliases_in_top_level(program, AliasScope::default(), &mut alias_decls);
     cleaned.extend(alias_decls);
     cleaned
+}
+
+/// Collects aliases whose class-string arguments became static only after name resolution.
+///
+/// Calls remain in their original statement lists so their boolean result and control-flow
+/// position stay visible. The synthesized declaration makes the alias available to the closed
+/// world class table before type checking; a retained call therefore lowers as the defensive
+/// "already defined" result.
+pub fn collect_resolved_aliases(mut program: Program) -> Program {
+    let mut declared = super::walk::collect_declared_fqns(&program)
+        .into_iter()
+        .map(|name| php_symbol_key(&name))
+        .collect::<HashSet<_>>();
+    let mut alias_decls = Vec::new();
+    collect_resolved_aliases_in_program(&mut program, &mut alias_decls, &mut declared);
+    program.extend(alias_decls);
+    program
+}
+
+/// Scans one resolved statement list for static alias calls and nested statement lists.
+fn collect_resolved_aliases_in_program(
+    program: &mut Program,
+    alias_decls: &mut Vec<Stmt>,
+    declared: &mut HashSet<String>,
+) {
+    for stmt in program {
+        collect_resolved_aliases_in_stmt(stmt, alias_decls, declared);
+    }
+}
+
+/// Records a resolved alias call and descends through every statement-owned body.
+fn collect_resolved_aliases_in_stmt(
+    stmt: &mut Stmt,
+    alias_decls: &mut Vec<Stmt>,
+    declared: &mut HashSet<String>,
+) {
+    if let Some((original, alias)) = extract_resolved_class_alias(stmt) {
+        if declared.insert(php_symbol_key(&alias)) {
+            alias_decls.push(synthesise_resolved_alias_decl(
+                &original,
+                &alias,
+                stmt.span,
+            ));
+        }
+    }
+
+    match &mut stmt.kind {
+        StmtKind::Synthetic(body)
+        | StmtKind::IncludeOnceGuard { body, .. }
+        | StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::While { body, .. }
+        | StmtKind::DoWhile { body, .. }
+        | StmtKind::Foreach { body, .. }
+        | StmtKind::FunctionDecl { body, .. } => {
+            collect_resolved_aliases_in_program(body, alias_decls, declared);
+        }
+        StmtKind::If {
+            then_body,
+            elseif_clauses,
+            else_body,
+            ..
+        } => {
+            collect_resolved_aliases_in_program(then_body, alias_decls, declared);
+            for (_, body) in elseif_clauses {
+                collect_resolved_aliases_in_program(body, alias_decls, declared);
+            }
+            if let Some(body) = else_body {
+                collect_resolved_aliases_in_program(body, alias_decls, declared);
+            }
+        }
+        StmtKind::IfDef {
+            then_body,
+            else_body,
+            ..
+        } => {
+            collect_resolved_aliases_in_program(then_body, alias_decls, declared);
+            if let Some(body) = else_body {
+                collect_resolved_aliases_in_program(body, alias_decls, declared);
+            }
+        }
+        StmtKind::For {
+            init, update, body, ..
+        } => {
+            if let Some(init) = init {
+                collect_resolved_aliases_in_stmt(init, alias_decls, declared);
+            }
+            if let Some(update) = update {
+                collect_resolved_aliases_in_stmt(update, alias_decls, declared);
+            }
+            collect_resolved_aliases_in_program(body, alias_decls, declared);
+        }
+        StmtKind::Switch { cases, default, .. } => {
+            for (_, body) in cases {
+                collect_resolved_aliases_in_program(body, alias_decls, declared);
+            }
+            if let Some(body) = default {
+                collect_resolved_aliases_in_program(body, alias_decls, declared);
+            }
+        }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            collect_resolved_aliases_in_program(try_body, alias_decls, declared);
+            for catch in catches {
+                collect_resolved_aliases_in_program(&mut catch.body, alias_decls, declared);
+            }
+            if let Some(body) = finally_body {
+                collect_resolved_aliases_in_program(body, alias_decls, declared);
+            }
+        }
+        StmtKind::ClassDecl { methods, .. }
+        | StmtKind::TraitDecl { methods, .. }
+        | StmtKind::InterfaceDecl { methods, .. }
+        | StmtKind::EnumDecl { methods, .. } => {
+            for method in methods {
+                collect_resolved_aliases_in_program(&mut method.body, alias_decls, declared);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Iterates over top-level statements, removing each `class_alias("Orig", "Alias")`
@@ -113,8 +236,9 @@ fn collect_aliases_in_stmt(
                 body: collect_aliases_in_top_level(body, block_scope, alias_decls),
             }
         }
-        StmtKind::IncludeOnceGuard { label, body } => StmtKind::IncludeOnceGuard {
-            label,
+        StmtKind::IncludeOnceGuard { source_path, required, body } => StmtKind::IncludeOnceGuard {
+            source_path,
+            required,
             body: collect_aliases_in_top_level(body, scope.clone(), alias_decls),
         },
         StmtKind::Synthetic(body) => {
@@ -167,52 +291,82 @@ fn positional_class_alias_args(stmt: &Stmt) -> Option<&[Expr]> {
     {
         return None;
     }
-    if args.len() < 2 || args.len() > 3
-        || args.iter().any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_)))
-    {
+    if !class_alias_arity_is_supported(args) {
         return None;
     }
     Some(args)
 }
 
-/// Diagnoses disabled autoload only on source forms the collector itself accepts.
+/// Checks the argument shape of a `class_alias()` call the compiler can resolve statically.
 ///
-/// Run before constant folding: a ternary or cast that later becomes a literal
-/// must retain its unsupported source-shape diagnostic regardless of this flag.
-pub(super) fn validate_alias_autoload(program: &[Stmt]) -> Result<(), CompileError> {
-    let scope = AliasScope::default();
-    for stmt in program {
-        match &stmt.kind {
-            StmtKind::NamespaceBlock { body, .. } | StmtKind::IncludeOnceGuard { body, .. }
-                | StmtKind::Synthetic(body) => validate_alias_autoload(body)?,
-            StmtKind::ExprStmt(_) => {
-                if positional_class_alias_args(stmt).is_some_and(|args| {
-                    constant_class_name(&args[0], &scope).is_some()
-                        && constant_class_name(&args[1], &scope).is_some()
-                        && args.get(2).is_some_and(|arg| literal_autoload_is_false(&arg.kind))
-                }) {
-                    return Err(CompileError::new(stmt.span, UNSUPPORTED_AUTOLOAD_FALSE));
-                }
-            }
-            _ => {}
-        }
+/// The third argument is PHP's `$autoload`: whether to AUTOLOAD the original class before
+/// aliasing it. It says nothing about whether the two names are statically known, so a literal
+/// `false` is just as resolvable as a literal `true` — in a closed world the original is either
+/// compiled in or the alias is rejected anyway, and autoloading never enters into it.
+///
+/// Refusing `false` is what kept Symfony's generated container out of the compiled world: it
+/// emits `\class_alias(\ContainerXXXX\App_KernelProdContainer::class, App_KernelProdContainer::class, false)`
+/// — both names `::class` constants — and the whole entry failed with
+/// "class_alias() requires statically resolvable class names".
+///
+/// A NON-literal flag is still refused: it is a value the compiler cannot see, and accepting it
+/// would mean guessing at a call it cannot model.
+///
+/// Named and spread arguments are refused outright: the collector reads the call positionally.
+fn class_alias_arity_is_supported(args: &[Expr]) -> bool {
+    if args.len() < 2
+        || args.len() > 3
+        || args.iter().any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_)))
+    {
+        return false;
     }
-    Ok(())
-}
-
-/// Recognizes scalar literals PHP coerces to false for the autoload parameter.
-fn literal_autoload_is_false(kind: &ExprKind) -> bool {
-    match kind {
-        ExprKind::BoolLiteral(false) | ExprKind::IntLiteral(0) | ExprKind::Null => true,
-        ExprKind::FloatLiteral(value) => *value == 0.0,
-        ExprKind::StringLiteral(value) => value.is_empty() || value == "0",
-        _ => false,
+    match args.get(2).map(|arg| &arg.kind) {
+        None => true,
+        Some(ExprKind::BoolLiteral(_)) => true,
+        Some(ExprKind::IntLiteral(_)) => true,
+        Some(_) => false,
     }
 }
 
-/// Explains the collector's unsupported explicitly disabled autoload mode.
-const UNSUPPORTED_AUTOLOAD_FALSE: &str = "class_alias() does not support autoload=false in AOT mode; \
-    omit autoload or pass true";
+/// Extracts a class alias pair from a resolved statement call with static class strings.
+fn extract_resolved_class_alias(stmt: &Stmt) -> Option<(String, String)> {
+    let StmtKind::ExprStmt(expr) = &stmt.kind else {
+        return None;
+    };
+    let ExprKind::FunctionCall { name, args } = &expr.kind else {
+        return None;
+    };
+    if !name
+        .as_canonical()
+        .trim_start_matches('\\')
+        .eq_ignore_ascii_case("class_alias")
+    {
+        return None;
+    }
+    resolved_class_alias_args(args)
+}
+
+/// Returns the statically known original and alias class names for supported call arguments.
+pub(crate) fn resolved_class_alias_args(args: &[Expr]) -> Option<(String, String)> {
+    if !class_alias_arity_is_supported(args) {
+        return None;
+    }
+    Some((
+        resolved_class_name(args.first()?)?,
+        resolved_class_name(args.get(1)?)?,
+    ))
+}
+
+/// Resolves a literal string or a canonical named `ClassName::class` expression.
+fn resolved_class_name(expr: &Expr) -> Option<String> {
+    match &expr.kind {
+        ExprKind::StringLiteral(name) => Some(name.trim_start_matches('\\').to_string()),
+        ExprKind::ClassConstant {
+            receiver: crate::parser::ast::StaticReceiver::Named(name),
+        } => Some(name.as_canonical().trim_start_matches('\\').to_string()),
+        _ => None,
+    }
+}
 
 /// Folds a compile-time-constant class-name argument to its string value.
 ///
@@ -311,6 +465,7 @@ fn synthesise_alias_decl(orig: &str, alias: &str, span: crate::span::Span) -> St
         StmtKind::ClassDecl {
             generics: None,
             name: alias_local,
+            doc_comment: None,
             extends: Some(extends_name),
             implements: Vec::new(),
             is_abstract: false,
@@ -335,6 +490,37 @@ fn synthesise_alias_decl(orig: &str, alias: &str, span: crate::span::Span) -> St
     )
 }
 
+/// Synthesizes an alias declaration from already-canonical class names.
+fn synthesise_resolved_alias_decl(
+    orig: &str,
+    alias: &str,
+    span: crate::span::Span,
+) -> Stmt {
+    let orig_parts = orig
+        .trim_start_matches('\\')
+        .split('\\')
+        .filter(|part| !part.is_empty())
+        .map(str::to_string)
+        .collect();
+    Stmt::new(
+        StmtKind::ClassDecl {
+            generics: None,
+            name: alias.trim_start_matches('\\').to_string(),
+            doc_comment: None,
+            extends: Some(Name::from_parts(NameKind::FullyQualified, orig_parts)),
+            implements: Vec::new(),
+            is_abstract: false,
+            is_final: false,
+            is_readonly_class: false,
+            trait_uses: Vec::new(),
+            properties: Vec::new(),
+            methods: Vec::new(),
+            constants: Vec::new(),
+        },
+        span,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -345,15 +531,16 @@ mod tests {
         crate::parser::parse(&tokens).unwrap().remove(0)
     }
 
-    /// Included and synthetic wrappers preserve source eligibility before any constant folding.
+    /// A literal `autoload = false` is a statically resolvable alias, not a diagnostic: the
+    /// original is either compiled into the closed world or the alias is rejected anyway.
     #[test]
-    fn alias_autoload_diagnostics_preserve_top_level_wrappers() {
+    fn literal_autoload_false_resolves_statically_through_wrappers() {
         let call = alias_statement();
         let span = call.span;
         let program = vec![
             call.clone(),
             Stmt::new(StmtKind::Synthetic(vec![call.clone()]), span),
-            Stmt::new(StmtKind::IncludeOnceGuard { label: "review_include".into(), body: vec![call] }, span),
+            Stmt::new(StmtKind::IncludeOnceGuard { source_path: "review_include".into(), required: true, body: vec![call] }, span),
         ];
         for stmt in &program {
             let direct = match &stmt.kind {
@@ -361,11 +548,19 @@ mod tests {
                 _ => stmt,
             };
             assert_eq!(direct.span, span);
+            let args = positional_class_alias_args(direct).expect("direct positional call");
             assert_eq!(
-                validate_alias_autoload(std::slice::from_ref(stmt)).unwrap_err().message,
-                UNSUPPORTED_AUTOLOAD_FALSE,
+                resolved_class_alias_args(args),
+                Some(("Original".to_string(), "Alias".to_string())),
             );
         }
-        assert!(validate_alias_autoload(&program.clone()).is_err());
+    }
+
+    /// Named and spread arguments never reach the positional collector.
+    #[test]
+    fn named_and_spread_arguments_are_not_collectible() {
+        let tokens = crate::lexer::tokenize("<?php class_alias(original: 'Original', alias: 'Alias');").unwrap();
+        let call = crate::parser::parse(&tokens).unwrap().remove(0);
+        assert!(positional_class_alias_args(&call).is_none());
     }
 }

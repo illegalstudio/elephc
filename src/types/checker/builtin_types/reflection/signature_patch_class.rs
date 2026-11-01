@@ -11,7 +11,7 @@ use super::*;
 
 /// Applies ReflectionClass and ReflectionObject specific signature overrides.
 pub(super) fn patch_reflection_class_object(class_name: &str, class_info: &mut ClassInfo) {
-            if matches!(class_name, "ReflectionClass" | "ReflectionObject") {
+            if matches!(class_name, "ReflectionClass" | "ReflectionObject" | "ReflectionEnum") {
                 for (property_name, property_type) in &mut class_info.properties {
                     match property_name.as_str() {
                         "__interfaces" | "__traits" => {
@@ -42,6 +42,7 @@ pub(super) fn patch_reflection_class_object(class_name: &str, class_info: &mut C
                     "isuserdefined",
                     "hasmethod",
                     "hasproperty",
+                    "hasconstant",
                     "implementsinterface",
                     "issubclassof",
                     "isinstance",

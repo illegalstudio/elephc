@@ -217,6 +217,18 @@ echo implode(" ", $arr);
     assert_eq!(out, "Hello World");
 }
 
+/// Verifies `implode()` normalizes a gradual indexed-array payload before reading its slots.
+#[test]
+fn test_implode_gradual_indexed_array() {
+    let out = compile_and_run(
+        r#"<?php
+$values = $argc > 0 ? [1, 2, 3] : false;
+echo implode(",", $values);
+"#,
+    );
+    assert_eq!(out, "1,2,3");
+}
+
 /// Verifies `implode()` and `join()` accept an ASSOCIATIVE array, joining its values.
 ///
 /// PHP ignores the keys entirely, so this is ordinary code — but the renderers walk a dense
@@ -861,6 +873,234 @@ string(17) \"Hello|world-again\"\n"
     );
 }
 
+/// Two-argument `levenshtein()` uses PHP's unit insertion, replacement, and deletion costs.
+#[test]
+fn test_levenshtein_two_argument_compatibility_helper() {
+    let out = compile_and_run(
+        r#"<?php echo levenshtein("kitten", "sitting"), ":", levenshtein("", "abc"), ":", levenshtein("same", "same");"#,
+    );
+    assert_eq!(out, "3:3:0");
+}
+
+/// One-argument `strip_tags()` removes quoted-attribute tags and comments while retaining text.
+#[test]
+fn test_strip_tags_one_argument_compatibility_helper() {
+    let out = compile_and_run(
+        r#"<?php echo strip_tags('<a title="1 > 0">hello</a><!-- hidden --><b>!</b>');"#,
+    );
+    assert_eq!(out, "hello!");
+}
+
+/// Integer-only `pack()` compatibility emits the expected endian byte sequences.
+#[test]
+fn test_pack_integer_compatibility_helper() {
+    let out = compile_and_run(
+        r#"<?php
+$bytes = pack('VNn', 0x12345678, 0x12345678, 0x1234);
+for ($i = 0; $i < strlen($bytes); $i++) { echo ord($bytes[$i]), ','; }
+"#,
+    );
+    assert_eq!(out, "120,86,52,18,18,52,86,120,18,52,");
+}
+
+/// `random_bytes()` returns a binary string with exactly the requested length.
+#[test]
+fn test_random_bytes_compatibility_helper() {
+    let out = compile_and_run(r#"<?php echo strlen(random_bytes(1)), ':', strlen(random_bytes(9));"#);
+    assert_eq!(out, "1:9");
+}
+
+/// Randomizer's PHP 8.3 alphabet sampler returns the requested byte count and rejects invalid
+/// empty-alphabet and non-positive-length inputs with ValueError.
+#[test]
+fn test_randomizer_get_bytes_from_string_compatibility_class() {
+    let out = compile_and_run(
+        r#"<?php
+$randomizer = new Random\Randomizer();
+$sample = $randomizer->getBytesFromString('x', 4);
+echo $sample, ':', strlen($sample), ':';
+try { $randomizer->getBytesFromString('', 1); } catch (ValueError $error) { echo 'empty'; }
+echo ':';
+try { $randomizer->getBytesFromString('x', 0); } catch (ValueError $error) { echo 'length'; }
+"#,
+    );
+    assert_eq!(out, "xxxx:4:empty:length");
+}
+
+/// `Random\Randomizer::pickArrayKeys()`, `shuffleArray()` and `getInt()` keep php's contracts:
+/// distinct keys returned in the ORIGINAL array order, a keyless shuffled permutation, and php 8.5's
+/// `ValueError` wording. Laravel's `Arr::random()` / `Collection::random()` call the first two.
+/// The draws are random, so the fixture asserts the invariants php guarantees, not the values.
+#[test]
+fn test_randomizer_pick_array_keys_shuffle_array_and_get_int() {
+    let out = compile_and_run(
+        r#"<?php
+use Random\Randomizer;
+$r = new Randomizer();
+foreach ([[[], 1], [[1, 2], 0], [[1, 2], 3]] as [$a, $n]) {
+    try { $r->pickArrayKeys($a, $n); echo "no error\n"; } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+}
+$src = ["x" => 1, "y" => 2, "z" => 3, 10 => 4, 11 => 5];
+$keys = array_keys($src);
+$ok = true;
+for ($i = 0; $i < 100; $i++) {
+    $picked = $r->pickArrayKeys($src, 3);
+    if (count($picked) !== 3 || count(array_unique($picked)) !== 3) { $ok = false; }
+    $positions = [];
+    foreach ($picked as $key) { $positions[] = array_search($key, $keys, true); }
+    $sorted = $positions;
+    sort($sorted);
+    if ($positions !== $sorted) { $ok = false; }
+}
+echo $ok ? "pick ok\n" : "pick BAD\n";
+$list = [1, 2, 3, 4, 5, 6];
+$shuffled = $r->shuffleArray($list);
+$sorted = $shuffled;
+sort($sorted);
+echo ($sorted === $list && array_is_list($shuffled)) ? "shuffle ok\n" : "shuffle BAD\n";
+$assoc = $r->shuffleArray(["a" => 1, "b" => 2, "c" => 3]);
+sort($assoc);
+echo json_encode($assoc), json_encode($r->shuffleArray([])), "\n";
+echo $r->getInt(3, 3), "\n";
+try { $r->getInt(5, 1); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "Random\\Randomizer::pickArrayKeys(): Argument #1 ($array) must not be empty\n\
+Random\\Randomizer::pickArrayKeys(): Argument #2 ($num) must be between 1 and the number of elements in argument #1 ($array)\n\
+Random\\Randomizer::pickArrayKeys(): Argument #2 ($num) must be between 1 and the number of elements in argument #1 ($array)\n\
+pick ok\nshuffle ok\n[1,2,3][]\n3\n\
+Random\\Randomizer::getInt(): Argument #2 ($max) must be greater than or equal to argument #1 ($min)\n"
+    );
+}
+
+/// Verifies `str_getcsv()` preserves quoted separators and collapses doubled enclosures.
+#[test]
+fn test_str_getcsv_compatibility_helper() {
+    let out = compile_and_run(
+        r#"<?php
+$fields = str_getcsv('one,"two,three","say ""hi"""', ',', '"', '');
+echo count($fields), ':', $fields[0], ':', $fields[1], ':', $fields[2];
+"#,
+    );
+    assert_eq!(out, "3:one:two,three:say \"hi\"");
+}
+
+/// Verifies an indexed Mixed replacement array is converted element-by-element to PHP strings.
+#[test]
+fn test_str_replace_array_search_mixed_replace() {
+    let out = compile_and_run(
+        r#"<?php
+function replacements(mixed $first, mixed $second): array {
+    return [$first, $second];
+}
+echo str_replace(["a", "b"], replacements(1, null), "abc");
+"#,
+    );
+    assert_eq!(out, "1c");
+}
+
+/// Verifies a gradual search array is converted element-by-element to PHP strings.
+#[test]
+fn test_str_replace_mixed_search_array() {
+    let out = compile_and_run(
+        r#"<?php
+function searches(mixed $first, mixed $second): array {
+    return [$first, $second];
+}
+echo str_replace(searches("a", 2), ["x", "y"], "a2");
+"#,
+    );
+    assert_eq!(out, "xy");
+}
+
+/// Verifies php's three-argument `html_entity_decode()` compiles and decodes the ENT_QUOTES set.
+///
+/// php 8.5.10 declares `html_entity_decode(string $string, int $flags = ENT_QUOTES|
+/// ENT_SUBSTITUTE|ENT_HTML401, ?string $encoding = null): string` and answers `<b>`, `<b>` and
+/// `"q"'s'&` for the three calls below. elephc's contract used to declare one parameter, so the
+/// second and third were `html_entity_decode() takes exactly 1 argument` — which is what stopped
+/// `vendor/symfony/polyfill-mbstring/Mbstring.php` from compiling at all.
+///
+/// No `function_exists()` guard here on purpose: `opt-fold` folds one away before the later
+/// passes run, and a test written that way asserts nothing.
+#[test]
+fn test_html_entity_decode_accepts_php_flags_and_encoding() {
+    let out = compile_and_run(
+        r#"<?php
+echo html_entity_decode("&lt;b&gt;"), ':';
+echo html_entity_decode("&lt;b&gt;", ENT_QUOTES), ':';
+echo html_entity_decode("&quot;q&quot;&#039;s&#039;&amp;", ENT_QUOTES, 'UTF-8');
+"#,
+    );
+    assert_eq!(out, "<b>:<b>:\"q\"'s'&");
+}
+
+/// Verifies an ARRAY `$subject` answers an array, the shape php documents and elephc printed wrong.
+///
+/// php: "if `$subject` is an array, then the search and replace is performed with every entry of
+/// `$subject`, and the return value is an array as well." Measured on 8.5.10,
+/// `str_replace(["a"], ["1"], ["ab", "ba"])` is `array(0 => '1b', 1 => 'b1')`.
+///
+/// The backend has had an array-subject path for a while; the contract still declared
+/// `returns: string` and the semantics took it verbatim, so `var_dump()` of that call printed
+/// `string(2) "b1"` — a silent wrong answer with no diagnostic anywhere.
+#[test]
+fn test_str_replace_array_subject_answers_an_array() {
+    let out = compile_and_run(
+        r#"<?php
+$replaced = str_replace(["a"], ["1"], ["ab", "ba"]);
+echo gettype($replaced), ':', count($replaced), ':', $replaced[0], ':', $replaced[1];
+"#,
+    );
+    assert_eq!(out, "array:2:1b:b1");
+}
+
+/// Verifies list unpacking accepts `str_replace()`'s array-subject result.
+///
+/// This is `Mbstring::mb_stripos()` line 710 reduced to ordinary PHP. The checker refused it
+/// with "List unpacking requires an array on the right-hand side" for one reason: it had been
+/// told the right-hand side was a string.
+#[test]
+fn test_str_replace_array_subject_list_unpacks() {
+    let out = compile_and_run(
+        r#"<?php
+[$first, $second] = str_replace(["a", "b"], ["1", "2"], ["ab", "ba"]);
+echo $first, '|', $second;
+"#,
+    );
+    assert_eq!(out, "12|21");
+}
+
+/// Verifies a STRING `$subject` still answers a string, and `str_ireplace()` follows the same rule.
+#[test]
+fn test_str_replace_string_subject_keeps_its_string_result() {
+    let out = compile_and_run(
+        r#"<?php
+$scalar = str_replace(["a"], ["1"], "aba");
+echo gettype($scalar), ':', $scalar, ':';
+[$first, $second] = str_ireplace(["A", "B"], ["x", "y"], ["ab", "BA"]);
+echo $first, '|', $second;
+"#,
+    );
+    assert_eq!(out, "string:1b1:xy|yx");
+}
+
+
+/// `implode()` over integers keeps its glue. `__rt_itoa` reserves its digits at the concat offset,
+/// and this helper built its result past that offset without publishing it, so each conversion
+/// landed on the separator it had just written: `12233333` for `[1, 22, 333]`.
+#[test]
+fn test_implode_int_keeps_the_glue() {
+    let out = compile_and_run(
+        r#"<?php
+echo implode(',', [1, 22, 333]), '|', implode('--', [10, 20]), '|', implode(',', [7]);
+"#,
+    );
+    assert_eq!(out, "1,22,333|10--20|7");
+}
+
 /// Verifies `(int)` over a numeric STRING caps at PHP_INT_MAX/MIN instead of wrapping.
 ///
 /// PHP applies two different rules, and elephc was using the wrong one here. A float VALUE is
@@ -938,4 +1178,44 @@ echo (int)$finite, ",";
         out,
         "0,0,0,0,0,9223372036854775807,"
     );
+}
+
+/// `str_replace()`'s by-reference `$count`: php counts each search's replacements over the text
+/// the earlier searches produced, skips an empty search, pairs an array `$replace` by position
+/// (an exhausted one replaces with ""), and sums the counts over an array `$subject` whose keys it
+/// keeps. The fourth argument was refused outright, so Symfony's `cache:clear` -- which writes a
+/// warmed file back only when `$count` is set -- could not be compiled.
+#[test]
+fn test_str_replace_reports_its_replacement_count() {
+    let out = compile_and_run(
+        r#"<?php
+$c = str_replace("a", "x", "banana", $n); echo $c, ":", $n, "|";
+$c = str_replace(["a", "n", ""], ["1"], "banana", $n); echo $c, ":", $n, "|";
+$c = str_replace(["a", "1"], "1", "banana", $n); echo $c, ":", $n, "|";
+$c = str_replace("o", "0", ["k" => "foo", "bar", "zoo"], $n); echo json_encode($c), ":", $n, "|";
+$c = str_replace("zz", "y", "abc", $n); echo $c, ":", $n, "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "bxnxnx:3|b111:5|b1n1n1:6|{\"k\":\"f00\",\"0\":\"bar\",\"1\":\"z00\"}:4|abc:0\n"
+    );
+}
+
+/// A three-argument `str_replace()` whose search and replace are gradual arrays (untyped
+/// properties, `mixed` parameters) pairs them like php. The backend only walks `array<string>`
+/// and refused the call, so Twig's lexer -- which closes brackets with
+/// `str_replace($this->openingBrackets, $this->closingBrackets, $expect)` -- could not compile.
+#[test]
+fn test_str_replace_with_gradual_array_search_and_replace() {
+    let out = compile_and_run(
+        r#"<?php
+class L { private $open = ['(', '[', '{']; private $close = [')', ']', '}'];
+  public function m(string $e) { return str_replace($this->open, $this->close, $e); } }
+echo (new L)->m('('), (new L)->m('['), "|";
+function f(mixed $a, mixed $b, string $s) { return str_replace($a, $b, $s); }
+echo f(['a', 'n'], ['b'], 'banana'), "|", f('a', 'o', 'banana'), "\n";
+"#,
+    );
+    assert_eq!(out, ")]|bbbb|bonono\n");
 }

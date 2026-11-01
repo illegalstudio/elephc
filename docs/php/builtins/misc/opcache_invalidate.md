@@ -2,7 +2,7 @@
 title: "opcache_invalidate()"
 description: "Invalidates a script's cached opcodes, optionally without checking its timestamp."
 sidebar:
-  order: 711
+  order: 730
 ---
 
 ## opcache_invalidate()

@@ -216,8 +216,13 @@ pub(super) fn reflection_parameter_members_with_declaring_function(
         // A scope that calls `func_get_args()` carries the compiler's own `...$__elephc_func_args`
         // (and a `$__elephc_func_argc` before it). They are ABI slots, not PHP parameters, and
         // leaving them here made `getNumberOfParameters()` answer 2 and `isVariadic()` true for
-        // `function f($a) { return func_get_args(); }`, where PHP answers 1 and false.
-        if crate::names::is_generated_local_name(name) {
+        // `function f($a) { return func_get_args(); }`, where PHP answers 1 and false. With the
+        // eval bridge linked every function carries the collector, and `getNumberOfParameters()`
+        // of `read(): int` answered 1.
+        if crate::names::is_generated_local_name(name)
+            || name == crate::func_args::HIDDEN_ARGS_PARAM
+            || name == crate::func_args::HIDDEN_ARGC_PARAM
+        {
             continue;
         }
         let is_variadic = sig.variadic.as_deref() == Some(name.as_str());
@@ -235,9 +240,15 @@ pub(super) fn reflection_parameter_members_with_declaring_function(
                     .get(index)
                     .and_then(Option::as_ref)
                     .is_some());
+        // A variadic `string ...$tags` is stored as `array<string>`; its declared type is the
+        // element's, which is what php reflects when no type expression was recorded.
+        let declared_ty = match ty {
+            PhpType::Array(element) if is_variadic => element.as_ref(),
+            _ => ty,
+        };
         let type_metadata = reflection_parameter_type_metadata(
             sig.param_type_exprs.get(index).and_then(Option::as_ref),
-            ty,
+            declared_ty,
         )
         .filter(|_| has_type);
         let default_expr = sig.defaults.get(index).and_then(Option::as_ref);

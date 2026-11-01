@@ -44,4 +44,19 @@ impl RuntimeValueOps for FakeOps {
     impl_fake_construction_raw_ops!();
     impl_fake_lifecycle_scalar_ops!();
     impl_fake_numeric_string_ops!();
+
+    /// Returns a distinct sentinel per (peak, real_usage) combination.
+    ///
+    /// The trait default answers 0 for every combination, which is honest for an adapter with
+    /// no heap but gives a test NO TEETH: swapping `peak` for `real_usage` in the interpreter,
+    /// or ignoring the flag entirely, would still answer 0 and still pass. Four distinguishable
+    /// values make the dispatch itself the thing under test.
+    fn memory_usage_bytes(&mut self, peak: bool, real_usage: bool) -> Result<i64, EvalStatus> {
+        Ok(match (peak, real_usage) {
+            (false, false) => 1_000,
+            (false, true) => 2_000,
+            (true, false) => 3_000,
+            (true, true) => 4_000,
+        })
+    }
 }

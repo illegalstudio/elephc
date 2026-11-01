@@ -233,6 +233,28 @@ pub(super) fn emit_array_pop_null(ctx: &mut FunctionContext<'_>) {
     crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Void);
 }
 
+/// Returns the local slot loaded by an array-mutator argument when it came from `load_local`.
+pub(super) fn source_load_local_slot(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Result<Option<LocalSlotId>> {
+    let Some(value_ref) = ctx.function.value(value) else {
+        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+    };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(None);
+    };
+    let Some(inst_ref) = ctx.function.instruction(inst) else {
+        return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
+    };
+    if inst_ref.op == Op::LoadLocal {
+        if let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate {
+            return Ok(Some(slot));
+        }
+    }
+    Ok(None)
+}
+
 
 /// Describes which indexed-array `array_search()` lowering path applies.
 pub(super) enum ArraySearchCase {

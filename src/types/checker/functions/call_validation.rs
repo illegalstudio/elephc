@@ -135,6 +135,81 @@ fn is_assoc_spread_source(expr: &Expr, env: &TypeEnv) -> bool {
     }
 }
 
+/// Returns whether an expression denotes writable storage accepted by a by-reference call.
+///
+/// Named arguments delegate to their value. Container elements remain writable when their
+/// base is itself a stable local, property, static property, or container place. Nullsafe and
+/// computed-property reads are excluded because they do not guarantee one stable write target.
+fn is_writable_call_place(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(_) | ExprKind::StaticPropertyAccess { .. } => true,
+        ExprKind::PropertyAccess { object, .. } => is_stable_place_receiver(object),
+        // `f($obj->{$name})`: the lowering reads the property into a temporary, passes that, and
+        // writes it back under the same (once-evaluated) name, as for a declared property.
+        ExprKind::DynamicPropertyAccess { object, .. } => is_stable_place_receiver(object),
+        ExprKind::ArrayAccess { array, .. } => is_stable_place_receiver(array),
+        ExprKind::NamedArg { value, .. } => is_writable_call_place(value),
+        _ => false,
+    }
+}
+
+impl Checker {
+    /// Accepts a call result bound to a by-reference parameter and records its site for the
+    /// lowering's notice; returns false for every other non-place shape.
+    pub(crate) fn record_by_ref_call_result(&mut self, arg: &Expr) -> bool {
+        let value = match &arg.kind {
+            ExprKind::NamedArg { value, .. } => value.as_ref(),
+            _ => arg,
+        };
+        if !is_call_result_argument(value) {
+            return false;
+        }
+        self.by_ref_call_result_sites.insert(value.span);
+        true
+    }
+}
+
+/// Returns whether a by-reference argument is a call result rather than a place.
+///
+/// php binds such a value to a temporary and only raises the "Only variables should be passed by
+/// reference" notice, where a literal or an operator expression stays a compile error. The
+/// lowering emits that notice and passes the value through a hidden local.
+pub(crate) fn is_call_result_argument(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::FunctionCall { .. }
+        | ExprKind::MethodCall { .. }
+        | ExprKind::StaticMethodCall { .. }
+        | ExprKind::NullsafeMethodCall { .. }
+        | ExprKind::ClosureCall { .. }
+        | ExprKind::ExprCall { .. } => true,
+        ExprKind::NamedArg { value, .. } => is_call_result_argument(value),
+        _ => false,
+    }
+}
+
+/// Returns whether a receiver chain can be read and written without changing its root.
+fn is_stable_place_receiver(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(_) | ExprKind::This | ExprKind::StaticPropertyAccess { .. } => true,
+        ExprKind::PropertyAccess { object, .. } => is_stable_place_receiver(object),
+        ExprKind::ArrayAccess { array, .. } => is_stable_place_receiver(array),
+        _ => false,
+    }
+}
+
+/// Returns whether a normalized slot still carries the exact declaration
+/// default inserted by an earlier planner pass.
+pub(super) fn is_injected_declared_default(
+    sig: &FunctionSig,
+    param_idx: usize,
+    arg: &Expr,
+) -> bool {
+    sig.defaults
+        .get(param_idx)
+        .and_then(|default| default.as_ref())
+        .is_some_and(|default| default.span == arg.span && default == arg)
+}
+
 impl Checker {
     /// Enforces PHP's syntactic "no argument unpacking after named arguments"
     /// rule on a call surface whose callee is not resolvable at compile time
@@ -198,18 +273,76 @@ impl Checker {
         ))
     }
 
-    /// Returns true when an argument expression is an l-value supported by by-reference calls.
+    /// Returns whether the named constructor binds its by-reference parameter into a property.
+    ///
+    /// `callee_desc` is `Constructor 'Class::__construct'`, the spelling the constructor checks
+    /// pass; the answer comes from the program-wide escape pre-pass.
+    fn constructor_keeps_parameter_reference(&self, callee_desc: &str, param: Option<&str>) -> bool {
+        let (Some(param), Some(rest)) = (param, callee_desc.strip_prefix("Constructor '")) else {
+            return false;
+        };
+        let Some(scope) = rest.strip_suffix('\'') else {
+            return false;
+        };
+        let scope = crate::types::checker::ref_param_widening::folded_scope_key(scope);
+        self.property_bound_ref_params.contains(&(scope, param.to_string()))
+    }
+
+    /// Refuses binding a builtin Throwable payload slot (`$this->message`, `$this->code`, ...)
+    /// to a user by-reference parameter: the slot cannot become the reference cell php shares
+    /// (see `is_native_throwable_payload_property`), and a silent copy would lose the callee's
+    /// writes. The refusal hands the class file to the runtime instead.
+    fn reject_throwable_payload_reference(
+        &mut self,
+        arg: &Expr,
+        env: &TypeEnv,
+    ) -> Result<(), CompileError> {
+        let place = match &arg.kind {
+            ExprKind::NamedArg { value, .. } => value.as_ref(),
+            _ => arg,
+        };
+        let ExprKind::PropertyAccess { object, property } = &place.kind else {
+            return Ok(());
+        };
+        let object_ty = self.infer_type(object, env)?;
+        let Some(class) = crate::types::checker::single_object_class_name(&object_ty) else {
+            return Ok(());
+        };
+        if !self.is_native_throwable_payload_property(&class, property) {
+            return Ok(());
+        }
+        Err(CompileError::new(
+            place.span,
+            &format!(
+                "The builtin Throwable property ${} cannot be passed by reference",
+                property
+            ),
+        ))
+    }
+
+    /// Returns true when an argument expression is a writable PHP l-value.
     pub(crate) fn is_by_ref_argument_lvalue(
         &mut self,
         arg: &Expr,
         env: &TypeEnv,
     ) -> Result<bool, CompileError> {
+        let writable = is_writable_call_place(arg);
         match &arg.kind {
             ExprKind::Variable(_) => Ok(true),
-            ExprKind::ArrayAccess { array, .. } => {
-                self.is_addressable_ref_array_receiver(array, env)
+            ExprKind::NamedArg { value, .. } => {
+                let addressable = self.is_by_ref_argument_lvalue(value, env)?;
+                Ok(writable || addressable)
             }
-            _ => Ok(false),
+            // The receiver walk is not only a predicate: an element of a declared property
+            // (`f($holder->items[0])`) promotes that property to a reference property, so every
+            // later write publishes through its cell before releasing the old value. Answering
+            // from the writable-place shape alone skipped the promotion, and a destructor run by
+            // `$holder->items = [...]` read the slot while its old array was being freed.
+            ExprKind::ArrayAccess { array, .. } => {
+                let addressable = self.is_addressable_ref_array_receiver(array, env)?;
+                Ok(writable || addressable)
+            }
+            _ => Ok(writable),
         }
     }
 
@@ -549,11 +682,94 @@ impl Checker {
             (PhpType::Mixed, _) => true,
             (_, PhpType::Never) => true, // never is the bottom type — compatible with any expected type
             (PhpType::Bool, PhpType::False) => true,
-            // The backend has explicit boxed-Mixed cast funnels for scalar boundaries.
-            // Refcounted/object boundaries do not yet validate the runtime tag, so keep
-            // those statically rejected instead of treating Mixed as universally safe.
-            (PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str, PhpType::Mixed) => true,
+            // The backend has explicit boxed-gradual cast funnels for scalar boundaries. Most
+            // unions use the same boxed representation as `Mixed`; compact nullable integers use
+            // `TaggedScalar` instead and deliberately remain excluded until their ABI conversion
+            // is explicit.
+            (
+                PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str,
+                actual @ (PhpType::Mixed | PhpType::Union(_)),
+            ) if actual.codegen_repr() == PhpType::Mixed => true,
+            // Boxed unions keep the same representation. Concrete heap boundaries below use
+            // shared EIR narrowing with runtime checks before their payload is exposed.
+            (PhpType::Union(_), PhpType::Mixed) => true,
+            (
+                PhpType::Object(_) | PhpType::Callable,
+                actual @ (PhpType::Mixed | PhpType::Union(_)),
+            ) if actual.codegen_repr() == PhpType::Mixed => true,
+            // A parameter declared as a UNION of heap shapes -- classes, `callable`, or both --
+            // accepts a boxed value for the same reason the single-shape arm above does: the
+            // representation is the identical boxed cell and the class is narrowed with a
+            // runtime check before the payload is exposed. Without this, the union destination
+            // was stricter than either of its members would have been alone.
+            //
+            // `$container->get($id)` is declared `?object` by PSR-11, so every eager service
+            // fetch handed to a `callable|SomeClass` parameter arrives as `Object("")|Void`.
+            // php compiles that and raises its TypeError at run time if the object turns out
+            // not to match; refusing it at compile time rejects a program php accepts.
+            // A plain `Mixed` actual is already accepted by the `(Union, Mixed)` arm above.
+            (
+                PhpType::Union(expected_members),
+                actual @ PhpType::Union(_),
+            ) if actual.codegen_repr() == PhpType::Mixed
+                && expected_members
+                    .iter()
+                    .all(|member| matches!(member, PhpType::Object(_) | PhpType::Callable)) =>
+            {
+                true
+            }
+            // The same destination fed an object whose CLASS is statically unknown. A single
+            // class destination already accepts one; a union of them refusing it would make the
+            // union stricter than any of its members, which is not what a union means.
+            (PhpType::Union(expected_members), PhpType::Object(actual_name))
+                if actual_name.is_empty()
+                    && expected_members
+                        .iter()
+                        .all(|member| matches!(member, PhpType::Object(_) | PhpType::Callable)) =>
+            {
+                true
+            }
+            (PhpType::Iterable, actual @ (PhpType::Mixed | PhpType::Union(_)))
+                if actual.codegen_repr() == PhpType::Mixed => true,
+            (PhpType::Array(element), actual @ (PhpType::Mixed | PhpType::Union(_)))
+                if element.codegen_repr() == PhpType::Mixed
+                    && actual.codegen_repr() == PhpType::Mixed => true,
+            (
+                PhpType::AssocArray { key, value },
+                actual @ (PhpType::Mixed | PhpType::Union(_)),
+            )
+                if key.codegen_repr() == PhpType::Mixed
+                    && value.codegen_repr() == PhpType::Mixed
+                    && actual.codegen_repr() == PhpType::Mixed => true,
+            // A declared `array` is the boxed packed-or-hash union, and it accepts a boxed value
+            // the way the concrete `array<mixed>` arm above does: the boundary narrows it with a
+            // runtime check. `$this->metadata = unpack(...)` stores `array|false` into an
+            // `array` property, and a `?array &$failed` out-parameter is returned as `array`.
+            (expected @ PhpType::Union(_), actual @ PhpType::Union(_))
+                if expected.is_php_array() && actual.codegen_repr() == PhpType::Mixed => true,
             (PhpType::Iterable, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable) => true,
+            // The other direction, which php also accepts once the value really is an array: the
+            // argument lowering materialises the iterable first, exactly as `iterator_to_array()`
+            // would, so the callee never sees a Traversable. `twig/twig`'s
+            // `SandboxExtension::ensureSpreadAllowed(iterable $obj)` converts its Traversable half
+            // and then hands the result to a parameter declared `array`.
+            (PhpType::Array(_) | PhpType::AssocArray { .. }, PhpType::Iterable) => true,
+            // A BOXED union that overlaps the destination is php's runtime question, not a
+            // compile-time refusal: php checks the value the call actually passes. Symfony's
+            // `getParameter()` is declared `array|bool|string|int|float|\UnitEnum|null`, and
+            // `cache:clear` hands the cache directory it returns to `Filesystem::remove(string|
+            // iterable $files)` -- refusing that kept the command out of the build.
+            (PhpType::Union(expected_members), actual @ PhpType::Union(actual_members))
+                if actual.codegen_repr() == PhpType::Mixed
+                    && actual_members.iter().any(|actual_member| {
+                        !matches!(actual_member, PhpType::Void)
+                            && expected_members.iter().any(|expected_member| {
+                                Self::types_compatible(expected_member, actual_member)
+                            })
+                    }) =>
+            {
+                true
+            }
             (PhpType::Union(expected_members), PhpType::Union(actual_members)) => actual_members
                 .iter()
                 .all(|actual_member| {
@@ -597,7 +813,18 @@ impl Checker {
         span: crate::span::Span,
         context: &str,
     ) -> Result<(), CompileError> {
-        if Self::types_compatible(expected, actual) || self.type_accepts(expected, actual) {
+        let member_accepted = |member: &PhpType| {
+            Self::types_compatible(expected, member)
+                || self.type_accepts(expected, member)
+                || self.object_argument_may_narrow_to(expected, member)
+        };
+        // An argument UNION is accepted member by member, each through whichever rule fits it:
+        // Carbon's `setTimezone(static::safeCreateDateTimeZone(...))` passes `?CarbonTimeZone` to
+        // `DateTimeZone|string|int`, where `null` is the coercion `types_compatible` admits and
+        // `CarbonTimeZone` the subclass only `type_accepts` knows; neither rule took both.
+        if member_accepted(actual)
+            || matches!(actual, PhpType::Union(members) if members.iter().all(|member| member_accepted(member)))
+        {
             Ok(())
         } else {
             let mut message = format!("{} expects {}, got {}", context, expected, actual);
@@ -606,6 +833,40 @@ impl Checker {
                 message.push_str(&hint);
             }
             Err(CompileError::new(span, &message))
+        }
+    }
+
+    /// Whether an object argument of a SUPERTYPE can satisfy a class-typed parameter.
+    ///
+    /// php checks a class parameter against the object that actually arrives, so passing a
+    /// `Node` (or an interface, `Phase2OptimizableConditional`) to a parameter declared
+    /// `ConditionalTerm|ConditionalPrimary|ConditionalFactor` is valid whenever the runtime class
+    /// is one of them, and a `TypeError` otherwise. The closed world cannot disprove it, so it is
+    /// accepted here when some expected class is a SUBTYPE of the argument's static type; the
+    /// call lowering guards the narrowing at run time (Doctrine's `Parser` and `SqlWalker`, the
+    /// type-info `Type::collection()` family).
+    fn object_argument_may_narrow_to(&self, expected: &PhpType, actual: &PhpType) -> bool {
+        let PhpType::Object(actual_name) = actual else {
+            return false;
+        };
+        if actual_name.is_empty() {
+            return false;
+        }
+        let narrows_to = |expected_name: &str| {
+            !expected_name.is_empty()
+                && (self.is_subclass_of(expected_name, actual_name)
+                    || self.class_implements_interface(expected_name, actual_name)
+                    || self.interface_extends_interface(expected_name, actual_name))
+        };
+        match expected {
+            PhpType::Object(expected_name) => narrows_to(expected_name),
+            PhpType::Union(members) => {
+                members.iter().all(|member| matches!(member, PhpType::Object(_) | PhpType::Void))
+                    && members.iter().any(|member| {
+                        matches!(member, PhpType::Object(name) if narrows_to(name))
+                    })
+            }
+            _ => false,
         }
     }
 
@@ -639,6 +900,91 @@ impl Checker {
             false,
             false,
             false,
+            false,
+        )
+    }
+
+    /// `check_known_callable_call` for a callback the ENGINE invokes rather than the source.
+    ///
+    /// `usort()`, `uksort()`, `array_map()` and the rest do not call their callback from the
+    /// calling file; the engine calls it, under PHP's COERCIVE parameter binding whatever
+    /// `strict_types` that file declared — which is why the callback checks already run inside
+    /// `with_internal_callback_binding`. The argument types the checker synthesizes for such a
+    /// call are the container's element or KEY types, and an array key is `int|string` at
+    /// runtime however the array was inferred, so a comparator declared with `string`
+    /// parameters has to accept the `Int` key type an indexed array reports. PHP binds it; the
+    /// runtime callable invoker performs the matching adaptation.
+    pub(crate) fn check_engine_invoked_callback_call(
+        &mut self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+        caller_env: &TypeEnv,
+        callee_desc: &str,
+    ) -> Result<PhpType, CompileError> {
+        self.check_known_callable_call_with_options(
+            sig,
+            args,
+            span,
+            caller_env,
+            callee_desc,
+            false,
+            true,
+            false,
+            false,
+            false,
+        )
+    }
+
+    /// `check_known_callable_call` for a closure literal the engine invokes with a fixed argument
+    /// list: surplus arguments are ignored, as PHP ignores them for any userland function.
+    pub(crate) fn check_known_userland_callable_call(
+        &mut self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+        caller_env: &TypeEnv,
+        callee_desc: &str,
+    ) -> Result<PhpType, CompileError> {
+        self.check_known_callable_call_with_options(
+            sig,
+            args,
+            span,
+            caller_env,
+            callee_desc,
+            false,
+            false,
+            true,
+            false,
+            false,
+        )
+    }
+
+    /// `check_engine_invoked_callback_call` for a callback known to be USERLAND code.
+    ///
+    /// PHP passes a userland function every argument the engine supplies and lets it ignore the
+    /// ones it does not declare: `preg_replace_callback('/x/', fn() => 'y', $s)` and
+    /// `array_map(fn() => 1, $a)` are ordinary PHP. Only an INTERNAL function rejects surplus
+    /// arguments, which is why this is not the default for every callback.
+    pub(crate) fn check_engine_invoked_userland_callback_call(
+        &mut self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+        caller_env: &TypeEnv,
+        callee_desc: &str,
+    ) -> Result<PhpType, CompileError> {
+        self.check_known_callable_call_with_options(
+            sig,
+            args,
+            span,
+            caller_env,
+            callee_desc,
+            false,
+            true,
+            true,
+            false,
+            false,
         )
     }
 
@@ -659,9 +1005,16 @@ impl Checker {
         callee_desc: &str,
         owner_class: &str,
     ) -> Result<PhpType, CompileError> {
-        let coercive = self.class_is_user_declared(owner_class);
+        let coercive = self.class_supports_coercive_param_binding(owner_class);
         let internal_sig = self.internal_operand_binding_signature(owner_class, sig);
         let sig = internal_sig.as_ref().unwrap_or(sig);
+        // php ignores surplus arguments to any userland function (`$strictValidator->isValid($v,
+        // false, true)` in Symfony's `EmailValidator`, written for egulias 1's wider signature).
+        // Only an internal callee rejects them, which compiler-injected classes stand in for.
+        // A constructor stays strict: a fixed `new` has no lowering that evaluates and drops the
+        // surplus yet (only the dynamic-`new` ladder does, for side-effect-free extras).
+        let userland = self.class_is_user_declared(owner_class)
+            && !callee_desc.starts_with("Constructor");
         self.check_known_callable_call_with_options(
             sig,
             args,
@@ -670,6 +1023,40 @@ impl Checker {
             callee_desc,
             false,
             coercive,
+            userland,
+            false,
+            true,
+        )
+    }
+
+    /// `check_user_declared_call` for a receiver whose SUBCLASSES declare more parameters than the
+    /// signature in hand.
+    ///
+    /// PHP dispatches on the runtime class and ignores arguments a userland function does not
+    /// declare, so a call that looks over-supplied for the type in hand is exactly right for an
+    /// override. `twig/twig`'s `IncludeNode` is the shape: it declares
+    /// `addGetTemplate(Compiler $compiler/* , string $template = '' */)` with the second parameter
+    /// COMMENTED OUT for backwards compatibility, `EmbedNode` overrides it with two, and
+    /// `IncludeNode` itself calls it with two.
+    pub(crate) fn check_user_declared_call_with_advisory_arity(
+        &mut self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+        caller_env: &TypeEnv,
+        callee_desc: &str,
+        owner_class: &str,
+    ) -> Result<PhpType, CompileError> {
+        let coercive = self.class_supports_coercive_param_binding(owner_class);
+        self.check_known_callable_call_with_options(
+            sig,
+            args,
+            span,
+            caller_env,
+            callee_desc,
+            false,
+            coercive,
+            true,
             false,
             true,
         )
@@ -686,7 +1073,7 @@ impl Checker {
         callee_desc: &str,
         owner_class: &str,
     ) -> Result<PhpType, CompileError> {
-        let coercive = self.class_is_user_declared(owner_class);
+        let coercive = self.class_supports_coercive_param_binding(owner_class);
         let internal_sig = self.internal_operand_binding_signature(owner_class, sig);
         let sig = internal_sig.as_ref().unwrap_or(sig);
         self.check_known_callable_call_with_options(
@@ -697,6 +1084,7 @@ impl Checker {
             callee_desc,
             true,
             coercive,
+            false,
             true,
             true,
         )
@@ -724,10 +1112,31 @@ impl Checker {
     /// Compiler-injected classes carry `Span::dummy()` as their declaration span, which is the
     /// only marker distinguishing them from user declarations. An unknown name is treated as
     /// not user-declared so an unresolved receiver never silently gains coercive binding.
+    ///
+    /// An interface counts too: a call dispatched through a user interface binds the arguments
+    /// with the interface's signature, and php coerces them exactly as for a class method.
+    /// Symfony's `ConstraintViolationBuilderInterface::setParameter(string $key, string $value)`
+    /// takes ints from ten validators, and refusing them interpreted every one of those files.
     fn class_is_user_declared(&self, class_name: &str) -> bool {
         self.classes
             .get(class_name)
             .is_some_and(|info| info.declaration_span != crate::span::Span::dummy())
+            || self
+                .interfaces
+                .get(class_name)
+                .is_some_and(|info| info.declaration_span != crate::span::Span::dummy())
+    }
+
+    /// Returns whether ordinary EIR argument lowering can apply PHP scalar parameter coercions.
+    ///
+    /// `IteratorIterator` is a compiled prelude class: psysh's Hoa `FileFinder` passes the int
+    /// `RecursiveIteratorIterator` mode as its `?string $class`, which php coerces.
+    fn class_supports_coercive_param_binding(&self, class_name: &str) -> bool {
+        self.class_is_user_declared(class_name)
+            || matches!(
+                class_name.trim_start_matches('\\'),
+                "DateTime" | "DateTimeImmutable" | "IteratorIterator"
+            )
     }
 
     /// Validates a known callable call while allowing spread arguments for by-reference
@@ -749,6 +1158,34 @@ impl Checker {
             true,
             false,
             true,
+            true,
+            false,
+        )
+    }
+
+    /// Validates a call made THROUGH a callable value, whose arity is advisory.
+    ///
+    /// The signature is inferred from the callables elephc has seen flow into the slot, not
+    /// declared by the callee, and PHP binds a user function's declared parameters while ignoring
+    /// the surplus. Only a shortfall below the required count is a defect in every shape.
+    pub(crate) fn check_callable_value_call(
+        &mut self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+        caller_env: &TypeEnv,
+        callee_desc: &str,
+    ) -> Result<PhpType, CompileError> {
+        self.check_known_callable_call_with_options(
+            sig,
+            args,
+            span,
+            caller_env,
+            callee_desc,
+            false,
+            false,
+            true,
+            false,
             false,
         )
     }
@@ -769,6 +1206,7 @@ impl Checker {
         callee_desc: &str,
         allow_by_ref_spread: bool,
         coercive_param_binding: bool,
+        callee_arity_is_advisory: bool,
         descriptor_invocation: bool,
         allow_property_ref_places: bool,
     ) -> Result<PhpType, CompileError> {
@@ -829,7 +1267,9 @@ impl Checker {
                         ),
                     ));
                 }
-            } else if effective_arg_count < required || effective_arg_count > sig.params.len() {
+            } else if effective_arg_count < required
+                || (effective_arg_count > sig.params.len() && !callee_arity_is_advisory)
+            {
                 return Err(CompileError::new(
                     span,
                     &format!(
@@ -858,7 +1298,7 @@ impl Checker {
             } else if descriptor_invocation {
                 self.infer_descriptor_call_arg_type(arg, caller_env)?
             } else {
-                self.infer_type(arg, caller_env)?
+                self.infer_call_argument_type(arg, caller_env)?
             };
             let can_widen_by_ref_local = self.by_ref_argument_can_widen_local_to_mixed(arg)
                 || self.boxed_reference_promotion_pending(arg, span);
@@ -866,8 +1306,13 @@ impl Checker {
                 continue;
             }
             if param_idx < regular_param_count {
+                // An omitted trailing default the planner materialized is not a caller
+                // expression at all, so neither the l-value shape nor the reference binding
+                // has anything to say about it.
+                let omitted_default = defaults.get(param_idx).copied().unwrap_or(false)
+                    || is_injected_declared_default(sig, param_idx, arg);
                 let supplied_reference = sig.ref_params.get(param_idx).copied().unwrap_or(false)
-                    && !defaults.get(param_idx).copied().unwrap_or(false);
+                    && !omitted_default;
                 if supplied_reference && !self.internal_callback_binding {
                     if descriptor_invocation && matches!(arg.kind, ExprKind::ArrayAccess { .. }) {
                         let param_name = sig
@@ -886,6 +1331,18 @@ impl Checker {
                     // The callee holds a reference to this local from here on, and it can
                     // escape, so the local is never kill/retype eligible in this body.
                     self.record_reference_alias_root(arg);
+                    // A constructor that STORES the reference (`$this->message = &$message`) and
+                    // is handed the payload slot (`new class($this->message, ...)`, Symfony's
+                    // `AutowiringFailedException`) binds it to a copy: the slot cannot become a
+                    // reference cell, and the lazy message idiom only needs the final text. The one
+                    // divergence is timing -- the message callback runs when the object is
+                    // assigned to the slot (as php does itself under xdebug) instead of at the
+                    // first `getMessage()`. A callee that WRITES through the parameter would
+                    // silently lose its writes, so those stay refused.
+                    let param_name = sig.params.get(param_idx).map(|(name, _)| name.as_str());
+                    if !self.constructor_keeps_parameter_reference(callee_desc, param_name) {
+                        self.reject_throwable_payload_reference(arg, caller_env)?;
+                    }
                     let property_place = allow_property_ref_places
                         && !source_has_spread
                         && match sig.params.get(param_idx).map(|(_, ty)| ty) {
@@ -894,7 +1351,10 @@ impl Checker {
                             }
                             None => false,
                         };
-                    if !property_place && !self.is_by_ref_argument_lvalue(arg, caller_env)? {
+                    if !property_place
+                        && !self.is_by_ref_argument_lvalue(arg, caller_env)?
+                        && !self.record_by_ref_call_result(arg)
+                    {
                         let param_name = sig
                             .params
                             .get(param_idx)
@@ -910,6 +1370,8 @@ impl Checker {
                     }
                 }
                 if let Some((param_name, expected_ty)) = sig.params.get(param_idx) {
+                    self.binding_position = if descriptor_invocation { 0 } else { param_idx + 1 };
+                    self.forget_definite_param_mismatch(arg);
                     let runtime_descriptor_projection = actual_ty.codegen_repr() == PhpType::Mixed
                         && descriptor_projected
                         && !supplied_reference;
@@ -942,12 +1404,26 @@ impl Checker {
                     if !runtime_descriptor_projection
                         && sig.declared_params.get(param_idx).copied().unwrap_or(false)
                     {
-                        self.require_strict_types_param_binding(
+                        let context = format!("{} parameter ${}", callee_desc, param_name);
+                        if let Err(err) = self.require_strict_types_param_binding(
                             expected_ty,
                             &actual_ty,
                             arg.span,
-                            &format!("{} parameter ${}", callee_desc, param_name),
-                        )?;
+                            &context,
+                        ) {
+                            if self.defer_definite_param_mismatch(
+                                expected_ty,
+                                &actual_ty,
+                                arg,
+                                &context,
+                                supplied_reference,
+                            ) {
+                                // php binds this argument when the call RUNS and throws there.
+                                param_idx += 1;
+                                continue;
+                            }
+                            return Err(err);
+                        }
                     }
                     // A proven callable array is accepted only where EIR materializes a real
                     // descriptor for the declared Callable slot. Untracked Array(Mixed) values
@@ -973,12 +1449,40 @@ impl Checker {
                                 supplied_reference,
                             )?;
                         } else {
-                            self.require_compatible_arg_type(
+                            let declared_value_param = sig
+                                .declared_params
+                                .get(param_idx)
+                                .copied()
+                                .unwrap_or(false)
+                                && !sig.ref_params.get(param_idx).copied().unwrap_or(false);
+                            // The same four guards `require_bound_param_arg_type` consults on the
+                            // coercive path. The gradual pair was missing here, so a value PHP checks
+                            // at the call -- `$container->getParameter()`, declared
+                            // `array|bool|string|int|float|UnitEnum|null`, reaching `?string $buildDir`
+                            // in Symfony's `WarmableInterface::warmUp()` -- was refused statically on an
+                            // INTERFACE-dispatched call while the identical call on the concrete class
+                            // was accepted.
+                            let has_runtime_guard = crate::types::param_binding::object_requires_runtime_nominal_guard(
                                 expected_ty,
                                 &actual_ty,
-                                arg.span,
-                                &format!("{} parameter ${}", callee_desc, param_name),
-                            )?;
+                            ) || crate::types::param_binding::gradual_object_requires_runtime_nominal_guard(
+                                expected_ty,
+                                &actual_ty,
+                            ) || crate::types::param_binding::nullable_int_requires_runtime_param_guard(
+                                expected_ty,
+                                &actual_ty,
+                            ) || crate::types::param_binding::gradual_union_requires_runtime_param_guard(
+                                expected_ty,
+                                &actual_ty,
+                            );
+                            if !declared_value_param || !has_runtime_guard {
+                                self.require_compatible_arg_type(
+                                    expected_ty,
+                                    &actual_ty,
+                                    arg.span,
+                                    &format!("{} parameter ${}", callee_desc, param_name),
+                                )?;
+                            }
                         }
                     }
                 }
@@ -1000,6 +1504,7 @@ impl Checker {
                     .and_then(|index| sig.ref_params.get(index))
                     .copied()
                     .unwrap_or(false);
+                self.binding_position = 0;
                 if variadic_by_ref {
                     if !self.internal_callback_binding {
                         self.validate_by_ref_variadic_argument(
@@ -1021,24 +1526,36 @@ impl Checker {
                     // checker does not otherwise consume. The slot is the one
                     // `variadic_param_index` names, so it stays the collector's flag even when a
                     // hidden parameter shares the signature.
-                    if variadic_index
+                    let declared_variadic = variadic_index
                         .and_then(|index| sig.declared_params.get(index))
                         .copied()
-                        .unwrap_or(false)
-                    {
-                        self.require_strict_types_param_binding(
+                        .unwrap_or(false);
+                    if coercive_param_binding && declared_variadic {
+                        self.require_bound_param_arg_type(
+                            expected_ty,
+                            &actual_ty,
+                            arg,
+                            caller_env,
+                            &format!("{} variadic parameter ${}", callee_desc, vname),
+                            None,
+                            variadic_by_ref,
+                        )?;
+                    } else {
+                        if declared_variadic {
+                            self.require_strict_types_param_binding(
+                                expected_ty,
+                                &actual_ty,
+                                arg.span,
+                                &format!("{} variadic parameter ${}", callee_desc, vname),
+                            )?;
+                        }
+                        self.require_compatible_arg_type(
                             expected_ty,
                             &actual_ty,
                             arg.span,
                             &format!("{} variadic parameter ${}", callee_desc, vname),
                         )?;
                     }
-                    self.require_compatible_arg_type(
-                        expected_ty,
-                        &actual_ty,
-                        arg.span,
-                        &format!("{} variadic parameter ${}", callee_desc, vname),
-                    )?;
                 }
             }
             param_idx += 1;

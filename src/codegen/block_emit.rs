@@ -12,6 +12,9 @@
 //!   user blocks run.
 //! - Executable and library PHP frames publish local cleanup activations so a throw
 //!   releases abandoned frame owners before control reaches the surviving catch.
+
+use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 use std::fmt::Write as _;
 
 use crate::codegen::abi;
@@ -24,7 +27,7 @@ use crate::codegen::Emit;
 use crate::codegen::WebIsolation;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::codegen_support::DeferredFiberWrapper;
-use crate::ir::{BasicBlock, Function, InstId, Module};
+use crate::ir::{BasicBlock, Function, InstId, Module, Op};
 use crate::names::{
     function_epilogue_symbol, function_symbol, method_symbol, php_symbol_key,
     static_method_symbol, static_property_symbol,
@@ -72,6 +75,22 @@ pub(super) fn module_hosts_php_ext(module: &Module) -> bool {
 }
 
 
+/// Fails on a body that did not lower, or records it when surveying (see `ELEPHC_CODEGEN_SURVEY`).
+fn record_or_fail(
+    emitted: Result<()>,
+    survey: bool,
+    surveyed: &mut Vec<String>,
+) -> Result<()> {
+    match emitted {
+        Ok(()) => Ok(()),
+        Err(err) if survey => {
+            surveyed.push(err.to_string());
+            Ok(())
+        }
+        Err(err) => Err(err),
+    }
+}
+
 /// Emits EIR bodies and the process entry, retaining shared state for deferred helper emission.
 ///
 /// `web` restructures the entry point: the top-level body is emitted as the
@@ -94,7 +113,6 @@ pub(super) fn emit_module(
     web: bool,
     web_isolation: WebIsolation,
 ) -> Result<SharedCodegenState> {
-    let mut shared = SharedCodegenState::default();
     // A program hosting PHP extensions declares the engine's shutdown routine; every
     // process-exit sequence emitted below then runs it (RSHUTDOWN, MSHUTDOWN) after output
     // is flushed, as php-src does. Executables only: a library never exits the process.
@@ -114,7 +132,23 @@ pub(super) fn emit_module(
         // decided on the plain text would gate an emission it did not measure. Folding is a
         // size optimization for executables; library builds keep every body.
         && emit == Emit::Executable;
+    let size_trace = std::env::var_os("ELEPHC_CODEGEN_SIZE_TRACE").is_some();
+    // `ELEPHC_CODEGEN_SURVEY=1` keeps emitting after a body fails and reports every backend error
+    // in one pass. Codegen is the LAST phase: a `--web` build of the Symfony app spends twelve
+    // minutes in the front end before the first instruction is lowered, so learning one blocker
+    // per run is the expensive way to learn five. Off by default -- a real build must still stop
+    // at the first error, because everything after it is emitted against half-registered state.
+    let survey = std::env::var_os("ELEPHC_CODEGEN_SURVEY").is_some();
+    // Diagnostic: how many bodies could have been emitted without the shared caches at all.
+    let count_shared_touches = std::env::var_os("ELEPHC_CODEGEN_SHARED_TOUCHES").is_some();
+    let mut bodies_touching_shared = 0usize;
+    let mut bodies_total = 0usize;
+    let mut surveyed: Vec<String> = Vec::new();
+    let mut shared = SharedCodegenState::for_module(module);
     shared.counters = counters;
+    // Read before the move: the parallel pass below stays off while instrumentation is on,
+    // because the id a body is given depends on the order bodies are emitted in.
+    let instrumented = !matches!(instrument, crate::codegen::Instrumentation::Off);
     shared.instrument = instrument;
     if probe {
         let main_symbol = if web {
@@ -128,6 +162,8 @@ pub(super) fn emit_module(
             data.add_named_symbol(symbol, &key);
         }
     }
+    let mut inventory = BackendInventory::from_env();
+    super::source_units::emit_state_helpers(module, emitter, data);
     function_variants::emit_dispatchers(module, emitter, data);
     super::shared_mbstring_callable::emit(module, emitter, data, &mut shared)?;
     // Emitted before the module's own bodies so every string context that calls them is
@@ -139,7 +175,50 @@ pub(super) fn emit_module(
         &mut shared,
         regalloc_linear,
     )?;
+    super::shared_mixed_callable::emit_shared_mixed_callable_helpers(
+        module,
+        emitter,
+        data,
+        &mut shared,
+        regalloc_linear,
+    )?;
     super::shared_count_guard::emit_shared_count_guard(
+        module,
+        emitter,
+        data,
+        &mut shared,
+        regalloc_linear,
+    )?;
+    super::shared_static_throw::emit_shared_static_throw(
+        module,
+        emitter,
+        data,
+        &mut shared,
+        regalloc_linear,
+    )?;
+    super::shared_null_method_trace::emit_shared_null_method_trace_helper(
+        module,
+        emitter,
+        data,
+        &mut shared,
+        regalloc_linear,
+    )?;
+    super::shared_type_error_given::emit_shared_type_error_given(
+        module,
+        emitter,
+        data,
+        &mut shared,
+        regalloc_linear,
+    )?;
+    super::shared_eval_status::emit_shared_eval_status(
+        module,
+        emitter,
+        data,
+        &mut shared,
+        regalloc_linear,
+    )?;
+    super::lower_inst::emit_reflection_class_table(module, emitter, data, &mut shared, regalloc_linear)?;
+    super::lower_inst::emit_shared_eval_registration_helper(
         module,
         emitter,
         data,
@@ -171,53 +250,208 @@ pub(super) fn emit_module(
     } else {
         Default::default()
     };
-    for function in module
-        .functions
-        .iter()
-        .filter(|function| !is_main(function))
+    let bodies = module_bodies(module, &body_aliases);
+    // A body that needs nothing from `shared` can be emitted on any thread; one that reaches a
+    // cache cannot, because the helper behind that cache belongs to the module exactly once.
+    // The split is discovered by emitting and rolling back, so no predicate has to be kept in
+    // step with the lowering. Every diagnostic mode below depends on emission ORDER, so each one
+    // keeps the single pass.
+    let jobs = codegen_jobs();
+    let mut serial_bodies: Vec<usize> = (0..bodies.len()).collect();
+    // Shared helpers already emitted, by key. The serial pass shares it with the workers: a
+    // helper a worker produced must not be produced again here, or the assembler sees the same
+    // symbol defined twice.
+    let mut seen_helpers: HashSet<String> = HashSet::new();
+    // The module-wide helpers emitted above the body loop (the shared Mixed string ladder, the
+    // shared callable dispatch, the count guard) can already hold a keyed helper. Seed the set
+    // from what is in the buffer, or a worker emits a second copy of it.
+    collect_helper_keys(emitter.text_from(0), &mut seen_helpers);
+    // Out-of-line functions (descriptor invokers, the named-argument normalizer) are not in the
+    // buffer until the very end, but they carry helper markers too.
+    collect_helper_keys(emitter.out_of_line_from(0), &mut seen_helpers);
+    let mut parallel_ran = false;
+    if count_shared_touches {
+        eprintln!(
+            "[elephc-codegen-shared] parallel gate: jobs={} bodies={} min={} survey={} inventory={} counters={} instrumented={}",
+            jobs,
+            bodies.len(),
+            parallel_min_bodies(),
+            survey,
+            inventory.is_enabled(),
+            counters,
+            instrumented
+        );
+    }
+    // The backend inventory no longer forces the single pass: a worker hands a body that fails
+    // to the serial pass below (`emit_chunk`), whose inventory records its refusal in order. It
+    // is on in every build that may defer class files to the runtime autoloader, so keeping the
+    // single pass for it emitted every body of the Symfony demo serially.
+    if jobs > 1
+        && bodies.len() >= parallel_min_bodies()
+        && !survey
+        && !counters
+        && !instrumented
     {
-        if let Some(survivor) = body_aliases.get(&function.name) {
-            emit_folded_body(function, survivor, emitter)?;
-            continue;
+        let worker_pass_started = Instant::now();
+        let preset = shared.module_preset();
+        let template = emitter.fresh();
+        let mut data_index = data.merge_index();
+        let data_base = data.base();
+        let (mut kept, mut deferred_bytes) = (0usize, 0usize);
+        serial_bodies.clear();
+        // Chunks arrive in any order and are merged in chunk order, each as soon as every earlier
+        // one is in: the text reaches the spill file while the workers are still running, instead
+        // of the whole program's text waiting in memory for the last worker.
+        emit_bodies_in_parallel(
+            module,
+            &bodies,
+            &template,
+            &preset,
+            &data_base,
+            jobs,
+            regalloc_linear,
+            |chunk| {
+                kept += chunk.text.len();
+                deferred_bytes += chunk.deferred_bytes;
+                serial_bodies.extend(chunk.deferred.iter().copied());
+                // A helper reached by two chunks was emitted twice, spelling the same symbols
+                // both times. Keep the first copy and drop the rest, or the assembler sees a
+                // duplicate definition; every reference resolves to the survivor either way.
+                match drop_duplicate_helpers(&chunk.text, &mut seen_helpers) {
+                    Some(deduped) => emitter.append_block(&deduped),
+                    None => emitter.append_block(&chunk.text),
+                }
+                emitter.spill_completed_text();
+                data.merge_indexed(chunk.data, &mut data_index);
+            },
+        )?;
+        let worker_pass = worker_pass_started.elapsed();
+        if count_shared_touches {
+            eprintln!(
+                "[elephc-codegen-shared] worker_pass={:.2}s",
+                worker_pass.as_secs_f64()
+            );
+            eprintln!(
+                "[elephc-codegen-shared] parallel_bytes={} deferred_bytes={} deferred_share={:.1}%",
+                kept,
+                deferred_bytes,
+                100.0 * deferred_bytes as f64 / (kept + deferred_bytes).max(1) as f64,
+            );
         }
-        emit_user_function(module, function, emitter, data, &mut shared, regalloc_linear)?;
+        parallel_ran = true;
+        // The workers' shared bodies (invoker bodies, the named-argument normalizer) live in the
+        // merged text, but this emitter never emitted them. Whatever it emits from here on (the
+        // module's tail passes run on it after `main`, past the last de-duplication) must treat
+        // them as defined, or the assembler sees the same symbol twice.
+        emitter.mark_shared_bodies_emitted(seen_helpers.iter());
+        // The appended bodies carried their own section directives; put the emitter back on a
+        // known one before the serial pass continues after them.
+        emitter.reopen_text_section(None);
     }
-    for method in &module.class_methods {
-        if let Some(survivor) = body_aliases.get(&method.name) {
-            emit_folded_body(method, survivor, emitter)?;
-            continue;
+    let serial_started = Instant::now();
+    let serial_count = serial_bodies.len();
+    for index in serial_bodies {
+        let body = bodies[index];
+        let touches_before = shared.cache_touches();
+        let body_started = emitter.checkpoint();
+        let body_ool_started = emitter.out_of_line_len();
+        let emitted = inventory.run_with_shared(
+            emitter,
+            &mut shared,
+            &body.function.name,
+            |emitter, shared| {
+                emit_module_body(module, body, emitter, data, shared, regalloc_linear)
+            },
+        );
+        record_or_fail(emitted, survey, &mut surveyed)?;
+        if parallel_ran {
+            // This body's shared state is empty of whatever the workers emitted, so it may have
+            // produced a second copy of a helper they already hold.
+            dedupe_emitted_since(emitter, body_started, body_ool_started, &mut seen_helpers);
         }
-        emit_class_method(module, method, emitter, data, &mut shared, regalloc_linear)?;
+        // Between bodies no checkpoint is held, so completed text may leave memory here.
+        emitter.spill_completed_text();
+        if count_shared_touches {
+            bodies_total += 1;
+            if shared.cache_touches() != touches_before {
+                bodies_touching_shared += 1;
+            }
+        }
     }
-    for closure in &module.closures {
-        emit_user_function(module, closure, emitter, data, &mut shared, regalloc_linear)?;
+    if count_shared_touches {
+        eprintln!(
+            "[elephc-codegen-shared] serial_tail={:.2}s over {} bodies",
+            serial_started.elapsed().as_secs_f64(),
+            serial_count,
+        );
     }
+    trace_codegen_size(size_trace, "bodies-complete", emitter);
+    if count_shared_touches {
+        eprintln!(
+            "[elephc-codegen-shared] bodies={} touching_shared_caches={} independent={}",
+            bodies_total,
+            bodies_touching_shared,
+            bodies_total - bodies_touching_shared,
+        );
+    }
+    if !surveyed.is_empty() {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} function(s) did not lower:\n  {}",
+            surveyed.len(),
+            surveyed.join("\n  ")
+        )));
+    }
+    inventory.finish()?;
     emit_eir_fiber_wrappers(module, emitter);
     // Enum case materializers are plain out-of-line functions that any user body,
     // method or closure may call, so they must exist in every emit kind — including
     // `Emit::Cdylib`, which returns before the main function is emitted.
     super::enum_singletons::emit_enum_case_materializers(emitter, module, data);
+    // Every body drains its own typed-property guard requests; anything raised outside a body
+    // (a wrapper, a materializer) is emitted here, and a copy a worker already holds is dropped.
+    {
+        let strays_started = emitter.checkpoint();
+        let strays_ool_started = emitter.out_of_line_len();
+        super::lower_inst::emit_pending_property_guard_helpers(
+            module, emitter, data, &mut shared,
+        )?;
+        if parallel_ran {
+            dedupe_emitted_since(emitter, strays_started, strays_ool_started, &mut seen_helpers);
+        }
+    }
     if emit.is_library() {
         return Ok(shared);
     }
     let main = module
         .functions
         .iter()
-        .find(|function| is_main(function))
+        .find(|function| is_main(module, function))
         .ok_or_else(|| CodegenIrError::invalid_module("EIR module has no main function"))?;
-    emit_main_function(
-        module,
-        main,
-        emitter,
-        data,
-        &mut shared,
-        gc_stats,
-        heap_debug,
-        requires_elephc_tls,
-        regalloc_linear,
-        web,
-        web_isolation,
-    )?;
+    let main_started = emitter.checkpoint();
+    let main_ool_started = emitter.out_of_line_len();
+    inventory.run_with_shared(emitter, &mut shared, &main.name, |emitter, shared| {
+        emit_main_function(
+            module,
+            main,
+            emitter,
+            data,
+            shared,
+            gc_stats,
+            heap_debug,
+            requires_elephc_tls,
+            regalloc_linear,
+            web,
+            web_isolation,
+        )?;
+        super::lower_inst::emit_pending_property_guard_helpers(module, emitter, data, shared)
+    })?;
+    if parallel_ran {
+        // main is emitted against the compiling thread's caches, which hold none of what the
+        // workers emitted, so it can repeat a helper a worker already produced.
+        dedupe_emitted_since(emitter, main_started, main_ool_started, &mut seen_helpers);
+        emitter.mark_shared_bodies_emitted(seen_helpers.iter());
+    }
+    inventory.finish()?;
     // Generate the per-request reset routine only for `--web`, and only after the
     // handler body is emitted so every function static local (including any in the
     // main body) has been recorded into `data`. The handler prologue's
@@ -241,6 +475,539 @@ pub(super) fn emit_module(
         emitter.raw(&format!("{PROBE_TEXT_END_LABEL}:"));
     }
     Ok(shared)
+}
+
+/// Records every shared-helper key already present in `text`.
+fn collect_helper_keys(text: &str, seen: &mut HashSet<String>) {
+    // One `memmem` pass over the whole text, not a `str::find` per line: building a searcher
+    // for each of millions of assembly lines showed up in the codegen profile.
+    let open = crate::codegen::context::HELPER_MARKER_OPEN;
+    let mut line_end = 0;
+    for at in memchr::memmem::find_iter(text.as_bytes(), open.as_bytes()) {
+        if at < line_end {
+            continue; // a line counts its first marker only, as the per-line scan did
+        }
+        let rest = &text[at + open.len()..];
+        let len = rest.find('\n').unwrap_or(rest.len());
+        line_end = at + open.len() + len;
+        seen.insert(rest[..len].trim().to_string());
+    }
+}
+
+/// Drops, from everything `emitter` wrote since the two start markers, the shared-helper regions
+/// whose key was already emitted.
+///
+/// Both the buffer and the out-of-line text are looked at: a helper that a body requested from
+/// inside an out-of-line scope (a descriptor invoker, the named-argument normalizer) lives in the
+/// latter, and a worker's copy of it would otherwise be defined a second time.
+fn dedupe_emitted_since(
+    emitter: &mut Emitter,
+    buf_started: usize,
+    out_of_line_started: usize,
+    seen: &mut HashSet<String>,
+) {
+    if let Some(deduped) = drop_duplicate_helpers(emitter.text_from(buf_started), seen) {
+        emitter.rollback_to(buf_started);
+        emitter.append_block(&deduped);
+    }
+    if let Some(deduped) = drop_duplicate_helpers(emitter.out_of_line_from(out_of_line_started), seen)
+    {
+        emitter.replace_out_of_line_from(out_of_line_started, &deduped);
+    }
+}
+
+/// Removes shared-helper regions whose key has already been emitted.
+///
+/// Workers emit against caches of their own, so the same helper can be produced more than once.
+/// Its symbols come from its cache key, so the copies are interchangeable: the first one seen
+/// stays and the others are dropped. Regions nest (a helper may reach another), and the decision
+/// is taken at EVERY depth of a region being kept: a builtin-callable wrapper seen for the first
+/// time still carries the invoker it reached, and when another body had already emitted that
+/// invoker the kept copy defined `_eir_shared_callable_invoker_*` a second time. Inside a dropped
+/// region nothing is looked at, so its nested keys stay unrecorded.
+fn drop_duplicate_helpers(text: &str, seen: &mut HashSet<String>) -> Option<String> {
+    use crate::codegen::context::{HELPER_MARKER_CLOSE, HELPER_MARKER_OPEN};
+    // The markers are rare against the text they sit in, so they are found with `memmem` and
+    // only their own lines are looked at; the rest is copied as whole runs. Scanning every line
+    // for both markers was most of the cost of merging a parallel pass's output.
+    let bytes = text.as_bytes();
+    let opens = memchr::memmem::find_iter(bytes, HELPER_MARKER_OPEN.as_bytes())
+        .map(|at| (at, true));
+    let closes = memchr::memmem::find_iter(bytes, HELPER_MARKER_CLOSE.as_bytes())
+        .map(|at| (at, false));
+    let mut markers: Vec<(usize, bool)> = opens.chain(closes).collect();
+    if markers.is_empty() {
+        return None;
+    }
+    markers.sort_unstable();
+    let line_start = |at: usize| memchr::memrchr(b'\n', &bytes[..at]).map_or(0, |nl| nl + 1);
+    let line_end = |at: usize| {
+        memchr::memchr(b'\n', &bytes[at..]).map_or(bytes.len(), |nl| at + nl + 1)
+    };
+    let mut out: Option<String> = None;
+    let mut copied_until = 0usize;
+    let mut depth = 0usize;
+    // The depth at which the region being dropped opened, while one is.
+    let mut dropping_at: Option<usize> = None;
+    for (at, open) in markers {
+        if open {
+            if dropping_at.is_none() {
+                let end = line_end(at);
+                let key = text[at + HELPER_MARKER_OPEN.len()..end].trim();
+                if !seen.insert(key.to_string()) {
+                    dropping_at = Some(depth);
+                    let start = line_start(at);
+                    out.get_or_insert_with(|| String::with_capacity(text.len()))
+                        .push_str(&text[copied_until..start]);
+                }
+            }
+            depth += 1;
+        } else {
+            depth = depth.saturating_sub(1);
+            if dropping_at == Some(depth) {
+                dropping_at = None;
+                copied_until = line_end(at);
+            }
+        }
+    }
+    let mut out = out?;
+    if dropping_at.is_none() {
+        out.push_str(&text[copied_until..]);
+    }
+    Some(out)
+}
+
+/// How many threads may emit bodies at once: one per core, up to `MAX_CODEGEN_JOBS`.
+///
+/// This was one for a long time, for a measured reason: a body that reached a shared codegen
+/// cache had to be emitted serially, and those were the expensive bodies, so a parallel pass
+/// spent eight threads on the cheap ones and made the build slower. What changed is that no
+/// family of those caches forces a body serial any more when the helpers emitted ahead of the
+/// bodies already filled it (`ModulePreset`), the eval registration helper is one of those, and
+/// the keyed helpers merge; on the Symfony `--web` module 111 of 9 005 bodies still defer.
+/// Measured on that module, codegen 13.3 s serial, 9.4 s at 8 jobs, 8.8 s at 12; the peak
+/// footprint goes from 1.75 GB to 2.2 GB, which is what the ceiling holds down.
+///
+/// `ELEPHC_CODEGEN_JOBS` overrides it; `ELEPHC_CODEGEN_JOBS=1` is the serial pass.
+fn codegen_jobs() -> usize {
+    if let Ok(value) = std::env::var("ELEPHC_CODEGEN_JOBS") {
+        return value.trim().parse::<usize>().unwrap_or(1).clamp(1, 64);
+    }
+    std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(1)
+        .clamp(1, MAX_CODEGEN_JOBS)
+}
+
+/// Ceiling on `codegen_jobs`: past it the phase stops getting faster and only uses more memory.
+const MAX_CODEGEN_JOBS: usize = 12;
+
+/// Fewest bodies a module needs before its bodies are emitted in parallel.
+///
+/// Below it the pass costs more than it saves -- threads to start, a fresh cache state per chunk,
+/// helpers emitted once per chunk and merged -- and a small program keeps the output the serial
+/// pass gives it. `ELEPHC_CODEGEN_PARALLEL_MIN` overrides it, which is how a test run sends every
+/// small fixture through the parallel pass.
+fn parallel_min_bodies() -> usize {
+    std::env::var("ELEPHC_CODEGEN_PARALLEL_MIN")
+        .ok()
+        .and_then(|value| value.trim().parse().ok())
+        .unwrap_or(256)
+}
+
+/// Which lowering one emittable body takes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BodyKind {
+    /// A plain function or a closure: both go through `emit_user_function`.
+    UserFunction,
+    /// A class method, which carries the legacy runtime metadata symbol shape.
+    ClassMethod,
+}
+
+/// One body the module owns, paired with the lowering it takes.
+#[derive(Clone, Copy)]
+struct ModuleBody<'a> {
+    kind: BodyKind,
+    function: &'a Function,
+    /// The survivor whose machine code this body shares, when the fold map names it.
+    survivor: Option<&'a str>,
+}
+
+/// Lists every body `emit_module` lowers, in the order a serial build emits them.
+fn module_bodies<'a>(
+    module: &'a Module,
+    aliases: &'a std::collections::HashMap<String, String>,
+) -> Vec<ModuleBody<'a>> {
+    let body = |kind, function: &'a Function| ModuleBody {
+        kind,
+        function,
+        survivor: aliases.get(&function.name).map(String::as_str),
+    };
+    module
+        .functions
+        .iter()
+        .filter(|function| !is_main(module, function))
+        .map(|function| body(BodyKind::UserFunction, function))
+        .chain(
+            module
+                .class_methods
+                .iter()
+                .map(|function| body(BodyKind::ClassMethod, function)),
+        )
+        .chain(
+            module
+                .closures
+                .iter()
+                .map(|function| body(BodyKind::UserFunction, function)),
+        )
+        .collect()
+}
+
+/// Emits one body through the lowering its kind names.
+fn emit_module_body(
+    module: &Module,
+    body: ModuleBody<'_>,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    shared: &mut SharedCodegenState,
+    regalloc_linear: bool,
+) -> Result<()> {
+    // A folded candidate keeps its EIR function but emits a jump to the survivor's body.
+    if let Some(survivor) = body.survivor {
+        return emit_folded_body(body.function, survivor, emitter);
+    }
+    match body.kind {
+        BodyKind::UserFunction => {
+            emit_user_function(module, body.function, emitter, data, shared, regalloc_linear)?
+        }
+        BodyKind::ClassMethod => {
+            emit_class_method(module, body.function, emitter, data, shared, regalloc_linear)?
+        }
+    }
+    // A typed-property guard this body asked for is emitted right behind it, never inside it.
+    super::lower_inst::emit_pending_property_guard_helpers(module, emitter, data, shared)
+}
+
+/// How many chunks the parallel pass cuts the bodies into, whatever the number of threads.
+///
+/// Fixed so that the output does not depend on the machine: each chunk starts from the same
+/// state and emits the same text whichever thread runs it, and chunks are merged in order, so a
+/// build is byte-identical at any job count. Many more chunks than threads keeps a thread from
+/// being handed one slow stretch of the module, and keeps each chunk's text small while it waits
+/// to be merged: 256 chunks peaked 90 MB below 64 on the Symfony module, at the same speed.
+const CODEGEN_CHUNKS: usize = 256;
+
+/// What one chunk produced: the text of the bodies it could emit alone, and the indexes of the
+/// ones that reached a shared cache and must be re-emitted serially.
+struct ChunkOutput {
+    /// The kept bodies' assembly, in module order.
+    text: String,
+    /// Bytes emitted for bodies that were then deferred; see `ELEPHC_CODEGEN_SHARED_TOUCHES`.
+    deferred_bytes: usize,
+    /// Body indexes that reached a shared cache, in module order.
+    deferred: Vec<usize>,
+    /// The chunk's data-section shard.
+    data: DataSection,
+}
+
+/// Emits every body it can on `jobs` threads and hands each chunk's output to `merge`, in chunk
+/// order, on the calling thread.
+///
+/// Each chunk owns its emitter, its data shard and its own `SharedCodegenState` started from
+/// `preset`, so nothing is shared mutably and the borrow checker -- not a convention -- is what
+/// guarantees it. A body whose emission reaches a cache outside the preset is rolled back and
+/// deferred, because the helper behind that cache belongs to the module exactly once.
+fn emit_bodies_in_parallel<'a>(
+    module: &'a Module,
+    bodies: &[ModuleBody<'a>],
+    template: &Emitter,
+    preset: &std::sync::Arc<super::shared_state::ModulePreset>,
+    data_base: &std::sync::Arc<crate::codegen::data_section::DataBase>,
+    jobs: usize,
+    regalloc_linear: bool,
+    mut merge: impl FnMut(ChunkOutput),
+) -> Result<()> {
+    let chunk_len = bodies.len().div_ceil(CODEGEN_CHUNKS).max(1);
+    let chunks: Vec<&[ModuleBody<'a>]> = bodies.chunks(chunk_len).collect();
+    let next_chunk = std::sync::atomic::AtomicUsize::new(0);
+    // The compile's thread-local facts, which a new thread would otherwise read as defaults.
+    let context = crate::compile_thread_context::CompileThreadContext::capture();
+    let (sender, receiver) = std::sync::mpsc::channel::<(usize, Result<ChunkOutput>)>();
+    std::thread::scope(|scope| {
+        for _ in 0..jobs.min(chunks.len()) {
+            let sender = sender.clone();
+            let (chunks, next_chunk, context) = (&chunks, &next_chunk, &context);
+            scope.spawn(move || {
+                context.install();
+                loop {
+                let index = next_chunk.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some(chunk) = chunks.get(index) else {
+                    break;
+                };
+                let output = emit_chunk(
+                    module,
+                    chunk,
+                    index * chunk_len,
+                    index,
+                    template,
+                    preset,
+                    data_base,
+                    regalloc_linear,
+                );
+                if sender.send((index, output)).is_err() {
+                    break;
+                }
+                }
+            });
+        }
+        drop(sender);
+        let mut pending: std::collections::BTreeMap<usize, Result<ChunkOutput>> =
+            std::collections::BTreeMap::new();
+        let mut next_merge = 0usize;
+        let mut failure = None;
+        for (index, output) in receiver {
+            pending.insert(index, output);
+            while let Some(output) = pending.remove(&next_merge) {
+                next_merge += 1;
+                match output {
+                    Ok(output) if failure.is_none() => merge(output),
+                    Ok(_) => {}
+                    Err(error) => {
+                        failure.get_or_insert(error);
+                    }
+                }
+            }
+        }
+        match failure {
+            Some(error) => Err(error),
+            None if next_merge < chunks.len() => {
+                Err(CodegenIrError::invalid_module("a codegen worker panicked"))
+            }
+            None => Ok(()),
+        }
+    })
+}
+
+/// Emits one chunk of bodies from a fresh state; see `emit_bodies_in_parallel`.
+fn emit_chunk<'a>(
+    module: &'a Module,
+    chunk: &[ModuleBody<'a>],
+    base: usize,
+    shard: usize,
+    template: &Emitter,
+    preset: &std::sync::Arc<super::shared_state::ModulePreset>,
+    data_base: &std::sync::Arc<crate::codegen::data_section::DataBase>,
+    regalloc_linear: bool,
+) -> Result<ChunkOutput> {
+    let mut emitter = template.fresh();
+    let mut data = DataSection::for_shard(shard, Some(std::sync::Arc::clone(data_base)));
+    let mut shared = SharedCodegenState::for_module(module);
+    shared.apply_module_preset(preset);
+    let mut deferred = Vec::new();
+    let mut deferred_bytes = 0usize;
+    // While refusals are being collected, a failing body is left to the serial pass, which
+    // records it in the inventory; failing the whole pass here would lose every other refusal.
+    let collect_refusals = BackendInventory::from_env().is_enabled();
+    for (offset, body) in chunk.iter().enumerate() {
+        let start = emitter.checkpoint();
+        // Data is rolled back with the text: a callable descriptor is a data entry that points
+        // at a text label this body defines, so keeping one without the other hands the
+        // assembler a reference with no definition.
+        let data_start = data.checkpoint();
+        let out_of_line_start = emitter.out_of_line_len();
+        let cache_mark = shared.out_of_line_cache_mark();
+        // The CACHE is deliberately not rolled back with them. Undoing a deferred body's entries
+        // makes every following body re-emit the helpers it needs, and the watch below does not
+        // bound that: one instruction's lowering can emit thousands of descriptors, so the abort
+        // cannot land inside it. Measured on the Symfony module, adding the rollback took the
+        // discarded text from 2 101 439 143 bytes to 29 397 554 561 and the worker pass from 40 s
+        // to 121 s.
+        shared.arm_deferral_watch();
+        let outcome =
+            emit_module_body(module, *body, &mut emitter, &mut data, &mut shared, regalloc_linear);
+        shared.disarm_deferral_watch();
+        match outcome {
+            Ok(()) => {}
+            Err(error) if error.is_deferred_body() || collect_refusals => {
+                deferred_bytes += emitter.text_from(start).len();
+                deferred.push(base + offset);
+                data.rollback_to(data_start);
+                // The body's out-of-line functions (invokers, wrappers) leave with it, and so do
+                // the cache entries naming them: the serial pass emits the body again with the
+                // same global symbols, and a surviving copy defined them a second time.
+                emitter.rollback_out_of_line_to(out_of_line_start);
+                shared.forget_out_of_line_caches_since(cache_mark);
+                emitter.rollback_to(start);
+                shared.forget_worker_templates();
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(ChunkOutput {
+        text: emitter.text_with_out_of_line(),
+        deferred_bytes,
+        deferred,
+        data,
+    })
+}
+
+/// Emits one opt-in checkpoint between code-generation body families.
+fn trace_codegen_size(enabled: bool, stage: &str, emitter: &Emitter) {
+    if enabled {
+        eprintln!(
+            "[elephc-codegen-size] stage={stage} emitter_bytes={}",
+            emitter.checkpoint(),
+        );
+    }
+}
+
+/// Environment variable enabling the scan-every-body backend survey.
+const BACKEND_INVENTORY_VAR: &str = "ELEPHC_BACKEND_INVENTORY";
+
+/// Collects one backend refusal per body while discarding partial assembly.
+struct BackendInventory {
+    enabled: bool,
+    scanned: usize,
+    failures: Vec<InventoryFailure>,
+}
+
+/// Records the body, groupable cause, and fully rendered backend refusal.
+struct InventoryFailure {
+    body: String,
+    cause: String,
+    detail: String,
+}
+
+impl BackendInventory {
+    /// Reads the inventory switch from the process environment.
+    fn from_env() -> Self {
+        Self::new(
+            matches!(std::env::var(BACKEND_INVENTORY_VAR).as_deref(), Ok("1"))
+                || super::collects_backend_refusals(),
+        )
+    }
+
+    /// Returns true when every body is scanned for its first refusal instead of stopping.
+    ///
+    /// The scan records one failure per body and rolls that body's assembly back, which depends
+    /// on emitting them one after another, so it keeps the single pass.
+    fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Builds an inventory with an explicit switch for deterministic tests.
+    fn new(enabled: bool) -> Self {
+        Self {
+            enabled,
+            scanned: 0,
+            failures: Vec::new(),
+        }
+    }
+
+    /// Emits one body or records its first refusal and rolls its output back.
+    #[cfg(test)]
+    fn run(
+        &mut self,
+        emitter: &mut Emitter,
+        name: &str,
+        emit: impl FnOnce(&mut Emitter) -> Result<()>,
+    ) -> Result<()> {
+        if !self.enabled {
+            return emit(emitter);
+        }
+        self.scanned += 1;
+        let checkpoint = emitter.checkpoint();
+        match emit(emitter) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                emitter.rollback_to(checkpoint);
+                self.failures.push(InventoryFailure {
+                    body: error.owner_body().unwrap_or(name).to_string(),
+                    cause: cause_key(error.message()),
+                    detail: error.to_string(),
+                });
+                Ok(())
+            }
+        }
+    }
+
+    /// Emits one body while rolling back Reflection label reservations with failed assembly.
+    fn run_with_shared(
+        &mut self,
+        emitter: &mut Emitter,
+        shared: &mut SharedCodegenState,
+        name: &str,
+        emit: impl FnOnce(&mut Emitter, &mut SharedCodegenState) -> Result<()>,
+    ) -> Result<()> {
+        if !self.enabled {
+            return emit(emitter, shared);
+        }
+        self.scanned += 1;
+        let emitter_checkpoint = emitter.checkpoint();
+        let reflection_checkpoint = shared.reflection.materializer_checkpoint();
+        match emit(emitter, shared) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                emitter.rollback_to(emitter_checkpoint);
+                shared
+                    .reflection
+                    .rollback_materializers(reflection_checkpoint);
+                self.failures.push(InventoryFailure {
+                    body: error.owner_body().unwrap_or(name).to_string(),
+                    cause: cause_key(error.message()),
+                    detail: error.to_string(),
+                });
+                Ok(())
+            }
+        }
+    }
+
+    /// Returns an aggregate error when at least one scanned body refused.
+    fn finish(&self) -> Result<()> {
+        if !self.enabled || self.failures.is_empty() {
+            return Ok(());
+        }
+        let mut error = CodegenIrError::invalid_module(self.report());
+        error.failed_bodies = self.failures.iter().map(|failure| (failure.body.clone(), failure.detail.clone())).collect();
+        Err(error)
+    }
+
+    /// Renders a cause histogram followed by per-body diagnostic details.
+    fn report(&self) -> String {
+        let mut report = format!(
+            "backend inventory: {} of {} scanned bodies could not be lowered\n\
+             (first refusal per body only, so this is a floor; no artifact was produced)\n\n\
+             by cause:\n",
+            self.failures.len(), self.scanned
+        );
+        for (cause, count) in self.causes() {
+            let _ = writeln!(report, "  {:>4}  {}", count, cause);
+        }
+        report.push_str("\nby body:\n");
+        for failure in &self.failures {
+            let _ = writeln!(report, "  {}\n        {}", failure.body, failure.detail);
+        }
+        report
+    }
+
+    /// Groups identical causes and sorts them by descending frequency.
+    fn causes(&self) -> Vec<(&str, usize)> {
+        let mut counts: HashMap<&str, usize> = HashMap::new();
+        for failure in &self.failures {
+            *counts.entry(failure.cause.as_str()).or_insert(0) += 1;
+        }
+        let mut causes: Vec<(&str, usize)> = counts.into_iter().collect();
+        causes.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(right.0)));
+        causes
+    }
+}
+
+/// Removes a trailing body attribution so equivalent causes share one bucket.
+fn cause_key(message: &str) -> String {
+    match message.rfind(" in '") {
+        Some(index) if message.ends_with('\'') => message[..index].to_string(),
+        _ => message.to_string(),
+    }
 }
 
 /// Emits the static EIR Fiber wrappers needed for closure callbacks.
@@ -408,7 +1175,7 @@ fn emit_probe_symbol_table(
         if !function.has_source_identity() {
             continue;
         }
-        if is_main(function) {
+        if is_main(module, function) {
             push(data, &mut words, main_symbol.to_string(), "{main}");
         } else {
             push(data, &mut words, user_function_entry_symbol(function), function.display_name());
@@ -534,10 +1301,10 @@ fn emit_generator_function(
     let callback_label = format!("{}__gencb", entry_label);
     let param_types = generator_param_types(function);
     // Parameters (and closure captures, which arrive as call arguments) are boxed into the
-    // coroutine's fixed `start_args` slots; there are only `FIBER_START_ARGS_MAX` of them.
+    // coroutine's fixed `start_args` slots; there are only `GENERATOR_START_ARGS_MAX` of them.
     // Reject overflow with a clear diagnostic instead of silently writing past the slots into
     // adjacent fiber fields.
-    let max_params = crate::codegen::runtime::FIBER_START_ARGS_MAX as usize;
+    let max_params = crate::codegen::runtime::GENERATOR_START_ARGS_MAX as usize;
     if param_types.len() > max_params {
         return Err(CodegenIrError::unsupported(format!(
             "generator '{}' has {} parameters including closure captures; \
@@ -641,7 +1408,7 @@ fn emit_generator_constructor(
     callback_label: &str,
     param_types: &[PhpType],
 ) {
-    use crate::codegen::runtime::{FIBER_START_ARGS_OFFSET, FIBER_START_ARG_COUNT_OFFSET};
+    use crate::codegen::runtime::{generator_start_arg_offset, FIBER_START_ARG_COUNT_OFFSET};
     let target = emitter.target;
     let n = param_types.len();
     let frame_size = gen_arg_frame_size(n);
@@ -696,7 +1463,7 @@ fn emit_generator_constructor(
     // -- box each spilled parameter into an owned Mixed cell stored in start_args --
     for (idx, ty) in param_types.iter().enumerate() {
         let slot = gen_param_slot(idx);
-        let store_off = FIBER_START_ARGS_OFFSET as usize + idx * 8;
+        let store_off = generator_start_arg_offset(idx);
         match gen_param_kind(ty) {
             GenParamKind::Mixed => {
                 abi::load_at_offset(emitter, gen_reg, slot);
@@ -837,7 +1604,7 @@ fn emit_generator_callback(
     param_types: &[PhpType],
 ) {
     use crate::codegen::runtime::generators::coro::GEN_RETURN_VALUE_OFFSET;
-    use crate::codegen::runtime::FIBER_START_ARGS_OFFSET;
+    use crate::codegen::runtime::generator_start_arg_offset;
     let target = emitter.target;
     let n = param_types.len();
     let frame_size = gen_arg_frame_size(n);
@@ -864,7 +1631,7 @@ fn emit_generator_callback(
     // -- unbox each start_args cell into its scratch frame slot --
     for (idx, ty) in param_types.iter().enumerate() {
         let slot = gen_param_slot(idx);
-        let load_off = FIBER_START_ARGS_OFFSET as usize + idx * 8;
+        let load_off = generator_start_arg_offset(idx);
         match target.arch {
             Arch::AArch64 => {
                 emitter.instruction(&format!("ldr x0, [x19, #{}]", load_off));  // load the boxed Mixed start argument
@@ -1084,8 +1851,15 @@ fn emit_main_function(
 }
 
 /// Returns true when a function is the process entry function.
-fn is_main(function: &Function) -> bool {
-    function.flags.is_main || function.name == "main"
+///
+/// The `is_main` flag decides. The bare name only stands in for a module that flags no entry at
+/// all (hand-built modules): a PHP program may declare its own `function main()`, which the
+/// module lists BEFORE the flagged entry, so a name match picked it as the process entry and
+/// dropped it from the user bodies -- top-level code was lost and eval's function registration
+/// referenced an `_fn_main` that was never emitted.
+fn is_main(module: &Module, function: &Function) -> bool {
+    function.flags.is_main
+        || (function.name == "main" && !module.functions.iter().any(|f| f.flags.is_main))
 }
 
 /// Initializes static-property storage before user code runs.
@@ -1155,24 +1929,45 @@ pub(super) fn emit_static_property_initializers(ctx: &mut FunctionContext<'_>) -
         emit_static_property_null_word(ctx, &class_name, &property);
     }
     for (class_name, property, php_type, expr) in default_initializers {
-        emit_static_property_default(ctx, &class_name, &property, &php_type, &expr)?;
+        // The refusal belongs to the declaring class, not to the entry program that runs this
+        // prologue: an initializer naming a class constant the compiled world lacks (a class
+        // left to the runtime autoloader) hands the declaring file back to the runtime too.
+        emit_static_property_default(ctx, &class_name, &property, &php_type, &expr)
+            .map_err(|error| error.owned_by(static_property_owner_body(&class_name, &property)))?;
     }
     Ok(())
 }
 
+/// Names the static property a refused initializer is recorded against (`Class::$prop`).
+///
+/// `autoload::deferral::BackendDeferral::for_module` maps the same spelling to the declaring
+/// class's file.
+pub(crate) fn static_property_owner_body(class_name: &str, property: &str) -> String {
+    format!("{}::${}", class_name, property)
+}
+
 /// Marks one typed static property without a default as uninitialized.
+///
+/// The VALUE word goes back to zero with the marker, and it must. `__rt_web_reset` releases what
+/// the property held and leaves the pointer in place; this block then runs again for the next
+/// request and says "uninitialized" while the dead pointer is still sitting there. The first
+/// store to the property releases whatever it finds in that word before overwriting it, so the
+/// leftover made it free an address the heap had already handed to someone else. Symfony's
+/// `Container::$make` coalesce-assign is exactly that shape: on the second request it freed a
+/// live service-id string and the worker took a segmentation fault. Zero releases as a no-op.
 fn emit_static_property_sentinel(ctx: &mut FunctionContext<'_>, class_name: &str, property: &str) {
     ctx.emitter.comment(&format!(
         "mark static property {}::${} uninitialized",
         class_name, property
     ));
+    let symbol = static_property_symbol(class_name, property);
+    abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 0);
     let marker_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_int_immediate(
         ctx.emitter,
         marker_reg,
         UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
     );
-    let symbol = static_property_symbol(class_name, property);
     abi::emit_store_reg_to_symbol(ctx.emitter, marker_reg, &symbol, 8);
 }
 
@@ -1201,15 +1996,35 @@ fn emit_static_property_default(
     expr: &ExprKind,
 ) -> Result<()> {
     ensure_static_property_default_type_supported(class_name, property, php_type)?;
+    if let Some(value) = crate::codegen::literal_defaults::enum_case_literal_default(
+        ctx.module, class_name, php_type, expr,
+    ) {
+        ctx.emitter.comment(&format!(
+            "initialize static property {}::${}",
+            class_name, property
+        ));
+        return emit_static_property_default_value(ctx, class_name, property, php_type, &value);
+    }
     let resolved = super::const_default_values::resolve_const_default(
         &crate::parser::ast::Expr::new(expr.clone(), crate::span::Span::synthetic()),
         &super::const_default_values::ConstDefaultContext::for_class(ctx.module, class_name),
     ).and_then(super::const_default_values::resolved_literal_default);
     let expr = resolved.as_ref().unwrap_or(expr);
+    // Whatever the shared constant resolver left symbolic: class-like constants of the owner
+    // and the program's global constants.
+    let expr = crate::codegen::eval_class_constant_helpers::resolve_class_like_constants_in_literal(
+        ctx.module,
+        class_name,
+        expr,
+    );
+    let expr = crate::codegen::literal_defaults::resolve_literal_default_global_constants(
+        &expr,
+        &ctx.module.global_constants,
+    );
     let value = literal_default_value(
         &format!("static property {}::${}", class_name, property),
         php_type,
-        expr,
+        &expr,
         "static property initializer",
     )?;
     ctx.emitter.comment(&format!(
@@ -1233,6 +2048,7 @@ fn ensure_static_property_default_type_supported(
         | PhpType::Str
         | PhpType::Void
         | PhpType::Never
+        | PhpType::Iterable
         | PhpType::Mixed
         | PhpType::Object(_)
         | PhpType::Array(_)
@@ -1254,6 +2070,13 @@ fn emit_static_property_default_value(
     value: &LiteralDefaultValue,
 ) -> Result<()> {
     match value {
+        // Only object allocation builds an initializer-thunk default.
+        LiteralDefaultValue::InitThunk { .. } => {
+            return Err(CodegenIrError::unsupported(format!(
+                "initializer thunk default for static property {}::${}",
+                class_name, property
+            )));
+        }
         LiteralDefaultValue::Int(value) => {
             let int_reg = abi::int_result_reg(ctx.emitter);
             abi::emit_load_int_immediate(ctx.emitter, int_reg, *value);
@@ -1269,40 +2092,6 @@ fn emit_static_property_default_value(
         }
         LiteralDefaultValue::Str(value) => {
             emit_string_literal_default_to_result(ctx, value);
-        }
-        // `public static Level $l = Level::Low;` — the same singleton the instance-property
-        // path loads, into the result register this function's caller then stores. See
-        // `LiteralDefaultValue::EnumCase` for why the receiver is only settled here.
-        LiteralDefaultValue::EnumCase {
-            enum_name,
-            case_name,
-        } => {
-            let is_case = ctx
-                .module
-                .enum_infos
-                .get(enum_name.as_str())
-                .is_some_and(|info| info.cases.iter().any(|case| &case.name == case_name));
-            if !is_case {
-                return Err(CodegenIrError::unsupported(format!(
-                    "enum case default {}::{} for static property {}::${}",
-                    enum_name, case_name, class_name, property
-                )));
-            }
-            crate::codegen::enum_singletons::emit_lazy_case_load_unguarded(
-                ctx.emitter,
-                ctx.module,
-                enum_name,
-                case_name,
-            );
-            // The static slot becomes a new OWNER, so it retains, exactly as the instance
-            // path and an ordinary `Enum::Case` read do (issue #349). Without it,
-            // `Config::$shared = Level::High;` releases the global's only reference. There is
-            // no object register to preserve here — the caller stores straight from the
-            // result register.
-            abi::emit_incref_if_refcounted(
-                ctx.emitter,
-                &crate::types::PhpType::Object(enum_name.clone()),
-            );
         }
         LiteralDefaultValue::Null => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
@@ -1323,6 +2112,15 @@ fn emit_static_property_default_value(
         LiteralDefaultValue::BoxedNull => {
             emit_boxed_null_literal_to_result(ctx);
         }
+        LiteralDefaultValue::EnumCase {
+            enum_name,
+            case_name,
+            boxed,
+        } => {
+            crate::codegen::literal_defaults::emit_enum_case_default_to_result(
+                ctx, enum_name, case_name, *boxed,
+            );
+        }
         LiteralDefaultValue::BoxedStr(value) => {
             emit_boxed_string_literal_default_to_result(ctx, value);
         }
@@ -1340,12 +2138,27 @@ fn emit_static_property_default_value(
             elements,
         } => {
             emit_array_literal_default_to_result(ctx, elem_type, elements)?;
+            if matches!(php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+                crate::codegen::emit_box_current_value_as_mixed(
+                    ctx.emitter,
+                    &PhpType::Array(Box::new(elem_type.clone())),
+                );
+            }
         }
         LiteralDefaultValue::AssocArray {
             value_type,
             entries,
         } => {
             emit_assoc_array_literal_default_to_result(ctx, value_type, entries)?;
+            if matches!(php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+                crate::codegen::emit_box_current_value_as_mixed(
+                    ctx.emitter,
+                    &PhpType::AssocArray {
+                        key: Box::new(PhpType::Mixed),
+                        value: Box::new(value_type.clone()),
+                    },
+                );
+            }
         }
         LiteralDefaultValue::EmptyAssocArray { value_type } => {
             emit_empty_assoc_array_literal_to_result(ctx, value_type);
@@ -1395,49 +2208,300 @@ fn emit_static_property_default_value(
 /// jumping. The finished region then goes through the late machine peepholes.
 fn emit_blocks(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let region_start = ctx.emitter.text_len();
-    let blocks = ctx.function.blocks.clone();
-    let order = block_layout::emission_order(ctx.function);
-    let use_counts = block_layout::value_use_counts(ctx.function);
+    // Borrowed for the same reason as the instruction in `lower_instruction`:
+    // `FunctionContext::function` is a `&'a Function` whose lifetime does not depend on the
+    // borrow of `ctx`, so copying the reference out lets the blocks outlive the `&mut ctx`
+    // below. The clone this replaces copied every block of every body -- its name, its
+    // instruction-id vector and its terminator -- to end a borrow that was never in the way.
+    let function = ctx.function;
+    let order = block_layout::emission_order(function);
+    let use_counts = block_layout::value_use_counts(function);
+    let loop_headers = signal_loop_headers(ctx);
+    // What the prologue established (`frame::emit_callee_saved_saves`), or `None`.
+    let frame_slot_base = ctx.emitter.frame_slot_base;
     ctx.begin_cold_section();
     for (position, &index) in order.iter().enumerate() {
-        ctx.machine_layout.next_block = order.get(position + 1).map(|&next| blocks[next].id);
+        let block = &function.blocks[index];
+        ctx.machine_layout.next_block = order.get(position + 1).map(|&next| function.blocks[next].id);
         ctx.machine_layout.fused_compare =
-            block_layout::fusible_compare(ctx.function, &blocks[index], &use_counts);
-        emit_block(ctx, &blocks[index])?;
+            block_layout::fusible_compare(function, block, &use_counts);
+        // Every block of the body runs with x28 = this frame's base (set by the prologue,
+        // restored by `longjmp` at a catch). A `return` lowered inline in an earlier block
+        // emits the callee-saved restores, which turn the base off for what follows them in
+        // the text; the next block is live code again.
+        ctx.emitter.frame_slot_base = frame_slot_base;
+        emit_block(ctx, block, index == 0 || loop_headers.contains(&block.id))?;
     }
     ctx.machine_layout.next_block = None;
     ctx.machine_layout.fused_compare = None;
     ctx.flush_cold_section();
+    // What follows the blocks -- the shared epilogue, the cleanup callback that borrows another
+    // frame's x29, an entry stub -- addresses slots through x29.
+    ctx.emitter.frame_slot_base = None;
     // The text peepholes pay off in loops and in small functions (often called from loops);
     // large loop-free bodies (generated helpers and dispatch code) skip them, keeping compile
     // time flat. Block-level layout above still removes their jumps to the next block.
     let region_bytes = ctx.emitter.text_len() - region_start;
     if region_bytes <= machine_peephole::SMALL_REGION_BYTES
-        || block_layout::has_retreating_edge(ctx.function)
+        || block_layout::has_retreating_edge(function)
     {
         let target = ctx.emitter.target;
         ctx.emitter
             .rewrite_text_from(region_start, |text| machine_peephole::optimize_region(text, target));
     }
+    // What follows the blocks -- the shared epilogue, the cleanup callback that borrows another
+    // frame's x29, an entry stub -- addresses slots through x29.
+    ctx.emitter.frame_slot_base = None;
     Ok(())
 }
 
+/// The blocks that start with an async-signal safe point: the loop headers, i.e. the targets of
+/// a back edge found by a depth-first walk from the entry block.
+///
+/// php's VM checks for a pending interrupt at function entry, at a loop's back edge and after a
+/// call returns; the calls are covered by `signal_safe_point_after`, the entry by the first block.
+/// A block start that is neither (the join of an `if`, a `catch` body) is a bounded step between
+/// two of those points, and a safe point there only cost a call at about 300 000 sites of the
+/// Symfony console. Every cycle contains a back edge, so a tight loop still polls. Blocks the walk
+/// cannot reach from the entry (landing pads, dead arms) are walked as roots of their own, so a loop in one still polls, but their first block does not.
+fn signal_loop_headers(ctx: &FunctionContext<'_>) -> crate::fast_hash::FastSet<crate::ir::BlockId> {
+    use crate::ir::{BlockId, Terminator};
+    let mut headers = crate::fast_hash::FastSet::default();
+    if !ctx.uses_pcntl_async_signals() {
+        return headers;
+    }
+    let function = ctx.function;
+    let index_of: crate::fast_hash::FastMap<BlockId, usize> = function
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(index, block)| (block.id, index))
+        .collect();
+    let successors = |index: usize| -> Vec<usize> {
+        let mut targets: Vec<BlockId> = Vec::new();
+        match &function.blocks[index].terminator {
+            Some(Terminator::Br { target, .. }) => targets.push(*target),
+            Some(Terminator::CondBr { then_target, else_target, .. }) => {
+                targets.push(*then_target);
+                targets.push(*else_target);
+            }
+            Some(Terminator::Switch { cases, default, .. }) => {
+                targets.extend(cases.iter().map(|case| case.target));
+                targets.push(*default);
+            }
+            Some(Terminator::GeneratorSuspend { resume, .. }) => targets.push(*resume),
+            _ => {}
+        }
+        targets.iter().filter_map(|target| index_of.get(target).copied()).collect()
+    };
+    // 0 = unvisited, 1 = on the DFS stack, 2 = finished.
+    let mut state = vec![0u8; function.blocks.len()];
+    let mut stack: Vec<(usize, Vec<usize>, usize)> = Vec::new();
+    for root in 0..function.blocks.len() {
+        if state[root] != 0 {
+            continue;
+        }
+        state[root] = 1;
+        stack.push((root, successors(root), 0));
+        while let Some((node, succ, next)) = stack.last_mut() {
+            if *next < succ.len() {
+                let child = succ[*next];
+                *next += 1;
+                match state[child] {
+                    0 => {
+                        state[child] = 1;
+                        let child_successors = successors(child);
+                        stack.push((child, child_successors, 0));
+                    }
+                    1 => {
+                        headers.insert(function.blocks[child].id);
+                    }
+                    _ => {}
+                }
+            } else {
+                state[*node] = 2;
+                stack.pop();
+            }
+        }
+    }
+    headers
+}
+
+/// Whether `ELEPHC_OP_STATS` asks for the per-op instruction histogram.
+fn op_stats_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("ELEPHC_OP_STATS").is_some())
+}
+
+/// Per EIR op: how many were lowered and how many instructions they emitted.
+type OpStats = std::collections::BTreeMap<String, (u64, u64)>;
+
+/// The histogram key of one instruction: its op, refined by the immediate for the generic ops
+/// (`runtime_call`, `core_builtin`, `call`) whose cost depends on what they call.
+fn op_stats_key(inst: &crate::ir::Instruction) -> String {
+    let name = inst.op.name();
+    if !matches!(name, "runtime_call" | "core_builtin" | "const_str" | "call" | "method_call") {
+        return name.to_string();
+    }
+    let detail = format!("{:?}", inst.immediate);
+    let detail = detail.split(['(', '{', ' ']).next().unwrap_or("").to_string();
+    let inner = format!("{:?}", inst.immediate);
+    let inner = inner.trim_start_matches(&detail).chars().take(40).collect::<String>();
+    format!("{name}[{detail}{inner}]")
+}
+
+fn op_stats() -> &'static std::sync::Mutex<OpStats> {
+    static STATS: std::sync::OnceLock<std::sync::Mutex<OpStats>> = std::sync::OnceLock::new();
+    STATS.get_or_init(Default::default)
+}
+
+fn record_op_stats(op: String, instructions: usize) {
+    if let Ok(mut stats) = op_stats().lock() {
+        let entry = stats.entry(op).or_default();
+        entry.0 += 1;
+        entry.1 += instructions as u64;
+    }
+}
+
+/// Prints the per-op histogram collected under `ELEPHC_OP_STATS=1`, largest total first.
+pub fn print_op_stats() {
+    if !op_stats_enabled() {
+        return;
+    }
+    let Ok(stats) = op_stats().lock() else {
+        return;
+    };
+    let total: u64 = stats.values().map(|(_, instructions)| instructions).sum();
+    let mut rows = stats.iter().collect::<Vec<_>>();
+    rows.sort_by(|left, right| right.1 .1.cmp(&left.1 .1));
+    eprintln!("OPSTATS total_instructions={total}");
+    for (op, (count, instructions)) in rows {
+        eprintln!(
+            "OPSTATS {op} count={count} instructions={instructions} average={:.1}",
+            *instructions as f64 / (*count).max(1) as f64
+        );
+    }
+}
+
 /// Emits one EIR basic block.
-fn emit_block(ctx: &mut FunctionContext<'_>, block: &BasicBlock) -> Result<()> {
+fn emit_block(ctx: &mut FunctionContext<'_>, block: &BasicBlock, entry_safe_point: bool) -> Result<()> {
     ctx.emitter.comment(&format!("@block name={}", block.name));
     let block_label = ctx.block_label_for_id(block.id)?;
     ctx.emitter.label(&block_label);
+    // Async signal handlers run at safe points, where php's VM checks for an interrupt: after a
+    // call returns and on a backward jump. A block start covers every back edge (and forward
+    // branches, which costs little); `signal_safe_point_after` covers the calls. Checking after
+    // EVERY instruction, as this used to, put a million dispatch calls into the Symfony build and
+    // spent 3.4% of a request in them.
+    if entry_safe_point && ctx.uses_pcntl_async_signals() {
+        emit_signal_safe_point(ctx);
+    }
     for inst_id in &block.instructions {
         emit_instruction_source_marker(ctx, *inst_id)?;
-        lower_inst::lower_instruction(ctx, *inst_id)?;
-        if ctx.uses_pcntl_async_signals() {
-            abi::emit_call_label(ctx.emitter, "__rt_pcntl_async_dispatch_preserving");
+        let stats_mark = op_stats_enabled().then(|| ctx.emitter.text_mark());
+        lower_inst::lower_instruction(ctx, *inst_id).map_err(|error| {
+            let location = instruction_location(ctx, *inst_id);
+            error.at(location)
+        })?;
+        if let Some(mark) = stats_mark {
+            if let Some(inst) = ctx.function.instruction(*inst_id) {
+                record_op_stats(op_stats_key(inst), ctx.emitter.instructions_since(mark));
+            }
+        }
+        // A worker arms this watch around each body; nothing else does, so on every other path
+        // the check is one `Option` read. See `CodegenIrError::deferred_body`.
+        if ctx.shared.must_defer() {
+            return Err(CodegenIrError::deferred_body());
+        }
+        if ctx.uses_pcntl_async_signals() && signal_safe_point_after(ctx, *inst_id) {
+            emit_signal_safe_point(ctx);
         }
     }
     let terminator = block.terminator.as_ref().ok_or_else(|| {
         CodegenIrError::invalid_module(format!("block '{}' has no terminator", block.name))
     })?;
     lower_term::lower_terminator(ctx, terminator)
+}
+
+/// Emits one async-signal safe point: a single call whose callee tests the dispatch flag.
+///
+/// Every block start and call site of a program that can enable async signals is a safe point --
+/// 21,000 of them per Symfony request, 817,520 in the Symfony console's code. The flag test used
+/// to be inline (adrp/add/ldr/cbz plus the call) for speed, which made it 2.5% of that code. On
+/// AArch64 `__rt_pcntl_safe_point` now does the test with `x16` alone and no flag change, so the
+/// site is one `bl` and the fast path stays a handful of predicted instructions. The x86_64
+/// helper's fast path is already flag-free, so that target calls it directly.
+fn emit_signal_safe_point(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        // One call per site: `__rt_pcntl_safe_point` tests the flag itself (see its emitter).
+        Arch::AArch64 => abi::emit_call_label(ctx.emitter, "__rt_pcntl_safe_point"),
+        Arch::X86_64 => {
+            abi::emit_call_label(ctx.emitter, "__rt_pcntl_async_dispatch_preserving");
+        }
+    }
+}
+
+/// Returns whether an async signal may be dispatched right after this instruction.
+///
+/// These are the instructions that run PHP code or a builtin, the places php's VM checks for a
+/// pending interrupt once the callee returns: calls of every shape, constructions (which run a
+/// constructor), eval and include entries, and generator resumption. Everything else is a
+/// bounded step between two such points.
+fn signal_safe_point_after(ctx: &FunctionContext<'_>, inst_id: InstId) -> bool {
+    let Some(inst) = ctx.function.instruction(inst_id) else {
+        return false;
+    };
+    matches!(
+        inst.op,
+        Op::Call
+            | Op::FunctionVariantCall
+            | Op::MethodCall
+            | Op::NullsafeMethodCall
+            | Op::StaticMethodCall
+            | Op::IteratorMethodCall
+            | Op::ClosureCall
+            | Op::ExprCall
+            | Op::PipeCall
+            | Op::CallableDescriptorInvoke
+            | Op::LanguageConstructCall
+            | Op::RuntimeCall
+            | Op::SplRuntimeCall
+            | Op::ExternCall
+            | Op::FiberRuntimeCall
+            | Op::ObjectNew
+            | Op::DynamicObjectNew
+            | Op::DynamicObjectNewMixed
+            | Op::DynamicObjectNewWithoutConstructorMixed
+            | Op::DynamicPdoStatementConstructorCall
+            | Op::EvalObjectNew
+            | Op::EvalStaticMethodCall
+            | Op::EvalLiteralCall
+            | Op::EvalFunctionCall
+            | Op::EvalFunctionCallArray
+            | Op::GeneratorYield
+            | Op::GeneratorYieldFrom
+    )
+}
+
+/// Describes the source line and opcode associated with an EIR instruction.
+fn instruction_location(ctx: &FunctionContext<'_>, inst_id: InstId) -> String {
+    let Some(inst) = ctx.function.instruction(inst_id) else {
+        return format!("op #{}", inst_id.as_raw());
+    };
+    // The enclosing function is named for the same reason the checker records a declaration and
+    // the EIR validator names its own: an `Instruction` carries a `Span` with line and column but
+    // NO file, and after include/autoload expansion one `line:col` belongs to every spliced file
+    // at once. The function is what turns a backend gap into something a reader can go and open.
+    match inst.span.filter(|span| span.line > 0) {
+        Some(span) => format!(
+            "{}:{}, op {}, in {}",
+            span.line,
+            span.col,
+            inst.op.name(),
+            ctx.function.name
+        ),
+        None => format!("op {}, in {}", inst.op.name(), ctx.function.name),
+    }
 }
 
 /// Emits the source-map marker for an EIR instruction when it carries a real PHP span.
@@ -1727,26 +2791,28 @@ fn normalized_candidate_body(
 ) -> Option<String> {
     let mut emitter = Emitter::new(module.target);
     let mut data = DataSection::new();
-    let mut shared = SharedCodegenState::default();
-    let lowered = if is_method {
-        emit_class_method(
-            module,
-            function,
-            &mut emitter,
-            &mut data,
-            &mut shared,
-            regalloc_linear,
-        )
-    } else {
-        emit_user_function(
-            module,
-            function,
-            &mut emitter,
-            &mut data,
-            &mut shared,
-            regalloc_linear,
-        )
-    };
+    let mut shared = SharedCodegenState::for_module(module);
+    let lowered = frame::without_frame_reader(|| {
+        if is_method {
+            emit_class_method(
+                module,
+                function,
+                &mut emitter,
+                &mut data,
+                &mut shared,
+                regalloc_linear,
+            )
+        } else {
+            emit_user_function(
+                module,
+                function,
+                &mut emitter,
+                &mut data,
+                &mut shared,
+                regalloc_linear,
+            )
+        }
+    });
     lowered.ok()?;
     // The DATA the body references is part of its meaning: two isolated pools assign the same
     // label to literals of different contents (a seven-byte "integer" and a seven-byte "boolean"
@@ -1781,6 +2847,7 @@ fn normalize_body_text(text: &str, function: &Function) -> String {
     // Order matters: the longer suffix symbols must be erased before the entry symbol, or the
     // entry erasure would consume their prefix and leave a mangled remainder behind.
     let own_symbols = [
+        format!("{entry_symbol}__bt_reader"),
         format!("{entry_symbol}__cdylib_exception_cleanup"),
         format!("{entry_symbol}_epilogue"),
         entry_symbol.clone(),
@@ -1925,6 +2992,22 @@ fn replace_symbol_token(line: &str, raw: &str, canonical: &str) -> String {
 mod normalization_tests {
     use super::*;
 
+    /// The single-pass key scan records what the per-line scan recorded: the trimmed rest of
+    /// each line after its first marker, across CRLF endings, a final line without a newline,
+    /// and two markers on one line.
+    #[test]
+    fn helper_keys_are_the_rest_of_each_marked_line() {
+        let open = crate::codegen::context::HELPER_MARKER_OPEN;
+        let text = format!(
+            "    mov x0, x1\n; {open}alpha \r\n; {open}beta {open}gamma\nret\n; {open} delta"
+        );
+        let mut seen = HashSet::new();
+        collect_helper_keys(&text, &mut seen);
+        let mut keys: Vec<_> = seen.into_iter().collect();
+        keys.sort();
+        assert_eq!(keys, vec!["alpha".to_string(), format!("beta {open}gamma"), "delta".to_string()]);
+    }
+
     /// Label canonicalization must leave indented string data byte-for-byte intact.
     #[test]
     fn indented_ascii_preserves_internal_label_spelling() {
@@ -1937,5 +3020,132 @@ mod normalization_tests {
         assert!(normalized.contains("    .ascii \"L_payload_17\""));
         assert!(!normalized.contains("b L_payload_17"));
         assert_ne!(normalized, normalize_body_text(second, &function));
+    }
+}
+
+#[cfg(test)]
+mod backend_inventory_tests {
+    //! Purpose:
+    //! Regression tests for scan-and-report backend inventory behavior.
+    //!
+    //! Called from:
+    //! - `cargo test` through Rust's test harness.
+    //!
+    //! Key details:
+    //! - Tests use an explicit switch instead of mutating the process environment.
+
+    use super::{BackendInventory, CodegenIrError};
+    use crate::codegen::platform::{Arch, Platform, Target};
+    use crate::codegen::shared_reflection::{
+        ReflectionMaterializerKey, ReflectionOwnerKind,
+    };
+    use crate::codegen::shared_state::SharedCodegenState;
+    use crate::codegen_support::emit::Emitter;
+    use crate::ir::Module;
+
+    /// Builds a fixed-target emitter whose buffer can be inspected directly.
+    fn emitter() -> Emitter {
+        Emitter::new(Target::new(Platform::Linux, Arch::AArch64))
+    }
+
+    /// Verifies disabled inventory preserves abort-on-first-error behavior.
+    #[test]
+    fn disabled_inventory_propagates_refusals() {
+        let mut inventory = BackendInventory::new(false);
+        let mut emitter = emitter();
+        let outcome = inventory.run(&mut emitter, "f", |_| {
+            Err(CodegenIrError::unsupported("gap"))
+        });
+        assert!(outcome.is_err());
+        assert!(inventory.finish().is_ok());
+    }
+
+    /// Verifies enabled inventory rolls back a failed body and continues scanning.
+    #[test]
+    fn enabled_inventory_rolls_back_and_continues() {
+        let mut inventory = BackendInventory::new(true);
+        let mut emitter = emitter();
+        let first = inventory.run(&mut emitter, "failed", |emitter| {
+            emitter.raw("discarded:");
+            Err(CodegenIrError::unsupported("gap"))
+        });
+        let second = inventory.run(&mut emitter, "kept", |emitter| {
+            emitter.raw("kept:");
+            Ok(())
+        });
+        assert!(first.is_ok());
+        assert!(second.is_ok());
+        let output = emitter.output();
+        assert!(!output.contains("discarded:"));
+        assert!(output.contains("kept:"));
+    }
+
+    /// Verifies a refused body cannot leave a reusable Reflection label without assembly.
+    #[test]
+    fn enabled_inventory_rolls_back_reflection_materializer_reservations() {
+        let mut inventory = BackendInventory::new(true);
+        let mut emitter = emitter();
+        let module = Module::new(Target::new(Platform::Linux, Arch::AArch64));
+        let mut shared = SharedCodegenState::for_module(&module);
+        let key = ReflectionMaterializerKey::FullClass {
+            owner: ReflectionOwnerKind::Class,
+            name: "RolledBack".to_string(),
+        };
+
+        let failed_key = key.clone();
+        let failed = inventory.run_with_shared(
+            &mut emitter,
+            &mut shared,
+            "failed",
+            |emitter, shared| {
+                emitter.raw("discarded:");
+                shared
+                    .reflection
+                    .reserve_materializer(failed_key, "discarded_label".to_string());
+                Err(CodegenIrError::unsupported("gap"))
+            },
+        );
+
+        assert!(failed.is_ok());
+        assert_eq!(emitter.checkpoint(), 0);
+        assert!(shared.reflection.materializer_label(&key).is_none());
+
+        let kept_key = key.clone();
+        let kept = inventory.run_with_shared(
+            &mut emitter,
+            &mut shared,
+            "kept",
+            |emitter, shared| {
+                emitter.raw("kept:");
+                shared
+                    .reflection
+                    .reserve_materializer(kept_key, "kept_label".to_string());
+                Ok(())
+            },
+        );
+
+        assert!(kept.is_ok());
+        assert!(emitter.output().contains("kept:"));
+        assert_eq!(
+            shared.reflection.materializer_label(&key).as_deref(),
+            Some("kept_label")
+        );
+    }
+
+    /// Verifies identical causes are grouped while per-body details remain present.
+    #[test]
+    fn enabled_inventory_groups_equivalent_causes() {
+        let mut inventory = BackendInventory::new(true);
+        let mut emitter = emitter();
+        for body in ["a", "b"] {
+            let _ = inventory.run(&mut emitter, body, |_| {
+                Err(CodegenIrError::unsupported(format!("gap in '{}'", body)))
+            });
+        }
+        let report = inventory.report();
+        assert_eq!(inventory.causes().len(), 1, "{report}");
+        assert!(report.contains("2 of 2 scanned bodies"), "{report}");
+        assert!(report.contains("a"), "{report}");
+        assert!(report.contains("b"), "{report}");
     }
 }

@@ -222,7 +222,7 @@ fn get_loaded_extensions_lists_xml_only_when_the_host_linked_the_bridge() {
     let source = br#"$ext = get_loaded_extensions();
 echo count($ext), ":", in_array("xml", $ext) ? "xml" : "no-xml", ":", in_array("xmlwriter", $ext) ? "xmlwriter" : "no-xmlwriter";
 echo ":", extension_loaded("xml") ? "loaded" : "absent", ":", count(get_loaded_extensions(true));"#;
-    let base = if cfg!(feature = "curl") { 12 } else { 11 };
+    let base = if cfg!(feature = "curl") { 13 } else { 12 };
 
     let program = parse_fragment(source).expect("parse eval fragment");
     let mut context = ElephcEvalContext::new();

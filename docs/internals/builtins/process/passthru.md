@@ -2,7 +2,7 @@
 title: "passthru() - internals"
 description: "Compiler internals for passthru(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 827
+  order: 861
 ---
 
 ## `passthru()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/passthru.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/passthru.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,19 +39,21 @@ sidebar:
 ## Signature summary
 
 ```php
-function passthru(string $command): void
+function passthru(string $command, int $result_code = null): void
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 1–2 arguments (1 optional).
+- **By-reference parameters**: `$result_code`.
 
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/network_env/passthru.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/passthru.rs) (`eval_builtin!`)
 - **Execution**: Magician interpreter adapter.
-- **Adapter reason**: `runtime-state-or-resource`.
+- **Adapter reason**: `by-reference-or-lvalue`.
 - **Dispatch hooks**: `direct`, `values`
+- **By-reference parameters**: `$result_code`.
 
 ## Cross-references
 

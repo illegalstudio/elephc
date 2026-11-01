@@ -66,6 +66,8 @@ pub(crate) fn inject_builtin_datetime(
                     date_interval_constructor(),
                     date_interval_format(),
                     date_interval_create_from_date_string(),
+                    date_interval_serialize(),
+                    date_interval_unserialize(),
                 ],
                 attributes: Vec::new(),
                 constants: Vec::new(),
@@ -141,6 +143,9 @@ pub(crate) fn inject_builtin_datetime(
                     m.push(datetime_create_from_object("createFromInterface", "DateTimeImmutable"));
                     m.push(datetime_create_from_object("createFromMutable", "DateTimeImmutable"));
                     m.push(datetime_set_isodate("DateTimeImmutable"));
+                    m.push(datetime_date_create("DateTimeImmutable"));
+                    m.push(datetime_serialize());
+                    m.push(datetime_unserialize());
                     m
                 },
                 attributes: Vec::new(),
@@ -160,12 +165,16 @@ pub(crate) fn inject_builtin_datetime(
         methods.push(datetime_create_from_object("createFromInterface", "DateTime"));
         methods.push(datetime_create_from_object("createFromImmutable", "DateTime"));
         methods.push(datetime_set_isodate("DateTime"));
+        methods.push(datetime_date_create("DateTime"));
+        methods.push(datetime_serialize());
+        methods.push(datetime_unserialize());
         methods.push(datetime_date_parse_from_format());
         methods.push(datetime_date_parse());
         methods.push(datetime_gettimeofday());
         methods.push(datetime_strftime());
         methods.push(datetime_extract_micros());
         methods.push(datetime_strip_micros());
+        methods.push(datetime_now_micros());
         methods.push(datetime_extract_modify_micros());
         methods.push(datetime_strip_modify_micros());
         methods.push(datetime_sun_rs());

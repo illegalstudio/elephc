@@ -77,6 +77,29 @@ pub(in crate::interpreter) fn copy_scope_value(
     Ok(copied)
 }
 
+/// Gives an owned result that can still be the very cell its storage holds a cell of its own.
+///
+/// A property read hands back the property's own cell, and an assignment hands back the cell it
+/// just stored (`$a = $b = []`). Storing that handle shares the cell, so a later in-place write
+/// through either name reaches the other: php shares the VALUE until a write separates it, which
+/// is what a fresh cell over the same payload gives. See `eval_detach_property_read`.
+pub(super) fn detach_owned_storage_cell(
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let copied = copy_scope_value(value, context, values);
+    let released = eval_release_value(context, values, value);
+    match (copied, released) {
+        (Err(status), _) => Err(status),
+        (Ok(copied), Err(status)) => {
+            let _ = eval_release_value(context, values, copied);
+            Err(status)
+        }
+        (Ok(copied), Ok(())) => Ok(copied),
+    }
+}
+
 /// Selects an ordinary or owned instance-property read without changing access checks.
 pub(super) fn eval_property_get_with_result_ownership(
     object: RuntimeCellHandle,

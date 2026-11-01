@@ -2,7 +2,7 @@
 title: "is_finite()"
 description: "Checks whether a float is finite."
 sidebar:
-  order: 643
+  order: 656
 ---
 
 ## is_finite()

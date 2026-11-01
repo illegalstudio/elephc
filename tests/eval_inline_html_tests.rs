@@ -78,6 +78,12 @@ const CASES: &[&str] = &[
         "echo \"one\\n\"; // note ?> between <?php echo \"two\\n\";",
         "echo \"one\\n\"; # note ?> between <?php echo \"two\\n\";",
         "echo \"a\"; ?>B<?php\u{a0}echo \"c\";",
+        // Twig without a cache directory runs `eval('?>' . $compiledTemplate)`, whose source
+        // opens with `<?php` straight after the close tag; the open-tag refusal used to scan in
+        // PHP mode only and rejected it (`unexpected token "<?php"`).
+        "?><?php echo 2;",
+        "?><?php\\nfunction evalInlineTpl() { return 9; }\\necho evalInlineTpl();",
+        "?>\\n<?php return 4;",
 ];
 
 /// The harness: evaluates each line and prints its output and return value, delimited.
@@ -149,6 +155,9 @@ fn a_close_tag_in_eval_switches_to_inline_html_as_php_does() {
             " between two\n",
             "|NULL]\n",
             "[28:aB<?php\u{a0}echo \"c\";|NULL]\n",
+            "[29:2|NULL]\n",
+            "[30:9|NULL]\n",
+            "[31:|4]\n",
             "END\n",
         )
     );

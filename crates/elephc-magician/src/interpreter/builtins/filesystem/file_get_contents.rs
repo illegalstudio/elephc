@@ -100,6 +100,10 @@ fn eval_file_get_contents_windowed_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(filename, values)?;
+    #[cfg(unix)]
+    if stream_wrappers::php_std_stream_fd(&path) == Some(0) {
+        return eval_file_get_contents_stdin(range, values);
+    }
     if let Some(result) = eval_user_wrapper_file_get_contents_result(&path, context, values)? {
         return eval_file_get_contents_window_cell(result, range, values);
     }
@@ -114,6 +118,54 @@ fn eval_file_get_contents_windowed_result(
                 values.bool_value(false)
             }
         },
+        Err(_) => {
+            values.warning("Warning: file_get_contents(): Failed to open stream\n")?;
+            values.bool_value(false)
+        }
+    }
+}
+
+/// Reads an owned duplicate of stdin, applying a seek and byte cap before consuming input.
+/// A File uses unbuffered descriptor reads, so native stream reads see any uncaptured tail.
+#[cfg(unix)]
+fn eval_file_get_contents_stdin(
+    range: EvalFileReadRange,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut input = match crate::stream_resources::duplicate_standard_descriptor(0) {
+        Ok(input) => input,
+        Err(_) => {
+            values.warning("Warning: file_get_contents(): Failed to open stream\n")?;
+            return values.bool_value(false);
+        }
+    };
+    if range.offset != 0 {
+        let position = if range.offset < 0 {
+            SeekFrom::End(range.offset)
+        } else {
+            SeekFrom::Start(range.offset as u64)
+        };
+        if let Err(error) = input.seek(position) {
+            drop(input);
+            if error.raw_os_error() == Some(libc::ESPIPE) {
+                values.warning("Warning: file_get_contents(): Stream does not support seeking\n")?;
+            }
+            values.warning(&format!(
+                "Warning: file_get_contents(): Failed to seek to position {} in the stream\n",
+                range.offset,
+            ))?;
+            return values.bool_value(false);
+        }
+    }
+    let mut bytes = Vec::new();
+    let result = match range.length {
+        Some(length) => (&mut input).take(length as u64).read_to_end(&mut bytes),
+        None => input.read_to_end(&mut bytes),
+    };
+    drop(input);
+    match result {
+        Ok(_) => values.string_bytes_value(&bytes),
         Err(_) => {
             values.warning("Warning: file_get_contents(): Failed to open stream\n")?;
             values.bool_value(false)
@@ -216,12 +268,7 @@ fn eval_file_get_contents_negative_length_error<T>(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
-    let exception = values.new_object("ValueError")?;
-    let message = values.string(FILE_GET_CONTENTS_NEGATIVE_LENGTH_MESSAGE)?;
-    let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
+    eval_throw_builtin_exception_with_code("ValueError", FILE_GET_CONTENTS_NEGATIVE_LENGTH_MESSAGE, 0, context, values)
 }
 
 /// Reads bytes from supported direct path or stream-wrapper URLs.

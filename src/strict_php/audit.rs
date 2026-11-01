@@ -94,6 +94,22 @@ fn audit_stmt(stmt: &Stmt, errors: &mut Vec<CompileError>) {
         StmtKind::Echo(expr) => audit_expr(expr, errors),
         StmtKind::Assign { name: _, value } => audit_expr(value, errors),
         StmtKind::RefAssign { target: _, source } => audit_expr(source, errors),
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            audit_expr(index, errors);
+            audit_expr(source, errors);
+        }
+        StmtKind::DynamicStaticPropertyWrite {
+            property,
+            index,
+            value,
+            ..
+        } => {
+            audit_expr(property, errors);
+            if let Some(index) = index {
+                audit_expr(index, errors);
+            }
+            audit_expr(value, errors);
+        }
         StmtKind::If {
             condition,
             then_body,
@@ -207,8 +223,8 @@ fn audit_stmt(stmt: &Stmt, errors: &mut Vec<CompileError>) {
             once: _,
             required: _,
         } => audit_expr(path, errors),
-        StmtKind::IncludeOnceMark { label: _ } => {}
-        StmtKind::IncludeOnceGuard { label: _, body } => audit_stmts(body, errors),
+        StmtKind::IncludeOnceMark { .. } => {}
+        StmtKind::IncludeOnceGuard { body, .. } => audit_stmts(body, errors),
         StmtKind::Throw(expr) => audit_expr(expr, errors),
         StmtKind::Synthetic(body) => audit_stmts(body, errors),
         StmtKind::Try {
@@ -310,6 +326,7 @@ fn audit_stmt(stmt: &Stmt, errors: &mut Vec<CompileError>) {
             is_abstract: _,
             is_final: _,
             is_readonly_class: _,
+            doc_comment: _,
             trait_uses,
             properties,
             methods,
@@ -389,6 +406,14 @@ fn audit_stmt(stmt: &Stmt, errors: &mut Vec<CompileError>) {
             audit_expr(object, errors);
             audit_expr(value, errors);
         }
+        StmtKind::PropertyRefAssign {
+            object,
+            property: _,
+            source,
+        } => {
+            audit_expr(object, errors);
+            audit_expr(source, errors);
+        }
         StmtKind::StaticPropertyAssign {
             receiver: _,
             property: _,
@@ -440,6 +465,7 @@ fn audit_stmt(stmt: &Stmt, errors: &mut Vec<CompileError>) {
                 "`extern` declarations are an elephc extension and are not valid PHP",
             );
         }
+        StmtKind::ClassLikeActivate { .. } => {}
     }
 }
 
@@ -539,6 +565,8 @@ fn audit_expr(expr: &Expr, errors: &mut Vec<CompileError>) {
         | ExprKind::ScopedConstantAccess { receiver, name: _ } => {
             audit_static_receiver(receiver, span, errors)
         }
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => audit_expr(property, errors),
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => audit_expr(receiver, errors),
         ExprKind::BinaryOp { left, op: _, right } => {
             audit_expr(left, errors);
             audit_expr(right, errors);
@@ -553,6 +581,7 @@ fn audit_expr(expr: &Expr, errors: &mut Vec<CompileError>) {
             }
         }
         ExprKind::Negate(inner)
+        | ExprKind::ArrayReference(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)

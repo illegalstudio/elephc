@@ -14,7 +14,7 @@ use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::types::PhpType;
 
-use super::calls::{emit_call_label, emit_pop_reg, emit_push_reg};
+use super::calls::emit_call_label;
 use super::frame::{load_at_offset, store_at_offset};
 use super::registers::{float_result_reg, int_result_reg, string_result_regs};
 use crate::codegen_support::sentinels::tagged_scalar_tag_reg;
@@ -64,10 +64,8 @@ pub fn emit_store(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
 
 /// Retains a refcounted result value before it is reused or overwritten.
 ///
-/// If `ty` is a refcounted heap value or callable descriptor, emits a retain call after
-/// preserving the heap pointer in a temporary slot. The target architecture dictates
-/// register preservation conventions: AArch64 uses a pre-decrement stack store, while
-/// x86_64 uses a 16-byte aligned push/pop pair to maintain SysV ABI alignment.
+/// If `ty` is a refcounted heap value or callable descriptor, emits a retain call. The helper
+/// preserves the heap pointer in `x0`/`rax`, so no save around the call is needed.
 pub fn emit_incref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
     if matches!(ty, PhpType::Callable) {
         callable_descriptor::emit_retain_current_descriptor(emitter);
@@ -76,14 +74,10 @@ pub fn emit_incref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
     if ty.is_refcounted() {
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction("str x0, [sp, #-16]!");                     // preserve heap pointer across incref helper call
-                emitter.instruction("bl __rt_incref");                          // retain shared heap value before creating a new owner
-                emitter.instruction("ldr x0, [sp], #16");                       // restore original heap pointer after incref
+                emitter.instruction("bl __rt_incref");                          // retain shared heap value before creating a new owner; the helper preserves x0
             }
             Arch::X86_64 => {
-                emit_push_reg(emitter, "rax"); // preserve the heap pointer in a 16-byte temporary slot to keep the SysV stack aligned across the helper call
-                emitter.instruction("call __rt_incref");                        // retain shared heap value before creating a new owner
-                emit_pop_reg(emitter, "rax"); // restore the original heap pointer after the aligned incref helper call
+                emitter.instruction("call __rt_incref");                        // retain shared heap value before creating a new owner; the helper preserves rax
             }
         }
     }
@@ -93,7 +87,8 @@ pub fn emit_incref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
 ///
 /// Dispatches to the appropriate runtime helper based on the PHP type:
 /// - `Mixed`/`Union` → `__rt_decref_mixed`
-/// - `Array` → `__rt_decref_array`
+/// - generic `Array<Mixed>` → `__rt_decref_any` because string-key writes may promote it to hash storage
+/// - other `Array` values → `__rt_decref_array`
 /// - `AssocArray` → `__rt_decref_hash`
 /// - `Object` → `__rt_decref_object`
 /// - `Iterable` → `__rt_decref_any` (inspects heap kind)
@@ -125,6 +120,9 @@ pub fn emit_unary_cleanup_preserving_exception(emitter: &mut Emitter, entry: &st
 pub(crate) fn refcount_release_helper(ty: &PhpType) -> Option<&'static str> {
     match ty {
         PhpType::Mixed | PhpType::Union(_) => Some("__rt_decref_mixed"),
+        // A generic `array<mixed>` may have been promoted to hash storage at run time, so its
+        // release inspects the heap kind instead of assuming an indexed header.
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => Some("__rt_decref_any"),
         PhpType::Array(_) => Some("__rt_decref_array"),
         PhpType::AssocArray { .. } => Some("__rt_decref_hash"),
         PhpType::Object(_) => Some("__rt_decref_object"),

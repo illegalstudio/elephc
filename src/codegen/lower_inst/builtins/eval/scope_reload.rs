@@ -18,6 +18,13 @@ pub(super) fn store_mixed_scope_cell_to_local(
 ) -> Result<()> {
     match local.ty.codegen_repr() {
         PhpType::Mixed | PhpType::Union(_) => {
+            if ctx.local_stores_ref_cell_pointer(local.slot) {
+                // `$r =& $h` in the fragment turns `$h`'s entry into an eval reference wrapper.
+                // Stored through a reference-bound slot, the wrapper lands in the shared cell
+                // itself (a global's, or another local's), and native reads of it see NULL. The
+                // cell takes the referenced value; the fragment-side link ends with the eval.
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_deref");
+            }
             abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
             replace_owned_eval_local(ctx, local, pending_throw)?;
         }
@@ -74,6 +81,16 @@ pub(super) fn store_mixed_scope_cell_to_global(
     ctx.data.add_comm(symbol.clone(), ty.stack_size().max(8));
     match &ty {
         PhpType::Mixed | PhpType::Union(_) => {
+            if ctx.shared.uses_shared_ref_cell(ctx.module, &global.name) {
+                // The replaced owner is released even if this is the same borrowed cell.
+                // Acquire the new share first, and retire the old one on the guarded path.
+                abi::emit_call_label(ctx.emitter, "__rt_incref");
+                super::super::super::globals_constants::lower_replace_shared_global(
+                    ctx, &symbol, &PhpType::Mixed,
+                )?;
+                retire_eval_replacement_owner(ctx.emitter, &PhpType::Mixed, pending_throw);
+                return Ok(());
+            }
             abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
             replace_owned_eval_global(ctx.emitter, &symbol, &ty, pending_throw);
         }
@@ -105,6 +122,15 @@ pub(super) fn store_mixed_scope_cell_to_global(
             ctx.emitter
                 .instruction(&format!("mov {}, {}", result_reg, payload_reg)); // move the unboxed array payload into the ABI result register
             abi::emit_incref_if_refcounted(ctx.emitter, &ty);
+            if ctx.shared.uses_shared_ref_cell(ctx.module, &global.name) {
+                super::super::super::globals_constants::lower_replace_shared_global(
+                    ctx,
+                    &symbol,
+                    &ty,
+                )?;
+                retire_eval_replacement_owner(ctx.emitter, &ty, pending_throw);
+                return Ok(());
+            }
             replace_owned_eval_global(ctx.emitter, &symbol, &ty, pending_throw);
         }
         other => {
@@ -207,6 +233,52 @@ pub(super) fn store_missing_scope_entry_to_local(
     local: &EvalSyncLocal,
     pending_throw: Option<usize>,
 ) -> Result<()> {
+    // A reference-bound local (`global $g`, `$a = &$b`) shares its cell with another name, and
+    // eval's `unset($g)` only broke that binding. Writing the null fallback through the cell
+    // cleared the global or the referenced variable itself. The binding is kept instead: a later
+    // read of the name in this frame still sees the shared value, where php would see it unset.
+    if ctx.local_ref_cell_representation_is_definite(local.slot) {
+        return Ok(());
+    }
+    // A slot promoted at run time (`global $g` in a function) carries its state in a flag.
+    let still_bound = ctx.next_label("eval_scope_missing_keeps_reference");
+    let skip_when_bound = ctx.ref_cell_state_offset(local.slot);
+    if let Some(state_offset) = skip_when_bound {
+        let state_reg = abi::secondary_scratch_reg(ctx.emitter);
+        abi::load_at_offset(ctx.emitter, state_reg, state_offset);
+        match ctx.emitter.target.arch {
+            crate::codegen::platform::Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cbnz {state_reg}, {still_bound}")); // a reference binding is only broken, never written through
+            }
+            crate::codegen::platform::Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("test {state_reg}, {state_reg}")); // is the slot a promoted reference?
+                ctx.emitter.instruction(&format!("jne {still_bound}"));          // a reference binding is only broken, never written through
+            }
+        }
+    }
+    store_missing_scope_entry_to_unbound_local(ctx, local, pending_throw)?;
+    if skip_when_bound.is_some() {
+        ctx.emitter.label(&still_bound);
+    }
+    Ok(())
+}
+
+/// Stores the null fallback into a local slot that is not a reference binding.
+fn store_missing_scope_entry_to_unbound_local(
+    ctx: &mut FunctionContext<'_>,
+    local: &EvalSyncLocal,
+    pending_throw: Option<usize>,
+) -> Result<()> {
+    let ty = local.ty.codegen_repr();
+    if (ty == PhpType::Str || ty.is_refcounted())
+        && !ctx.local_ref_cell_representation_is_definite(local.slot)
+    {
+        // Removing the eval entry does not consume the raw native slot's owner.
+        // That slot still owns its previous payload. Use the existing
+        // cleanup guard so a runtime-promoted reference is not treated as raw.
+        let offset = ctx.local_offset(local.slot)?;
+        crate::codegen::frame::emit_owned_local_cleanup(ctx, local.slot, offset, &ty);
+    }
     match local.ty.codegen_repr() {
         PhpType::Mixed | PhpType::Union(_) => {
             ensure_eval_local_writeback_owns_value(ctx, local)?;
@@ -268,6 +340,12 @@ pub(super) fn store_missing_scope_entry_to_global(
     global: &EvalSyncGlobal,
     pending_throw: Option<usize>,
 ) -> Result<()> {
+    if ctx.shared.uses_shared_ref_cell(ctx.module, &global.name)
+        && !crate::superglobals::is_superglobal(&global.name)
+    {
+        super::super::super::globals_constants::unset_global_name(ctx, &global.name);
+        return Ok(());
+    }
     let symbol = ir_global_symbol(&global.name);
     let ty = global.ty.codegen_repr();
     ctx.data.add_comm(symbol.clone(), ty.stack_size().max(8));
@@ -298,6 +376,13 @@ pub(super) fn store_missing_scope_entry_to_global(
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+            if ctx.shared.uses_shared_ref_cell(ctx.module, &global.name) {
+                return super::super::super::globals_constants::lower_store_shared_global(
+                    ctx,
+                    &symbol,
+                    &ty,
+                );
+            }
             replace_owned_eval_global(ctx.emitter, &symbol, &ty, pending_throw);
         }
         other => {
@@ -335,7 +420,8 @@ mod tests {
                 let pending: &[&str] = if target == "linux-x86_64" {
                     &["lea rdx, [rsp + 88]"]
                 } else {
-                    &["mov x2, sp", "add x2, x2, #88"]
+                    // `emit_sp_address` forms a near stack-slot address in one instruction.
+                    &["add x2, sp, #88"]
                 };
                 for &instruction in pending {
                     assert!(asm.contains(instruction), "{target}: {asm}");
@@ -352,7 +438,8 @@ mod tests {
         let cases = [
             (PhpType::Mixed, "__rt_decref_mixed"),
             (PhpType::Str, "__rt_heap_free_safe"),
-            (PhpType::Array(Box::new(PhpType::Mixed)), "__rt_decref_array"),
+            // `array<mixed>` may have been promoted to hash storage, so it releases by heap kind.
+            (PhpType::Array(Box::new(PhpType::Mixed)), "__rt_decref_any"),
             (PhpType::AssocArray { key: Box::new(PhpType::Str), value: Box::new(PhpType::Str) }, "__rt_decref_hash"),
         ];
         for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {

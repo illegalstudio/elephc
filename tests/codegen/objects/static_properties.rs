@@ -1409,11 +1409,18 @@ echo StaticPen::$pet->name, "|", $i;
     assert_eq!(out.stdout, "dog|40", "{}", out.stderr);
 
     let lines: Vec<&str> = assembly.lines().collect();
+    // The label also closes INSTANCE property stores (`ReflectionProperty::setValue`'s dynamic
+    // property write, which borrows the box its caller releases); only the stores that land in a
+    // `_static_prop_` symbol are the ones this test pins.
     let stores: Vec<usize> = lines
         .iter()
         .enumerate()
-        .filter(|(_, line)| {
-            line.contains("prop_store_mixed_value_done") && line.trim_end().ends_with(':')
+        .filter(|(index, line)| {
+            line.contains("prop_store_mixed_value_done")
+                && line.trim_end().ends_with(':')
+                && lines[*index + 1..(*index + 25).min(lines.len())]
+                    .iter()
+                    .any(|line| line.contains("_static_prop_"))
         })
         .map(|(index, _)| index)
         .collect();
@@ -1461,6 +1468,69 @@ echo Utils::greet("World");
 "#,
     );
     assert_eq!(out, "Hello World");
+}
+
+/// Verifies runtime static-property names select the correct declared read slot.
+#[test]
+fn test_dynamic_static_property_read_named_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class DynamicStaticReadConfig {
+    public static int $retries = 5;
+    public static string $name = "prod";
+}
+$key = 'retries';
+echo DynamicStaticReadConfig::${$key};
+echo "|";
+$key = 'name';
+echo DynamicStaticReadConfig::${$key};
+"#,
+    );
+    assert_eq!(out, "5|prod");
+}
+
+/// Verifies direct writes dispatch to the runtime-selected static-property slot.
+#[test]
+fn test_dynamic_static_property_write() {
+    let out = compile_and_run(
+        r#"<?php
+class DynamicStaticWriteConfig {
+    public static int $x = 0;
+    public static int $y = 0;
+}
+$name = 'x';
+DynamicStaticWriteConfig::${$name} = 5;
+$name = 'y';
+DynamicStaticWriteConfig::${$name} = 9;
+echo DynamicStaticWriteConfig::$x;
+echo "|";
+echo DynamicStaticWriteConfig::$y;
+"#,
+    );
+    assert_eq!(out, "5|9");
+}
+
+/// Verifies indexed writes mutate and persist the runtime-selected static array.
+#[test]
+fn test_dynamic_static_property_array_element_write() {
+    let out = compile_and_run(
+        r#"<?php
+class DynamicStaticArrayStore {
+    public static array $cache = [];
+    public static array $other = [];
+}
+$name = 'cache';
+DynamicStaticArrayStore::${$name}[0] = 'v';
+DynamicStaticArrayStore::${$name}[1] = 'x';
+$name = 'other';
+DynamicStaticArrayStore::${$name}[0] = 'w';
+echo DynamicStaticArrayStore::$cache[0];
+echo DynamicStaticArrayStore::$cache[1];
+echo "|";
+echo DynamicStaticArrayStore::$other[0];
+"#,
+    );
+    assert_eq!(out, "vx|w");
 }
 
 /// Tests calling a class static method that returns a new instance via `new`, then
@@ -1603,6 +1673,111 @@ echo Registry::$items[0] . ":" . Registry::$items[1];
     assert_eq!(out, "4:8");
 }
 
+/// Verifies that assigning `[]` to an associative static property preserves hash storage.
+#[test]
+fn test_empty_array_resets_associative_static_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Registry {
+    public static array $items = ['seed' => 1];
+
+    public static function reset(): void {
+        self::$items = [];
+    }
+}
+Registry::reset();
+Registry::$items['next'] = 2;
+echo count(Registry::$items), ':', Registry::$items['next'];
+"#,
+    );
+    assert_eq!(out, "1:2");
+}
+
+/// Verifies that a boxed gradual array is copied into associative static-property storage.
+#[test]
+fn test_mixed_array_replaces_associative_static_property() {
+    let out = compile_and_run(
+        r#"<?php
+function boxed(mixed $value): mixed { return $value; }
+class Registry {
+    public static array $items = ['seed' => 1];
+
+    public static function replace(mixed $items): void {
+        self::$items = $items;
+    }
+}
+Registry::replace(boxed(['next' => 2]));
+echo count(Registry::$items), ':', Registry::$items['next'];
+"#,
+    );
+    assert_eq!(out, "1:2");
+}
+
+/// Tests that a `Mixed` value assigned to an UNTYPED static property widens its slot.
+///
+/// The sibling test above covers the DECLARED `array` case. This is the untyped one, and it is a
+/// different code path: the initializer alone typed the slot `array<string>`, and the store of a
+/// value the checker only knows as `Mixed` used to be refused outright
+/// (`store_static_property assigning PHP type Mixed to ... with PHP type Array(Str)`).
+#[test]
+fn test_mixed_value_widens_untyped_list_static_property() {
+    let out = compile_and_run(
+        r#"<?php
+function boxed(mixed $value): mixed { return $value; }
+class Encodings {
+    private static $list = ['ASCII', 'UTF-8'];
+
+    public static function set(mixed $value): void {
+        self::$list = $value;
+    }
+
+    public static function get() {
+        return self::$list;
+    }
+}
+echo implode('|', Encodings::get());
+Encodings::set(boxed(['A', 'B']));
+echo ',', implode('|', Encodings::get());
+"#,
+    );
+    assert_eq!(out, "ASCII|UTF-8,A|B");
+}
+
+/// Tests that widening an untyped array-initialized static property does not impose array-ness.
+///
+/// This is what decided the widening target. An untyped property has no `array` contract, so PHP
+/// accepts a scalar in a slot whose initializer was a list; resolving to a hash the way the
+/// DECLARED path does would raise a `TypeError` PHP never raises. `Mixed` keeps both observable.
+///
+/// The getter declares `: mixed` so the assertion does not ride on an unrelated, pre-existing
+/// refusal: `count()` on the result of an UNTYPED getter that returns a static property is
+/// rejected by the checker whether or not the property was ever widened.
+#[test]
+fn test_untyped_array_static_property_still_accepts_a_scalar() {
+    let out = compile_and_run(
+        r#"<?php
+function boxed(mixed $value): mixed { return $value; }
+class Slot {
+    private static $held = ['a' => 1, 'b' => 2];
+
+    public static function set(mixed $value): void {
+        self::$held = $value;
+    }
+
+    public static function get(): mixed {
+        return self::$held;
+    }
+}
+echo count(Slot::get());
+Slot::set(boxed(42));
+echo ',', Slot::get();
+Slot::set(boxed(['c' => 3]));
+echo ',', count(Slot::get());
+"#,
+    );
+    assert_eq!(out, "2,42,1");
+}
+
 /// Tests `+=` and `*=` compound assignment on an `int` typed static property.
 #[test]
 fn test_static_property_compound_assign() {
@@ -1633,6 +1808,60 @@ echo Registry::$items[0] . ":" . Registry::$items[2];
 "#,
     );
     assert_eq!(out, "12:3");
+}
+
+/// Verifies an untyped static property widened to `mixed` can retain its literal array default
+/// and later accept another array through a dynamically typed parameter.
+#[test]
+fn test_mixed_static_property_materializes_literal_array_default() {
+    let out = compile_and_run(
+        r#"<?php
+class EncodingRegistry {
+    private static mixed $encodingList = ['ASCII', 'UTF-8'];
+
+    public static function replace($encodingList) {
+        self::$encodingList = $encodingList;
+    }
+
+    public static function dump() {
+        echo implode(',', self::$encodingList);
+    }
+}
+
+EncodingRegistry::dump();
+EncodingRegistry::replace(['ISO-8859-1']);
+echo ':';
+EncodingRegistry::dump();
+"#,
+    );
+    assert_eq!(out, "ASCII,UTF-8:ISO-8859-1");
+}
+
+/// Verifies Mixed values are checked and widened before entering declared static array storage.
+#[test]
+fn test_mixed_array_values_replace_declared_static_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeStaticArrayHolder {
+    public static array $generic = [];
+    public static array $associative = ['seed' => 0];
+
+    public static function replaceGeneric(mixed $value): void {
+        self::$generic = $value;
+    }
+
+    public static function replaceAssociative(mixed $value): void {
+        self::$associative = $value;
+    }
+}
+
+RuntimeStaticArrayHolder::replaceGeneric([1, 'two']);
+RuntimeStaticArrayHolder::replaceAssociative(['name' => 'value', 'count' => 2]);
+echo RuntimeStaticArrayHolder::$generic[0], ':', RuntimeStaticArrayHolder::$generic[1], '|';
+echo RuntimeStaticArrayHolder::$associative['name'], ':', RuntimeStaticArrayHolder::$associative['count'];
+"#,
+    );
+    assert_eq!(out, "1:two|value:2");
 }
 
 /// Tests that the index expression in `Registry::$items[idx()] += 6` is evaluated exactly once.
@@ -1777,6 +2006,18 @@ echo A::$x;
     assert_eq!(out, "1");
 }
 
+/// Tests that a static-property pre-increment yields its updated value inside an expression.
+#[test]
+fn test_static_property_pre_increment_expression_value() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public static $x = 99; }
+if (100 < ++A::$x) { echo 'too-high'; } else { echo A::$x; }
+"#,
+    );
+    assert_eq!(out, "100");
+}
+
 /// Tests post-decrement and pre-decrement `--A::$x` / `A::$x--` on a static property.
 #[test]
 fn test_static_property_decrement() {
@@ -1898,4 +2139,305 @@ echo f(), "\n";
 "#,
     );
     assert_eq!(out, "{\"y\":\"z\",\"k\":\"p\"}\n");
+}
+
+/// Verifies an untyped static property can own, replace, reload, and invoke callable values.
+#[test]
+fn test_static_property_replaces_and_invokes_callable_values() {
+    let out = compile_and_run(
+        r#"<?php
+class CallableHolder { public static $callback; }
+
+CallableHolder::$callback = static fn(int $value): int => $value + 1;
+$first = CallableHolder::$callback;
+echo $first(40), "|";
+
+CallableHolder::$callback = static fn(int $value): int => $value * 2;
+$second = CallableHolder::$callback;
+echo $second(21);
+"#,
+    );
+    assert_eq!(out, "41|42");
+}
+
+/// Verifies `self::$closure ??= self::method(...)` reaches a `\Closure`-typed static property.
+///
+/// `??=` reads the property and evaluates the default in two branches that have to meet at one
+/// value, so BOTH sides are boxed into a `Mixed` cell and that cell is what the assignment writes
+/// back. The store had no way to put a boxed value into a descriptor slot and refused, which is
+/// how `Symfony\Component\DependencyInjection\Container::get()` — written exactly this way —
+/// stopped the whole compile. The instance-property form is the same store on the other property
+/// path and is covered here too. Calling twice proves the descriptor SURVIVES the store: the
+/// second call reads the property instead of re-creating it.
+#[test]
+fn test_coalescing_assign_of_a_first_class_callable_into_a_closure_typed_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Registry {
+    private static \Closure $make;
+    private \Closure $format;
+
+    public function get(string $id): string {
+        return (self::$make ??= self::make(...))($id);
+    }
+
+    public function formatted(string $id): string {
+        $this->format ??= strtoupper(...);
+        return ($this->format)($id);
+    }
+
+    private static function make(string $id): string {
+        return "made:" . $id;
+    }
+}
+$r = new Registry();
+echo $r->get('x'), "\n";
+echo $r->get('y'), "\n";
+echo $r->formatted('ab'), "\n";
+echo $r->formatted('cd'), "\n";
+"#,
+    );
+    assert_eq!(out, "made:x\nmade:y\nAB\nCD\n");
+}
+
+/// Verifies an accessor that returns a static property hands the caller an owned reference.
+///
+/// Symfony's `Request::getTrustedProxies()` is `return self::$trustedProxies;` over an
+/// `array`-defaulted private static, and `ValidateRequestListener::onKernelRequest` calls it as
+/// `if ($request::getTrustedProxies())`. The caller releases a call result once it has consumed
+/// it, so a returned borrow left the property pointing at reclaimed storage and the arena handed
+/// the same address to the next allocation. Reading it inside the class (`(bool) self::$p`)
+/// never reproduces it: nothing escapes, so nothing releases.
+#[test]
+fn test_returning_a_static_property_hands_the_caller_its_own_reference() {
+    let out = compile_and_run(
+        r#"<?php
+final class Request {
+    private static array $trustedProxies = [];
+
+    public static function setTrustedProxies(array $proxies): void {
+        self::$trustedProxies = $proxies;
+    }
+
+    public static function getTrustedProxies(): array {
+        return self::$trustedProxies;
+    }
+}
+
+final class ValidateRequestListener {
+    public function onKernelRequest(Request $request): string {
+        if ($request::getTrustedProxies()) {
+            return 'trusted';
+        }
+
+        return 'none';
+    }
+}
+
+$request = new Request();
+$listener = new ValidateRequestListener();
+echo $listener->onKernelRequest($request);
+echo '|', count(Request::getTrustedProxies());
+Request::setTrustedProxies(['10.0.0.1', '10.0.0.2']);
+echo '|', $listener->onKernelRequest($request);
+echo '|', count(Request::getTrustedProxies());
+echo '|', implode(',', Request::getTrustedProxies());
+echo '|', $listener->onKernelRequest($request);
+"#,
+    );
+    assert_eq!(out, "none|0|trusted|2|10.0.0.1,10.0.0.2|trusted");
+}
+
+/// Verifies a static property keeps its own reference to a stored by-value array parameter.
+///
+/// The parameter is borrowed from the caller and rebinds to a copy-on-write shadow local, which
+/// stays an owner and is released by the frame epilogue. Moving that reference into the property
+/// instead of retaining left both believing they owned the one reference the shadow held, so the
+/// epilogue took it back and the caller's own release then freed the array under the property.
+#[test]
+fn test_storing_a_borrowed_array_parameter_into_a_static_property_keeps_it_alive() {
+    let out = compile_and_run(
+        r#"<?php
+final class R {
+    private static array $p = [];
+
+    public static function set(array $x): void {
+        self::$p = $x;
+    }
+
+    public static function dump(): string {
+        return implode(',', self::$p) . '#' . count(self::$p);
+    }
+}
+
+echo R::dump();
+R::set(['a', 'b']);
+echo '|', R::dump();
+R::set(['c']);
+echo '|', R::dump();
+"#,
+    );
+    assert_eq!(out, "#0|a,b#2|c#1");
+}
+
+/// Verifies a boxed NON-callable assigned to a `\Closure`-typed static property is a catchable
+/// `TypeError`, exactly as in PHP — not a silently stored null.
+#[test]
+fn test_assigning_a_boxed_non_callable_to_a_closure_typed_property_throws() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    private static \Closure $make;
+
+    public function set(mixed $v): void {
+        self::$make = $v;
+    }
+}
+$c = new C();
+try {
+    $c->set(5);
+    echo "no error\n";
+} catch (\TypeError $e) {
+    echo "TypeError caught\n";
+}
+"#,
+    );
+    assert_eq!(out, "TypeError caught\n");
+}
+
+/// `Class::$p[] = $v` appends at the next integer key once a keyed write made the slot a hash,
+/// for untyped and `array`-typed static properties, and on a slot holding a boxed array.
+#[test]
+fn test_static_property_push_onto_keyed_and_boxed_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+class Reg {
+    protected static $adapters = [];
+    public static $names = [];
+    public static array $typed = [];
+    public static $boxed;
+    public static function extend(Closure $callback, $name = null) {
+        if (!is_null($name)) { static::$adapters[$name] = $callback; } else { static::$adapters[] = $callback; }
+    }
+    public static function run() {
+        $out = [];
+        foreach (static::$adapters as $k => $adapter) { $out[] = $k . '=' . $adapter(); }
+        return implode(',', $out);
+    }
+    public static function add($k, string $v) {
+        if ($k !== null) { self::$names[$k] = $v; } else { self::$names[] = $v; }
+        self::$typed['x' . $v] = strlen($v);
+        self::$typed[] = $v . '!';
+    }
+}
+Reg::extend(fn () => 'a', 'first');
+Reg::extend(fn () => 'b');
+Reg::extend(fn () => 'c');
+echo Reg::run(), "\n";
+Reg::add('a', 'one');
+Reg::add(null, 'two');
+Reg::add(5, 'three');
+Reg::add(null, 'four');
+Reg::$boxed = $argc > 5 ? 'str' : [1];
+Reg::$boxed[] = 2;
+echo json_encode(Reg::$names), "\n", json_encode(Reg::$typed), "\n", json_encode(Reg::$boxed), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "first=a,0=b,1=c\n{\"a\":\"one\",\"0\":\"two\",\"5\":\"three\",\"6\":\"four\"}\n{\"xone\":3,\"0\":\"one!\",\"xtwo\":3,\"1\":\"two!\",\"xthree\":5,\"2\":\"three!\",\"xfour\":4,\"3\":\"four!\"}\n[1,2]\n"
+    );
+}
+
+/// An untyped static array property defaulted to a non-empty list and later reset to `[]` keeps
+/// storage its default fits in.
+///
+/// The `[]` write carries no element evidence, yet it specialized the slot to `array<never>`, and
+/// the `[1, 2]` default could then not be stored: the build failed with "static property
+/// initializer ... with PHP type Void". A cache flushed by `static::$cache = []` is the shape.
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_static_array_reset_to_empty_keeps_its_default() {
+    let out = compile_and_run(
+        r#"<?php
+class Cache {
+    protected static $entries = [1, 2];
+    public static function flush() { static::$entries = []; }
+    public static function dump() { return json_encode(static::$entries); }
+}
+echo Cache::dump(), "\n";
+Cache::flush();
+echo Cache::dump(), "\n";
+"#,
+    );
+    assert_eq!(out, "[1,2]\n[]\n");
+}
+
+/// A default built with `+` over array constants is folded once, as php does when the class is
+/// linked, including a constant the class only inherits from an interface. Symfony's
+/// `CurlHttpClient::$emptyDefaults = self::OPTIONS_DEFAULTS + [...]` was refused before.
+#[test]
+fn test_array_union_default_over_an_interface_constant() {
+    let out = compile_and_run(
+        r#"<?php
+interface Opts { const DEFAULTS = ['a' => null, 'b' => 1, '8' => 'x']; }
+class C implements Opts {
+    private static array $empty = self::DEFAULTS + ['b' => 2, 'c' => true, 8 => 'y'];
+    public array $inst = [1, 2] + [5, 6, 7];
+    public static function get(): array { return self::$empty; }
+}
+final class D implements Opts {
+    public const DEFAULTS = Opts::DEFAULTS + ['d' => 4];
+    private static array $empty = self::DEFAULTS + ['a' => 0, 'e' => 5];
+    public static function get(): array { return self::$empty; }
+}
+echo json_encode(C::get()), "\n";
+echo json_encode((new C)->inst), "\n";
+echo json_encode(D::get()), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"a\":null,\"b\":1,\"8\":\"x\",\"c\":true}\n[1,2,7]\n{\"a\":null,\"b\":1,\"8\":\"x\",\"d\":4,\"e\":5}\n"
+    );
+}
+
+/// A static `array` slot an append compound types as `array<mixed, mixed>` takes its own
+/// reference on every store: codegen normalizes a hash value and retains it, and copies a list
+/// into fresh hash storage. Lowering treated both as moves, so `Box::$items = []` leaked one hash
+/// per assignment and a local source was retained twice. The expected output is php 8.5's own.
+#[test]
+fn test_static_hash_slot_reassignments_are_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Box { public static array $items = []; }
+function mk(int $n): array { return ['k' . $n => $n]; }
+@(Box::$items[] += 1);
+Box::$items = [];
+Box::$items = [];
+$h = ['a' => 1, 'b' => [2]];
+Box::$items = $h;
+Box::$items = $h;
+$h['c'] = 3;
+echo json_encode(Box::$items), json_encode($h), "\n";
+$l = [1, 2, 3];
+Box::$items = $l;
+$l[] = 4;
+echo json_encode(Box::$items), json_encode($l), "\n";
+for ($i = 0; $i < 5; $i++) { Box::$items = [$i, 'x' . $i]; }
+echo json_encode(Box::$items), "\n";
+for ($i = 0; $i < 5; $i++) { Box::$items = mk($i); }
+echo json_encode(Box::$items), "\n";
+unset($h, $l);
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "{\"a\":1,\"b\":[2]}{\"a\":1,\"b\":[2],\"c\":3}\n[1,2,3][1,2,3,4]\n[4,\"x4\"]\n{\"k4\":4}\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "static hash-slot stores leaked: {}",
+        out.stderr
+    );
 }

@@ -70,6 +70,7 @@ fn class_with(name: &str, methods: Vec<ClassMethod>, properties: Vec<ClassProper
         StmtKind::ClassDecl {
             generics: None,
             name: name.to_string(),
+            doc_comment: None,
             extends: None,
             implements: Vec::new(),
             is_abstract: false,

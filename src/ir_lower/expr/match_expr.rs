@@ -49,14 +49,26 @@ pub(super) fn lower_match(
             fallthrough = Some(next_test);
         }
         ctx.builder.position_at_end(result_block);
-        store_expr_into_temp(ctx, &temp_name, result_type.clone(), result, expr.span);
+        super::lazy_branches::store_branch_expr_into_temp(
+            ctx,
+            &temp_name,
+            result_type.clone(),
+            result,
+            expr.span,
+        );
         branch_to(ctx, merge);
         if let Some(fallthrough) = fallthrough {
             ctx.builder.position_at_end(fallthrough);
         }
     }
     if let Some(default) = default {
-        store_expr_into_temp(ctx, &temp_name, result_type.clone(), default, expr.span);
+        super::lazy_branches::store_branch_expr_into_temp(
+            ctx,
+            &temp_name,
+            result_type.clone(),
+            default,
+            expr.span,
+        );
         branch_to(ctx, merge);
     } else if !ctx.builder.insertion_block_is_terminated() {
         let message = ctx.intern_string("Fatal error: unhandled match case\n");

@@ -89,9 +89,15 @@ pub(super) fn resolve_slice_length_to_result(
         abi::emit_load_int_immediate(ctx.emitter, reg, 0);
         return Ok(());
     }
+    let length = length.expect("length present");
+    if ctx.value_php_type(length)?.codegen_repr() == PhpType::TaggedScalar {
+        ctx.load_value_to_result(length)?;
+        crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
+        return Ok(());
+    }
     resolve_int_operand_to_result(
         ctx,
-        length.expect("length present"),
+        length,
         &format!("{} length", name),
     )
 }
@@ -315,10 +321,11 @@ pub(super) fn lower_mixed_array_splice_aarch64(
     offset: ValueId,
     length: Option<ValueId>,
     replacement: &SpliceReplacement,
+    receiver_is_slot_address: bool,
 ) -> Result<()> {
     let drop_label = ctx.next_label("mixed_array_splice_empty");
     let done_label = ctx.next_label("mixed_array_splice_done");
-    ctx.load_value_to_reg(array, "x0")?;
+    load_mixed_splice_receiver_cell(ctx, array, "x0", receiver_is_slot_address)?;
     abi::emit_push_reg(ctx.emitter, "x0");
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     ctx.emitter.instruction("cmp x0, #4");                                      // require an indexed-array payload before splicing the Mixed cell
@@ -334,7 +341,12 @@ pub(super) fn lower_mixed_array_splice_aarch64(
     abi::emit_push_reg(ctx.emitter, "x0");
     materialize_mixed_slice_args(ctx, offset, length, "array_splice")?;
     abi::emit_call_label(ctx.emitter, "__rt_array_splice_refcounted");
-    emit_mixed_splice_replacement_insert(ctx, array, replacement)?;
+    emit_mixed_splice_replacement_insert(
+        ctx,
+        array,
+        replacement,
+        receiver_is_slot_address,
+    )?;
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the empty-array fallback after splicing the boxed payload
     ctx.emitter.label(&drop_label);
     abi::emit_pop_reg(ctx.emitter, "x9");
@@ -350,10 +362,11 @@ pub(super) fn lower_mixed_array_splice_x86_64(
     offset: ValueId,
     length: Option<ValueId>,
     replacement: &SpliceReplacement,
+    receiver_is_slot_address: bool,
 ) -> Result<()> {
     let drop_label = ctx.next_label("mixed_array_splice_empty");
     let done_label = ctx.next_label("mixed_array_splice_done");
-    ctx.load_value_to_reg(array, "rax")?;
+    load_mixed_splice_receiver_cell(ctx, array, "rax", receiver_is_slot_address)?;
     abi::emit_push_reg(ctx.emitter, "rax");
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     ctx.emitter.instruction("cmp rax, 4");                                      // require an indexed-array payload before splicing the Mixed cell
@@ -369,7 +382,12 @@ pub(super) fn lower_mixed_array_splice_x86_64(
     abi::emit_push_reg(ctx.emitter, "rax");
     materialize_mixed_slice_args(ctx, offset, length, "array_splice")?;
     abi::emit_call_label(ctx.emitter, "__rt_array_splice_refcounted");
-    emit_mixed_splice_replacement_insert(ctx, array, replacement)?;
+    emit_mixed_splice_replacement_insert(
+        ctx,
+        array,
+        replacement,
+        receiver_is_slot_address,
+    )?;
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the empty-array fallback after splicing the boxed payload
     ctx.emitter.label(&drop_label);
     abi::emit_pop_reg(ctx.emitter, "r11");
@@ -558,7 +576,9 @@ pub(super) fn array_slice_runtime_helper(source_elem_ty: &PhpType) -> &'static s
         // was refused at compile time rather than run (issue #675). Same split, and the same
         // ownership rule, as `array_splice_runtime_helper` below.
         "__rt_array_slice_str"
-    } else if source_elem_ty.is_refcounted() {
+    } else if matches!(source_elem_ty.codegen_repr(), PhpType::Callable)
+        || source_elem_ty.is_refcounted()
+    {
         "__rt_array_slice_refcounted"
     } else {
         "__rt_array_slice"

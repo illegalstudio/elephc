@@ -60,12 +60,9 @@ fn lower_compare_values(
         && is_datetime_family_value(ctx, lhs.value)
         && is_datetime_family_value(ctx, rhs.value)
     {
+        // Each key consumes its operand (see `lower_datetime_instant_key`).
         let lhs_key = lower_datetime_instant_key(ctx, lhs, expr);
         let rhs_key = lower_datetime_instant_key(ctx, rhs, expr);
-        release_binary_operand_temporary(ctx, lhs, expr.span);
-        if rhs.value != lhs.value {
-            release_binary_operand_temporary(ctx, rhs, expr.span);
-        }
         lhs = lhs_key;
         rhs = rhs_key;
     }
@@ -114,6 +111,36 @@ fn lower_compare_values(
             || object_ordering
             || needs_runtime_ordering_dispatch(ctx, lhs.value)
             || needs_runtime_ordering_dispatch(ctx, rhs.value));
+    // Operand shapes the dedicated runtime relational opcode does not claim, yet which no typed
+    // opcode can order either — a string against an int, an object against a scalar. Reduce those
+    // to PHP's `<=>` and compare its result against zero.
+    if !uses_runtime_relational_compare
+        && matches!(op, BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq)
+        && ordered_compare_uses_php_runtime(lhs.ir_type, rhs.ir_type)
+    {
+        let comparison = ctx.emit_value(
+            Op::Spaceship,
+            vec![lhs.value, rhs.value],
+            None,
+            PhpType::Int,
+            Op::Spaceship.default_effects(),
+            Some(expr.span),
+        );
+        let zero = lower_int_literal(ctx, 0, expr);
+        let result = ctx.emit_value(
+            Op::ICmp,
+            vec![comparison.value, zero.value],
+            Some(Immediate::CmpPredicate(cmp_predicate(op))),
+            PhpType::Bool,
+            Op::ICmp.default_effects(),
+            Some(expr.span),
+        );
+        release_binary_operand_temporary(ctx, lhs, expr.span);
+        if rhs.value != lhs.value {
+            release_binary_operand_temporary(ctx, rhs, expr.span);
+        }
+        return result;
+    }
     let opcode = match op {
         BinOp::StrictEq => Op::StrictEq,
         BinOp::StrictNotEq => Op::StrictNotEq,
@@ -166,6 +193,11 @@ fn lower_compare_values(
     result
 }
 
+/// Returns whether ordered operands need PHP's runtime comparison table rather than a typed opcode.
+fn ordered_compare_uses_php_runtime(lhs: IrType, rhs: IrType) -> bool {
+    !matches!((lhs, rhs), (IrType::I64, IrType::I64) | (IrType::F64, IrType::F64) | (IrType::I64, IrType::F64) | (IrType::F64, IrType::I64) | (IrType::Str, IrType::Str))
+}
+
 /// Returns whether an operand carries a runtime tag that must select PHP's ordering rule.
 fn needs_runtime_ordering_dispatch(ctx: &LoweringContext<'_, '_>, value: ValueId) -> bool {
     matches!(
@@ -210,10 +242,13 @@ pub(super) fn datetime_instant_compare_operator(op: &BinOp) -> bool {
 /// PHP's null-vs-object ordering applies.
 pub(super) fn is_datetime_family_value(ctx: &LoweringContext<'_, '_>, value: ValueId) -> bool {
     let ty = ctx.builder.value_php_type(value);
+    // A subclass keeps the family's `timestamp`/`microsecond` slots: Monolog compares its
+    // `JsonSerializableDateTimeImmutable` record stamps, and Carbon is a `DateTime`.
     matches!(
         singular_object_class(&ty),
         Some((name, false))
-            if matches!(name.trim_start_matches('\\'), "DateTime" | "DateTimeImmutable")
+            if super::property_access::class_extends_class(ctx, &name, "DateTime")
+                || super::property_access::class_extends_class(ctx, &name, "DateTimeImmutable")
     )
 }
 
@@ -223,13 +258,37 @@ pub(super) fn is_datetime_family_value(ctx: &LoweringContext<'_, '_>, value: Val
 /// Both components are stored as `int` properties, so the key is an exact ordering of the absolute
 /// instant including the sub-second part. Reducing each operand to this key lets the family's
 /// comparison operators reuse ordinary signed-integer comparison without any object-aware codegen.
+///
+/// Consumes `object`: a property read releases an owning-temporary receiver, so a temporary
+/// (`$a == new DateTimeImmutable(...)`) is acquired once more for the second read, and the caller
+/// must not release it again. Both reads released the one reference before, and the comparison a
+/// third time.
 pub(super) fn lower_datetime_instant_key(
     ctx: &mut LoweringContext<'_, '_>,
     object: LoweredValue,
     expr: &Expr,
 ) -> LoweredValue {
+    let second_receiver = if ctx.value_is_owning_temporary(object) {
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, object, Some(expr.span))
+    } else {
+        object
+    };
+    // The slots are ints, but a program whose subclass writes them through a magic setter (Carbon's
+    // `__set`) widens their storage to `Mixed`, and the backend then refused the raw `IMul` on the
+    // box (Monolog's `RotatingFileHandler::write()` in Laravel's world).
     let timestamp = lower_property_get_from_value(ctx, object, "timestamp", Op::PropGet, expr);
-    let microsecond = lower_property_get_from_value(ctx, object, "microsecond", Op::PropGet, expr);
+    let timestamp = if timestamp.ir_type == IrType::I64 {
+        timestamp
+    } else {
+        coerce_to_int(ctx, timestamp, expr)
+    };
+    let microsecond =
+        lower_property_get_from_value(ctx, second_receiver, "microsecond", Op::PropGet, expr);
+    let microsecond = if microsecond.ir_type == IrType::I64 {
+        microsecond
+    } else {
+        coerce_to_int(ctx, microsecond, expr)
+    };
     let million = lower_int_literal(ctx, 1_000_000, expr);
     let scaled = ctx.emit_value(
         Op::IMul,

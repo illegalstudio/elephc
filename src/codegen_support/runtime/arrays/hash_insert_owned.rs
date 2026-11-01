@@ -14,6 +14,11 @@ use crate::codegen_support::platform::Arch;
 
 /// hash_insert_owned: insert a normalized key-value pair whose key/value ownership already
 /// belongs to the destination table. Used by hash_grow when moving entries.
+///
+/// It writes into the first non-live slot of the probe, tombstone or empty. That is only
+/// correct because every caller (grow, shallow clone, pop/shift renumbering, owned-hash
+/// conversion) fills a FRESH table, which holds no tombstone. `__rt_hash_set`, which works on
+/// tables that have seen unsets, must probe past tombstones before it inserts.
 /// Input:  x0=hash_table_ptr, x1=key_lo, x2=key_hi (-1 means integer key), x3=value_lo, x4=value_hi, x5=value_tag
 /// Output: x0=hash_table_ptr
 pub fn emit_hash_insert_owned(emitter: &mut Emitter) {

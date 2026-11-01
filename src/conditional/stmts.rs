@@ -104,9 +104,10 @@ mod tests {
 fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
     match kind {
         StmtKind::Synthetic(stmts) => StmtKind::Synthetic(apply_stmts(stmts, defines)),
-        StmtKind::IncludeOnceMark { label } => StmtKind::IncludeOnceMark { label },
-        StmtKind::IncludeOnceGuard { label, body } => StmtKind::IncludeOnceGuard {
-            label,
+        StmtKind::IncludeOnceMark { source_path } => StmtKind::IncludeOnceMark { source_path },
+        StmtKind::IncludeOnceGuard { source_path, required, body } => StmtKind::IncludeOnceGuard {
+            source_path,
+            required,
             body: apply_stmts(body, defines),
         },
         StmtKind::Echo(expr) => StmtKind::Echo(rewrite_expr(expr, defines)),
@@ -278,6 +279,7 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
         StmtKind::ClassDecl {
             generics,
             name,
+            doc_comment,
             extends,
             implements,
             is_abstract,
@@ -290,6 +292,7 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
         } => StmtKind::ClassDecl {
             generics,
             name,
+            doc_comment,
             extends,
             implements,
             is_abstract,
@@ -404,6 +407,15 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
             property,
             value: rewrite_expr(value, defines),
         },
+        StmtKind::PropertyRefAssign {
+            object,
+            property,
+            source,
+        } => StmtKind::PropertyRefAssign {
+            object: Box::new(rewrite_expr(*object, defines)),
+            property,
+            source: rewrite_expr(source, defines),
+        },
         StmtKind::StaticPropertyAssign {
             receiver,
             property,
@@ -431,6 +443,30 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
             receiver,
             property,
             index: rewrite_expr(index, defines),
+            value: rewrite_expr(value, defines),
+        },
+        StmtKind::StaticPropertyElementRefAssign {
+            receiver,
+            property,
+            index,
+            source,
+        } => StmtKind::StaticPropertyElementRefAssign {
+            receiver,
+            property,
+            index: rewrite_expr(index, defines),
+            source: rewrite_expr(source, defines),
+        },
+        StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property,
+            index,
+            append,
+            value,
+        } => StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property: Box::new(rewrite_expr(*property, defines)),
+            index: index.map(|index| rewrite_expr(index, defines)),
+            append,
             value: rewrite_expr(value, defines),
         },
         StmtKind::PropertyArrayPush {
@@ -465,6 +501,7 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
             library,
         },
         StmtKind::ExternClassDecl { name, fields } => StmtKind::ExternClassDecl { name, fields },
+        StmtKind::ClassLikeActivate { name, kind, source_path } => StmtKind::ClassLikeActivate { name, kind, source_path },
         StmtKind::ExternGlobalDecl { name, c_type } => {
             StmtKind::ExternGlobalDecl { name, c_type }
         }

@@ -454,7 +454,7 @@ fn userland_throw_unwinds_across_a_function_boundary() {
 ///
 /// PHP resolves an UNQUALIFIED class name inside a namespace against that namespace, so
 /// `\App\ArgumentCountError` is a different (nonexistent) name; the `use` import is what
-/// binds the global one. Getting this wrong would make namespaced Symfony-shaped code either
+/// binds the global one. Getting this wrong would make namespaced application code either
 /// fail to compile or catch nothing.
 #[test]
 fn namespaced_code_resolves_the_new_error_classes() {

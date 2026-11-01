@@ -33,18 +33,34 @@ builtin! {
 /// indexed array of scalars; the result widens key/value to `Mixed` when the operands
 /// disagree, via `PhpType::two_input_hash_result`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    let ty1 = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    let ty2 = cx.checker.infer_type(&cx.args[1], cx.env)?;
-    let accepted =
-        |t: &PhpType| matches!(t, PhpType::AssocArray { .. }) || t.is_scalar_indexed_array();
-    if !accepted(&ty1) || !accepted(&ty2) {
-        return Err(CompileError::new(
-            cx.span,
-            &format!(
-                "{}() arguments must be associative arrays or indexed arrays of scalars",
-                cx.name
-            ),
-        ));
+    // php's signature is `array_replace(array $array, array ...$replacements)`. Reading exactly two
+    // arguments refused ordinary PHP with `takes exactly 2 arguments` -- Symfony's `UrlGenerator`
+    // writes `array_replace($defaults, $this->context->getParameters(), $parameters)`, and that
+    // one line kept the whole routing component out of the compiled world.
+    let accepted = |t: &PhpType| {
+        matches!(
+            t,
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_)
+        )
+    };
+    let mut types = Vec::with_capacity(cx.args.len());
+    for arg in cx.args {
+        let ty = cx.checker.infer_type(arg, cx.env)?;
+        if !accepted(&ty) {
+            return Err(CompileError::new(
+                cx.span,
+                &format!("{}() arguments must be arrays", cx.name),
+            ));
+        }
+        types.push(ty);
     }
-    Ok(PhpType::two_input_hash_result(&ty1, &ty2))
+    if types.iter().any(|ty| matches!(ty, PhpType::Mixed | PhpType::Union(_))) {
+        return Ok(PhpType::Mixed);
+    }
+    // Left to right, exactly as the nested two-argument lowering evaluates it.
+    let mut result = types.first().cloned().unwrap_or(PhpType::Mixed);
+    for ty in types.iter().skip(1) {
+        result = PhpType::two_input_hash_result(&result, ty);
+    }
+    Ok(result)
 }

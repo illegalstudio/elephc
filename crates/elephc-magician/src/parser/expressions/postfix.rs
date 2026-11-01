@@ -9,6 +9,7 @@
 //! - Postfix operations preserve PHP chaining and dynamic member evaluation order.
 
 use super::*;
+use super::precedence::is_assignment_target;
 
 impl Parser {
 
@@ -36,7 +37,7 @@ impl Parser {
             return Ok(EvalInstanceOfTarget::Expr(Box::new(expr)));
         }
         if matches!(self.current(), TokenKind::DollarIdent(_)) {
-            let target = self.parse_instanceof_variable_target()?;
+            let target = self.parse_variable_class_name_target(false)?;
             return Ok(EvalInstanceOfTarget::Expr(Box::new(target)));
         }
         let name = self.parse_class_reference_name(true)?;
@@ -57,13 +58,34 @@ impl Parser {
         Ok(EvalInstanceOfTarget::ClassName(class_name))
     }
 
-    /// Parses PHP's unparenthesized dynamic `instanceof` variable/property/array target.
-    pub(in crate::parser) fn parse_instanceof_variable_target(&mut self) -> Result<EvalExpr, EvalParseError> {
+    /// Parses an unparenthesized dynamic class-name variable/property/array target.
+    ///
+    /// `ctor_position` says a `(` after the target opens a CONSTRUCTOR argument list rather than
+    /// a method call. That difference is the whole reason `new $obj->prop()` was refused: the
+    /// `(` guard below exists so `instanceof $obj->method()` -- which PHP's grammar does not
+    /// allow -- cannot be read as a class name, and it was rejecting the constructor's own
+    /// parentheses along with it.
+    pub(in crate::parser) fn parse_variable_class_name_target(
+        &mut self,
+        ctor_position: bool,
+    ) -> Result<EvalExpr, EvalParseError> {
         let TokenKind::DollarIdent(name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
         };
-        let mut expr = EvalExpr::LoadVar(name.clone());
+        let expr = EvalExpr::LoadVar(name.clone());
         self.advance();
+        self.parse_class_name_target_chain(expr, ctor_position)
+    }
+
+    /// Continues a dynamic class-name target with its `[index]`, `::$static` and `->member` chain.
+    ///
+    /// Shared by `new $var...` and `new Name::$static...`: the latter is how Laravel writes
+    /// `new static::$resolvedCollectionClasses[static::class]($models)`.
+    pub(in crate::parser) fn parse_class_name_target_chain(
+        &mut self,
+        mut expr: EvalExpr,
+        ctor_position: bool,
+    ) -> Result<EvalExpr, EvalParseError> {
         loop {
             if matches!(self.current(), TokenKind::LBracket)
                 && matches!(self.tokens.get(self.pos + 1), Some(TokenKind::RBracket))
@@ -77,6 +99,26 @@ impl Parser {
                     array: Box::new(expr),
                     index: Box::new(index),
                 };
+                if ctor_position && matches!(self.current(), TokenKind::LParen) {
+                    break;
+                }
+                continue;
+            }
+            if self.consume(TokenKind::DoubleColon) {
+                // `new $obj::$name()` reads a STATIC property of the object's class and uses what
+                // it holds as the class name.
+                let TokenKind::DollarIdent(property) = self.current() else {
+                    return Err(EvalParseError::UnexpectedToken);
+                };
+                let property = property.clone();
+                self.advance();
+                expr = EvalExpr::DynamicStaticPropertyGet {
+                    class_name: Box::new(expr),
+                    property,
+                };
+                if ctor_position && matches!(self.current(), TokenKind::LParen) {
+                    break;
+                }
                 continue;
             }
             if self.consume(TokenKind::Arrow) {
@@ -85,13 +127,17 @@ impl Parser {
                 };
                 let member = member.clone();
                 self.advance();
-                if matches!(self.current(), TokenKind::LParen) {
+                let opens_call = matches!(self.current(), TokenKind::LParen);
+                if opens_call && !ctor_position {
                     return Err(EvalParseError::UnexpectedToken);
                 }
                 expr = EvalExpr::PropertyGet {
                     object: Box::new(expr),
                     property: member,
                 };
+                if opens_call {
+                    break;
+                }
                 continue;
             }
             break;
@@ -146,6 +192,24 @@ impl Parser {
             if self.consume(TokenKind::DoubleColon) {
                 expr = self.parse_dynamic_static_member_expr(expr)?;
                 continue;
+            }
+            if self.consume(TokenKind::PlusPlus) {
+                if !is_assignment_target(&expr) {
+                    return Err(EvalParseError::UnexpectedToken);
+                }
+                return Ok(EvalExpr::PostfixIncDec {
+                    target: Box::new(expr),
+                    increment: true,
+                });
+            }
+            if self.consume(TokenKind::MinusMinus) {
+                if !is_assignment_target(&expr) {
+                    return Err(EvalParseError::UnexpectedToken);
+                }
+                return Ok(EvalExpr::PostfixIncDec {
+                    target: Box::new(expr),
+                    increment: false,
+                });
             }
             let nullsafe = if self.consume(TokenKind::Arrow) {
                 false

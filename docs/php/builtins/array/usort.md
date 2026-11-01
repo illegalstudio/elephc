@@ -2,7 +2,7 @@
 title: "usort()"
 description: "Sorts an array by values using a user-defined comparison function."
 sidebar:
-  order: 73
+  order: 84
 ---
 
 ## usort()

@@ -15,10 +15,19 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
     if is_fiber_class(&class_name) {
         return lower_fiber_new(ctx, inst);
     }
-    if reflection::is_reflection_owner_class(&class_name) {
+    // A class reflector the module reflection table answers is an ordinary `new`: its constructor
+    // reads the row. Every other Reflection construction still goes through its metadata path.
+    if reflection::is_reflection_owner_class(&class_name)
+        && !reflection::table_builds_reflector(ctx, &class_name, inst)?
+    {
         return reflection::lower_reflection_owner_new(ctx, inst, &class_name);
     }
-    let reflection_owner_class = reflection::reflection_owner_base_class(ctx, &class_name);
+    // Only a USER subclass of a Reflection owner is populated from compile-time metadata here. The
+    // builtin owner itself reaches this point only when the module reflection table answers it
+    // (`table_builds_reflector`): its constructor reads the row, so there is no literal operand
+    // to extract -- `new ReflectionFunction($callable)` has none.
+    let reflection_owner_class = reflection::reflection_owner_base_class(ctx, &class_name)
+        .filter(|_| !reflection::is_reflection_owner_class(&class_name));
     let is_reflection_subclass = reflection_owner_class.is_some();
     if class_name == "CallbackFilterIterator" || class_name == "RecursiveCallbackFilterIterator" {
         return lower_callback_filter_iterator_new(ctx, inst, &class_name);
@@ -38,6 +47,27 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
     if let Some(class_id) = throwable_payload_class_id(ctx, &class_name) {
         return lower_builtin_throwable_new(ctx, inst, &class_name, class_id);
     }
+    if !ctx.module.class_infos.contains_key(&class_name)
+        && !ctx.module.extern_class_infos.contains_key(&class_name)
+        && !ctx.module.packed_class_infos.contains_key(&class_name)
+    {
+        if ctx.module.required_runtime_features.eval_bridge {
+            let native_miss_label = ctx.next_label("eval_native_new_miss");
+            let native_done_label = ctx.next_label("eval_native_new_done");
+            builtins::lower_eval_native_object_new_fallback(
+                ctx,
+                inst,
+                &native_miss_label,
+            )?;
+            abi::emit_jump(ctx.emitter, &native_done_label);
+            ctx.emitter.label(&native_miss_label);
+            exceptions::emit_error(ctx, &format!("Class \"{}\" not found", class_name));
+            ctx.emitter.label(&native_done_label);
+            return Ok(());
+        }
+        exceptions::emit_error(ctx, &format!("Class \"{}\" not found", class_name));
+        return Ok(());
+    }
     let constructor_key = php_symbol_key("__construct");
     let (
         class_id,
@@ -47,6 +77,7 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
         owned_reference_property_offsets,
         property_initialization,
         constructor_impl,
+        initialize_inherited_builtin_throwable,
         borrowed_reference_params,
     ) = {
         let class_info =
@@ -59,7 +90,9 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
                 class_name
             )));
         }
-        let property_initialization = collect_property_initialization(class_info, inst);
+        let property_initialization =
+            collect_property_initialization(ctx.module, &class_name, class_info, inst);
+        let mut initialize_inherited_builtin_throwable = false;
         // A private constructor is not inherited, so a descendant of a class that declares one
         // carries no `__construct` entry of its own. PHP still instantiates it through that
         // ancestor, so resolve the owner; it is the class itself for every other constructor.
@@ -68,35 +101,52 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
         let constructor_impl = if let Some((owner_name, constructor)) = constructor_owner
             .and_then(|(name, info)| info.methods.get(&constructor_key).map(|sig| (name, sig)))
         {
-            if constructor.params.len() != inst.operands.len() {
-                return Err(CodegenIrError::unsupported(format!(
-                    "constructor call to {}::__construct with {} args for {} params",
-                    class_name,
-                    inst.operands.len(),
-                    constructor.params.len()
-                )));
-            }
             let impl_class = constructor_owner
                 .and_then(|(_, info)| info.method_impl_classes.get(&constructor_key).cloned())
                 .unwrap_or_else(|| owner_name.to_string());
             if !class_method_already_emitted(ctx, &impl_class, &constructor_key, false) {
-                return Err(CodegenIrError::unsupported(format!(
-                    "constructor call to {}::__construct without an emitted EIR method body",
-                    impl_class
-                )));
+                if super::super::is_throwable_like_class(ctx, &class_name)
+                    && is_builtin_throwable_payload_class(&impl_class)
+                {
+                    if inst.operands.len() > 3 {
+                        return Err(CodegenIrError::unsupported(format!(
+                            "{}::__construct with {} EIR operands",
+                            class_name,
+                            inst.operands.len()
+                        )));
+                    }
+                    initialize_inherited_builtin_throwable = true;
+                } else {
+                    return Err(CodegenIrError::unsupported(format!(
+                        "constructor call to {}::__construct without an emitted EIR method body",
+                        impl_class
+                    )));
+                }
             }
-            let param_types = constructor
-                .params
-                .iter()
-                .map(|(_, ty)| ty.codegen_repr())
-                .collect::<Vec<_>>();
-            Some(ConstructorCallTarget {
-                impl_class,
-                param_types,
-                ref_params: constructor.ref_params.clone(),
-                sig: constructor.clone(),
-                padding_thunk: None,
-            })
+            if initialize_inherited_builtin_throwable {
+                None
+            } else {
+                if constructor.params.len() != inst.operands.len() {
+                    return Err(CodegenIrError::unsupported(format!(
+                        "constructor call to {}::__construct with {} args for {} params",
+                        class_name,
+                        inst.operands.len(),
+                        constructor.params.len()
+                    )));
+                }
+                let param_types = constructor
+                    .params
+                    .iter()
+                    .map(|(_, ty)| ty.codegen_repr())
+                    .collect::<Vec<_>>();
+                Some(ConstructorCallTarget {
+                    impl_class,
+                    param_types,
+                    ref_params: constructor.ref_params.clone(),
+                    sig: constructor.clone(),
+                    padding_thunk: None,
+                })
+            }
         } else if !inst.operands.is_empty() {
             return Err(CodegenIrError::unsupported(format!(
                 "constructor arguments for class {} without __construct",
@@ -126,6 +176,7 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
             owned_ref_offsets,
             property_initialization,
             constructor_impl,
+            initialize_inherited_builtin_throwable,
             borrowed_reference_params,
         )
     };
@@ -138,26 +189,35 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
             &format!("{}::__construct", constructor.impl_class),
         )?;
     }
-    if let Some(owner_class) = reflection_owner_class.as_deref() {
-        reflection_constructor::validate_reflection_subclass_constructor_forwarding(
+    let populate_reflection_subclass = match reflection_owner_class.as_deref() {
+        Some(owner_class) => reflection_constructor::reflection_subclass_forwards_constructor(
             ctx,
             &class_name,
             owner_class,
             constructor_impl.as_ref(),
-        )?;
-    }
-    emit_object_allocation(
+        ),
+        None => false,
+    };
+    // The shared allocator builds the object from its static template when it can and hands
+    // back whatever defaults the template could not hold (or the class's init thunk).
+    let remaining_defaults = emit_class_instance_allocation(
         ctx,
+        &class_name,
         class_id,
         property_count,
         allow_dynamic_properties,
         &uninitialized_marker_offsets,
         &owned_reference_property_offsets,
+        property_initialization.inline_defaults(),
     )?;
     let result = inst
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("object_new missing result value"))?;
     ctx.store_result_value(result)?;
+    // The allocation's reference lives only in this instruction's result until the
+    // constructor returns, so a constructor that throws would strand the half-built object.
+    // php destroys it WITHOUT running `__destruct`; the guard releases the raw object on
+    // unwind and marks it destructor-suppressed, as the dynamic-new path does.
     let needs_construction_guard = constructor_impl.is_some()
         || property_initialization.uses_thunk()
         || is_reflection_subclass;
@@ -168,15 +228,27 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
     } else {
         0
     };
+    let property_initialization =property_initialization.with_remaining_inline(remaining_defaults);
     emit_property_initialization(ctx, result, &property_initialization)?;
-    if is_reflection_subclass {
+    if populate_reflection_subclass {
         reflection::populate_reflection_owner_new(ctx, inst, &class_name, result)?;
     }
     if super::super::is_throwable_like_class(ctx, &class_name) {
         ctx.load_value_to_result(result)?;
         emit_regular_throwable_creation_line(ctx, result, abi::int_result_reg(ctx.emitter), class_id);
+        // File, line and trace of the `new` site (the branch's location capture).
+        ctx.load_value_to_result(result)?;
+        let object_reg = abi::int_result_reg(ctx.emitter);
+        throwable_new::emit_throwable_creation_site(ctx, object_reg, inst.span.map_or(0, |span| span.source_line()));
     }
-    if let Some(constructor) = constructor_impl {
+    if initialize_inherited_builtin_throwable {
+        ctx.load_value_to_result(result)?;
+        preserve_throwable_for_init(ctx);
+        emit_throwable_message_fields(ctx, inst.operands.first().copied())?;
+        emit_throwable_code_field(ctx, inst.operands.get(1).copied())?;
+        emit_throwable_previous_field(ctx, inst.operands.get(2).copied())?;
+        restore_throwable_after_init(ctx);
+    } else if let Some(constructor) = constructor_impl {
         emit_constructor_call(
             ctx,
             result,

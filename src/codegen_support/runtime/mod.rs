@@ -11,7 +11,7 @@
 
 mod arrays;
 mod buffers;
-mod callables;
+pub(crate) mod callables;
 /// PHP loose-equality (`==`) walkers for boxed Mixed values, arrays, and objects.
 mod compare;
 /// `ext/curl` easy-handle runtime helpers (`__rt_curl_*`) over the `elephc_curl` bridge.
@@ -20,6 +20,8 @@ pub(crate) mod data;
 mod diagnostics;
 mod error_handlers;
 mod handler_state;
+/// The last-diagnostic record `error_get_last()` reads.
+pub(crate) mod last_error;
 mod warning_dispatch;
 mod emitters;
 mod bcmath;
@@ -28,9 +30,12 @@ mod eval_scope;
 mod exceptions;
 pub(crate) use exceptions::deep_cleanup::Scope as CleanupScope;
 mod fibers;
+/// `ext/filter` parsers used by `filter_var()` specialized lowering.
+mod filter;
 /// Runtime helpers for generator state management (yield, resume, stack frames).
 pub(crate) mod generators;
 mod io;
+pub(crate) use io::emit_realpath_cache_invalidate;
 /// The shared PHP `float`→`int` conversion (`__rt_php_float_to_int`).
 mod numeric;
 mod objects;
@@ -54,10 +59,15 @@ pub(crate) use strings::concat_scratch::scratch_capacity as concat_scratch_capac
 mod system;
 #[cfg(test)]
 mod hosted_fatals;
+pub(crate) use system::PCNTL_PENDING_FLAG_SLOT;
 /// zval pack/unpack bridge helpers (elephc values ↔ PHP zval structs).
 mod zval;
 
-pub(crate) use data::emit_runtime_data_fixed;
+pub(crate) use data::{
+    emit_class_methods_registry_data, emit_class_registry_data, emit_interface_registry_data,
+    emit_class_relation_registry_data, emit_const_registry_data,
+    emit_member_exists_registry_data, emit_runtime_data_fixed,
+};
 
 /// Returns the `(C entry point, runtime slot)` pairs the `elephc_curl` bridge is reached
 /// through, so the publisher in `crate::codegen_support::curl` and the `__rt_curl_*`
@@ -72,6 +82,7 @@ pub(crate) use exceptions::UNCAUGHT_EXIT_STATUS;
 pub(crate) use exceptions::emit_creation_line_load;
 /// Invokes unary cleanup while accumulating destructor exceptions in the caller's frame slot.
 pub(crate) use exceptions::emit_guarded_cleanup_call;
+pub(crate) use exceptions::RELEASE_SLOT_KINDS;
 /// The PHP object-handle pool: binding a handle at allocation and reading one back.
 /// Every object-allocation site in codegen calls `emit_acquire_object_handle`.
 pub(crate) use objects::{
@@ -87,7 +98,9 @@ pub(crate) use data::{
 };
 /// Emit fixed runtime data section (symbols, constants, type metadata).
 pub(crate) use data::emit_runtime_data_user;
-pub(crate) use data::{is_user_filter_contract_method, is_user_wrapper_contract_method};
+pub(crate) use data::{
+    is_user_filter_contract_method, is_user_wrapper_contract_method, user_wrapper_contract_param_type,
+};
 /// Emit user-program-specific runtime data section.
 pub(crate) use emitters::emit_runtime;
 /// The PHP 8.5 NAN-to-bool coercion probe, reached from `src/codegen/lower_inst` float
@@ -102,11 +115,11 @@ pub(crate) use arrays::heap_live_bases::emit_reset as emit_heap_live_bases_reset
 pub(crate) use system::STACK_LIMIT_SYMBOL;
 /// Emit full runtime helpers (orchestrates all runtime sections).
 pub(crate) use fibers::{
-    FIBER_CALLABLE_OFFSET, FIBER_PENDING_THROW_OFFSET, FIBER_STACK_BASE_OFFSET,
+    FIBER_CALLABLE_OFFSET, FIBER_OBJECT_SIZE, FIBER_PENDING_THROW_OFFSET, FIBER_STACK_BASE_OFFSET,
     FIBER_STACK_SIZE_OFFSET, FIBER_START_ARGS_MAX, FIBER_START_ARGS_OFFSET,
     FIBER_START_ARG_COUNT_OFFSET, FIBER_STATE_NOT_STARTED, FIBER_STATE_RUNNING,
     FIBER_STATE_SUSPENDED, FIBER_STATE_TERMINATED, FIBER_TRANSFER_VALUE_OFFSET,
-    FIBER_USER_ARG_MAX_OFFSET,
+    FIBER_USER_ARG_MAX_OFFSET, GENERATOR_START_ARGS_MAX, generator_start_arg_offset,
 };
 
 pub(crate) use exceptions::guards as exception_guards;

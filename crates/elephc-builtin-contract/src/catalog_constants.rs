@@ -19,7 +19,8 @@ use crate::{
 macro_rules! constant {
     (
         $name:literal, $module:ident, $value:expr
-        $(, since: $since:ident)? $(, route: $route:ident)? $(, extension: $extension:literal)? $(,)?
+        $(, since: $since:ident)? $(, route: $route:ident)? $(, extension: $extension:literal)?
+        $(, targets: $targets:expr)? $(,)?
     ) => {
         ConstantContract {
             id: BuiltinId::from_canonical_name($name),
@@ -30,6 +31,7 @@ macro_rules! constant {
             route: constant!(@route $($route)?),
             extension: constant!(@flag $($extension)?),
             internal: false,
+            target_support: constant!(@targets $($targets)?),
         }
     };
     (@since $since:ident) => { Some(PhpVersion::$since) };
@@ -38,20 +40,34 @@ macro_rules! constant {
     (@route) => { ConstantRoute::Predefined };
     (@flag $value:literal) => { $value };
     (@flag) => { false };
+    (@targets $targets:expr) => { Some($targets) };
+    (@targets) => { None };
 }
 
+/// `PHP_WINDOWS_VERSION_*` exist on Windows builds of php only. elephc does not emit Windows yet,
+/// so no target it compiles for defines them; they stay catalogued so the Windows branch of a
+/// library (Symfony's `CliDumper::hasColorSupport()` reads all three) still type-checks.
+const WINDOWS_ONLY: &[&str] = &["windows-x86_64"];
+
 pub(crate) static CONSTANTS: &[ConstantContract] = &[
-    constant!("FILEINFO_APPLE", Fileinfo, ConstValue::Int(2048)),
-    constant!("FILEINFO_CONTINUE", Fileinfo, ConstValue::Int(32)),
-    constant!("FILEINFO_DEVICES", Fileinfo, ConstValue::Int(8)),
-    constant!("FILEINFO_EXTENSION", Fileinfo, ConstValue::Int(16777216)),
-    constant!("FILEINFO_MIME", Fileinfo, ConstValue::Int(1040)),
-    constant!("FILEINFO_MIME_ENCODING", Fileinfo, ConstValue::Int(1024)),
-    constant!("FILEINFO_MIME_TYPE", Fileinfo, ConstValue::Int(16)),
-    constant!("FILEINFO_NONE", Fileinfo, ConstValue::Int(0)),
-    constant!("FILEINFO_PRESERVE_ATIME", Fileinfo, ConstValue::Int(128)),
-    constant!("FILEINFO_RAW", Fileinfo, ConstValue::Int(256)),
-    constant!("FILEINFO_SYMLINK", Fileinfo, ConstValue::Int(2)),
+    constant!("APC_ITER_ALL", Apcu, ConstValue::Int(0xFFFF_FFFF)),
+    constant!("APC_ITER_ATIME", Apcu, ConstValue::Int(0x0080)),
+    constant!("APC_ITER_CTIME", Apcu, ConstValue::Int(0x0020)),
+    constant!("APC_ITER_DEVICE", Apcu, ConstValue::Int(0x0800)),
+    constant!("APC_ITER_DTIME", Apcu, ConstValue::Int(0x0040)),
+    constant!("APC_ITER_INODE", Apcu, ConstValue::Int(0x1000)),
+    constant!("APC_ITER_KEY", Apcu, ConstValue::Int(0x0002)),
+    constant!("APC_ITER_MD5", Apcu, ConstValue::Int(0x0400)),
+    constant!("APC_ITER_MEM_SIZE", Apcu, ConstValue::Int(0x0200)),
+    constant!("APC_ITER_MTIME", Apcu, ConstValue::Int(0x0010)),
+    constant!("APC_ITER_NONE", Apcu, ConstValue::Int(0x0000)),
+    constant!("APC_ITER_NUM_HITS", Apcu, ConstValue::Int(0x0008)),
+    constant!("APC_ITER_REFCOUNT", Apcu, ConstValue::Int(0x0100)),
+    constant!("APC_ITER_TTL", Apcu, ConstValue::Int(0x2000)),
+    constant!("APC_ITER_TYPE", Apcu, ConstValue::Int(0x0001)),
+    constant!("APC_ITER_VALUE", Apcu, ConstValue::Int(0x0004)),
+    constant!("APC_LIST_ACTIVE", Apcu, ConstValue::Int(1)),
+    constant!("APC_LIST_DELETED", Apcu, ConstValue::Int(2)),
     constant!("ARRAY_FILTER_USE_BOTH", Standard, ConstValue::Int(1)),
     constant!("ARRAY_FILTER_USE_KEY", Standard, ConstValue::Int(2)),
     constant!("ARRAY_FILTER_USE_VALUE", Standard, ConstValue::Int(0), extension: true),
@@ -76,13 +92,63 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("CAL_MONTH_JULIAN_LONG", Calendar, ConstValue::Int(3)),
     constant!("CAL_MONTH_JULIAN_SHORT", Calendar, ConstValue::Int(2)),
     constant!("CAL_NUM_CALS", Calendar, ConstValue::Int(4)),
+    constant!("CASE_LOWER", Standard, ConstValue::Int(0)),
+    constant!("CASE_UPPER", Standard, ConstValue::Int(1)),
+    constant!("CONNECTION_ABORTED", Standard, ConstValue::Int(1)),
+    constant!("CONNECTION_NORMAL", Standard, ConstValue::Int(0)),
+    constant!("CONNECTION_TIMEOUT", Standard, ConstValue::Int(2)),
     constant!("COUNT_NORMAL", Standard, ConstValue::Int(0)),
     constant!("COUNT_RECURSIVE", Standard, ConstValue::Int(1)),
+    constant!("CREDITS_ALL", Standard, ConstValue::Int(4294967295)),
+    constant!("CREDITS_DOCS", Standard, ConstValue::Int(16)),
+    constant!("CREDITS_FULLPAGE", Standard, ConstValue::Int(32)),
+    constant!("CREDITS_GENERAL", Standard, ConstValue::Int(2)),
+    constant!("CREDITS_GROUP", Standard, ConstValue::Int(1)),
+    constant!("CREDITS_MODULES", Standard, ConstValue::Int(8)),
+    constant!("CREDITS_QA", Standard, ConstValue::Int(64)),
+    constant!("CREDITS_SAPI", Standard, ConstValue::Int(4)),
+    constant!("CRYPT_BLOWFISH", Standard, ConstValue::Int(1)),
+    constant!("CRYPT_EXT_DES", Standard, ConstValue::Int(1)),
+    constant!("CRYPT_MD5", Standard, ConstValue::Int(1)),
+    constant!("CRYPT_SALT_LENGTH", Standard, ConstValue::Int(123)),
+    constant!("CRYPT_SHA256", Standard, ConstValue::Int(1)),
+    constant!("CRYPT_SHA512", Standard, ConstValue::Int(1)),
+    constant!("CRYPT_STD_DES", Standard, ConstValue::Int(1)),
+    constant!("DATE_ATOM", Date, ConstValue::Str("Y-m-d\\TH:i:sP")),
+    constant!("DATE_COOKIE", Date, ConstValue::Str("l, d-M-Y H:i:s T")),
+    constant!("DATE_ISO8601", Date, ConstValue::Str("Y-m-d\\TH:i:sO")),
+    constant!("DATE_ISO8601_EXPANDED", Date, ConstValue::Str("X-m-d\\TH:i:sP")),
+    constant!("DATE_RFC1036", Date, ConstValue::Str("D, d M y H:i:s O")),
+    constant!("DATE_RFC1123", Date, ConstValue::Str("D, d M Y H:i:s O")),
+    constant!("DATE_RFC2822", Date, ConstValue::Str("D, d M Y H:i:s O")),
+    constant!("DATE_RFC3339", Date, ConstValue::Str("Y-m-d\\TH:i:sP")),
+    constant!("DATE_RFC3339_EXTENDED", Date, ConstValue::Str("Y-m-d\\TH:i:s.vP")),
+    constant!("DATE_RFC7231", Date, ConstValue::Str("D, d M Y H:i:s \\G\\M\\T")),
+    constant!("DATE_RFC822", Date, ConstValue::Str("D, d M y H:i:s O")),
+    constant!("DATE_RFC850", Date, ConstValue::Str("l, d-M-y H:i:s T")),
+    constant!("DATE_RSS", Date, ConstValue::Str("D, d M Y H:i:s O")),
+    constant!("DATE_W3C", Date, ConstValue::Str("Y-m-d\\TH:i:sP")),
     constant!("DEBUG_BACKTRACE_IGNORE_ARGS", Core, ConstValue::Int(2)),
     constant!("DEBUG_BACKTRACE_PROVIDE_OBJECT", Core, ConstValue::Int(1)),
     constant!("DEFAULT_INCLUDE_PATH", Core, ConstValue::TargetDependent(ConstType::Str)),
     constant!("DIRECTORY_SEPARATOR", Standard, ConstValue::TargetDependent(ConstType::Str)),
+    constant!("DNS_A", Standard, ConstValue::Int(1)),
+    constant!("DNS_A6", Standard, ConstValue::Int(16777216)),
+    constant!("DNS_AAAA", Standard, ConstValue::Int(134217728)),
+    constant!("DNS_ALL", Standard, ConstValue::Int(251721779)),
+    constant!("DNS_ANY", Standard, ConstValue::Int(268435456)),
+    constant!("DNS_CAA", Standard, ConstValue::Int(8192)),
+    constant!("DNS_CNAME", Standard, ConstValue::Int(16)),
+    constant!("DNS_HINFO", Standard, ConstValue::Int(4096)),
+    constant!("DNS_MX", Standard, ConstValue::Int(16384)),
+    constant!("DNS_NAPTR", Standard, ConstValue::Int(67108864)),
+    constant!("DNS_NS", Standard, ConstValue::Int(2)),
+    constant!("DNS_PTR", Standard, ConstValue::Int(2048)),
+    constant!("DNS_SOA", Standard, ConstValue::Int(32)),
+    constant!("DNS_SRV", Standard, ConstValue::Int(33554432)),
+    constant!("DNS_TXT", Standard, ConstValue::Int(32768)),
     constant!("ENT_COMPAT", Standard, ConstValue::Int(2)),
+    constant!("ENT_DISALLOWED", Standard, ConstValue::Int(128)),
     constant!("ENT_HTML401", Standard, ConstValue::Int(0)),
     constant!("ENT_HTML5", Standard, ConstValue::Int(48)),
     constant!("ENT_IGNORE", Standard, ConstValue::Int(4)),
@@ -92,6 +158,14 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("ENT_XHTML", Standard, ConstValue::Int(32)),
     constant!("ENT_XML1", Standard, ConstValue::Int(16)),
     constant!("EXIF_USE_MBSTRING", Exif, ConstValue::Int(0), route: Prelude),
+    constant!("EXTR_IF_EXISTS", Standard, ConstValue::Int(6)),
+    constant!("EXTR_OVERWRITE", Standard, ConstValue::Int(0)),
+    constant!("EXTR_PREFIX_ALL", Standard, ConstValue::Int(3)),
+    constant!("EXTR_PREFIX_IF_EXISTS", Standard, ConstValue::Int(5)),
+    constant!("EXTR_PREFIX_INVALID", Standard, ConstValue::Int(4)),
+    constant!("EXTR_PREFIX_SAME", Standard, ConstValue::Int(2)),
+    constant!("EXTR_REFS", Standard, ConstValue::Int(256)),
+    constant!("EXTR_SKIP", Standard, ConstValue::Int(1)),
     constant!("E_ALL", Core, ConstValue::TargetDependent(ConstType::Int)),
     constant!("E_COMPILE_ERROR", Core, ConstValue::Int(64)),
     constant!("E_COMPILE_WARNING", Core, ConstValue::Int(128)),
@@ -109,11 +183,71 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("E_USER_WARNING", Core, ConstValue::Int(512)),
     constant!("E_WARNING", Core, ConstValue::Int(2)),
     constant!("FALSE", Core, ConstValue::Bool(false)),
+    constant!("FILEINFO_APPLE", Fileinfo, ConstValue::Int(2048)),
+    constant!("FILEINFO_CONTINUE", Fileinfo, ConstValue::Int(32)),
+    constant!("FILEINFO_DEVICES", Fileinfo, ConstValue::Int(8)),
+    constant!("FILEINFO_EXTENSION", Fileinfo, ConstValue::Int(16777216)),
+    constant!("FILEINFO_MIME", Fileinfo, ConstValue::Int(1040)),
+    constant!("FILEINFO_MIME_ENCODING", Fileinfo, ConstValue::Int(1024)),
+    constant!("FILEINFO_MIME_TYPE", Fileinfo, ConstValue::Int(16)),
+    constant!("FILEINFO_NONE", Fileinfo, ConstValue::Int(0)),
+    constant!("FILEINFO_PRESERVE_ATIME", Fileinfo, ConstValue::Int(128)),
+    constant!("FILEINFO_RAW", Fileinfo, ConstValue::Int(256)),
+    constant!("FILEINFO_SYMLINK", Fileinfo, ConstValue::Int(2)),
     constant!("FILE_APPEND", Standard, ConstValue::Int(8)),
     constant!("FILE_IGNORE_NEW_LINES", Standard, ConstValue::Int(2)),
     constant!("FILE_NO_DEFAULT_CONTEXT", Standard, ConstValue::Int(16)),
     constant!("FILE_SKIP_EMPTY_LINES", Standard, ConstValue::Int(4)),
     constant!("FILE_USE_INCLUDE_PATH", Standard, ConstValue::Int(1)),
+    constant!("FILTER_CALLBACK", Filter, ConstValue::Int(1024)),
+    constant!("FILTER_DEFAULT", Filter, ConstValue::Int(516)),
+    constant!("FILTER_FLAG_ALLOW_FRACTION", Filter, ConstValue::Int(4096)),
+    constant!("FILTER_FLAG_ALLOW_HEX", Filter, ConstValue::Int(2)),
+    constant!("FILTER_FLAG_ALLOW_OCTAL", Filter, ConstValue::Int(1)),
+    constant!("FILTER_FLAG_ALLOW_SCIENTIFIC", Filter, ConstValue::Int(16384)),
+    constant!("FILTER_FLAG_ALLOW_THOUSAND", Filter, ConstValue::Int(8192)),
+    constant!("FILTER_FLAG_EMAIL_UNICODE", Filter, ConstValue::Int(1048576)),
+    constant!("FILTER_FLAG_EMPTY_STRING_NULL", Filter, ConstValue::Int(256)),
+    constant!("FILTER_FLAG_ENCODE_AMP", Filter, ConstValue::Int(64)),
+    constant!("FILTER_FLAG_ENCODE_HIGH", Filter, ConstValue::Int(32)),
+    constant!("FILTER_FLAG_ENCODE_LOW", Filter, ConstValue::Int(16)),
+    constant!("FILTER_FLAG_GLOBAL_RANGE", Filter, ConstValue::Int(536870912)),
+    constant!("FILTER_FLAG_HOSTNAME", Filter, ConstValue::Int(1048576)),
+    constant!("FILTER_FLAG_IPV4", Filter, ConstValue::Int(1_048_576)),
+    constant!("FILTER_FLAG_IPV6", Filter, ConstValue::Int(2_097_152)),
+    constant!("FILTER_FLAG_NONE", Filter, ConstValue::Int(0)),
+    constant!("FILTER_FLAG_NO_ENCODE_QUOTES", Filter, ConstValue::Int(128)),
+    constant!("FILTER_FLAG_NO_PRIV_RANGE", Filter, ConstValue::Int(8388608)),
+    constant!("FILTER_FLAG_NO_RES_RANGE", Filter, ConstValue::Int(4194304)),
+    constant!("FILTER_FLAG_PATH_REQUIRED", Filter, ConstValue::Int(262144)),
+    constant!("FILTER_FLAG_QUERY_REQUIRED", Filter, ConstValue::Int(524288)),
+    constant!("FILTER_FLAG_STRIP_BACKTICK", Filter, ConstValue::Int(512)),
+    constant!("FILTER_FLAG_STRIP_HIGH", Filter, ConstValue::Int(8)),
+    constant!("FILTER_FLAG_STRIP_LOW", Filter, ConstValue::Int(4)),
+    constant!("FILTER_FORCE_ARRAY", Filter, ConstValue::Int(67_108_864)),
+    constant!("FILTER_NULL_ON_FAILURE", Filter, ConstValue::Int(134_217_728)),
+    constant!("FILTER_REQUIRE_ARRAY", Filter, ConstValue::Int(16_777_216)),
+    constant!("FILTER_REQUIRE_SCALAR", Filter, ConstValue::Int(33_554_432)),
+    constant!("FILTER_SANITIZE_ADD_SLASHES", Filter, ConstValue::Int(523)),
+    constant!("FILTER_SANITIZE_EMAIL", Filter, ConstValue::Int(517)),
+    constant!("FILTER_SANITIZE_ENCODED", Filter, ConstValue::Int(514)),
+    constant!("FILTER_SANITIZE_FULL_SPECIAL_CHARS", Filter, ConstValue::Int(522)),
+    constant!("FILTER_SANITIZE_NUMBER_FLOAT", Filter, ConstValue::Int(520)),
+    constant!("FILTER_SANITIZE_NUMBER_INT", Filter, ConstValue::Int(519)),
+    constant!("FILTER_SANITIZE_SPECIAL_CHARS", Filter, ConstValue::Int(515)),
+    constant!("FILTER_SANITIZE_URL", Filter, ConstValue::Int(518)),
+    constant!("FILTER_THROW_ON_FAILURE", Filter, ConstValue::Int(268435456)),
+    constant!("FILTER_UNSAFE_RAW", Filter, ConstValue::Int(516)),
+    constant!("FILTER_VALIDATE_BOOL", Filter, ConstValue::Int(258)),
+    constant!("FILTER_VALIDATE_BOOLEAN", Filter, ConstValue::Int(258)),
+    constant!("FILTER_VALIDATE_DOMAIN", Filter, ConstValue::Int(277)),
+    constant!("FILTER_VALIDATE_EMAIL", Filter, ConstValue::Int(274)),
+    constant!("FILTER_VALIDATE_FLOAT", Filter, ConstValue::Int(259)),
+    constant!("FILTER_VALIDATE_INT", Filter, ConstValue::Int(257)),
+    constant!("FILTER_VALIDATE_IP", Filter, ConstValue::Int(275)),
+    constant!("FILTER_VALIDATE_MAC", Filter, ConstValue::Int(276)),
+    constant!("FILTER_VALIDATE_REGEXP", Filter, ConstValue::Int(272)),
+    constant!("FILTER_VALIDATE_URL", Filter, ConstValue::Int(273)),
     constant!("FNM_CASEFOLD", Standard, ConstValue::Int(16)),
     constant!("FNM_NOESCAPE", Standard, ConstValue::TargetDependent(ConstType::Int)),
     constant!("FNM_PATHNAME", Standard, ConstValue::TargetDependent(ConstType::Int)),
@@ -134,6 +268,9 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("GMP_ROUND_PLUSINF", Gmp, ConstValue::Int(1), route: Prelude),
     constant!("GMP_ROUND_ZERO", Gmp, ConstValue::Int(0), route: Prelude),
     constant!("GMP_VERSION", Gmp, ConstValue::Str("6.3.0"), route: Prelude),
+    constant!("GRAPHEME_EXTR_MAXBYTES", Intl, ConstValue::Int(1)),
+    constant!("HTML_ENTITIES", Standard, ConstValue::Int(1)),
+    constant!("HTML_SPECIALCHARS", Standard, ConstValue::Int(0)),
     constant!("ICONV_IMPL", Iconv, ConstValue::TargetDependent(ConstType::Str)),
     constant!("ICONV_MIME_DECODE_CONTINUE_ON_ERROR", Iconv, ConstValue::Int(2)),
     constant!("ICONV_MIME_DECODE_STRICT", Iconv, ConstValue::Int(1)),
@@ -142,15 +279,18 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("IMAGETYPE_BMP", Standard, ConstValue::Int(6), route: Prelude),
     constant!("IMAGETYPE_COUNT", Standard, ConstValue::Int(20), route: Prelude),
     constant!("IMAGETYPE_GIF", Standard, ConstValue::Int(1), route: Prelude),
+    constant!("IMAGETYPE_HEIF", Standard, ConstValue::Int(20)),
     constant!("IMAGETYPE_ICO", Standard, ConstValue::Int(17), route: Prelude),
     constant!("IMAGETYPE_IFF", Standard, ConstValue::Int(14), route: Prelude),
     constant!("IMAGETYPE_JB2", Standard, ConstValue::Int(12), route: Prelude),
     constant!("IMAGETYPE_JP2", Standard, ConstValue::Int(10), route: Prelude),
     constant!("IMAGETYPE_JPC", Standard, ConstValue::Int(9), route: Prelude),
     constant!("IMAGETYPE_JPEG", Standard, ConstValue::Int(2), route: Prelude),
+    constant!("IMAGETYPE_JPEG2000", Standard, ConstValue::Int(9)),
     constant!("IMAGETYPE_JPX", Standard, ConstValue::Int(11), route: Prelude),
     constant!("IMAGETYPE_PNG", Standard, ConstValue::Int(3), route: Prelude),
     constant!("IMAGETYPE_PSD", Standard, ConstValue::Int(5), route: Prelude),
+    constant!("IMAGETYPE_SVG", Standard, ConstValue::Int(21)),
     constant!("IMAGETYPE_SWC", Standard, ConstValue::Int(13), route: Prelude),
     constant!("IMAGETYPE_SWF", Standard, ConstValue::Int(4), route: Prelude),
     constant!("IMAGETYPE_TIFF_II", Standard, ConstValue::Int(7), route: Prelude),
@@ -227,6 +367,26 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("IMG_WEIGHTED4", Gd, ConstValue::Int(21), route: Prelude),
     constant!("IMG_XPM", Gd, ConstValue::Int(16), route: Prelude),
     constant!("INF", Standard, ConstValue::Float(f64::INFINITY)),
+    constant!("INFO_ALL", Standard, ConstValue::Int(4294967295)),
+    constant!("INFO_CONFIGURATION", Standard, ConstValue::Int(4)),
+    constant!("INFO_CREDITS", Standard, ConstValue::Int(2)),
+    constant!("INFO_ENVIRONMENT", Standard, ConstValue::Int(16)),
+    constant!("INFO_GENERAL", Standard, ConstValue::Int(1)),
+    constant!("INFO_LICENSE", Standard, ConstValue::Int(64)),
+    constant!("INFO_MODULES", Standard, ConstValue::Int(8)),
+    constant!("INFO_VARIABLES", Standard, ConstValue::Int(32)),
+    constant!("INI_ALL", Standard, ConstValue::Int(7)),
+    constant!("INI_PERDIR", Standard, ConstValue::Int(2)),
+    constant!("INI_SCANNER_NORMAL", Standard, ConstValue::Int(0)),
+    constant!("INI_SCANNER_RAW", Standard, ConstValue::Int(1)),
+    constant!("INI_SCANNER_TYPED", Standard, ConstValue::Int(2)),
+    constant!("INI_SYSTEM", Standard, ConstValue::Int(4)),
+    constant!("INI_USER", Standard, ConstValue::Int(1)),
+    constant!("INPUT_COOKIE", Filter, ConstValue::Int(2)),
+    constant!("INPUT_ENV", Filter, ConstValue::Int(4)),
+    constant!("INPUT_GET", Filter, ConstValue::Int(1)),
+    constant!("INPUT_POST", Filter, ConstValue::Int(0)),
+    constant!("INPUT_SERVER", Filter, ConstValue::Int(5)),
     constant!("JSON_BIGINT_AS_STRING", Json, ConstValue::Int(2)),
     constant!("JSON_ERROR_CTRL_CHAR", Json, ConstValue::Int(3)),
     constant!("JSON_ERROR_DEPTH", Json, ConstValue::Int(1)),
@@ -256,15 +416,63 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("JSON_UNESCAPED_LINE_TERMINATORS", Json, ConstValue::Int(2048)),
     constant!("JSON_UNESCAPED_SLASHES", Json, ConstValue::Int(64)),
     constant!("JSON_UNESCAPED_UNICODE", Json, ConstValue::Int(256)),
-    constant!("LIBXML_COMPACT", Libxml, ConstValue::Int(65536)),
+    constant!("LC_ALL", Standard, ConstValue::TargetDependent(ConstType::Int)),
+    constant!("LC_COLLATE", Standard, ConstValue::TargetDependent(ConstType::Int)),
+    constant!("LC_CTYPE", Standard, ConstValue::TargetDependent(ConstType::Int)),
+    constant!("LC_MESSAGES", Standard, ConstValue::TargetDependent(ConstType::Int)),
+    constant!("LC_MONETARY", Standard, ConstValue::TargetDependent(ConstType::Int)),
+    constant!("LC_NUMERIC", Standard, ConstValue::TargetDependent(ConstType::Int)),
+    constant!("LC_TIME", Standard, ConstValue::TargetDependent(ConstType::Int)),
+    constant!("LIBXML_COMPACT", Libxml, ConstValue::Int(65_536)),
+    constant!("LIBXML_ERR_ERROR", Libxml, ConstValue::Int(2)),
+    constant!("LIBXML_ERR_FATAL", Libxml, ConstValue::Int(3)),
+    constant!("LIBXML_ERR_NONE", Libxml, ConstValue::Int(0)),
+    constant!("LIBXML_ERR_WARNING", Libxml, ConstValue::Int(1)),
     constant!("LIBXML_HTML_NODEFDTD", Libxml, ConstValue::Int(4)),
     constant!("LIBXML_NOBLANKS", Libxml, ConstValue::Int(256)),
     constant!("LIBXML_NOERROR", Libxml, ConstValue::Int(32)),
+    constant!("LIBXML_NONET", Libxml, ConstValue::Int(2048)),
     constant!("LIBXML_NOXMLDECL", Libxml, ConstValue::Int(2)),
     constant!("LOCK_EX", Standard, ConstValue::Int(2)),
     constant!("LOCK_NB", Standard, ConstValue::Int(4)),
     constant!("LOCK_SH", Standard, ConstValue::Int(1)),
     constant!("LOCK_UN", Standard, ConstValue::Int(3)),
+    // syslog()'s priorities, facilities and openlog() options. Laravel's default logging
+    // config names `LOG_USER` as the syslog channel's facility, so booting the framework reads
+    // it. Values measured with php 8.5 on darwin; they are the same on Linux.
+    constant!("LOG_ALERT", Standard, ConstValue::Int(1)),
+    constant!("LOG_AUTH", Standard, ConstValue::Int(32)),
+    constant!("LOG_AUTHPRIV", Standard, ConstValue::Int(80)),
+    constant!("LOG_CONS", Standard, ConstValue::Int(2)),
+    constant!("LOG_CRIT", Standard, ConstValue::Int(2)),
+    constant!("LOG_CRON", Standard, ConstValue::Int(72)),
+    constant!("LOG_DAEMON", Standard, ConstValue::Int(24)),
+    constant!("LOG_DEBUG", Standard, ConstValue::Int(7)),
+    constant!("LOG_EMERG", Standard, ConstValue::Int(0)),
+    constant!("LOG_ERR", Standard, ConstValue::Int(3)),
+    constant!("LOG_INFO", Standard, ConstValue::Int(6)),
+    constant!("LOG_KERN", Standard, ConstValue::Int(0)),
+    constant!("LOG_LOCAL0", Standard, ConstValue::Int(128)),
+    constant!("LOG_LOCAL1", Standard, ConstValue::Int(136)),
+    constant!("LOG_LOCAL2", Standard, ConstValue::Int(144)),
+    constant!("LOG_LOCAL3", Standard, ConstValue::Int(152)),
+    constant!("LOG_LOCAL4", Standard, ConstValue::Int(160)),
+    constant!("LOG_LOCAL5", Standard, ConstValue::Int(168)),
+    constant!("LOG_LOCAL6", Standard, ConstValue::Int(176)),
+    constant!("LOG_LOCAL7", Standard, ConstValue::Int(184)),
+    constant!("LOG_LPR", Standard, ConstValue::Int(48)),
+    constant!("LOG_MAIL", Standard, ConstValue::Int(16)),
+    constant!("LOG_NDELAY", Standard, ConstValue::Int(8)),
+    constant!("LOG_NEWS", Standard, ConstValue::Int(56)),
+    constant!("LOG_NOTICE", Standard, ConstValue::Int(5)),
+    constant!("LOG_NOWAIT", Standard, ConstValue::Int(16)),
+    constant!("LOG_ODELAY", Standard, ConstValue::Int(4)),
+    constant!("LOG_PERROR", Standard, ConstValue::Int(32)),
+    constant!("LOG_PID", Standard, ConstValue::Int(1)),
+    constant!("LOG_SYSLOG", Standard, ConstValue::Int(40)),
+    constant!("LOG_USER", Standard, ConstValue::Int(8)),
+    constant!("LOG_UUCP", Standard, ConstValue::Int(64)),
+    constant!("LOG_WARNING", Standard, ConstValue::Int(4)),
     constant!("MB_CASE_FOLD", Mbstring, ConstValue::Int(3)),
     constant!("MB_CASE_FOLD_SIMPLE", Mbstring, ConstValue::Int(7)),
     constant!("MB_CASE_LOWER", Mbstring, ConstValue::Int(1)),
@@ -329,23 +537,60 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("MYSQLI_TYPE_VAR_STRING", Mysqli, ConstValue::Int(253), route: Prelude),
     constant!("MYSQLI_TYPE_YEAR", Mysqli, ConstValue::Int(13), route: Prelude),
     constant!("MYSQLI_USE_RESULT", Mysqli, ConstValue::Int(1), route: Prelude),
+    constant!("M_1_PI", Standard, ConstValue::Float(0.318_309_886_183_790_7)),
+    constant!("M_2_PI", Standard, ConstValue::Float(0.636_619_772_367_581_4)),
+    constant!("M_2_SQRTPI", Standard, ConstValue::Float(1.128_379_167_095_512_6)),
     constant!("M_E", Standard, ConstValue::Float(std::f64::consts::E)),
+    constant!("M_EULER", Standard, ConstValue::Float(0.577_215_664_901_532_9)),
+    constant!("M_LN10", Standard, ConstValue::Float(2.302_585_092_994_046)),
+    constant!("M_LN2", Standard, ConstValue::Float(0.693_147_180_559_945_3)),
+    constant!("M_LNPI", Standard, ConstValue::Float(1.144_729_885_849_400_2)),
     constant!("M_LOG10E", Standard, ConstValue::Float(std::f64::consts::LOG10_E)),
     constant!("M_LOG2E", Standard, ConstValue::Float(std::f64::consts::LOG2_E)),
     constant!("M_PI", Standard, ConstValue::Float(std::f64::consts::PI)),
     constant!("M_PI_2", Standard, ConstValue::Float(std::f64::consts::FRAC_PI_2)),
     constant!("M_PI_4", Standard, ConstValue::Float(std::f64::consts::FRAC_PI_4)),
+    constant!("M_SQRT1_2", Standard, ConstValue::Float(0.707_106_781_186_547_6)),
     constant!("M_SQRT2", Standard, ConstValue::Float(std::f64::consts::SQRT_2)),
+    constant!("M_SQRT3", Standard, ConstValue::Float(1.732_050_807_568_877_2)),
+    constant!("M_SQRTPI", Standard, ConstValue::Float(1.772_453_850_905_516)),
     constant!("NAN", Standard, ConstValue::Float(f64::NAN)),
     constant!("NULL", Core, ConstValue::Null),
     constant!("OPENSSL_DONT_ZERO_PAD_KEY", Openssl, ConstValue::Int(4)),
     constant!("OPENSSL_RAW_DATA", Openssl, ConstValue::Int(1)),
     constant!("OPENSSL_ZERO_PADDING", Openssl, ConstValue::Int(2)),
+    constant!("PASSWORD_BCRYPT", Standard, ConstValue::Str("2y")),
+    constant!("PASSWORD_BCRYPT_DEFAULT_COST", Standard, ConstValue::Int(12)),
+    constant!("PASSWORD_DEFAULT", Standard, ConstValue::Str("2y")),
     constant!("PATHINFO_ALL", Standard, ConstValue::Int(15)),
     constant!("PATHINFO_BASENAME", Standard, ConstValue::Int(2)),
     constant!("PATHINFO_DIRNAME", Standard, ConstValue::Int(1)),
     constant!("PATHINFO_EXTENSION", Standard, ConstValue::Int(4)),
     constant!("PATHINFO_FILENAME", Standard, ConstValue::Int(8)),
+    // The three PCRE constants describe the PCRE2 elephc STATICALLY LINKS, which is pinned in
+    // `src/native_deps/catalog.rs` (`PCRE2_VERSIONS`) and recorded in `elephc.lock`. A compiled
+    // binary has no host PCRE to interrogate at run time, so the value has to be baked in, and
+    // the one true answer is what that library's own `pcre2_config(PCRE2_CONFIG_VERSION)`
+    // returns: `"<PCRE2_MAJOR>.<PCRE2_MINOR> <PCRE2_DATE>"` from its `pcre2.h`.
+    //
+    // This DIVERGES from php on a given host, and legitimately so. php's PCRE_VERSION is a
+    // run-time query of whichever shared libpcre2 the process loaded, while its
+    // PCRE_VERSION_MAJOR/_MINOR are compile-time macros from the headers php was BUILT against,
+    // so php's own three can disagree: the Homebrew php 8.5.10 on the machine this was written on
+    // reports PCRE_VERSION "10.48 2026-08-31" beside MAJOR 10 / MINOR 47. elephc's three can
+    // never disagree, because there is exactly one PCRE2 in the binary. A program that branches
+    // on the version -- `symfony/polyfill-intl-grapheme` picks `\X` over a hand-written cluster
+    // regex at `(float) PCRE_VERSION >= 10.44` -- therefore gets an answer that describes the
+    // regex engine that will actually run its pattern, which is the answer it wanted.
+    //
+    // BUMPING PCRE2 MUST BUMP ALL THREE TOGETHER. `pcre_version_constants_match_each_other` in
+    // this file's tests fails when the string and the two integers drift apart, and
+    // `pcre_version_constant_matches_the_pinned_native_dependency` in `src/native_deps/catalog.rs`
+    // fails when they drift from the pinned tarball.
+    constant!("PATH_SEPARATOR", Standard, ConstValue::TargetDependent(ConstType::Str)),
+    constant!("PCRE_VERSION", Pcre, ConstValue::Str("10.47 2025-10-21")),
+    constant!("PCRE_VERSION_MAJOR", Pcre, ConstValue::Int(10)),
+    constant!("PCRE_VERSION_MINOR", Pcre, ConstValue::Int(47)),
     constant!("PEAR_EXTENSION_DIR", Core, ConstValue::TargetDependent(ConstType::Str)),
     constant!("PEAR_INSTALL_DIR", Core, ConstValue::TargetDependent(ConstType::Str)),
     constant!("PHP_BINARY", Core, ConstValue::TargetDependent(ConstType::Str)),
@@ -384,13 +629,15 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("PHP_OUTPUT_HANDLER_FINAL", Core, ConstValue::Int(8)),
     constant!("PHP_OUTPUT_HANDLER_FLUSH", Core, ConstValue::Int(4)),
     constant!("PHP_OUTPUT_HANDLER_FLUSHABLE", Core, ConstValue::Int(32)),
-    constant!("PHP_OUTPUT_HANDLER_PROCESSED", Core, ConstValue::Int(16384)),
+    constant!("PHP_OUTPUT_HANDLER_PROCESSED", Core, ConstValue::Int(16_384)),
     constant!("PHP_OUTPUT_HANDLER_REMOVABLE", Core, ConstValue::Int(64)),
     constant!("PHP_OUTPUT_HANDLER_START", Core, ConstValue::Int(1)),
     constant!("PHP_OUTPUT_HANDLER_STARTED", Core, ConstValue::Int(4096)),
     constant!("PHP_OUTPUT_HANDLER_STDFLAGS", Core, ConstValue::Int(112)),
     constant!("PHP_OUTPUT_HANDLER_WRITE", Core, ConstValue::Int(0)),
     constant!("PHP_PREFIX", Core, ConstValue::TargetDependent(ConstType::Str)),
+    constant!("PHP_QUERY_RFC1738", Standard, ConstValue::Int(1)),
+    constant!("PHP_QUERY_RFC3986", Standard, ConstValue::Int(2)),
     constant!("PHP_RELEASE_VERSION", Core, ConstValue::TargetDependent(ConstType::Int)),
     constant!("PHP_ROUND_HALF_DOWN", Standard, ConstValue::Int(2)),
     constant!("PHP_ROUND_HALF_EVEN", Standard, ConstValue::Int(3)),
@@ -413,9 +660,20 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("PHP_URL_USER", Standard, ConstValue::Int(3)),
     constant!("PHP_VERSION", Core, ConstValue::TargetDependent(ConstType::Str)),
     constant!("PHP_VERSION_ID", Core, ConstValue::TargetDependent(ConstType::Int)),
+    constant!("PHP_WINDOWS_VERSION_BUILD", Core, ConstValue::Int(0), targets: WINDOWS_ONLY),
+    constant!("PHP_WINDOWS_VERSION_MAJOR", Core, ConstValue::Int(0), targets: WINDOWS_ONLY),
+    constant!("PHP_WINDOWS_VERSION_MINOR", Core, ConstValue::Int(0), targets: WINDOWS_ONLY),
     constant!("PHP_ZTS", Core, ConstValue::Bool(false)),
+    constant!("PREG_BACKTRACK_LIMIT_ERROR", Pcre, ConstValue::Int(2)),
+    constant!("PREG_BAD_UTF8_ERROR", Pcre, ConstValue::Int(4)),
+    constant!("PREG_BAD_UTF8_OFFSET_ERROR", Pcre, ConstValue::Int(5)),
+    constant!("PREG_GREP_INVERT", Pcre, ConstValue::Int(1)),
+    constant!("PREG_INTERNAL_ERROR", Pcre, ConstValue::Int(1)),
+    constant!("PREG_JIT_STACKLIMIT_ERROR", Pcre, ConstValue::Int(6)),
+    constant!("PREG_NO_ERROR", Pcre, ConstValue::Int(0)),
     constant!("PREG_OFFSET_CAPTURE", Pcre, ConstValue::Int(256)),
     constant!("PREG_PATTERN_ORDER", Pcre, ConstValue::Int(1)),
+    constant!("PREG_RECURSION_LIMIT_ERROR", Pcre, ConstValue::Int(3)),
     constant!("PREG_SET_ORDER", Pcre, ConstValue::Int(2)),
     constant!("PREG_SPLIT_DELIM_CAPTURE", Pcre, ConstValue::Int(2)),
     constant!("PREG_SPLIT_NO_EMPTY", Pcre, ConstValue::Int(1)),
@@ -427,6 +685,12 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("PSFS_FLAG_FLUSH_INC", Standard, ConstValue::Int(1)),
     constant!("PSFS_FLAG_NORMAL", Standard, ConstValue::Int(0)),
     constant!("PSFS_PASS_ON", Standard, ConstValue::Int(2)),
+    constant!("SCANDIR_SORT_ASCENDING", Standard, ConstValue::Int(0)),
+    constant!("SCANDIR_SORT_DESCENDING", Standard, ConstValue::Int(1)),
+    constant!("SCANDIR_SORT_NONE", Standard, ConstValue::Int(2)),
+    constant!("SEEK_CUR", Standard, ConstValue::Int(1)),
+    constant!("SEEK_END", Standard, ConstValue::Int(2)),
+    constant!("SEEK_SET", Standard, ConstValue::Int(0)),
     constant!("SID", Session, ConstValue::Str(""), route: Dynamic),
     constant!("SORT_ASC", Standard, ConstValue::Int(4)),
     constant!("SORT_DESC", Standard, ConstValue::Int(3)),
@@ -449,8 +713,27 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("STREAM_CLIENT_PERSISTENT", Standard, ConstValue::Int(1)),
     constant!("STREAM_CRYPTO_METHOD_ANY_CLIENT", Standard, ConstValue::Int(127)),
     constant!("STREAM_CRYPTO_METHOD_ANY_SERVER", Standard, ConstValue::Int(126)),
+    constant!("STREAM_CRYPTO_METHOD_SSLv23_CLIENT", Standard, ConstValue::Int(57)),
+    constant!("STREAM_CRYPTO_METHOD_SSLv23_SERVER", Standard, ConstValue::Int(120)),
+    constant!("STREAM_CRYPTO_METHOD_SSLv2_CLIENT", Standard, ConstValue::Int(3)),
+    constant!("STREAM_CRYPTO_METHOD_SSLv2_SERVER", Standard, ConstValue::Int(2)),
+    constant!("STREAM_CRYPTO_METHOD_SSLv3_CLIENT", Standard, ConstValue::Int(5)),
+    constant!("STREAM_CRYPTO_METHOD_SSLv3_SERVER", Standard, ConstValue::Int(4)),
     constant!("STREAM_CRYPTO_METHOD_TLS_CLIENT", Standard, ConstValue::Int(121)),
     constant!("STREAM_CRYPTO_METHOD_TLS_SERVER", Standard, ConstValue::Int(120)),
+    constant!("STREAM_CRYPTO_METHOD_TLSv1_0_CLIENT", Standard, ConstValue::Int(9)),
+    constant!("STREAM_CRYPTO_METHOD_TLSv1_0_SERVER", Standard, ConstValue::Int(8)),
+    constant!("STREAM_CRYPTO_METHOD_TLSv1_1_CLIENT", Standard, ConstValue::Int(17)),
+    constant!("STREAM_CRYPTO_METHOD_TLSv1_1_SERVER", Standard, ConstValue::Int(16)),
+    constant!("STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT", Standard, ConstValue::Int(33)),
+    constant!("STREAM_CRYPTO_METHOD_TLSv1_2_SERVER", Standard, ConstValue::Int(32)),
+    constant!("STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT", Standard, ConstValue::Int(65)),
+    constant!("STREAM_CRYPTO_METHOD_TLSv1_3_SERVER", Standard, ConstValue::Int(64)),
+    constant!("STREAM_CRYPTO_PROTO_SSLv3", Standard, ConstValue::Int(4)),
+    constant!("STREAM_CRYPTO_PROTO_TLSv1_0", Standard, ConstValue::Int(8)),
+    constant!("STREAM_CRYPTO_PROTO_TLSv1_1", Standard, ConstValue::Int(16)),
+    constant!("STREAM_CRYPTO_PROTO_TLSv1_2", Standard, ConstValue::Int(32)),
+    constant!("STREAM_CRYPTO_PROTO_TLSv1_3", Standard, ConstValue::Int(64)),
     constant!("STREAM_FILTER_ALL", Standard, ConstValue::Int(3)),
     constant!("STREAM_FILTER_READ", Standard, ConstValue::Int(1)),
     constant!("STREAM_FILTER_WRITE", Standard, ConstValue::Int(2)),
@@ -489,6 +772,7 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("STREAM_OPTION_WRITE_BUFFER", Standard, ConstValue::Int(3)),
     constant!("STREAM_PEEK", Standard, ConstValue::Int(2)),
     constant!("STREAM_PF_INET", Standard, ConstValue::Int(2)),
+    constant!("STREAM_PF_INET6", Standard, ConstValue::Int(30)),
     constant!("STREAM_PF_UNIX", Standard, ConstValue::Int(1)),
     constant!("STREAM_REPORT_ERRORS", Standard, ConstValue::Int(8)),
     constant!("STREAM_SERVER_BIND", Standard, ConstValue::Int(4)),
@@ -547,7 +831,79 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("XML_OPTION_SKIP_WHITE", Xml, ConstValue::Int(4)),
     constant!("XML_OPTION_TARGET_ENCODING", Xml, ConstValue::Int(2)),
     constant!("XML_SAX_IMPL", Xml, ConstValue::Str("libxml")),
+    // php always defines both, false in a non-thread-safe release build. Symfony's `Process`
+    // tests `\defined('ZEND_THREAD_SAFE')` to decide whether to pin the working directory with
+    // getcwd(); without it the cwd stayed null and `is_dir(null)` refused every process
+    // ("The provided cwd "" does not exist"), which crashed Laravel's `artisan about`.
     constant!("ZEND_DEBUG_BUILD", Core, ConstValue::Bool(false)),
     constant!("ZEND_THREAD_SAFE", Core, ConstValue::Bool(false)),
     constant!("ZEND_VM_KIND", Core, ConstValue::TargetDependent(ConstType::Str)),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::CONSTANTS;
+    use crate::{ConstValue, PhpModule};
+
+    /// Finds one predefined constant's value in this file's table.
+    fn value(name: &str) -> &'static ConstValue {
+        &CONSTANTS
+            .iter()
+            .find(|constant| constant.name == name)
+            .unwrap_or_else(|| panic!("{name} is not in the constant table"))
+            .value
+    }
+
+    /// The three PCRE constants describe ONE statically linked library, so they cannot disagree.
+    ///
+    /// php's own three can and do (its string is a run-time query of the shared library it
+    /// loaded, its integers are compile-time macros of the headers it was built against), and
+    /// copying php's numbers off a host is exactly how elephc would acquire that inconsistency.
+    /// Bumping the pinned PCRE2 without bumping all three fails here.
+    #[test]
+    fn pcre_version_constants_match_each_other() {
+        let ConstValue::Str(version) = value("PCRE_VERSION") else {
+            panic!("PCRE_VERSION must be a string, as php's is");
+        };
+        let ConstValue::Int(major) = value("PCRE_VERSION_MAJOR") else {
+            panic!("PCRE_VERSION_MAJOR must be an integer");
+        };
+        let ConstValue::Int(minor) = value("PCRE_VERSION_MINOR") else {
+            panic!("PCRE_VERSION_MINOR must be an integer");
+        };
+        // php's shape is "<major>.<minor> <release date>", and `symfony/polyfill-intl-grapheme`
+        // reads it as `(float) PCRE_VERSION`, so the major and minor have to be the leading
+        // number and the date has to stay behind a space.
+        let (number, date) = version
+            .split_once(' ')
+            .unwrap_or_else(|| panic!("PCRE_VERSION {version:?} has no release date"));
+        assert_eq!(
+            number,
+            &format!("{major}.{minor}"),
+            "PCRE_VERSION {version:?} disagrees with PCRE_VERSION_MAJOR/_MINOR {major}.{minor}"
+        );
+        assert_eq!(
+            date.split('-').count(),
+            3,
+            "PCRE_VERSION {version:?} must carry a YYYY-MM-DD release date, as php's does"
+        );
+        assert_eq!(
+            number.parse::<f64>().ok(),
+            Some(*major as f64 + *minor as f64 / 100.0),
+            "(float) PCRE_VERSION must read back as the pinned version number"
+        );
+    }
+
+    /// All three PCRE constants belong to `ext/pcre`, so `--strict-php` and the module-scoped
+    /// documentation treat them alike.
+    #[test]
+    fn pcre_version_constants_share_the_pcre_module() {
+        for name in ["PCRE_VERSION", "PCRE_VERSION_MAJOR", "PCRE_VERSION_MINOR"] {
+            let constant = CONSTANTS
+                .iter()
+                .find(|constant| constant.name == name)
+                .unwrap_or_else(|| panic!("{name} is not in the constant table"));
+            assert_eq!(constant.module, PhpModule::Pcre, "{name}");
+        }
+    }
+}

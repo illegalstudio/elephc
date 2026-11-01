@@ -19,7 +19,24 @@ use crate::codegen_support::sentinels::{
 /// Emits x86_64 object-property storage and parsed-hash conversion helpers.
 pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     // -- __rt_obj_store_prop(rdi=obj, rsi=key_ptr, rdx=key_len, rcx=valbox): inject a property --
+    //
+    // TWO PASSES, because a serialized key is not always mangled. `serialize()` writes a
+    // private property as "\0Class\0name" and a protected one as "\0*\0name", but a class with
+    // a `__serialize()` chooses its own keys, and the natural spelling there is the DECLARED
+    // name: Symfony's `FileResource::__serialize()` returns `['resource' => …]` for a
+    // `private string $resource`. PHP resolves such a key against the class's declared
+    // properties, so it lands in the private slot; matching only the mangled row left the
+    // typed property uninitialized and every later read raised "must not be accessed before
+    // initialization". Exact keys are matched FIRST across all rows so an explicit mangled key
+    // still wins over an unmangled alias when a class has both spellings.
     emitter.label_global("__rt_obj_store_prop");
+    // stdClass has no declared slots: its dynamic properties live in the hash at obj+8, so a
+    // serialized property is inserted there (rdi..rcx already match `__rt_stdclass_set`).
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_stdclass_class_id", 0);
+    emitter.instruction("cmp QWORD PTR [rdi], r10");                            // is the receiver a stdClass instance?
+    emitter.instruction("jne __rt_obj_store_prop_declared");                    // declared-layout classes keep the slot matcher
+    emitter.instruction("jmp __rt_stdclass_set");                               // tail-call the hash-backed property store
+    emitter.label("__rt_obj_store_prop_declared");
     emitter.instruction("push rbp");                                            // save the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the store frame
     emitter.instruction("sub rsp, 96");                                         // reserve frame slots (class id spill included)
@@ -35,11 +52,13 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // save the property-info table
     emitter.instruction("mov rax, QWORD PTR [r10]");                            // property count
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the property count
+    emitter.instruction("mov QWORD PTR [rbp - 72], 0");                         // pass 0 = key as stored, pass 1 = unmangled tail
+    emitter.label("__rt_obj_store_prop_pass");
     emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // row index = 0
     emitter.label("__rt_obj_store_prop_loop");
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // reload the row index
     emitter.instruction("cmp rax, QWORD PTR [rbp - 48]");                       // scanned every row?
-    emitter.instruction("jge __rt_obj_store_prop_done");                        // unknown key is ignored
+    emitter.instruction("jge __rt_obj_store_prop_pass_end");                    // this pass found nothing
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // property-info table
     emitter.instruction("shl rax, 5");                                          // index * 32 (row stride)
     emitter.instruction("add rax, r10");                                        // table + index*32
@@ -47,6 +66,30 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save the row pointer
     emitter.instruction("mov r9, QWORD PTR [rax]");                             // row mangled key pointer
     emitter.instruction("mov rdx, QWORD PTR [rax + 8]");                        // row mangled key length
+    emitter.instruction("cmp QWORD PTR [rbp - 72], 0");                         // which pass is this?
+    emitter.instruction("je __rt_obj_store_prop_have_key");                     // pass 0 compares the row key verbatim
+    // Narrow the row key to whatever follows its LAST NUL, which is the declared property
+    // name. A row with no NUL is a public property whose key is already the declared name and
+    // was compared verbatim in pass 0, so it is skipped rather than compared twice.
+    emitter.instruction("xor r8, r8");                                          // scan cursor
+    emitter.instruction("mov r11, -1");                                         // index of the last NUL seen
+    emitter.label("__rt_obj_store_prop_tail_scan");
+    emitter.instruction("cmp r8, rdx");                                         // scanned the whole row key?
+    emitter.instruction("jge __rt_obj_store_prop_tail_done");                   // stop at the end of the key
+    emitter.instruction("mov al, BYTE PTR [r9 + r8]");                          // row key byte
+    emitter.instruction("test al, al");                                         // only NUL separators matter
+    emitter.instruction("jne __rt_obj_store_prop_tail_next");                   // keep scanning past ordinary bytes
+    emitter.instruction("mov r11, r8");                                         // remember this separator
+    emitter.label("__rt_obj_store_prop_tail_next");
+    emitter.instruction("add r8, 1");                                           // next byte
+    emitter.instruction("jmp __rt_obj_store_prop_tail_scan");                   // continue scanning
+    emitter.label("__rt_obj_store_prop_tail_done");
+    emitter.instruction("cmp r11, -1");                                         // was any separator found?
+    emitter.instruction("je __rt_obj_store_prop_next");                         // an unmangled row has no alias to try
+    emitter.instruction("add r11, 1");                                          // the name starts after the separator
+    emitter.instruction("add r9, r11");                                         // declared-name pointer
+    emitter.instruction("sub rdx, r11");                                        // declared-name length
+    emitter.label("__rt_obj_store_prop_have_key");
     emitter.instruction("cmp rdx, QWORD PTR [rbp - 24]");                       // same length as the parsed key?
     emitter.instruction("jne __rt_obj_store_prop_next");                        // lengths differ, skip
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // parsed key pointer
@@ -100,6 +143,8 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // object pointer
     emitter.instruction("add r10, r8");                                         // address of the property slot
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // value box
+    emitter.instruction("test r9, 0x100");                                      // is this a reference-bound slot?
+    emitter.instruction("jnz __rt_obj_store_prop_reference");                   // it holds a cell pointer, not a value: nothing to release or overwrite
     emitter.instruction("mov QWORD PTR [rbp - 72], r9");                        // preserve the property tag across the previous-value release
     emitter.instruction("mov QWORD PTR [rbp - 80], r10");                       // preserve the slot address across the previous-value release
     emitter.instruction("sub rsp, 16");                                         // reserve an aligned spill for the property offset
@@ -144,13 +189,40 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // hand the parsed box to the post-store finisher
     emitter.instruction("call __rt_unser_finish_stored_prop");                  // release the scalar box after the slot took its value
     emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
+    // See the AArch64 sibling: only a real list may be flattened into an indexed array, or every
+    // string key is renumbered away.
     emitter.label("__rt_obj_store_prop_arr");
-    emitter.instruction("mov QWORD PTR [rbp - 64], r8");                        // save the property byte offset across the call
+    // See the AArch64 sibling: an interpreter-built list is already an indexed array (tag 4);
+    // only the decoder's parsed hash (tag 5) needs list classification and conversion.
+    emitter.instruction("mov QWORD PTR [rbp - 64], r8");                        // save the property byte offset across the calls
+    emitter.instruction("mov r9, QWORD PTR [rcx]");                             // boxed value tag
+    emitter.instruction("cmp r9, 5");                                           // is this the decoder's parsed hash?
+    emitter.instruction("jne __rt_obj_store_prop_arr_direct");                  // an indexed array is already final
     emitter.instruction("mov rdi, QWORD PTR [rcx + 8]");                        // parsed hash pointer (box low word)
-    emitter.instruction("call __rt_hash_to_indexed_array");                     // materialize a native indexed array
+    emitter.instruction("mov QWORD PTR [rbp - 80], rdi");                       // keep the parsed hash across the classification
+    emitter.instruction("call __rt_array_is_list");                             // are its keys exactly 0..n-1 in order?
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 80]");                       // restore the parsed hash pointer
+    emitter.instruction("test rax, rax");                                       // a keyed array stays hash-backed
+    emitter.instruction("jz __rt_obj_store_prop_arr_keep_hash");                // store the parsed hash exactly as decoded
+    emitter.instruction("call __rt_hash_to_indexed_array");                     // a list is flattened for indexed property access
+    emitter.instruction("jmp __rt_obj_store_prop_arr_store");                   // store whichever container was chosen
+    emitter.label("__rt_obj_store_prop_arr_keep_hash");
+    emitter.instruction("mov rax, rdi");                                        // the parsed hash is the stored container
+    emitter.instruction("jmp __rt_obj_store_prop_arr_shared");                  // the slot needs its own owner of the unconverted container
+    emitter.label("__rt_obj_store_prop_arr_direct");
+    emitter.instruction("mov rax, QWORD PTR [rcx + 8]");                        // already-built array payload
+    emitter.label("__rt_obj_store_prop_arr_shared");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // object pointer
     emitter.instruction("add r10, QWORD PTR [rbp - 64]");                       // slot = object + byte offset
-    emitter.instruction("mov QWORD PTR [r10], rax");                            // store the indexed-array pointer
+    emitter.instruction("mov QWORD PTR [r10], rax");                            // store the container pointer
+    emitter.instruction("mov QWORD PTR [r10 + 8], 0");                          // the high word marks the typed property initialized
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // hand the parsed box to the post-store finisher
+    emitter.instruction("call __rt_unser_finish_stored_prop");                  // the finisher gives the slot its own owner of the payload
+    emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
+    emitter.label("__rt_obj_store_prop_arr_store");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // object pointer
+    emitter.instruction("add r10, QWORD PTR [rbp - 64]");                       // slot = object + byte offset
+    emitter.instruction("mov QWORD PTR [r10], rax");                            // store the freshly built indexed-array pointer
     emitter.instruction("mov QWORD PTR [r10 + 8], 0");                          // the high word marks the typed property initialized
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // hand the parsed box to the parse-owner release
     emitter.instruction("call __rt_decref_mixed");                              // retire the source hash box now the slot owns the new array
@@ -166,6 +238,10 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     // A parsed null keeps its boxed tag-8 cell like every other value: the in-band
     // NULL_SENTINEL is not a Mixed cell pointer, and every reader of the slot
     // (`=== null`, var_dump, json_encode) dereferenced it.
+    emitter.label("__rt_obj_store_prop_reference");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // the slot keeps its reference cell, so the parsed box is not stored anywhere
+    emitter.instruction("call __rt_unserialize_defer_data");                    // leave the cell alone (overwriting its pointer would corrupt the reference) and retire the box with its parse context
+    emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property left untouched
     emitter.label("__rt_obj_store_prop_mixed");
     emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // current property metadata word
     crate::codegen_support::abi::emit_load_int_immediate(emitter, "r9", crate::codegen_support::sentinels::UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
@@ -213,6 +289,11 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("add rax, 1");                                          // advance to the next row
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // persist the row index
     emitter.instruction("jmp __rt_obj_store_prop_loop");                        // continue scanning
+    emitter.label("__rt_obj_store_prop_pass_end");
+    emitter.instruction("cmp QWORD PTR [rbp - 72], 0");                         // was that the verbatim pass?
+    emitter.instruction("jne __rt_obj_store_prop_done");                        // both passes are spent
+    emitter.instruction("mov QWORD PTR [rbp - 72], 1");                         // retry against declared names
+    emitter.instruction("jmp __rt_obj_store_prop_pass");                        // rescan the rows unmangled
     emitter.label("__rt_obj_store_prop_done");
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // hand the ignored value box to the context owner
     emitter.instruction("call __rt_unserialize_defer_data");                    // keep the unclaimed value alive until the decode completes

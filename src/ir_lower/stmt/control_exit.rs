@@ -11,11 +11,15 @@ use super::*;
 
 /// Lowers a `break` terminator.
 pub(super) fn lower_break(ctx: &mut LoweringContext<'_, '_>, level: usize) {
-    let Some(frame) = loop_target(ctx, level) else {
+    let Some((_target_loop_index, frame)) = loop_target(ctx, level) else {
         ctx.builder.terminate(Terminator::Unreachable);
         return;
     };
-    terminate_branch(ctx, frame.break_block, loop_cleanup_count_for_branch(level));
+    terminate_branch(
+        ctx,
+        frame.break_block,
+        loop_cleanup_count_for_branch(level),
+    );
 }
 
 /// Releases the exceptions a finalizer took that a jump leaves behind, at the point in the exit
@@ -73,7 +77,7 @@ fn release_taken_exceptions(ctx: &mut LoweringContext<'_, '_>, target_loop_depth
 
 /// Lowers a `continue` terminator.
 pub(super) fn lower_continue(ctx: &mut LoweringContext<'_, '_>, level: usize) {
-    let Some(frame) = loop_target(ctx, level) else {
+    let Some((_target_loop_index, frame)) = loop_target(ctx, level) else {
         ctx.builder.terminate(Terminator::Unreachable);
         return;
     };
@@ -97,6 +101,9 @@ pub(super) fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option
     if ctx.return_type == IrType::Void {
         if let Some(value_expr) = value_expr {
             lower_expr(ctx, value_expr);
+            if ctx.builder.insertion_block_is_terminated() {
+                return;
+            }
         }
         terminate_return(ctx, None);
         return;
@@ -106,9 +113,15 @@ pub(super) fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option
     } else {
         emit_null_value(ctx, Some(span))
     };
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
+    let borrowed = value;
     let value = coerce_to_return_type(ctx, value, Some(span));
+    let value = acquire_returned_this(ctx, value_expr, borrowed, value, span);
+    // `return $this` has already acquired the borrowed receiver above. Other borrowed
+    // loads still need the general retain before their frame storage is cleaned up.
     let value = acquire_borrowed_return_value(ctx, value, span);
-    let value = acquire_returned_this(ctx, value_expr, value, span);
     let value = persist_scratch_return_string(ctx, value, span);
     terminate_return(ctx, Some(value.value));
 }
@@ -235,20 +248,52 @@ fn lower_reference_return(
             }
             terminate_return(ctx, Some(captured.value));
         }
-        Some(_) => {
-            if let Some(value_expr) = value_expr {
-                // Keep the source expression's side effects even though its value cannot be
-                // returned; the program is refused, so only the diagnostic is observable.
-                lower_expr(ctx, value_expr);
+        Some(ExprKind::ArrayAccess { .. }) => {
+            // `return $out[$k]` (Symfony's `FormDataCollector::buildPreliminaryFormTree` over a
+            // by-reference `$out`): a hash entry is promoted to a managed reference cell in place,
+            // so the caller shares it exactly as php does. The element is bound to a hidden alias
+            // first; only when that alias owns such a cell of the declared payload is the cell
+            // transferred. An inline indexed slot owns none, so it keeps the copy below, read
+            // from the alias so the index is evaluated once.
+            let Some(value_expr) = value_expr else { return };
+            let alias = ctx.next_synthetic_place_local_name();
+            crate::ir_lower::expr::lower_ref_assign_array_elem(ctx, &alias, value_expr, span);
+            if ctx.builder.insertion_block_is_terminated() {
+                return;
             }
-            refuse_reference_return(
-                ctx,
-                span,
-                "Unsupported by-reference return: this compiler transfers a reference only \
-                 from a variable or a property. PHP also allows other places here, such as an \
-                 array element or another reference-returning call, but this lowering cannot \
-                 transfer an owning cell for them yet",
-            );
+            if ctx.is_ref_bound_local(&alias)
+                && !ctx.is_borrowed_element_ref_local(&alias)
+                && reference_return_payload_matches(ctx, &alias)
+            {
+                let value = ctx.load_local(&alias, Some(span));
+                if ctx.builder.value_defining_op(value.value) == Some(Op::LoadRefCell) {
+                    acquire_and_return_reference_cell(ctx, value, span);
+                    return;
+                }
+            }
+            let value = ctx.load_local(&alias, Some(span));
+            let result_ty = ctx.return_php_type.clone();
+            let temp = ctx.declare_synthetic_php_local(result_ty.clone());
+            ctx.store_local(&temp, value, result_ty, Some(span));
+            let temp_expr = Expr::new(ExprKind::Variable(temp), span);
+            lower_reference_return(ctx, Some(&temp_expr), span);
+        }
+        Some(_) => {
+            // No owning cell can be transferred from this place yet (a dynamic property, an
+            // array element, another call), so the caller receives a fresh reference to a COPY
+            // of the value: the call works and reads correctly, only writes through the returned
+            // reference stay local. Refusing instead failed whole programs on Monolog's
+            // `LogRecord::&offsetGet()`, which returns `$this->{$offset}`.
+            let Some(value_expr) = value_expr else { return };
+            let value = lower_expr(ctx, value_expr);
+            if ctx.builder.insertion_block_is_terminated() {
+                return;
+            }
+            let result_ty = ctx.return_php_type.clone();
+            let temp = ctx.declare_synthetic_php_local(result_ty.clone());
+            ctx.store_local(&temp, value, result_ty, Some(span));
+            let temp_expr = Expr::new(ExprKind::Variable(temp), span);
+            lower_reference_return(ctx, Some(&temp_expr), span);
         }
         None => refuse_reference_return(
             ctx,
@@ -426,15 +471,29 @@ pub(super) fn lower_return_expr(ctx: &mut LoweringContext<'_, '_>, value_expr: &
 /// result drops the object's refcount to zero and runs its destructor while the
 /// original binding is still live — a use-after-free for any class with a
 /// destructor. Incrementing the refcount here balances that release.
+///
+/// That reasoning holds only while the returned value still IS the borrowed receiver.
+/// A declared return type that cannot carry a bare object pointer — a nullable object,
+/// `mixed`, or an object union — makes `coerce_to_return_type` box the receiver into a
+/// freshly allocated Mixed cell first. That cell already owns its reference to the
+/// receiver and is itself handed to the caller as owned, so acquiring it again leaves a
+/// reference nobody drops: the caller's single release cannot free the cell, the object
+/// never reaches zero, and `__destruct()` never runs for a discarded fluent temporary
+/// (`$obj->args([]);` on a method declared `: static|null`). `borrowed` is the value
+/// before coercion, so an unchanged value still takes the retain it needs.
 pub(super) fn acquire_returned_this(
     ctx: &mut LoweringContext<'_, '_>,
     value_expr: Option<&Expr>,
+    borrowed: LoweredValue,
     value: LoweredValue,
     span: Span,
 ) -> LoweredValue {
     if !matches!(value_expr.map(|expr| &expr.kind), Some(ExprKind::This))
         || ctx.value_is_owning_temporary(value)
     {
+        return value;
+    }
+    if value.value != borrowed.value && ctx.value_is_owning_temporary(value) {
         return value;
     }
     crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
@@ -447,10 +506,46 @@ pub(super) fn persist_scratch_return_string(
     value: LoweredValue,
     span: Span,
 ) -> LoweredValue {
-    if !string_value_needs_persistence(ctx, value) {
+    if value.ir_type != IrType::Str || ctx.builder.value_ownership(value.value) == Ownership::Owned {
         return value;
     }
-    persist_pending_string(ctx, value, span)
+    // Views over scratch storage (and Mixed casts) are copied by `persist_pending_string`, which
+    // also retires the detached owner of a Mixed cast. Anything else falls through to the
+    // slot-aware check below.
+    if string_value_needs_persistence(ctx, value) {
+        return persist_pending_string(ctx, value, span);
+    }
+    // Asking the CONTEXT, not just this value's defining opcode: `return $v;` loads a slot, so
+    // the load is what defines the returned value. A slot that received `$v .= ...` still holds
+    // bytes in the shared concat scratch buffer, and handing that pointer to the caller lets the
+    // next string operation overwrite the returned string in place.
+    if !ctx.value_is_scratch_backed(value) {
+        return value;
+    }
+    // A string `Acquire` IS a persist (`__rt_str_persist` copies it to an owned heap block), so a
+    // value it defines left the scratch already. `value_is_scratch_backed` looks through it for
+    // the slot a store wrote, but persisting the acquired copy again left that copy unreleased:
+    // `return substr($mixed, 1);` leaked one block per call.
+    if ctx.builder.value_defining_op(value.value) == Some(Op::Acquire) {
+        return value;
+    }
+    let persisted = ctx.emit_value(
+        Op::StrPersist,
+        vec![value.value],
+        None,
+        PhpType::Str,
+        Op::StrPersist.default_effects(),
+        Some(span),
+    );
+    // `return $local;` over a slot that eval (or a later widening) turned into a boxed Mixed reads
+    // a DETACHED copy. The persisted duplicate is what leaves, so the read's own copy has to go;
+    // builder finalization prunes this release when the slot turns out to lend a plain string.
+    if ctx.builder.value_defining_op(value.value) == Some(Op::LoadLocal)
+        && ctx.value_needs_release_after_use(value)
+    {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
+    persisted
 }
 
 /// Gives typed object returns an independent owner and stabilizes borrowed heap reads.
@@ -463,11 +558,27 @@ pub(super) fn persist_scratch_return_string(
 /// calls, so `return $static_local` must hand the caller an extra reference, since the
 /// caller releases call results after consuming them, and without the retain that
 /// release frees the box the slot still points to.
+///
+/// Class static properties are included for the same reason, and their owner outlives the
+/// call even further: the property symbol holds the value for the whole process. Symfony's
+/// `Request::getTrustedProxies()` — `return self::$trustedProxies;` over an `array`-defaulted
+/// private static — is the case that found this. Its caller writes
+/// `if ($request::getTrustedProxies())`, releases the call result once the condition is
+/// consumed, and the property is left pointing at storage the arena immediately re-hands out.
+/// `scratchpad/staticret/index.php` reduces it; the dynamic-name and reflection reads are the
+/// same borrow reached through a different selector.
 pub(super) fn acquire_borrowed_return_value(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     span: Span,
 ) -> LoweredValue {
+    // A function-static container load reads as a movable owner (`value_is_owned_unboxed_local_load`),
+    // which is right for a frame local the return consumes and wrong for a static: its slot keeps
+    // the container for the next call. `static $h = [...]; ...; return $h;` handed the caller the
+    // static's only reference, the caller freed it, and the next call wrote into freed storage.
+    if ctx.builder.value_defining_op(value.value) == Some(Op::LoadStaticLocal) {
+        return crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
+    }
     let temporary = ctx.value_is_owning_temporary(value);
     let php_type = ctx.builder.value_php_type(value.value);
     if !ctx.by_ref_return && matches!(php_type.codegen_repr(), PhpType::Object(_)) {
@@ -509,6 +620,36 @@ pub(super) fn acquire_borrowed_return_value(
     if !Ownership::php_type_needs_lifetime_tracking(&php_type) {
         return value;
     }
+    // `Op::Move` only relabels a container for the return contract (a hash property returned
+    // under a bare `array` return type). It owns nothing, so the question is asked of the value
+    // it relabels: `return $this->items;` with `$items` holding string keys reached the caller
+    // unretained, the caller released it, and the property was freed under the object. Symfony's
+    // `MergeExtensionConfigurationParameterBag` then fed the freed hash to `+=`, and
+    // `__rt_hash_new` wrote 117 MB past the heap.
+    let mut source = value.value;
+    while ctx.builder.value_defining_op(source) == Some(Op::Move) {
+        let Some(operand) = ctx
+            .builder
+            .value_defining_instruction(source)
+            .and_then(|inst| inst.operands.first().copied())
+        else {
+            break;
+        };
+        source = operand;
+    }
+    // The relabelled value may itself be an owning load -- a frame local whose reference the
+    // return moves out (the epilogue then skips that slot, `return_cleanup_skip_slot`).
+    // Acquiring it as well left one reference nobody drops: `$r = []; foreach (...) { if (...)
+    // {...} $r[$k] = 1; } return $r;` under `: array` leaked the whole hash on every call.
+    if source != value.value {
+        let source_type = ctx.builder.value_php_type(source);
+        if ctx.value_is_owning_temporary(LoweredValue {
+            value: source,
+            ir_type: crate::ir_lower::context::value_ir_type(&source_type),
+        }) {
+            return value;
+        }
+    }
     if !ctx.by_ref_return && ctx.builder.value_defining_op(value.value) == Some(Op::LoadRefCell) {
         // A by-value return cannot transfer the caller's mutable reference owner.
         // Detach Mixed cells so native reference writeback cannot invalidate the result.
@@ -521,16 +662,24 @@ pub(super) fn acquire_borrowed_return_value(
         return crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
     }
     if !matches!(
-        ctx.builder.value_defining_op(value.value),
+        ctx.builder.value_defining_op(source),
         Some(
             Op::ArrayGet
                 | Op::HashGet
                 | Op::HashGetSilent
+                | Op::LoadLocal
+                | Op::LoadRefCell
                 | Op::PropGet
                 | Op::DynamicPropGet
                 | Op::NullsafePropGet
                 | Op::LoadStaticLocal
                 | Op::LoadStaticProperty
+                | Op::LoadDynamicStaticProperty
+                | Op::LoadReflectionStaticProperty
+                // `return eval($code);` hands back the fragment's value cell, which the eval
+                // scope still owns and tears down on the way out; `$r = eval($code)` retains it
+                // in the store, a bare return has to do the same.
+                | Op::LanguageConstructCall
         )
     ) {
         return value;
@@ -554,6 +703,23 @@ fn pending_return_uses_local_owner(ctx: &LoweringContext<'_, '_>, mut value: cra
         }
     }
     false
+}
+
+/// Runs one exit's lowering, then puts back the finally and handler frames it consumed.
+///
+/// An exit inlines the finalizers it crosses by popping their frames, but the protected body
+/// goes on after that exit in its other branches: `try { if ($a) continue; if ($b) break; }
+/// finally { ... }` must run the finalizer on BOTH jumps. With the pop left in place the second
+/// exit found no frame and skipped the `finally` entirely.
+fn with_exit_frames_restored(
+    ctx: &mut LoweringContext<'_, '_>,
+    lower_exit: impl FnOnce(&mut LoweringContext<'_, '_>),
+) {
+    let finally_stack = ctx.finally_stack.clone();
+    let try_handler_stack = ctx.try_handler_stack.clone();
+    lower_exit(ctx);
+    ctx.finally_stack = finally_stack;
+    ctx.try_handler_stack = try_handler_stack;
 }
 
 /// Terminates with a return after running active finally bodies from inner to outer.
@@ -584,11 +750,13 @@ pub(crate) fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<
         }, ty, None);
         name
     });
-    terminate_return_with_owner(ctx, value, pending.as_deref());
+    with_exit_frames_restored(ctx, |ctx| {
+        terminate_return_consuming_frames(ctx, value, pending.as_deref())
+    });
 }
 
 /// Keeps a pending return frame-owned across every copied finalizer until its final transfer.
-fn terminate_return_with_owner(
+fn terminate_return_consuming_frames(
     ctx: &mut LoweringContext<'_, '_>,
     value: Option<crate::ir::ValueId>,
     pending: Option<&str>,
@@ -600,7 +768,7 @@ fn terminate_return_with_owner(
     release_taken_exceptions(ctx, None);
     if run_innermost_finally(ctx, false, None) {
         if !ctx.builder.insertion_block_is_terminated() {
-            terminate_return_with_owner(ctx, value, pending);
+            terminate_return_consuming_frames(ctx, value, pending);
         }
         // Finalizer frames are consumed only on the emitted control-flow path.
         // Restore the lexical lowering state for sibling and fallthrough blocks.
@@ -610,6 +778,7 @@ fn terminate_return_with_owner(
         ctx.exit_cleaned_loops = saved_cleaned;
         return;
     }
+    emit_try_handler_pops_for_return(ctx);
     emit_innermost_loop_cleanups(ctx, ctx.loop_stack.len());
     ctx.taken_finally_exceptions = saved_taken;
     ctx.exit_cleaned_loops = saved_cleaned;
@@ -624,6 +793,16 @@ fn terminate_return_with_owner(
 
 /// Terminates with a branch after running active finally bodies from inner to outer.
 pub(super) fn terminate_branch(ctx: &mut LoweringContext<'_, '_>, target: BlockId, loop_cleanup_count: usize) {
+    with_exit_frames_restored(ctx, |ctx| {
+        terminate_branch_consuming_frames(ctx, target, loop_cleanup_count)
+    });
+}
+
+fn terminate_branch_consuming_frames(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: BlockId,
+    loop_cleanup_count: usize,
+) {
     let saved_finally_stack = ctx.finally_stack.clone();
     let saved_try_loop_depths = ctx.try_loop_depths.clone();
     let saved_taken = ctx.taken_finally_exceptions.clone();
@@ -633,7 +812,7 @@ pub(super) fn terminate_branch(ctx: &mut LoweringContext<'_, '_>, target: BlockI
     release_taken_exceptions(ctx, Some(target_loop_depth));
     if run_innermost_finally(ctx, false, Some(target_loop_depth)) {
         if !ctx.builder.insertion_block_is_terminated() {
-            terminate_branch(ctx, target, loop_cleanup_count);
+            terminate_branch_consuming_frames(ctx, target, loop_cleanup_count);
         }
         ctx.finally_stack = saved_finally_stack;
         ctx.try_loop_depths = saved_try_loop_depths;
@@ -641,6 +820,7 @@ pub(super) fn terminate_branch(ctx: &mut LoweringContext<'_, '_>, target: BlockI
         ctx.exit_cleaned_loops = saved_cleaned;
         return;
     }
+    emit_try_handler_pops_for_branch(ctx, target_loop_depth);
     emit_innermost_loop_cleanups(ctx, loop_cleanup_count);
     ctx.taken_finally_exceptions = saved_taken;
     ctx.exit_cleaned_loops = saved_cleaned;
@@ -652,11 +832,15 @@ pub(super) fn terminate_branch(ctx: &mut LoweringContext<'_, '_>, target: BlockI
 
 /// Terminates with a throw after running finally bodies that apply to uncaught throws.
 pub(super) fn terminate_throw(ctx: &mut LoweringContext<'_, '_>, value: crate::ir::ValueId) {
+    with_exit_frames_restored(ctx, |ctx| terminate_throw_consuming_frames(ctx, value));
+}
+
+fn terminate_throw_consuming_frames(ctx: &mut LoweringContext<'_, '_>, value: crate::ir::ValueId) {
     let saved_finally_stack = ctx.finally_stack.clone();
     let saved_try_loop_depths = ctx.try_loop_depths.clone();
     if run_innermost_finally(ctx, true, None) {
         if !ctx.builder.insertion_block_is_terminated() {
-            terminate_throw(ctx, value);
+            terminate_throw_consuming_frames(ctx, value);
         }
         ctx.finally_stack = saved_finally_stack;
         ctx.try_loop_depths = saved_try_loop_depths;
@@ -729,9 +913,34 @@ pub(crate) fn lower_throw_access_error_expr_as(
     span: Span,
     php_type: PhpType,
 ) -> LoweredValue {
+    lower_throw_access_class_expr_as(ctx, "Error", message, span, php_type)
+}
+
+/// Lowers a statically-decided violation as a throw of `class_name`, in expression position.
+///
+/// The access violations raise `Error`; a proven argument-type mismatch raises `TypeError`, which
+/// is what php throws when the same call runs. Both are catchable, so the class has to be the one
+/// php uses or a `catch (TypeError $e)` around the call stops matching.
+pub(crate) fn lower_throw_access_class_expr(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    message: &str,
+    span: Span,
+) -> LoweredValue {
+    lower_throw_access_class_expr_as(ctx, class_name, message, span, PhpType::Void)
+}
+
+/// Throws `class_name` in expression position and yields a placeholder of `php_type`.
+pub(crate) fn lower_throw_access_class_expr_as(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    message: &str,
+    span: Span,
+    php_type: PhpType,
+) -> LoweredValue {
     let error_expr = Expr::new(
         ExprKind::NewObject {
-            class_name: crate::names::Name::unqualified("Error"),
+            class_name: crate::names::Name::unqualified(class_name),
             args: vec![Expr::new(ExprKind::StringLiteral(message.to_string()), span)],
         },
         span,

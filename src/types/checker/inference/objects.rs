@@ -11,4 +11,8 @@
 mod access;
 mod constructors;
 mod methods;
+#[cfg(test)]
+pub(crate) use methods::INTERFACE_IMPLEMENTATION_SIG_COPIES;
 mod reflection_filters;
+
+pub(crate) use methods::php_declared_type_spelling;

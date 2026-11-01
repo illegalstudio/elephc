@@ -293,6 +293,21 @@ var_dump(is_object(42));
     assert_eq!(out, "bool(true)\nbool(false)\nbool(false)\n");
 }
 
+/// Verifies closures satisfy `is_object()` both directly and through boxed Mixed storage.
+#[test]
+fn test_is_object_accepts_closure_callable_descriptors() {
+    let out = compile_and_run(
+        r#"<?php
+function boxed(mixed $value): mixed { return $value; }
+$closure = static fn (): int => 1;
+echo is_object($closure) ? 'direct:' : 'bad:';
+$mixed = boxed($closure);
+echo is_object($mixed) ? 'mixed' : 'bad';
+"#,
+    );
+    assert_eq!(out, "direct:mixed");
+}
+
 /// Verifies `is_scalar` is true for int/float/string/bool and false for null/array/object,
 /// matching PHP's classification (resources and null are not scalars).
 #[test]

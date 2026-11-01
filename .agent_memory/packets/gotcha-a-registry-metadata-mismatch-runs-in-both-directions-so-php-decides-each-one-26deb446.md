@@ -1,0 +1,48 @@
+---
+type: "Gotcha"
+title: "A registry metadata mismatch runs in BOTH directions, so php decides each one"
+description: "The declared builtin registry derives metadata tests compare hand written parameter lists against the shared contract, and a mismatch can mean either side is wrong. Both happen in the SAME file, which is why a blanket \"u"
+resource: "crates/elephc-magician/src/interpreter/builtins/registry/tests/metadata_filesystem.rs"
+tags: ["session-learning", "builtin-registry", "signatures", "hash-algos", "test-expectations"]
+timestamp: "2026-09-06T07:38:00.506Z"
+x-kage-id: "repo:lazy-petting-popcorn:gotcha:a-registry-metadata-mismatch-runs-in-both-directions-so-php-decides-each-one-178"
+x-kage-type: "gotcha"
+x-kage-status: "approved"
+x-kage-scope: "repo"
+x-kage-visibility: "team"
+x-kage-confidence: 0.7
+x-kage-verified: "verified"
+x-kage-paths: ["crates/elephc-magician/src/interpreter/builtins/registry/tests/metadata_filesystem.rs", "crates/elephc-magician/src/interpreter/builtins/registry/tests/metadata_time_and_env.rs", "crates/elephc-magician/src/interpreter/constants.rs", "src/codegen_support/runtime/strings/hash_algos.rs"]
+x-kage-stack: ["rust", "php", "elephc-magician"]
+---
+
+# A registry metadata mismatch runs in BOTH directions, so php decides each one
+
+> The declared builtin registry derives metadata tests compare hand written parameter lists against the shared contract…
+
+The `declared_builtin_registry_derives_*_metadata` tests compare hand-written parameter lists against the shared contract, and a mismatch can mean either side is wrong. Both happen in the SAME file, which is why a blanket "update the expectation" is a way to pin a value php never produces.
+
+Measured with `php -n` 8.5.6: `glob(string $pattern, int $flags = 0)`, `getenv(?string $name = null, bool $local_only = false)`, `file_put_contents(string $filename, mixed $data, int $flags = 0, $context = null)` and `scandir(string $directory, int $sorting_order = SCANDIR_SORT_ASCENDING, $context = null)` — for all four the contract had been completed and the expectation had gone stale. But `readfile(string $filename, bool $use_include_path = false, $context = null)` has three parameters in php and ONE in the contract, so there the expectation is honest about today's state and the contract is the incomplete side.
+
+The rule: run each mismatch past `php -n -r 'new ReflectionFunction(...)'` before deciding which side to move. Where the contract is the incomplete side, pin the current value with php's signature written beside it rather than editing the expectation into agreement.
+
+Same shape for `hash_algos()`: the count expectation went stale when `xxh128` was appended. Separately, elephc's ORDER diverges from php in two places (php: `sha512/224, sha512/256, sha512` and `adler32, crc32, crc32b, crc32c`), and that order is observable because callers index the array. The eval list mirrors `src/codegen_support/runtime/strings/hash_algos.rs`, which must match `crates/elephc-crypto/src/algos.rs`, so all three move together or not at all — changing one trades a php divergence for an eval/AOT one.
+Evidence: php -n 8.5.6 ReflectionFunction parameter names: glob = pattern,flags; getenv = name,local_only; file_put_contents = filename,data,flags,context; scandir = directory,sorting_order,context; readfile = filename,use_include_path,context. hash_algos() reports 60 algorithms and contains all 29 elephc names, in a different relative order for sha512 and adler32.
+Verified by: Commit d24dde8a5d. cargo test -p elephc-magician --lib with no skips: 1342 passed / 11 failed, every remaining failure in the parser.
+
+## Verification
+
+php -n 8.5.6 ReflectionFunction parameter names: glob = pattern,flags; getenv = name,local_only; file_put_contents = filename,data,flags,context; scandir = directory,sorting_order,context; readfile = filename,use_include_path,context. hash_algos() reports 60 algorithms and contains all 29 elephc names, in a different relative order for sha512 and adler32.
+
+# Citations
+
+[1] explicit_capture (2026-09-06T07:38:00.506Z)
+
+## Kage state
+
+Machine state for lossless round-trip; OKF consumers can ignore it.
+
+```json kage-state
+{"schema_version":2,"id":"repo:lazy-petting-popcorn:gotcha:a-registry-metadata-mismatch-runs-in-both-directions-so-php-decides-each-one-178","title":"A registry metadata mismatch runs in BOTH directions, so php decides each one","summary":"The declared builtin registry derives metadata tests compare hand written parameter lists against the shared contract, and a mismatch can mean either side is wrong. Both happen in the SAME file, which is why a blanket \"u","body":"The `declared_builtin_registry_derives_*_metadata` tests compare hand-written parameter lists against the shared contract, and a mismatch can mean either side is wrong. Both happen in the SAME file, which is why a blanket \"update the expectation\" is a way to pin a value php never produces.\n\nMeasured with `php -n` 8.5.6: `glob(string $pattern, int $flags = 0)`, `getenv(?string $name = null, bool $local_only = false)`, `file_put_contents(string $filename, mixed $data, int $flags = 0, $context = null)` and `scandir(string $directory, int $sorting_order = SCANDIR_SORT_ASCENDING, $context = null)` — for all four the contract had been completed and the expectation had gone stale. But `readfile(string $filename, bool $use_include_path = false, $context = null)` has three parameters in php and ONE in the contract, so there the expectation is honest about today's state and the contract is the incomplete side.\n\nThe rule: run each mismatch past `php -n -r 'new ReflectionFunction(...)'` before deciding which side to move. Where the contract is the incomplete side, pin the current value with php's signature written beside it rather than editing the expectation into agreement.\n\nSame shape for `hash_algos()`: the count expectation went stale when `xxh128` was appended. Separately, elephc's ORDER diverges from php in two places (php: `sha512/224, sha512/256, sha512` and `adler32, crc32, crc32b, crc32c`), and that order is observable because callers index the array. The eval list mirrors `src/codegen_support/runtime/strings/hash_algos.rs`, which must match `crates/elephc-crypto/src/algos.rs`, so all three move together or not at all — changing one trades a php divergence for an eval/AOT one.\nEvidence: php -n 8.5.6 ReflectionFunction parameter names: glob = pattern,flags; getenv = name,local_only; file_put_contents = filename,data,flags,context; scandir = directory,sorting_order,context; readfile = filename,use_include_path,context. hash_algos() reports 60 algorithms and contains all 29 elephc names, in a different relative order for sha512 and adler32.\nVerified by: Commit d24dde8a5d. cargo test -p elephc-magician --lib with no skips: 1342 passed / 11 failed, every remaining failure in the parser.","type":"gotcha","scope":"repo","visibility":"team","sensitivity":"internal","status":"approved","confidence":0.7,"tags":["session-learning","builtin-registry","signatures","hash-algos","test-expectations"],"paths":["crates/elephc-magician/src/interpreter/builtins/registry/tests/metadata_filesystem.rs","crates/elephc-magician/src/interpreter/builtins/registry/tests/metadata_time_and_env.rs","crates/elephc-magician/src/interpreter/constants.rs","src/codegen_support/runtime/strings/hash_algos.rs"],"stack":["rust","php","elephc-magician"],"source_refs":[{"kind":"explicit_capture","captured_at":"2026-09-06T07:38:00.506Z"}],"context":{"fact":"The `declared_builtin_registry_derives_*_metadata` tests compare hand-written parameter lists against the shared contract, and a mismatch can mean either side is wrong. Both happen in the SAME file, which is why a blanket \"update the expectation\" is a way to pin a value php never produces.","verification":"php -n 8.5.6 ReflectionFunction parameter names: glob = pattern,flags; getenv = name,local_only; file_put_contents = filename,data,flags,context; scandir = directory,sorting_order,context; readfile = filename,use_include_path,context. hash_algos() reports 60 algorithms and contains all 29 elephc names, in a different relative order for sha512 and adler32."},"freshness":{"ttl_days":365,"last_verified_at":"2026-09-06T07:38:00.506Z","path_fingerprints":[{"path":"crates/elephc-magician/src/interpreter/builtins/registry/tests/metadata_filesystem.rs","sha256":"343714f7e0b4c1344246914683e010c3c43ba0d761eb6f97046e8f2c38cf98b7","size":5014},{"path":"crates/elephc-magician/src/interpreter/builtins/registry/tests/metadata_time_and_env.rs","sha256":"57c24edee4e75c45ca8c78bb6386f7a728bb8567406188c01b7b130844e0a564","size":5983},{"path":"crates/elephc-magician/src/interpreter/constants.rs","sha256":"f3d95014433486271e66a2f2cfa67f089e46022691e51d6015d8221b8f066063","size":11991},{"path":"src/codegen_support/runtime/strings/hash_algos.rs","sha256":"267fee8d6b01399ad38dd8974e290c493cf17a8f04ed92d86e381fd7a0c09515","size":6439}],"path_fingerprint_policy":"source_hash_staleness","verification":"repo_local_agent_capture"},"edges":[],"quality":{"reviewer":"repo-local-agent","votes_up":0,"votes_down":0,"uses_30d":0,"reports_stale":0,"review_boundary":"git_or_pr","promotion_requires_review":true,"discovery_tokens":8000,"discovery_tokens_estimated":true,"score":94,"reasons":["high-value memory type","has source evidence","grounded to repo paths","tagged","actionable rationale or verification"],"risks":[],"duplicate_candidates":[],"stale_reasons":[],"estimated_tokens_saved":555},"created_at":"2026-09-06T07:38:00.506Z","updated_at":"2026-09-06T07:38:00.506Z","author_branch":"reconcile/dirname-symfony"}
+```
+

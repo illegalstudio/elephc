@@ -109,10 +109,10 @@ fn trait_method_reflection_sig(method: &ClassMethod) -> FunctionSig {
     let params = method
         .params
         .iter()
-        .map(|(name, type_ann, _, _)| {
+        .map(|(name, type_ann, _, is_ref)| {
             (
                 name.clone(),
-                if type_ann.is_some() {
+                if type_ann.is_some() || *is_ref {
                     PhpType::Mixed
                 } else {
                     PhpType::Int

@@ -24,6 +24,17 @@ for ($i = 1; $i <= 20; $i++) {
 }
 echo "Even numbers 1-20: " . $evens . "\n";
 
+// Function-call side effects are valid in both side clauses of a for loop.
+$letters = ["a", "b", "c"];
+for (next($letters); null !== key($letters); next($letters)) {
+    echo current($letters);
+}
+echo "\n";
+
+$negativeOffset = -1;
+0 > $negativeOffset && $negativeOffset += 0x40;
+echo "Adjusted offset: " . $negativeOffset . "\n";
+
 // Find first multiple of 7 with while + break
 $n = 1;
 while ($n <= 100) {

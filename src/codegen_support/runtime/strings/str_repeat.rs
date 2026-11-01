@@ -1,5 +1,5 @@
 //! Purpose:
-//! Emits the `__rt_str_repeat`, `__rt_str_repeat_loop` runtime helper assembly for str repeat.
+//! Emits the `__rt_str_repeat` runtime helper assembly for str repeat.
 //! Keeps PHP byte-string pointer/length behavior and target-specific ABI variants in one focused emitter.
 //!
 //! Called from:
@@ -72,26 +72,28 @@ pub fn emit_str_repeat(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x4");                                          // request storage for the full repeated payload
     emitter.instruction("bl __rt_concat_reserve");                              // reserve concat scratch or owned heap storage for the repeated string
     emitter.instruction("str x0, [sp, #32]");                                   // save result start pointer for the return pair
-    emitter.instruction("mov x9, x0");                                          // initialize the destination cursor at the reserved payload start
 
-    // -- outer loop: repeat N times --
-    emitter.label("__rt_str_repeat_copy_start");
-    emitter.instruction("ldr x10, [sp, #16]");                                  // initialize repetition counter from the saved repeat count
-    emitter.label("__rt_str_repeat_loop");
-    emitter.instruction("cbz x10, __rt_str_repeat_done");                       // if counter is 0, done repeating
-    emitter.instruction("ldp x1, x2, [sp]");                                    // reload source pointer and length
-    emitter.instruction("mov x11, x2");                                         // copy length as inner loop counter
-
-    // -- inner loop: copy one instance of the string --
-    emitter.label("__rt_str_repeat_copy");
-    emitter.instruction("cbz x11, __rt_str_repeat_next");                       // if no bytes remain, move to next repetition
-    emitter.instruction("ldrb w12, [x1], #1");                                  // load byte from source, advance src ptr
-    emitter.instruction("strb w12, [x9], #1");                                  // store byte to dest, advance dest ptr
-    emitter.instruction("sub x11, x11, #1");                                    // decrement inner byte counter
-    emitter.instruction("b __rt_str_repeat_copy");                              // continue copying bytes
-    emitter.label("__rt_str_repeat_next");
-    emitter.instruction("sub x10, x10, #1");                                    // decrement repetition counter
-    emitter.instruction("b __rt_str_repeat_loop");                              // continue to next repetition
+    // -- fill by doubling: one copy of the source, then the filled prefix onto its own end --
+    // The copy used to go byte by byte: Symfony's `str_repeat('x', 32768)` on every request
+    // cost ~160k instructions. Each memcpy below copies min(filled, remaining) bytes, so the
+    // source and destination never overlap and the fill takes log2(times) + 1 calls.
+    emitter.instruction("ldp x1, x2, [sp]");                                    // source pointer and length
+    emitter.bl_c("memcpy");                                                     // first instance at the start of the result
+    emitter.instruction("ldr x9, [sp, #8]");                                    // bytes filled so far = one source length
+    emitter.instruction("str x9, [sp, #40]");                                   // keep the filled count across memcpy calls
+    emitter.label("__rt_str_repeat_double");
+    emitter.instruction("ldr x9, [sp, #40]");                                   // bytes filled so far
+    emitter.instruction("ldr x10, [sp, #24]");                                  // total result length
+    emitter.instruction("subs x11, x10, x9");                                   // bytes still to fill
+    emitter.instruction("b.ls __rt_str_repeat_done");                           // the result is complete
+    emitter.instruction("cmp x11, x9");                                         // copy no more than what is already filled
+    emitter.instruction("csel x2, x11, x9, lo");                                // n = min(remaining, filled)
+    emitter.instruction("add x12, x9, x2");                                     // filled count after this copy
+    emitter.instruction("str x12, [sp, #40]");                                  // remember it across memcpy
+    emitter.instruction("ldr x1, [sp, #32]");                                   // source = the filled prefix
+    emitter.instruction("add x0, x1, x9");                                      // destination = first unfilled byte
+    emitter.bl_c("memcpy");                                                     // append the prefix to itself
+    emitter.instruction("b __rt_str_repeat_double");                            // until the result is full
 
     // -- finalize: return the repeated string --
     emitter.label("__rt_str_repeat_done");
@@ -158,31 +160,27 @@ fn emit_str_repeat_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, rcx");                                        // request storage for the full repeated payload
     emitter.instruction("call __rt_concat_reserve");                            // reserve concat scratch or owned heap storage for the repeated string
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the repeated-string start pointer for the return pair
-    emitter.instruction("mov r11, rax");                                        // initialize the destination cursor at the reserved payload start
 
-    // -- outer loop: repeat N times --
-    emitter.label("__rt_str_repeat_copy_start_linux_x86_64");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // seed the outer repetition counter from the saved repeat-count argument
-    emitter.label("__rt_str_repeat_loop_linux_x86_64");
-    emitter.instruction("test r10, r10");                                       // stop once every requested repetition has been copied into result storage
-    emitter.instruction("jz __rt_str_repeat_done_linux_x86_64");                // jump to finalization when the repeat counter reaches zero
-    emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload the source string pointer before copying the next repeated instance
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the source string length before copying the next repeated instance
-
-    // -- inner loop: copy one instance of the string --
-    emitter.label("__rt_str_repeat_copy_linux_x86_64");
-    emitter.instruction("test rsi, rsi");                                       // stop copying the current source instance once every source byte has been consumed
-    emitter.instruction("jz __rt_str_repeat_next_linux_x86_64");                // continue with the next repetition after the full source string has been copied
-    emitter.instruction("mov dl, BYTE PTR [r8]");                               // load one source byte before appending it to the result destination cursor
-    emitter.instruction("mov BYTE PTR [r11], dl");                              // append one source byte into result storage before advancing both cursors
-    emitter.instruction("add r8, 1");                                           // advance the source string pointer after copying one byte from the current repetition
-    emitter.instruction("add r11, 1");                                          // advance the result destination cursor after storing one byte from the current repetition
-    emitter.instruction("sub rsi, 1");                                          // decrement the remaining source byte count for the current repetition
-    emitter.instruction("jmp __rt_str_repeat_copy_linux_x86_64");               // continue copying bytes from the current source string instance until it is exhausted
-
-    emitter.label("__rt_str_repeat_next_linux_x86_64");
-    emitter.instruction("sub r10, 1");                                          // decrement the remaining repetition count after copying one full source instance
-    emitter.instruction("jmp __rt_str_repeat_loop_linux_x86_64");               // continue with the next repetition until the requested count is exhausted
+    // -- fill by doubling: one copy of the source, then the filled prefix onto its own end --
+    emitter.instruction("mov rdi, rax");                                        // destination = start of the result
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // source string pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // source string length
+    emitter.instruction("call memcpy");                                         // first instance at the start of the result
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // bytes filled so far = one source length
+    emitter.instruction("mov QWORD PTR [rbp - 48], rcx");                       // keep the filled count across memcpy calls
+    emitter.label("__rt_str_repeat_double_linux_x86_64");
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // bytes filled so far
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // total result length
+    emitter.instruction("sub rdx, rcx");                                        // bytes still to fill
+    emitter.instruction("jbe __rt_str_repeat_done_linux_x86_64");               // the result is complete
+    emitter.instruction("cmp rdx, rcx");                                        // copy no more than what is already filled
+    emitter.instruction("cmova rdx, rcx");                                      // n = min(remaining, filled)
+    emitter.instruction("lea r8, [rcx + rdx]");                                 // filled count after this copy
+    emitter.instruction("mov QWORD PTR [rbp - 48], r8");                        // remember it across memcpy
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // source = the filled prefix
+    emitter.instruction("lea rdi, [rsi + rcx]");                                // destination = first unfilled byte
+    emitter.instruction("call memcpy");                                         // append the prefix to itself
+    emitter.instruction("jmp __rt_str_repeat_double_linux_x86_64");             // until the result is full
 
     // -- finalize: return the repeated string --
     emitter.label("__rt_str_repeat_done_linux_x86_64");

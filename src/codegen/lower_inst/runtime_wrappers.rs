@@ -21,6 +21,25 @@ pub(super) fn emit_runtime_callable_invoker_inline(
     emit_runtime_callable_invoker_with_string_owner(ctx, sig, captures, false, false)
 }
 
+/// Returns whether a wrapper over `strval` converts a gradual operand into its own detached copy.
+///
+/// `Cast` to string of a `Mixed`, union or object operand always allocates a fresh heap string
+/// (the same `value_is_owning_mixed_string_cast` fact the AST lowering releases after use). A
+/// string operand is the identity cast and stays borrowed, so only the gradual signature owns.
+pub(in crate::codegen::lower_inst) fn builtin_wrapper_string_cast_is_owning(
+    name: &str,
+    sig: &FunctionSig,
+) -> bool {
+    name.eq_ignore_ascii_case("strval")
+        && sig.return_type.codegen_repr() == PhpType::Str
+        && sig.params.first().is_some_and(|(_, ty)| {
+            matches!(
+                ty.codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_) | PhpType::Object(_)
+            )
+        })
+}
+
 /// Emits a builtin invoker with mbstring's runtime argument boundary when required.
 pub(super) fn emit_runtime_builtin_invoker_inline(
     ctx: &mut FunctionContext<'_>,
@@ -37,10 +56,20 @@ pub(super) fn emit_runtime_builtin_invoker_inline(
         }
     });
     let Some(operation) = operation else {
-        // A transform that persists its result (`strtoupper`) must not be copied again here.
+        // A transform that persists its result (`strtoupper`) must not be copied again here; the
+        // `strval` wrapper over a gradual operand owns its detached cast as well. Either way the
+        // invoker takes the string over instead of leaving the original behind, one block per
+        // call through `$callable = 'strtoupper'; $callable($s)`.
         let owns_string_return = sig.return_type.codegen_repr() == PhpType::Str
-            && super::builtin_returns_owned_string(name);
-        return emit_runtime_callable_invoker_with_string_owner(ctx, sig, &[], owns_string_return, false);
+            && (super::builtin_returns_owned_string(name)
+                || builtin_wrapper_string_cast_is_owning(name, sig));
+        return emit_runtime_callable_invoker_with_string_owner(
+            ctx,
+            sig,
+            &[],
+            owns_string_return,
+            false,
+        );
     };
     if operation == elephc_builtin_contract::RuntimeBuiltinId::MbConvertVariables {
         let label = ctx.next_global_label("callable_invoker");
@@ -113,20 +142,81 @@ pub(super) fn emit_runtime_callable_invoker_in_class(
     php_return_status: bool,
     current_class: Option<&str>,
 ) -> String {
-    ctx.shared.callable_argument_normalizer |=
-        crate::codegen::runtime_callable_invoker::needs_callable_argument_normalizer(sig);
+    emit_runtime_callable_invoker_inline_impl(
+        ctx,
+        sig,
+        captures,
+        owns_string_return,
+        php_return_status,
+        current_class,
+        false,
+    )
+}
+
+/// Emits a bounded invoker whose string-result policy follows the concrete callee, with
+/// defaults resolved in the DECLARING class's constant scope (`None` for a free function).
+pub(super) fn emit_runtime_callable_invoker_bounded_in_class(
+    ctx: &mut FunctionContext<'_>,
+    sig: &FunctionSig,
+    captures: &[(String, PhpType, bool)],
+    owns_string_return: bool,
+    php_return_status: bool,
+    current_class: Option<&str>,
+) -> String {
+    emit_runtime_callable_invoker_inline_impl(
+        ctx,
+        sig,
+        captures,
+        owns_string_return,
+        php_return_status,
+        current_class,
+        true,
+    )
+}
+
+/// Shared body of the inline invoker emitters.
+///
+/// An invoker shared through the cache takes its name from the cache key, so every worker that
+/// reaches it spells the same symbol. The bounded form is never shared: it keeps a host-scoped
+/// name, because nothing else may reference it, and it is not marked as a keyed helper, or the
+/// merge would treat two different invokers as copies of one and drop a referenced definition.
+fn emit_runtime_callable_invoker_inline_impl(
+    ctx: &mut FunctionContext<'_>,
+    sig: &FunctionSig,
+    captures: &[(String, PhpType, bool)],
+    owns_string_return: bool,
+    php_return_status: bool,
+    current_class: Option<&str>,
+    catch_native_throws: bool,
+) -> String {
+    if crate::codegen::runtime_callable_invoker::needs_callable_argument_normalizer(sig) {
+        ctx.shared.require_callable_argument_normalizer();
+    }
     let defaults = crate::codegen::runtime_callable_invoker::resolve_invoker_defaults(
         ctx.module,
         current_class,
         sig,
     );
-    if let Some(label) =
-        ctx.shared
-            .runtime_callable_invoker(sig, captures, owns_string_return, php_return_status, &defaults)
-    {
-        return label;
+    if !catch_native_throws {
+        if let Some(label) = ctx.shared.runtime_callable_invoker(
+            sig,
+            captures,
+            owns_string_return,
+            php_return_status,
+            &defaults,
+        ) {
+            return label;
+        }
     }
-    let label = ctx.next_global_label("callable_invoker");
+    let key = format!(
+        "callable_invoker:{:?}:{:?}:{}:{}:{:?}",
+        sig, captures, owns_string_return, php_return_status, defaults
+    );
+    let label = if catch_native_throws {
+        ctx.next_global_label("callable_invoker")
+    } else {
+        ctx.keyed_global_label(&key, "callable_invoker")
+    };
     let invoker = super::super::runtime_callable_invoker::RuntimeCallableInvoker {
         label: &label,
         sig,
@@ -138,12 +228,35 @@ pub(super) fn emit_runtime_callable_invoker_in_class(
         defaults: &defaults,
     };
     // Out of line, not spliced into the function that first needed it: see
-    // `Emitter::begin_out_of_line` for the branch-range failure that splicing caused.
+    // `Emitter::begin_out_of_line` for the branch-range failure that splicing caused. The shared
+    // form is also a keyed helper, so the parallel merge keeps one copy across workers.
     let scope = ctx.emitter.begin_out_of_line();
-    super::super::runtime_callable_invoker::emit_runtime_callable_invoker(ctx.emitter, ctx.data, &invoker);
+    if catch_native_throws {
+        super::super::runtime_callable_invoker::emit_runtime_callable_invoker_with_exception_boundary(
+            ctx.emitter,
+            ctx.data,
+            &invoker,
+        );
+    } else {
+        ctx.emit_keyed_helper(&key, |ctx| {
+            super::super::runtime_callable_invoker::emit_runtime_callable_invoker(
+                ctx.emitter,
+                ctx.data,
+                &invoker,
+            );
+        });
+    }
     ctx.emitter.end_out_of_line(scope);
-    ctx.shared
-        .cache_runtime_callable_invoker(sig, captures, owns_string_return, php_return_status, &defaults, &label);
+    if !catch_native_throws {
+        ctx.shared.cache_runtime_callable_invoker(
+            sig,
+            captures,
+            owns_string_return,
+            php_return_status,
+            &defaults,
+            &label,
+        );
+    }
     label
 }
 
@@ -211,7 +324,13 @@ fn emit_runtime_call_wrapper_inline(
         RuntimeCallWrapperKind::Builtin { .. } => "callable_builtin",
         RuntimeCallWrapperKind::Extern => "callable_extern",
     };
-    let label = ctx.next_global_label(label_prefix);
+    let strictness = match kind {
+        RuntimeCallWrapperKind::Builtin { strict_php } => strict_php,
+        RuntimeCallWrapperKind::Extern => false,
+    };
+    // Keyed, so every codegen worker that reaches this wrapper spells the same symbol.
+    let key = format!("{}:{}:{:?}:{}", label_prefix, name, sig, strictness);
+    let label = ctx.keyed_global_label(&key, label_prefix);
     // Reserve the label before lowering the synthetic body. A callable-taking builtin
     // can itself require the open runtime callable table while its wrapper is being
     // emitted. Publishing the reservation here makes that recursion reuse this entry
@@ -225,37 +344,135 @@ fn emit_runtime_call_wrapper_inline(
             ctx.shared.cache_runtime_extern_wrapper(name, sig, &label)
         }
     }
-    let mut wrapper_module = ctx.module.clone();
-    let wrapper = build_runtime_call_wrapper_function(&mut wrapper_module, &label, name, sig, kind)?;
+    // The wrapper is lowered against the module itself whenever every data entry its body names
+    // is already interned -- the common case: an extern's own name, a builtin's messages. Only a
+    // body that must intern something new, or one of the two builtins whose body is a full
+    // semantic lowering, gets a private copy. Copying the WHOLE module (every body, every class)
+    // for each of the hundreds of wrappers a callable-string table reaches was over half of the
+    // codegen phase, serially, on Laravel and Symfony.
+    let module = ctx.module;
+    let mut copied_module = None;
+    let read_only = if wrapper_needs_full_lowering(name, sig, kind) {
+        None
+    } else {
+        let mut missed = false;
+        let wrapper = build_runtime_call_wrapper_function(
+            WrapperData::ReadOnly { module, missed: &mut missed },
+            &label,
+            name,
+            sig,
+            kind,
+        )?;
+        (!missed).then_some(wrapper)
+    };
+    let wrapper = match read_only {
+        Some(wrapper) => wrapper,
+        None => {
+            let mut owned = ctx.shared.take_wrapper_module(module);
+            let wrapper = build_runtime_call_wrapper_function(
+                WrapperData::Owned(&mut owned),
+                &label,
+                name,
+                sig,
+                kind,
+            );
+            copied_module = Some(owned);
+            wrapper?
+        }
+    };
+    let wrapper_module: &crate::ir::Module = copied_module.as_deref().unwrap_or(module);
     ctx.shared.record_generated_runtime_features(&wrapper);
     // Out of line, not spliced into the function that first needed it: see
-    // `Emitter::begin_out_of_line` for the branch-range failure that splicing caused.
+    // `Emitter::begin_out_of_line` for the branch-range failure that splicing caused. Keyed, so
+    // the parallel merge keeps one copy of the wrapper across workers.
     let scope = ctx.emitter.begin_out_of_line();
-    let emitted = super::super::block_emit::emit_synthetic_function_with_label(
-        &wrapper_module,
-        &wrapper,
-        &label,
-        ctx.emitter,
-        ctx.data,
-        ctx.shared,
-        false,
-    );
+    let emitted = ctx.emit_keyed_helper(&key, |ctx| {
+        super::super::block_emit::emit_synthetic_function_with_label(
+            wrapper_module,
+            &wrapper,
+            &label,
+            ctx.emitter,
+            ctx.data,
+            ctx.shared,
+            false,
+        )
+    });
     // Closed on the error path too: the scope holds the caller's text, and returning early with
     // it would drop everything the caller had emitted so far.
     ctx.emitter.end_out_of_line(scope);
     emitted?;
+    if let Some(copy) = copied_module {
+        ctx.shared.return_wrapper_module(copy);
+    }
     Ok(label)
+}
+
+/// Where a wrapper body's data entries come from.
+///
+/// `ReadOnly` looks every entry up in the module as it stands and flags a miss instead of
+/// interning; `Owned` interns into a private copy of the module.
+enum WrapperData<'a> {
+    ReadOnly { module: &'a crate::ir::Module, missed: &'a mut bool },
+    Owned(&'a mut crate::ir::Module),
+}
+
+impl WrapperData<'_> {
+    /// Returns the id of a string literal, interning it only into an owned copy.
+    fn string(&mut self, value: &str) -> crate::ir::DataId {
+        match self {
+            Self::Owned(module) => module.data.intern_string(value),
+            Self::ReadOnly { module, missed } => module.data.string_id(value).unwrap_or_else(|| {
+                **missed = true;
+                crate::ir::DataId::from_raw(0)
+            }),
+        }
+    }
+
+    /// Returns the id of a function name, interning it only into an owned copy.
+    fn function_name(&mut self, value: &str) -> crate::ir::DataId {
+        match self {
+            Self::Owned(module) => module.data.intern_function_name(value),
+            Self::ReadOnly { module, missed } => {
+                module.data.function_name_id(value).unwrap_or_else(|| {
+                    **missed = true;
+                    crate::ir::DataId::from_raw(0)
+                })
+            }
+        }
+    }
+}
+
+/// Returns whether a builtin wrapper's body is a full semantic lowering, which interns freely.
+fn wrapper_needs_full_lowering(name: &str, sig: &FunctionSig, kind: RuntimeCallWrapperKind) -> bool {
+    let RuntimeCallWrapperKind::Builtin { .. } = kind else {
+        return false;
+    };
+    let runtime_function = |id| {
+        crate::builtins::registry::lookup(name).is_some_and(|def| {
+            def.spec.semantics.runtime_functions
+                == crate::builtins::semantics::BuiltinRuntimeFunctions::One(id)
+        })
+    };
+    crate::builtins::registry::lookup(name).is_some_and(|def| matches!(
+        def.spec.semantics.argument_lowering,
+        crate::builtins::semantics::BuiltinArgumentLowering::WeakStringUnion { .. }
+    )) || (runtime_function(crate::ir::RuntimeFnId::ArrayMerge) && sig.variadic.is_some())
+        || (runtime_function(crate::ir::RuntimeFnId::Usort)
+            && sig.params.first().is_some_and(|(_, ty)| ty.codegen_repr() == PhpType::Mixed))
 }
 
 /// Builds the EIR body for a PHP-ABI wrapper around a builtin or extern call.
 fn build_runtime_call_wrapper_function(
-    module: &mut Module,
+    mut data: WrapperData<'_>,
     label: &str,
     name: &str,
     sig: &FunctionSig,
     kind: RuntimeCallWrapperKind,
 ) -> Result<Function> {
-    if let RuntimeCallWrapperKind::Builtin { strict_php } = kind {
+    if let (RuntimeCallWrapperKind::Builtin { strict_php }, WrapperData::Owned(module)) =
+        (kind, &mut data)
+    {
+        let module: &mut crate::ir::Module = module;
         // GMP's homes lower through the prelude helper graph, which first-class callable
         // wrappers must reproduce. Other EIR-graph homes already build their own callable
         // body through the generic wrapper path, so widening this predicate would duplicate
@@ -324,6 +541,8 @@ fn build_runtime_call_wrapper_function(
         return_php_type.clone(),
     );
     function.signature = Some(sig.clone());
+    // Lets typed runtime lowering know its string result feeds a descriptor invoker owner.
+    function.flags.is_callback_wrapper = matches!(kind, RuntimeCallWrapperKind::Builtin { .. });
     let mut params = wrapper_function_params(sig);
     if carries_invocation_scope {
         params.push(FunctionParam {
@@ -344,7 +563,7 @@ fn build_runtime_call_wrapper_function(
         );
     }
 
-    let data = module.data.intern_function_name(name);
+    let extern_name = matches!(kind, RuntimeCallWrapperKind::Extern).then(|| data.function_name(name));
     let mut builder = Builder::new(&mut function);
     let entry = builder.create_named_block("entry", Vec::new());
     builder.set_entry(entry);
@@ -358,7 +577,63 @@ fn build_runtime_call_wrapper_function(
         );
         operands.push(decode_invocation_scope(&mut builder, profile));
     }
-    let result = match kind {
+    let pointer_op = match kind {
+        RuntimeCallWrapperKind::Builtin { .. } => crate::builtins::registry::lookup(name).and_then(
+            |def| match def.spec.semantics.argument_lowering {
+                crate::builtins::semantics::BuiltinArgumentLowering::ArrayInternalPointer(op) => {
+                    Some(op)
+                }
+                _ => None,
+            },
+        ),
+        RuntimeCallWrapperKind::Extern => None,
+    };
+    let result = if let Some(op) = pointer_op {
+        // A descriptor call hands the pointer builtins a fresh array value, so there is no
+        // cursor slot to read: start at the first position, exactly as the direct-call lowering
+        // does for a non-local receiver (`lower_array_internal_pointer`).
+        let container = operands[0];
+        let cursor = builder.emit_const_i64(0);
+        let cursor = match op.seek_mode() {
+            None => cursor,
+            Some(mode) => {
+                let mode = builder.emit_const_i64(mode);
+                builder
+                    .emit_with_effects(
+                        Op::RuntimeCall,
+                        vec![container, cursor, mode],
+                        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+                            crate::ir::RuntimeFnId::ArrayPtrSeek,
+                        ))),
+                        IrType::I64,
+                        PhpType::Int,
+                        Ownership::NonHeap,
+                        crate::ir::RuntimeFnId::ArrayPtrSeek.effects(),
+                        None,
+                    )
+                    .expect("array_ptr_seek produces a value")
+            }
+        };
+        let target = if op.reads_key() {
+            crate::ir::RuntimeFnId::ArrayPtrKey
+        } else {
+            crate::ir::RuntimeFnId::ArrayPtrValue
+        };
+        let value = builder
+            .emit_with_effects(
+                Op::RuntimeCall,
+                vec![container, cursor],
+                Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target))),
+                wrapper_return_ir_type(&return_php_type),
+                return_php_type.clone(),
+                Ownership::Owned,
+                target.effects(),
+                None,
+            )
+            .expect("array pointer read produces a value");
+        Some(value)
+    } else {
+    match kind {
         RuntimeCallWrapperKind::Builtin { strict_php } => {
             let def = crate::builtins::registry::lookup(name).ok_or_else(|| {
                 CodegenIrError::invalid_module(format!(
@@ -366,9 +641,10 @@ fn build_runtime_call_wrapper_function(
                     name,
                 ))
             })?;
+            let operands = coerce_gradual_wrapper_operands(&mut builder, name, sig, operands);
             let mut lowering = WrapperBuiltinLoweringContext {
                 builder: &mut builder,
-                data: &mut module.data,
+                data: &mut data,
                 strict_php,
             };
             let result = crate::builtins::semantics::lower_registry_call(
@@ -385,19 +661,51 @@ fn build_runtime_call_wrapper_function(
                 ))
             })?
             .value;
-            let ownership = wrapper_result_ownership(
-                def.spec.semantics.result_ownership,
-                &return_php_type,
-                name,
-            )?;
-            builder.set_value_ownership(result, ownership);
-            Some(result)
+            if builtin_wrapper_string_cast_is_owning(name, sig) {
+                // The gradual cast owns a detached string (heap for a string payload, scratch for
+                // a number). Persisting it hands the invoker one heap owner whatever the payload
+                // was, and the cast's own copy is released here instead of being abandoned.
+                builder.set_value_ownership(result, Ownership::Owned);
+                let persisted = builder
+                    .emit_with_effects(
+                        Op::StrPersist,
+                        vec![result],
+                        None,
+                        IrType::Str,
+                        PhpType::Str,
+                        Ownership::Owned,
+                        Op::StrPersist.default_effects(),
+                        None,
+                    )
+                    .expect("str_persist produces a value");
+                builder.emit_with_effects(
+                    Op::Release,
+                    vec![result],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                    Op::Release.default_effects(),
+                    None,
+                );
+                Some(persisted)
+            } else {
+                let ownership = wrapper_result_ownership(
+                    def.spec.semantics.result_ownership,
+                    &return_php_type,
+                    name,
+                )?;
+                builder.set_value_ownership(result, ownership);
+                Some(result)
+            }
         }
         RuntimeCallWrapperKind::Extern => {
             let result = builder.emit(
                 Op::ExternCall,
                 operands,
-                Some(Immediate::Data(data)),
+                Some(Immediate::Data(
+                    extern_name.expect("an extern wrapper interns its callee's name"),
+                )),
                 wrapper_return_ir_type(&return_php_type),
                 return_php_type.clone(),
                 if Ownership::php_type_needs_lifetime_tracking(&return_php_type) {
@@ -408,6 +716,7 @@ fn build_runtime_call_wrapper_function(
             );
             result
         }
+    }
     };
     builder.terminate(Terminator::Return { value: result });
     Ok(function)
@@ -432,6 +741,66 @@ fn decode_invocation_scope(builder: &mut Builder<'_>, profile: ValueId) -> Value
     builder.terminate(Terminator::Br { target: merge, args: vec![decoded] });
     builder.position_at_end(merge);
     builder.block_param(merge, 0)
+}
+
+/// Casts a GRADUAL wrapper operand to the parameter type the builtin's own lowering needs.
+///
+/// A callable wrapper's parameters ARE the source element types: the descriptor case is
+/// specialized to the array it will walk. A `Mixed` element therefore reached, say, `strtolower`'s
+/// lowering, which needs a concrete string -- so the only way to keep the wrapper lowerable was to
+/// refuse every gradual source up front (`callable_accepts_string_source`), and
+/// `array_map('strtolower', $gradual)` compiled into a runtime abort:
+/// `callback string does not name a supported callable`. php casts there, and so does this.
+///
+/// Only a SCALAR target is cast. A container or object parameter has no single cast, and the
+/// builtins that take one already accept a gradual source through their own policy.
+fn coerce_gradual_wrapper_operands(
+    builder: &mut Builder<'_>,
+    name: &str,
+    sig: &FunctionSig,
+    operands: Vec<ValueId>,
+) -> Vec<ValueId> {
+    let Some(declared) = crate::types::first_class_callable_builtin_sig(name) else {
+        return operands;
+    };
+    operands
+        .into_iter()
+        .enumerate()
+        .map(|(idx, operand)| {
+            let source = sig.params.get(idx).map(|(_, ty)| ty.codegen_repr());
+            let target = declared.params.get(idx).map(|(_, ty)| ty.codegen_repr());
+            let (Some(PhpType::Mixed), Some(target)) = (source, target) else {
+                return operand;
+            };
+            if !matches!(
+                target,
+                PhpType::Str | PhpType::Int | PhpType::Float | PhpType::Bool
+            ) {
+                return operand;
+            }
+            builder
+                .emit(
+                    Op::RuntimeCall,
+                    vec![operand],
+                    None,
+                    wrapper_value_ir_type(&target),
+                    target.clone(),
+                    Ownership::for_php_type(&target),
+                )
+                .unwrap_or(operand)
+        })
+        .collect()
+}
+
+/// Returns whether a builtin's wrapper can state its result ownership for `return_ty`.
+///
+/// A builtin whose result aliases its arguments only on SOME paths has no single EIR ownership,
+/// so no wrapper exists for it. A dispatch table over every builtin (an open runtime callable
+/// name) skips those rather than failing the whole build on one it will never be asked for.
+pub(super) fn builtin_wrapper_result_is_representable(name: &str, return_ty: &PhpType) -> bool {
+    crate::builtins::registry::lookup(name).is_some_and(|def| {
+        wrapper_result_ownership(def.spec.semantics.result_ownership, return_ty, name).is_ok()
+    })
 }
 
 /// Maps a builtin's shared ownership contract onto its synthetic wrapper result.
@@ -465,6 +834,17 @@ fn wrapper_result_ownership(
         BuiltinResultOwnership::Independent if return_ty.codegen_repr() == PhpType::Str => {
             Ok(Ownership::Borrowed)
         }
+        // A boxed `mixed` result (`preg_replace()` over operands that may be arrays, whose
+        // callable wrapper answers `string|array|null`) is a cell the runtime call just built and
+        // no argument backs: the wrapper's caller owns it, exactly as the direct call's result is.
+        // Leaving it ambiguous dropped the builtin from every runtime-string dispatch table, so
+        // `$replace = $cb ? 'preg_replace_callback' : 'preg_replace'; $replace(...)` (Symfony's
+        // `ByteString::replaceMatches()`) had no descriptor target.
+        BuiltinResultOwnership::Independent
+            if matches!(return_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) =>
+        {
+            Ok(Ownership::Owned)
+        }
         BuiltinResultOwnership::Independent | BuiltinResultOwnership::NonHeap => {
             Err(CodegenIrError::invalid_module(format!(
                 "callable wrapper {} has ambiguous {:?} ownership for {:?}",
@@ -475,14 +855,14 @@ fn wrapper_result_ownership(
 }
 
 /// EIR construction adapter used by synthetic builtin callable wrappers.
-struct WrapperBuiltinLoweringContext<'a, 'f> {
+struct WrapperBuiltinLoweringContext<'a, 'f, 'd> {
     builder: &'a mut Builder<'f>,
-    data: &'a mut crate::ir::DataPool,
+    data: &'a mut WrapperData<'d>,
     strict_php: bool,
 }
 
 impl crate::builtins::semantics::BuiltinLoweringContext
-    for WrapperBuiltinLoweringContext<'_, '_>
+    for WrapperBuiltinLoweringContext<'_, '_, '_>
 {
     /// Returns PHP metadata attached to one synthetic-wrapper operand.
     fn value_php_type(&self, value: ValueId) -> PhpType {
@@ -496,7 +876,7 @@ impl crate::builtins::semantics::BuiltinLoweringContext
 
     /// Interns an ordinary string into the synthetic wrapper module's data pool.
     fn intern_string(&mut self, value: &str) -> crate::ir::DataId {
-        self.data.intern_string(value)
+        self.data.string(value)
     }
 
     /// Emits one backend-neutral operation into the synthetic wrapper body.
@@ -687,10 +1067,10 @@ mod tests {
             "linux-aarch64",
             "linux-x86_64",
         ] {
-            let mut module = Module::new(crate::codegen::platform::Target::parse(target).unwrap());
+            let mut module = crate::ir::Module::new(crate::codegen::platform::Target::parse(target).unwrap());
             let sig = crate::builtins::registry::first_class_callable_sig("clone").unwrap();
             let wrapper = build_runtime_call_wrapper_function(
-                &mut module,
+                WrapperData::Owned(&mut module),
                 "clone_scope_probe",
                 "clone",
                 &sig,
@@ -729,9 +1109,9 @@ mod tests {
         assert_eq!(sig.return_type, expected);
 
         for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-            let mut module = Module::new(crate::codegen::platform::Target::parse(target).unwrap());
+            let mut module = crate::ir::Module::new(crate::codegen::platform::Target::parse(target).unwrap());
             let wrapper = build_runtime_call_wrapper_function(
-                &mut module,
+                WrapperData::Owned(&mut module),
                 "debug_backtrace_array_probe",
                 "debug_backtrace",
                 &sig,
@@ -762,10 +1142,10 @@ mod tests {
     #[test]
     fn gc_status_callable_wrapper_marks_all_allocations_owned() {
         for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-            let mut module = Module::new(crate::codegen::platform::Target::parse(target).unwrap());
+            let mut module = crate::ir::Module::new(crate::codegen::platform::Target::parse(target).unwrap());
             let sig = crate::builtins::registry::first_class_callable_sig("gc_status").unwrap();
             let wrapper = build_runtime_call_wrapper_function(
-                &mut module, "gc_status_owner_probe", "gc_status", &sig,
+                WrapperData::Owned(&mut module), "gc_status_owner_probe", "gc_status", &sig,
                 RuntimeCallWrapperKind::Builtin { strict_php: false },
             ).unwrap();
             let allocations: Vec<_> = wrapper.instructions.iter()
@@ -778,5 +1158,61 @@ mod tests {
             }
             assert!(wrapper.instructions.iter().any(|inst| inst.op == Op::Release), "{target}");
         }
+    }
+
+    /// A wrapper whose body only names data the module already interned is built against the
+    /// module as it stands -- no copy -- and comes out identical to the copied build; one that
+    /// needs a new entry reports the miss so the caller falls back to a private copy. Copying the
+    /// whole module per wrapper was over half of the Laravel and Symfony codegen phase.
+    #[test]
+    fn read_only_wrapper_build_matches_the_owned_build_or_reports_a_miss() {
+        let target = crate::codegen::platform::Target::parse("macos-aarch64").unwrap();
+        let sig = FunctionSig {
+            params: vec![("value".to_string(), PhpType::Int)],
+            param_type_exprs: vec![None],
+            param_attributes: vec![Vec::new()],
+            defaults: vec![None],
+            return_type: PhpType::Int,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: vec![false],
+            declared_params: vec![true],
+            variadic: None,
+            deprecation: None,
+            is_generator: false,
+        };
+        let mut owned_module = crate::ir::Module::new(target);
+        let owned = build_runtime_call_wrapper_function(
+            WrapperData::Owned(&mut owned_module),
+            "extern_probe",
+            "probe_extern",
+            &sig,
+            RuntimeCallWrapperKind::Extern,
+        )
+        .unwrap();
+
+        let mut missed = false;
+        let fresh = crate::ir::Module::new(target);
+        build_runtime_call_wrapper_function(
+            WrapperData::ReadOnly { module: &fresh, missed: &mut missed },
+            "extern_probe",
+            "probe_extern",
+            &sig,
+            RuntimeCallWrapperKind::Extern,
+        )
+        .unwrap();
+        assert!(missed, "an extern name the module never interned must be reported");
+
+        let mut missed = false;
+        let read_only = build_runtime_call_wrapper_function(
+            WrapperData::ReadOnly { module: &owned_module, missed: &mut missed },
+            "extern_probe",
+            "probe_extern",
+            &sig,
+            RuntimeCallWrapperKind::Extern,
+        )
+        .unwrap();
+        assert!(!missed);
+        assert_eq!(format!("{:?}", read_only.instructions), format!("{:?}", owned.instructions));
     }
 }

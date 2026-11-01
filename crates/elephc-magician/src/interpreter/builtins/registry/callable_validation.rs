@@ -19,6 +19,10 @@ enum EvalCallableValidationError<'a> {
     CallUserFunc(&'a str),
     ClosureFromCallable,
     PregReplaceCallback,
+    /// `spl_autoload_register()`, whose `$callback` is NULLABLE, so PHP's prefix says so.
+    SplAutoloadRegister,
+    /// `spl_autoload_unregister()`, whose `$callback` is not nullable.
+    SplAutoloadUnregister,
 }
 
 /// Validates `preg_replace_callback()`'s callback before the pattern is compiled.
@@ -48,6 +52,42 @@ pub(in crate::interpreter) fn eval_validate_call_user_func_callback(
     eval_validate_callback(
         callback,
         EvalCallableValidationError::CallUserFunc(function_name),
+        context,
+        values,
+    )
+}
+
+/// Validates one `spl_autoload_register()` callback AT REGISTRATION, as PHP does.
+///
+/// PHP refuses the registration itself rather than the first autoload attempt: registering
+/// `'NotYetDeclared::m'` throws `TypeError` naming the class right there. Accepting it and
+/// discovering the problem at first use moves the failure to a line the program never wrote, and
+/// hides it entirely for a program that happens never to autoload anything.
+pub(in crate::interpreter) fn eval_validate_spl_autoload_register_callback(
+    callback: &EvaluatedCallable,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    eval_validate_callback(
+        callback,
+        EvalCallableValidationError::SplAutoloadRegister,
+        context,
+        values,
+    )
+}
+
+/// Validates one `spl_autoload_unregister()` callback, which PHP checks the same way.
+///
+/// Unregistering a callback that was never valid is refused rather than answered `false`: PHP
+/// distinguishes "this is not a callback" from "this callback is not registered".
+pub(in crate::interpreter) fn eval_validate_spl_autoload_unregister_callback(
+    callback: &EvaluatedCallable,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    eval_validate_callback(
+        callback,
+        EvalCallableValidationError::SplAutoloadUnregister,
         context,
         values,
     )
@@ -90,10 +130,9 @@ fn eval_validate_callback(
 ) -> Result<(), EvalStatus> {
     match callback {
         EvaluatedCallable::ForeignContext { callback, owner } => {
-            let Some(owner_context) = (unsafe { owner.context_ptr().as_mut() }) else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_validate_callback(callback, error, owner_context, values)
+            with_foreign_owner_context(owner, context, values, |owner_context, values| {
+                eval_validate_callback(callback, error, owner_context, values)
+            })
         }
         EvaluatedCallable::Named { name, display_name } => {
             eval_validate_named_callable(name, display_name, error, context, values)
@@ -128,9 +167,9 @@ fn eval_validate_callback(
                 values,
             ),
         },
-        EvaluatedCallable::BoundClosure { .. } | EvaluatedCallable::InvokableObject { .. } => {
-            Ok(())
-        }
+        EvaluatedCallable::BoundClosure { .. }
+        | EvaluatedCallable::InvokableObject { .. }
+        | EvaluatedCallable::NativeDescriptor { .. } => Ok(()),
     }
 }
 
@@ -317,6 +356,16 @@ fn eval_validate_call_user_func_static_method(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    // `Closure` is a builtin with no class record: its two static methods are answered by
+    // `eval_closure_static_method_result`, which static dispatch consults first. Symfony
+    // registers closure services with the factory `[Closure::class, 'fromCallable']` and
+    // `ContainerBuilder::createService` calls it through `call_user_func_array`.
+    if class_name.trim_start_matches('\\').eq_ignore_ascii_case("Closure")
+        && (method_name.eq_ignore_ascii_case("fromCallable")
+            || method_name.eq_ignore_ascii_case("bind"))
+    {
+        return Ok(());
+    }
     let class_name = resolve_eval_static_member_class_name(class_name, context)?;
     if eval_enum_static_builtin_applies(&class_name, method_name, context).is_some() {
         return Ok(());
@@ -398,8 +447,24 @@ fn eval_validate_call_user_func_native_static_method(
             || context
                 .native_static_method_signature(class_name, method_name)
                 .is_some()
-            || !values.class_exists(class_name)?
         {
+            return Ok(());
+        }
+        // A class NOTHING can produce is a different refusal from a class that lacks the method,
+        // and PHP words it differently: `class "X" not found` with the name quoted, against
+        // `class X does not have a method "m"` with the method quoted. Accepting the first --
+        // which is what an unconditional escape here did -- let `spl_autoload_register()` take a
+        // callback naming a class that does not exist and fail much later, or never.
+        if !values.class_exists(class_name)? {
+            let _ = eval_spl_autoload_class(class_name, context, values)?;
+            if !values.class_exists(class_name)? && !context.has_class(class_name) {
+                return eval_invalid_callback_type_error(
+                    error,
+                    &format!("class \"{class_name}\" not found"),
+                    context,
+                    values,
+                );
+            }
             return Ok(());
         }
         return eval_call_user_func_missing_method_type_error(
@@ -638,6 +703,15 @@ fn eval_invalid_callback_type_error<T>(
         EvalCallableValidationError::ClosureFromCallable => {
             format!("Failed to create closure from callable: {reason}")
         }
+        // Measured with `php -n` 8.5.6: the REASON is byte-identical to `call_user_func()`'s and
+        // only the prefix differs, because this parameter accepts null.
+        EvalCallableValidationError::SplAutoloadRegister => format!(
+            "spl_autoload_register(): Argument #1 ($callback) must be a valid callback or null, \
+             {reason}"
+        ),
+        EvalCallableValidationError::SplAutoloadUnregister => format!(
+            "spl_autoload_unregister(): Argument #1 ($callback) must be a valid callback, {reason}"
+        ),
     };
     eval_throw_type_error(&message, context, values)
 }

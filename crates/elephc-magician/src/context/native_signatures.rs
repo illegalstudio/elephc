@@ -393,6 +393,11 @@ impl ElephcEvalContext {
         class_name: &str,
         method_name: &str,
     ) -> Option<NativeCallableSignature> {
+        // A constructor is published once, as the class's constructor, and never as a method.
+        // `$o->__construct(...)` is still an ordinary method call -- a lazy ghost's initializer
+        // is written that way -- and without the signature the binder passed only the visible
+        // arguments, so the compiled body's hidden argument collector was missing and the bridge
+        // refused the call ("eval callback dispatch failed").
         self.native_methods
             .get(&native_method_key(class_name, method_name))
             .cloned()

@@ -37,6 +37,7 @@ stream_wrapper_register("pathop", "EvalPathOpWrapperW");
 echo unlink("pathop://delete-ok") ? "unlink" : "bad"; echo ":";
 echo call_user_func("unlink", "pathop://delete-no") === false ? "unlinkfalse" : "bad"; echo ":";
 echo mkdir("pathop://dir") ? "mkdir" : "bad"; echo ":";
+echo mkdir("pathop://tree", 0701, true) ? "mkdirrecursive" : "bad"; echo ":";
 echo rmdir("pathop://dir") === false ? "rmdirfalse" : "bad"; echo ":";
 echo rename("pathop://source", "pathop://dest") ? "rename" : "bad"; echo ":";
 echo call_user_func("rename", "pathop://source2", "pathop://dest") ? "callrename" : "bad";
@@ -50,7 +51,7 @@ return true;"#,
 
     assert_eq!(
         values.output,
-        "U(pathop://delete-ok)unlink:U(pathop://delete-no)unlinkfalse:M(pathop://dir,511,8)mkdir:R(pathop://dir,0)rmdirfalse:N(pathop://source,pathop://dest)rename:N(pathop://source2,pathop://dest)callrename"
+        "U(pathop://delete-ok)unlink:U(pathop://delete-no)unlinkfalse:M(pathop://dir,511,8)mkdir:M(pathop://tree,449,9)mkdirrecursive:R(pathop://dir,0)rmdirfalse:N(pathop://source,pathop://dest)rename:N(pathop://source2,pathop://dest)callrename"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

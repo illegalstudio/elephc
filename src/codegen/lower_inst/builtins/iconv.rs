@@ -1,8 +1,9 @@
 //! Purpose:
-//! Lowers PHP's ten iconv builtins from typed EIR into one shared runtime call.
+//! Lowers PHP's ten iconv builtins, plus mbstring's `mb_strtoupper()` / `mb_strtolower()`
+//! (implemented in the same bridge crate), from typed EIR into one shared runtime call.
 //!
 //! Called from:
-//! - Typed runtime-function dispatch for the iconv family.
+//! - Typed runtime-function dispatch for the iconv family and the mbstring case pair.
 //!
 //! Key details:
 //! - Every builtin stages its arguments into the same uniform slot block, so the whole
@@ -11,6 +12,9 @@
 //!   empty string, which PHP resolves to two different charsets.
 //! - `iconv_mime_encode()`'s `$options` array is read at the call site, because only the
 //!   backend can see the receiver's runtime storage.
+//! - The mbstring case pair returns a plain `string` through `__rt_iconv_call_str`, and its
+//!   nullable `$encoding` is tested for a runtime `null` when its static type is boxed,
+//!   because PHP resolves `null` to the default encoding while `""` is an invalid name.
 //! - Argument staging is target-neutral: the shared stack-field helpers own every
 //!   register and addressing decision.
 
@@ -33,6 +37,8 @@ const OP_MIME_DECODE: i64 = 6;
 const OP_MIME_DECODE_HEADERS: i64 = 7;
 const OP_GET_ENCODING: i64 = 8;
 const OP_SET_ENCODING: i64 = 9;
+const OP_MB_STRTOUPPER: i64 = 10;
+const OP_MB_STRTOLOWER: i64 = 11;
 
 /// Bytes reserved for the staged argument block, matching `IconvCallArgs`.
 const BLOCK_SIZE: usize = 272;
@@ -73,6 +79,8 @@ enum Staged {
     Text(usize),
     /// A nullable string argument; a statically `null` value stays absent.
     OptionalText(usize),
+    /// A nullable string argument whose boxed runtime `null` also stays absent.
+    NullableText(usize),
     /// An integer argument with a PHP default used when it is omitted.
     Number(usize, i64),
     /// A nullable integer argument; a statically `null` value stays absent.
@@ -237,6 +245,34 @@ pub(crate) fn lower_iconv_mime_encode(
     finish(ctx, inst, "__rt_iconv_call")
 }
 
+/// Lowers `mb_strtoupper(string, encoding?)`, which returns a plain string.
+pub(crate) fn lower_mb_strtoupper(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_mb_case(ctx, inst, "mb_strtoupper", OP_MB_STRTOUPPER)
+}
+
+/// Lowers `mb_strtolower(string, encoding?)`, which returns a plain string.
+pub(crate) fn lower_mb_strtolower(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_mb_case(ctx, inst, "mb_strtolower", OP_MB_STRTOLOWER)
+}
+
+/// Stages one mbstring case call and calls the string-returning entry point.
+fn lower_mb_case(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    op: i64,
+) -> Result<()> {
+    ensure_arity(inst, name, 1, 2)?;
+    stage_block(ctx, inst, name, op, &[Staged::Text(0), Staged::NullableText(1)])?;
+    finish(ctx, inst, "__rt_iconv_call_str")
+}
+
 /// Stages one iconv builtin's arguments and calls the shared value-returning entry point.
 fn lower_family(
     ctx: &mut FunctionContext<'_>,
@@ -283,6 +319,7 @@ fn stage_block(
         match entry {
             Staged::Text(slot) => stage_text(ctx, inst, index, *slot, name, false)?,
             Staged::OptionalText(slot) => stage_text(ctx, inst, index, *slot, name, true)?,
+            Staged::NullableText(slot) => stage_nullable_text(ctx, inst, index, *slot, name)?,
             Staged::Number(slot, default) => {
                 stage_number(ctx, inst, index, *slot, name, Some(*default))?
             }
@@ -322,6 +359,44 @@ fn stage_text(
     store_register(ctx, slot_field(slot, SLOT_PTR), &ptr_reg);
     store_register(ctx, slot_field(slot, SLOT_LEN), &len_reg);
     store_immediate(ctx, slot_field(slot, SLOT_PRESENT), 1);
+    Ok(())
+}
+
+/// Stages one nullable string operand, leaving the slot absent for a runtime `null` too.
+///
+/// A statically typed operand needs no test. A boxed one is unboxed first, and a null tag
+/// skips the staging entirely; any other payload is then coerced like a plain string.
+fn stage_nullable_text(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    operand: usize,
+    slot: usize,
+    name: &str,
+) -> Result<()> {
+    let Some(value) = inst.operands.get(operand).copied() else {
+        return Ok(());
+    };
+    if !matches!(
+        ctx.value_php_type(value)?.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        return stage_text(ctx, inst, operand, slot, name, true);
+    }
+    let absent = ctx.next_label("iconv_null_arg");
+    crate::codegen::lower_inst::call_operands::load_value_to_first_int_arg(ctx, value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #8");                              // runtime tag 8 = PHP null
+            ctx.emitter.instruction(&format!("b.eq {}", absent));               // a null argument keeps the slot absent (default encoding)
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 8");                              // runtime tag 8 = PHP null
+            ctx.emitter.instruction(&format!("je {}", absent));                 // a null argument keeps the slot absent (default encoding)
+        }
+    }
+    stage_text(ctx, inst, operand, slot, name, true)?;
+    ctx.emitter.label(&absent);
     Ok(())
 }
 

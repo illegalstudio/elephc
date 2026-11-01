@@ -32,6 +32,7 @@ macro_rules! constant {
             route: constant!(@route $($route)?),
             extension: constant!(@flag $($extension)?),
             internal: false,
+            target_support: None,
         }
     };
     (@since $since:ident) => { Some(PhpVersion::$since) };

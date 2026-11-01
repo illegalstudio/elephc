@@ -154,6 +154,7 @@ pub(in crate::interpreter) fn eval_function_probe_exists(
                 && eval_xml_builtin_linked(context, name)
                 && eval_fileinfo_builtin_linked(context, name))
             || eval_date_procedural_alias_exists(name)
+            || eval_debug_backtrace_function_exists(name)
             || eval_opcache_configuration_function_exists(name)
             || eval_opcache_reset_function_exists(name)
             || eval_opcache_get_status_function_exists(name)

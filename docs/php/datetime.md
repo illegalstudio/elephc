@@ -56,7 +56,7 @@ Both implement `DateTimeInterface`. `DateTime` mutates the object in place and r
 
 | Method | Description |
 |---|---|
-| `__construct(string $datetime = "now", ?DateTimeZone $timezone = null)` | Build from `"now"` or a date/time string such as `"2024-01-15 10:30:45"`. With a `$timezone`, the wall-clock string is interpreted in that zone (unless the string carries its own), and that zone becomes the display zone. |
+| `__construct(string $datetime = "now", ?DateTimeZone $timezone = null)` | Build from `"now"` or a date/time string such as `"2024-01-15 10:30:45"`. With a `$timezone`, the wall-clock string is interpreted in that zone (unless the string carries its own), and that zone becomes the display zone. As in PHP, `"now"` and any string that leaves the time of day alone (`"+1 day"`, `"1 hour ago"`, `"last day of next month"`) carry the current microseconds (`format("u")`); a string that sets a time of day (`"today"`, `"tomorrow"`, `"10:00"`, `"@ts"`, a bare date) has none. |
 | `getTimestamp(): int` | UNIX timestamp. |
 | `setTimestamp(int $ts): static` | Set the moment from a UNIX timestamp. |
 | `getMicrosecond(): int` | Sub-second component (0–999999). |
@@ -97,7 +97,7 @@ echo $later->format("H:i:s");         // 02:30:00
 
 `add()` and `sub()` are calendar operations: they decompose the date, apply the interval component by component, and recompose with `mktime()`, so month/day overflow normalizes exactly as in PHP (for example, `2020-01-31` plus one month becomes `2020-03-02`). An interval whose `invert` flag is `1` is applied in the opposite direction.
 
-`modify()` re-parses a string modifier against the object's current time, equivalent to `setTimestamp(strtotime($modifier, $this->getTimestamp()))`. It accepts whatever [`strtotime()`](system-and-io.md) supports — relative offsets (`"+1 day"`, `"-2 weeks"`, `"+1 month"`), time-only resets (`"23:45"`), bare keywords, and `"first/last day of …"` / `"first/last <weekday> of …"` phrases:
+`modify()` re-parses a string modifier against the object's current time, equivalent to `setTimestamp(strtotime($modifier, $this->getTimestamp()))`. It accepts whatever [`strtotime()`](system-and-io.md) supports — relative offsets (`"+1 day"`, `"-2 weeks"`, `"+1 month"`), time-only resets (`"23:45"`, and the 12-hour clock `"9am"`, `"9:30 pm"`), bare keywords, a keyword or weekday followed by a time of day, a signed or unsigned offset (`"tomorrow 14:30 +2 days"`, `"tomorrow 2 days"`) or another keyword (`"tomorrow 9am"`, `"friday noon"`, `"noon tomorrow"` — the later keyword resets what the earlier one set, as in PHP; `"tomorrow tomorrow"` is one day, a weekday after `noon`/`midnight`/`now` resets the time, and `"tomorrow friday"`, `"tomorrow 1 april"` and `"tomorrow 2023-04-01"` add the relative day to the weekday or date), and `"first/last day of …"` / `"first/last <weekday> of …"` phrases:
 
 ```php
 $dt = new DateTime();
@@ -321,7 +321,7 @@ The procedural date/time functions are supported as aliases for the OOP API:
 
 | Procedural | Equivalent |
 |---|---|
-| `date_create($s)` / `date_create_immutable($s)` | `new DateTime($s)` / `new DateTimeImmutable($s)` |
+| `date_create($s)` / `date_create_immutable($s)` | `new DateTime($s)` / `new DateTimeImmutable($s)`, except that a string the constructor cannot parse yields `false` instead of throwing `DateMalformedStringException` (internally `DateTime::__elephc_date_create()`) |
 | `date_create_from_format($f, $s [, $tz])` / `date_create_immutable_from_format($f, $s [, $tz])` | `DateTime::createFromFormat(…)` / `DateTimeImmutable::createFromFormat(…)` |
 | `date_format($d, $f)`, `date_diff($a, $b)`, `date_modify($d, $m)` | `$d->format($f)`, `$a->diff($b)`, `$d->modify($m)` |
 | `date_add($d, $i)`, `date_sub($d, $i)` | `$d->add($i)`, `$d->sub($i)` |
@@ -448,6 +448,6 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 
 Classes: `DateError`, `DateException`, `DateInterval`, `DateInvalidOperationException`, `DateInvalidTimeZoneException`, `DateMalformedIntervalStringException`, `DateMalformedPeriodStringException`, `DateMalformedStringException`, `DateObjectError`, `DatePeriod`, `DateRangeError`, `DateTime`, `DateTimeImmutable`, `DateTimeInterface`, `DateTimeZone`.
 
-Constants: `SUNFUNCS_RET_DOUBLE`, `SUNFUNCS_RET_STRING`, `SUNFUNCS_RET_TIMESTAMP`.
+Constants: `DATE_ATOM`, `DATE_COOKIE`, `DATE_ISO8601`, `DATE_ISO8601_EXPANDED`, `DATE_RFC1036`, `DATE_RFC1123`, `DATE_RFC2822`, `DATE_RFC3339`, `DATE_RFC3339_EXTENDED`, `DATE_RFC7231`, `DATE_RFC822`, `DATE_RFC850`, `DATE_RSS`, `DATE_W3C`, `SUNFUNCS_RET_DOUBLE`, `SUNFUNCS_RET_STRING`, `SUNFUNCS_RET_TIMESTAMP`.
 
 <!-- elephc:generated:symbols:end -->

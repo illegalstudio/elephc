@@ -17,7 +17,13 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
     // checker injects the variable as `Void` and emits a warning. At the
     // lowering level, we must initialize the local slot to null/0 before
     // the compound read so the runtime does not read garbage from the stack.
-    if is_compound_assignment_self_read(value, name, span) && !ctx.has_local_slot(name) {
+    // A superglobal is always defined: seeding it here wrote null over the request's `$_SERVER`
+    // the first time a function ran `$_SERVER += $_ENV` (Symfony's `Dotenv::populate()`).
+    if is_compound_assignment_self_read(value, name, span)
+        && !ctx.has_local_slot(name)
+        && !crate::globals_array::is_alias(name)
+        && !crate::superglobals::is_superglobal(name)
+    {
         let null_value = ctx.builder.emit_const_null();
         let null_lowered = LoweredValue { value: null_value, ir_type: IrType::I64 };
         ctx.store_local(name, null_lowered, PhpType::Void, Some(span));
@@ -51,7 +57,15 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
                 .then(|| crate::ir_lower::expr::lower_bound_closure_for_assignment(ctx, value))
                 .flatten()
         })
+        .or_else(|| {
+            name.starts_with(crate::parser::ast::NESTED_APPEND_TEMP_PREFIX)
+                .then(|| crate::ir_lower::expr::lower_array_access_quietly(ctx, value))
+                .flatten()
+        })
         .unwrap_or_else(|| lower_expr(ctx, value));
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
     // The checker recorded this assignment as a RE-BINDING of `$name` (an incompatible retype, or
     // a storage-only split of two numeric bindings such as a reused loop counter): end the old
     // binding here, so the store below mints a fresh slot at the new type instead of widening a
@@ -112,6 +126,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
     // type with `global_alias_type` (already `Mixed`) and stores through the global symbol, so a
     // marked top-level local another body writes via `global $a` keeps exactly the representation
     // it has today.
+    let lowered = detach_copied_mixed_cell(ctx, value, lowered, span);
     let mixed_storage_site = ctx.is_recorded_mixed_storage_site(span, name);
     if mixed_storage_site && !ctx.has_local_slot(name) {
         ctx.declare_local(name, PhpType::Mixed);
@@ -171,6 +186,45 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
 }
 
 /// Returns whether a closure literal captures the local being assigned.
+/// Gives `$copy = $place` its own boxed `Mixed` cell when `$place` holds one.
+///
+/// A PHP assignment copies the value, but a boxed cell was shared by pointer: both names held the
+/// same cell, and the in-place element writes on boxed containers (`mixed_array_append`,
+/// `__rt_mixed_array_set`) mutated it for both. `$old = $this->items; $this->items[] = 'x';` left
+/// `$old` holding the new element, and a `mixed` parameter copied then written did the same. The
+/// clone is a fresh cell over the SAME payload with its refcount raised, so the payload itself is
+/// still shared until a write — which the array runtime then separates like any other shared array.
+fn detach_copied_mixed_cell(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: &Expr,
+    lowered: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    let reads_a_place = matches!(
+        value.kind,
+        ExprKind::Variable(_)
+            | ExprKind::PropertyAccess { .. }
+            | ExprKind::StaticPropertyAccess { .. }
+    );
+    if !reads_a_place || lowered.ir_type != IrType::Heap(crate::ir::IrHeapKind::Mixed) {
+        return lowered;
+    }
+    let detached = ctx.emit_value(
+        Op::MixedClone,
+        vec![lowered.value],
+        None,
+        PhpType::Mixed,
+        Op::MixedClone.default_effects(),
+        Some(span),
+    );
+    // A property read hands back its own reference to the SAME cell, so owning it is no evidence
+    // of a private copy; the clone replaces it, and that reference is dropped here.
+    if ctx.value_is_owning_temporary(lowered) {
+        crate::ir_lower::ownership::release_if_owned(ctx, lowered, Some(span));
+    }
+    detached
+}
+
 pub(super) fn closure_captures_local(value: &Expr, name: &str) -> bool {
     matches!(
         &value.kind,
@@ -249,7 +303,7 @@ pub(super) fn contextualize_local_assignment(
             lowered,
             &source_repr,
             &contextual_repr,
-            span,
+            Some(span),
         );
         return (converted, contextual_ty);
     }
@@ -273,12 +327,21 @@ pub(super) fn contextualize_local_assignment(
             lowered,
             &source_repr,
             &contextual_repr,
-            span,
+            Some(span),
         );
         return (converted, contextual_ty);
     }
 
-    if matches!(value.kind, ExprKind::ArrayLiteral(_))
+    // A SUPERGLOBAL's contextual type is not an inference guess that a later walk may revise: it
+    // is the program's request storage, a hash every scope reads by name, and the symbol behind it
+    // is dereferenced as one everywhere. So an indexed array assigned to it must be converted
+    // whatever produced it — `$_GET = $this->query->all();` reaches here with a call's
+    // `array<mixed>`, not with a literal, and keeping the indexed pointer would publish it through
+    // a symbol every reader treats as a `Hash`. The literal-only rule below stays for ordinary
+    // locals, where the target representation is a contract this pass inferred rather than one the
+    // program declared.
+    let target_is_program_storage = crate::superglobals::is_superglobal(name);
+    if (target_is_program_storage || matches!(value.kind, ExprKind::ArrayLiteral(_)))
         && matches!(source_repr, PhpType::Array(_))
         && matches!(contextual_repr, PhpType::AssocArray { .. })
     {
@@ -366,6 +429,13 @@ pub(super) fn local_has_loop_storage_contract(
 /// - `$a = &$arr[idx]` binds the local to the indexed-array element's inline storage.
 pub(in crate::ir_lower) fn lower_ref_assign(ctx: &mut LoweringContext<'_, '_>, target: &str, source: &Expr, span: Span) {
     match &source.kind {
+        ExprKind::Variable(source_name)
+            if crate::superglobals::is_superglobal(source_name)
+                && target != source_name
+                && !crate::superglobals::is_superglobal(target) =>
+        {
+            ctx.bind_superglobal_ref_alias(target, source_name, Some(span));
+        }
         ExprKind::Variable(source_name) => {
             let fiber_start_sig = ctx.fiber_start_sig_for_local(source_name);
             ctx.alias_local_ref_cell(target, source_name, Some(span));
@@ -373,8 +443,20 @@ pub(in crate::ir_lower) fn lower_ref_assign(ctx: &mut LoweringContext<'_, '_>, t
                 ctx.bind_fiber_start_sig(target, sig);
             }
         }
+        // `$obj->prop = &$_SERVER`, which the parser spells as a copy plus this reverse bind: the
+        // property takes the superglobal's cell instead of the superglobal adopting the property's.
+        ExprKind::PropertyAccess { object, property } if crate::superglobals::is_superglobal(target) => {
+            let object = lower_expr(ctx, object);
+            if ctx.builder.insertion_block_is_terminated() {
+                return;
+            }
+            ctx.bind_property_to_superglobal_cell(object, property, target, Some(span));
+        }
         ExprKind::PropertyAccess { .. } => {
             crate::ir_lower::expr::lower_ref_assign_property(ctx, target, source, span);
+        }
+        ExprKind::DynamicPropertyAccess { .. } => {
+            crate::ir_lower::expr::lower_ref_assign_dynamic_property(ctx, target, source, span);
         }
         ExprKind::StaticPropertyAccess { .. } => {
             crate::ir_lower::expr::lower_ref_assign_static_property(ctx, target, source, span);

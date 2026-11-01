@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use crate::errors::CompileError;
 use crate::parser::ast::{CallableTarget, ClassMethod, Expr, ExprKind, InstanceOfTarget};
 use super::discovery::FunctionVariantRegistry;
-use super::engine::resolve_isolated;
+use super::engine::{dynamic_include_call_kind, resolve_isolated};
 use super::state::ResolveState;
 /// Recursively resolves include effects and nested declarations in an expression AST node.
 ///
@@ -44,6 +44,21 @@ pub(super) fn resolve_expr(
 ) -> Result<Expr, CompileError> {
     let span = expr.span;
     let kind = match expr.kind {
+        ExprKind::IncludeValue {
+            path,
+            once,
+            required,
+        } => {
+            let path = resolve_expr(
+                *path,
+                base_dir,
+                declared_once,
+                include_chain,
+                state,
+                function_variants,
+            )?;
+            dynamic_include_call_kind(path, once, required, span)
+        }
         ExprKind::BinaryOp { left, op, right } => ExprKind::BinaryOp {
             left: Box::new(resolve_expr(*left, base_dir, declared_once, include_chain, state, function_variants)?),
             op,
@@ -151,6 +166,14 @@ pub(super) fn resolve_expr(
                 })
                 .collect::<Result<Vec<_>, CompileError>>()?,
         ),
+        ExprKind::ArrayReference(value) => ExprKind::ArrayReference(Box::new(resolve_expr(
+            *value,
+            base_dir,
+            declared_once,
+            include_chain,
+            state,
+            function_variants,
+        )?)),
         ExprKind::ArrayLiteralMixed(entries) => ExprKind::ArrayLiteralMixed(
             entries
                 .iter()

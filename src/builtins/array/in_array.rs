@@ -33,6 +33,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[1], cx.env)?;
     if !arr_ty.is_php_array()
         && !boxed_value_may_hold_array(&arr_ty)
+        && !crate::types::checker::builtins::array_arg_is_gradually_acceptable(&arr_ty)
         && !matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
     {
         return Err(CompileError::new(

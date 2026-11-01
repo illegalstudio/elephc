@@ -63,7 +63,16 @@ pub(super) fn lower_yield(ctx: &mut LoweringContext<'_, '_>, key: Option<&Expr>,
 pub(super) fn lower_yield_from(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
     let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
-    if matches!(source_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+    if matches!(
+        source_ty,
+        PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Iterable
+            | PhpType::Mixed
+            | PhpType::Union(_)
+    )
+        || matches!(&source_ty, PhpType::Object(name) if name.trim_start_matches('\\') != "Generator")
+    {
         return lower_yield_from_array(ctx, value, expr);
     }
     let staging = prepublish_user_call_result(
@@ -87,30 +96,19 @@ pub(super) fn lower_yield_from(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, 
     take_prepublished_call_result(ctx, staging, result, expr.span)
 }
 
-/// Desugars `yield from <array>` into an iterator loop that re-yields each
-/// key/value pair, returning a boxed PHP null (arrays have no delegated return
-/// value). Reuses the foreach iterator opcodes so every array kind (indexed,
-/// associative, by-element-type) is handled by the existing iterator lowering.
+/// Desugars `yield from <array|Traversable>` into an iterator loop that re-yields
+/// each key/value pair, returning a boxed PHP null (non-Generator iterables have
+/// no delegated return value). Reuses the foreach iterator opcodes so every
+/// supported iterable representation is handled by existing iterator lowering.
 pub(super) fn lower_yield_from_array(
     ctx: &mut LoweringContext<'_, '_>,
     source: LoweredValue,
     expr: &Expr,
 ) -> LoweredValue {
     let span = expr.span;
-    let iterator_state = ctx.declare_iterator_state();
-    let iterator = ctx.emit_value(
-        Op::IterStart,
-        vec![source.value],
-        Some(Immediate::IterStart(crate::ir::IterStartMetadata::new(
-            iterator_state,
-            false,
-            None,
-            None,
-        ))),
-        PhpType::Iterable,
-        Op::IterStart.default_effects(),
-        Some(span),
-    );
+    // An `IteratorAggregate` source needs an owning slot for the iterator `getIterator()`
+    // returns, exactly as a `foreach` over one does (`lower_foreach`).
+    let (iterator, iterator_owner, _iterator_state) = ctx.emit_iter_start(source, false, span);
     let header = ctx.builder.create_named_block("yieldfrom.next", Vec::new());
     let body = ctx.builder.create_named_block("yieldfrom.body", Vec::new());
     let exit = ctx.builder.create_named_block("yieldfrom.exit", Vec::new());
@@ -176,6 +174,9 @@ pub(super) fn lower_yield_from_array(
     }
 
     ctx.builder.position_at_end(exit);
+    if let Some(owner) = iterator_owner {
+        ctx.retire_iter_start_owner(owner, span);
+    }
     // The iterator borrows a freshly-created array (e.g. a literal): release it
     // once iteration ends, mirroring `lower_foreach`.
     if ctx.value_is_owning_temporary(source) {

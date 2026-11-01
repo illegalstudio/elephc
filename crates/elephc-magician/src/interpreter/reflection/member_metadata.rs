@@ -15,6 +15,9 @@ pub(super) fn eval_reflection_method_metadata(
     method_name: &str,
     context: &ElephcEvalContext,
 ) -> Option<EvalReflectionMemberMetadata> {
+    if eval_reflection_is_builtin_closure(class_name, context) {
+        return eval_reflection_builtin_closure_method_metadata(method_name).map(|(_, method)| method);
+    }
     if context.has_class(class_name) || context.has_enum(class_name) {
         if let Some((declaring_class, method)) = context.class_method(class_name, method_name) {
             let required_parameter_count = eval_reflection_required_parameter_count(

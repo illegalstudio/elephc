@@ -27,6 +27,7 @@ fn parse_fragment_accepts_function_declaration_source() {
             parameter_is_by_ref: vec![false],
             parameter_is_variadic: vec![false],
             return_type: None,
+            returns_by_ref: false,
             body: vec![EvalStmt::Return(Some(EvalExpr::Binary {
                 op: EvalBinOp::Add,
                 left: Box::new(EvalExpr::LoadVar("x".to_string())),
@@ -58,6 +59,7 @@ return dyn();"#,
                 parameter_is_by_ref: Vec::new(),
                 parameter_is_variadic: Vec::new(),
                 return_type: None,
+                returns_by_ref: false,
                 body: vec![EvalStmt::Return(Some(EvalExpr::Const(EvalConst::String(
                     "Eval\\Ns".to_string()
                 ))))],
@@ -84,7 +86,7 @@ return Box;"#,
     assert_eq!(
         program.statements(),
         &[
-            EvalStmt::ClassDecl(EvalClass::new("Eval\\Block\\Box", Vec::new(), Vec::new())),
+            EvalStmt::class_decl(EvalClass::new("Eval\\Block\\Box", Vec::new(), Vec::new())),
             EvalStmt::Return(Some(EvalExpr::NewObject {
                 class_name: "Eval\\Block\\Box".to_string(),
                 args: Vec::new(),
@@ -130,7 +132,7 @@ class Child extends BaseAlias implements Iface, \Shared\Root {}"#,
     .expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::ClassDecl(EvalClass::with_relations(
+        &[EvalStmt::class_decl(EvalClass::with_relations(
             "Eval\\UseNs\\Child",
             Some("Lib\\Base".to_string()),
             vec![
@@ -198,7 +200,7 @@ return Alias(LocalValue, OTHER, new BoxAlias\Inner(), new Thing());"#,
 #[test]
 fn parse_fragment_rejects_mixed_kind_typed_grouped_use_imports() {
     assert_eq!(
-        parse_fragment(br#"use function Lib\{target, const VALUE};"#),
+        parse_fragment_error(br#"use function Lib\{target, const VALUE};"#),
         Err(EvalParseError::UnexpectedToken)
     );
 }
@@ -251,6 +253,7 @@ function dyn() { return alias(); }"#,
             parameter_is_by_ref: Vec::new(),
             parameter_is_variadic: Vec::new(),
             return_type: None,
+            returns_by_ref: false,
             body: vec![EvalStmt::Return(Some(EvalExpr::Call {
                 name: "Lib\\target".to_string(),
                 args: Vec::new(),
@@ -306,7 +309,7 @@ fn parse_fragment_resolves_global_relative_names_and_refuses_relative_imports() 
 #[test]
 fn parse_fragment_rejects_use_import_inside_function_body() {
     assert_eq!(
-        parse_fragment(br#"function dyn() { use function Lib\target; }"#),
+        parse_fragment_error(br#"function dyn() { use function Lib\target; }"#),
         Err(EvalParseError::UnsupportedConstruct)
     );
 }

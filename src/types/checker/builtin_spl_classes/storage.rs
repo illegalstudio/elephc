@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 
-use crate::parser::ast::{BinOp, ClassMethod, ClassProperty, Expr, Stmt, TypeExpr};
+use crate::parser::ast::{BinOp, CastType, ClassMethod, ClassProperty, Expr, Stmt, TypeExpr};
 use crate::types::traits::FlattenedClass;
 
 use super::common::*;
@@ -55,7 +55,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
             properties: array_iterator_properties(),
             methods: spl_array_iterator_methods(),
             attributes: Vec::new(),
-            constants: Vec::new(),
+            constants: array_flag_constants(),
             used_traits: Vec::new(),
             trait_aliases: Vec::new(),
         },
@@ -78,11 +78,17 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
             properties: array_object_properties(),
             methods: spl_array_object_methods(),
             attributes: Vec::new(),
-            constants: Vec::new(),
+            constants: array_flag_constants(),
             used_traits: Vec::new(),
             trait_aliases: Vec::new(),
         },
     );
+}
+
+/// php's `ArrayObject`/`ArrayIterator` flag constants (Laravel's `AsArrayObject` cast passes
+/// `ArrayObject::ARRAY_AS_PROPS`).
+fn array_flag_constants() -> Vec<crate::parser::ast::ClassConst> {
+    vec![class_const("STD_PROP_LIST", 1), class_const("ARRAY_AS_PROPS", 2)]
 }
 
 /// Builds the method list for SPL empty iterator.
@@ -107,10 +113,16 @@ fn array_iterator_properties() -> Vec<ClassProperty> {
 }
 
 /// Builds the property list for array object.
+///
+/// One native array, as php's `ArrayObject` wraps one: keys, order, the next integer key after an
+/// `unset()` and every access are the array's own. The previous split into parallel `keys` and
+/// `values` lists answered `$o[] = 'n'` on `['a' => 1]` with key `1` (php: `0`), searched linearly
+/// on every offset access, and leaked its copies.
 fn array_object_properties() -> Vec<ClassProperty> {
     vec![
-        storage_property("keys", array_type()),
-        storage_property("values", array_type()),
+        // php's own `array`, packed or hash: the synthetic `array_type()` is a list ABI that
+        // would read every string key as `0`.
+        storage_property("storage", named_type("array")),
         storage_property("flags", TypeExpr::Int),
     ]
 }
@@ -175,6 +187,8 @@ fn spl_array_iterator_methods() -> Vec<ClassMethod> {
 
 /// Builds the method list for SPL array object.
 fn spl_array_object_methods() -> Vec<ClassMethod> {
+    let storage = || property_access(this_expr(), "storage");
+    let element = || array_access(storage(), var_expr("offset"));
     vec![
         method_with_body(
             "__construct",
@@ -183,41 +197,107 @@ fn spl_array_object_methods() -> Vec<ClassMethod> {
                 param_default("flags", TypeExpr::Int, int_expr(0)),
             ],
             Some(TypeExpr::Void),
-            array_object_construct_body(),
+            vec![
+                property_assign_stmt(this_expr(), "storage", cast_expr(CastType::Array, var_expr("array"))),
+                property_assign_stmt(this_expr(), "flags", var_expr("flags")),
+            ],
         ),
-        method_with_body("getIterator", Vec::new(), Some(named_type("ArrayIterator")), array_object_get_iterator_body()),
-        method_with_body("count", Vec::new(), Some(TypeExpr::Int), array_count_body()),
+        method_with_body(
+            "getIterator",
+            Vec::new(),
+            Some(named_type("ArrayIterator")),
+            return_body(new_object_expr("ArrayIterator", vec![storage()])),
+        ),
+        method_with_body("count", Vec::new(), Some(TypeExpr::Int), return_body(count_expr(storage()))),
         method_with_body(
             "offsetExists",
             vec![param("offset", mixed_type())],
             Some(TypeExpr::Bool),
-            array_offset_exists_body(),
+            return_body(function_call("array_key_exists", vec![var_expr("offset"), storage()])),
         ),
         method_with_body(
             "offsetGet",
             vec![param("offset", mixed_type())],
             Some(mixed_type()),
-            array_offset_get_body(),
+            return_body(element()),
         ),
         method_with_body(
             "offsetSet",
             vec![param("offset", mixed_type()), param("value", mixed_type())],
             Some(TypeExpr::Void),
-            array_offset_set_body(),
+            vec![if_stmt(
+                binary_expr(var_expr("offset"), BinOp::StrictEq, null_expr()),
+                vec![property_array_push_stmt(this_expr(), "storage", var_expr("value"))],
+                Some(vec![property_array_assign_stmt(
+                    this_expr(),
+                    "storage",
+                    var_expr("offset"),
+                    var_expr("value"),
+                )]),
+            )],
         ),
         method_with_body(
             "offsetUnset",
             vec![param("offset", mixed_type())],
             Some(TypeExpr::Void),
-            array_offset_unset_body(),
+            vec![expr_stmt(function_call("unset", vec![element()]))],
         ),
         method_with_body(
             "append",
             vec![param("value", mixed_type())],
             Some(TypeExpr::Void),
-            array_append_body(),
+            vec![property_array_push_stmt(this_expr(), "storage", var_expr("value"))],
         ),
-        method_with_body("getArrayCopy", Vec::new(), Some(array_type()), array_copy_body()),
+        method_with_body("getArrayCopy", Vec::new(), Some(array_type()), return_body(storage())),
+        // `$this->tracedRequests->exchangeArray([])` (Symfony's `TraceableHttpClient::reset()`):
+        // the storage is replaced and the previous contents are returned.
+        method_with_body(
+            "exchangeArray",
+            vec![param("array", named_type("array"))],
+            Some(named_type("array")),
+            vec![
+                assign_stmt("previous", storage()),
+                property_assign_stmt(this_expr(), "storage", cast_expr(CastType::Array, var_expr("array"))),
+                return_stmt(var_expr("previous")),
+            ],
+        ),
+        method_with_body("getFlags", Vec::new(), Some(TypeExpr::Int), return_body(property_access(this_expr(), "flags"))),
+        method_with_body(
+            "setFlags",
+            vec![param("flags", TypeExpr::Int)],
+            Some(TypeExpr::Void),
+            vec![property_assign_stmt(this_expr(), "flags", var_expr("flags"))],
+        ),
+        // php's `[flags, storage, member properties, iterator class]` (Symfony's var-exporter
+        // `Hydrator` rebuilds an ArrayObject through `__unserialize()`).
+        method_with_body(
+            "__serialize",
+            Vec::new(),
+            Some(named_type("array")),
+            return_body(expr(crate::parser::ast::ExprKind::ArrayLiteral(vec![
+                property_access(this_expr(), "flags"),
+                storage(),
+                empty_array_expr(),
+                null_expr(),
+            ]))),
+        ),
+        method_with_body(
+            "__unserialize",
+            vec![param("data", named_type("array"))],
+            Some(TypeExpr::Void),
+            vec![
+                property_assign_stmt(
+                    this_expr(),
+                    "flags",
+                    cast_expr(CastType::Int, null_coalesce_expr(array_access(var_expr("data"), int_expr(0)), int_expr(0))),
+                ),
+                property_assign_stmt(
+                    this_expr(),
+                    "storage",
+                    cast_expr(CastType::Array, null_coalesce_expr(array_access(var_expr("data"), int_expr(1)), empty_array_expr())),
+                ),
+            ],
+        ),
     ]
 }
 
@@ -248,13 +328,6 @@ fn value_at(index: Expr) -> Expr {
 
 /// Builds the synthetic method body for array iterator construct.
 fn array_iterator_construct_body() -> Vec<Stmt> {
-    let mut body = array_object_construct_body();
-    body.insert(2, property_assign_stmt(this_expr(), "position", int_expr(0)));
-    body
-}
-
-/// Builds the synthetic method body for array object construct.
-fn array_object_construct_body() -> Vec<Stmt> {
     vec![
         property_assign_stmt(this_expr(), "keys", function_call("array_keys", vec![var_expr("array")])),
         property_assign_stmt(
@@ -262,6 +335,7 @@ fn array_object_construct_body() -> Vec<Stmt> {
             "values",
             function_call("array_values", vec![var_expr("array")]),
         ),
+        property_assign_stmt(this_expr(), "position", int_expr(0)),
         property_assign_stmt(this_expr(), "flags", var_expr("flags")),
     ]
 }
@@ -414,27 +488,6 @@ fn array_copy_body() -> Vec<Stmt> {
             ],
         ),
         return_stmt(var_expr("out")),
-    ]
-}
-
-/// Builds the synthetic method body for array object get iterator.
-fn array_object_get_iterator_body() -> Vec<Stmt> {
-    vec![
-        assign_stmt("it", new_object_expr("ArrayIterator", vec![empty_array_expr()])),
-        assign_stmt("i", int_expr(0)),
-        assign_stmt("limit", count_expr(keys_expr())),
-        while_stmt(
-            binary_expr(var_expr("i"), BinOp::Lt, var_expr("limit")),
-            vec![
-                expr_stmt(method_call(
-                    var_expr("it"),
-                    "offsetSet",
-                    vec![key_at(var_expr("i")), value_at(var_expr("i"))],
-                )),
-                increment_stmt("i"),
-            ],
-        ),
-        return_stmt(var_expr("it")),
     ]
 }
 

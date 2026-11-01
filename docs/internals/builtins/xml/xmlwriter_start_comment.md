@@ -2,7 +2,7 @@
 title: "xmlwriter_start_comment() - internals"
 description: "Compiler internals for xmlwriter_start_comment(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1125
+  order: 1185
 ---
 
 ## `xmlwriter_start_comment()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/xml_prelude/build/writer.rs`:1007](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs#L1007) (`xmlwriter_start_comment`)
+- **Lowering**: [`src/xml_prelude/build/writer.rs`:1017](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs#L1017) (`xmlwriter_start_comment`)
 - **Function symbol**: `xmlwriter_start_comment()`
 
 

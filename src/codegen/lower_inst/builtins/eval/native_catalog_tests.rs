@@ -42,7 +42,7 @@ fn native_catalog_initialization_is_target_aware_and_module_private() {
         let layout = frame::layout_for_function(&function, target, false, false, false);
         let mut emitter = Emitter::new(target);
         let mut data = DataSection::new();
-        let mut shared = SharedCodegenState::default();
+        let mut shared = SharedCodegenState::for_module(&module);
         {
             let mut context = FunctionContext::new(
                 &module, &function, &mut emitter, &mut data, &mut shared, layout,
@@ -89,7 +89,7 @@ fn native_catalog_initialization_is_target_aware_and_module_private() {
         // The helper body owns the readiness guard and the single publish step.
         let mut helper_emitter = Emitter::new(target);
         let mut helper_data = DataSection::new();
-        let mut helper_shared = SharedCodegenState::default();
+        let mut helper_shared = SharedCodegenState::for_module(&module);
         crate::codegen::eval_inventory_helper::emit_eval_inventory_helper(
             &module,
             &mut helper_emitter,

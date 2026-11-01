@@ -9,7 +9,75 @@
 
 use super::*;
 
+/// The kind of reflector one object identity is registered as.
+///
+/// One address holds one live object, so it can be only one kind of reflector at a time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EvalReflectionKind {
+    Attribute,
+    Class,
+    Function,
+    Method,
+    Property,
+    ClassConstant,
+}
+
 impl ElephcEvalContext {
+    /// Drops every registration under `identity` that is NOT of kind `keep`.
+    ///
+    /// The per-kind tables are keyed by object ADDRESS and a compiled free never reaches them, so
+    /// a reflector allocated where a dead reflector of another kind lived inherited its entry.
+    /// The class table answers `getFileName()` for any identity it holds, so a `ReflectionMethod`
+    /// built where a freed `ReflectionObject` of the calling class had been reported THAT class's
+    /// file: the Symfony demo showed `SourceCodeExtension.php` as the controller's source, with the
+    /// method's own lines sliced out of it. Registering a reflector, or re-binding one on a call,
+    /// clears the other kinds first.
+    pub fn forget_eval_reflection_identity_except(
+        &mut self,
+        identity: u64,
+        keep: EvalReflectionKind,
+    ) {
+        if keep != EvalReflectionKind::Attribute {
+            self.eval_reflection_attributes.remove(&identity);
+        }
+        if keep != EvalReflectionKind::Class {
+            self.eval_reflection_classes.remove(&identity);
+        }
+        if keep != EvalReflectionKind::Function {
+            self.eval_reflection_functions.remove(&identity);
+            self.eval_reflection_function_closure_targets.remove(&identity);
+        }
+        if keep != EvalReflectionKind::Method {
+            self.eval_reflection_methods.remove(&identity);
+        }
+        if keep != EvalReflectionKind::Property {
+            self.eval_reflection_properties.remove(&identity);
+            self.eval_dynamic_reflection_properties.remove(&identity);
+        }
+        if keep != EvalReflectionKind::ClassConstant {
+            self.eval_reflection_class_constants.remove(&identity);
+        }
+    }
+
+    /// Drops every reflection registration held under one object identity.
+    ///
+    /// The registry is keyed by object ADDRESS and outlives the reflector: a compiled free never
+    /// reaches it. Once that address holds an object that is not a reflector at all, each entry
+    /// still filed under it is a dead reflector's, and left in place it answers that object's
+    /// calls -- a console command reported the name of a `ReflectionMethod` freed from the same
+    /// block. Returns whether anything was dropped.
+    pub fn forget_eval_reflection_identity(&mut self, identity: u64) -> bool {
+        let mut dropped = self.eval_reflection_attributes.remove(&identity).is_some();
+        dropped |= self.eval_reflection_classes.remove(&identity).is_some();
+        dropped |= self.eval_reflection_functions.remove(&identity).is_some();
+        dropped |= self.eval_reflection_function_closure_targets.remove(&identity).is_some();
+        dropped |= self.eval_reflection_methods.remove(&identity).is_some();
+        dropped |= self.eval_reflection_properties.remove(&identity).is_some();
+        dropped |= self.eval_dynamic_reflection_properties.remove(&identity);
+        dropped |= self.eval_reflection_class_constants.remove(&identity).is_some();
+        dropped
+    }
+
     /// Records eval-declared attribute metadata for one synthetic ReflectionAttribute object.
     pub fn register_eval_reflection_attribute(
         &mut self,
@@ -18,6 +86,7 @@ impl ElephcEvalContext {
         target: u64,
         repeated: bool,
     ) {
+        self.forget_eval_reflection_identity_except(identity, EvalReflectionKind::Attribute);
         self.eval_reflection_attributes.insert(
             identity,
             EvalReflectionAttributeMetadata::new(attribute, target, repeated),
@@ -34,6 +103,7 @@ impl ElephcEvalContext {
 
     /// Records reflected class metadata for one synthetic ReflectionClass object.
     pub fn register_eval_reflection_class(&mut self, identity: u64, class_name: &str) {
+        self.forget_eval_reflection_identity_except(identity, EvalReflectionKind::Class);
         self.eval_reflection_classes
             .insert(identity, class_name.trim_start_matches('\\').to_string());
     }
@@ -47,6 +117,10 @@ impl ElephcEvalContext {
 
     /// Records reflected function metadata for one synthetic ReflectionFunction object.
     pub fn register_eval_reflection_function(&mut self, identity: u64, function_name: &str) {
+        self.forget_eval_reflection_identity_except(identity, EvalReflectionKind::Function);
+        // A callable target is attached AFTER the function is registered; one still filed here
+        // is a freed ReflectionFunction's.
+        self.eval_reflection_function_closure_targets.remove(&identity);
         self.eval_reflection_functions
             .insert(identity, function_name.trim_start_matches('\\').to_string());
     }
@@ -64,6 +138,7 @@ impl ElephcEvalContext {
         identity: u64,
         target: EvalClosureObjectTarget,
     ) {
+        self.forget_eval_reflection_identity_except(identity, EvalReflectionKind::Function);
         self.eval_reflection_function_closure_targets
             .insert(identity, target);
     }
@@ -84,6 +159,7 @@ impl ElephcEvalContext {
         declaring_class: &str,
         method_name: &str,
     ) {
+        self.forget_eval_reflection_identity_except(identity, EvalReflectionKind::Method);
         self.eval_reflection_methods.insert(
             identity,
             (
@@ -107,6 +183,7 @@ impl ElephcEvalContext {
         declaring_class: &str,
         property_name: &str,
     ) {
+        self.forget_eval_reflection_identity_except(identity, EvalReflectionKind::Property);
         self.eval_reflection_properties.insert(
             identity,
             (
@@ -148,6 +225,7 @@ impl ElephcEvalContext {
         constant_name: &str,
         owner_kind: u64,
     ) {
+        self.forget_eval_reflection_identity_except(identity, EvalReflectionKind::ClassConstant);
         self.eval_reflection_class_constants.insert(
             identity,
             (

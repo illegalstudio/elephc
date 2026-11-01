@@ -20,6 +20,31 @@ pub(super) fn lower_reflection_method_invoke_call(
     let method_key = php_symbol_key(method);
     let object_expr = object_expr?;
     let (class_name, reflected_method) = reflection_method_reflected_target(ctx, object_expr)?;
+    if method_key == "getclosure" {
+        let object_arg = reflection_method_get_closure_object(ctx, args)?;
+        let target_kind = reflection_method_target_kind(ctx, &class_name, &reflected_method)?;
+        let target = match target_kind {
+            ReflectionMethodTargetKind::Static => {
+                let ignored_object = lower_expr(ctx, &object_arg);
+                if ctx.value_is_owning_temporary(ignored_object) {
+                    crate::ir_lower::ownership::release_if_owned(
+                        ctx,
+                        ignored_object,
+                        Some(object_arg.span),
+                    );
+                }
+                CallableTarget::StaticMethod {
+                    receiver: StaticReceiver::Named(Name::from(class_name)),
+                    method: reflected_method,
+                }
+            }
+            ReflectionMethodTargetKind::Instance => CallableTarget::Method {
+                object: Box::new(object_arg),
+                method: reflected_method,
+            },
+        };
+        return Some(lower_first_class_callable(ctx, &target, expr));
+    }
     let Some((object_arg, forwarded_args)) = (match method_key.as_str() {
         "invoke" => reflection_method_invoke_args(args),
         "invokeargs" => reflection_method_invoke_args_array(ctx, args),
@@ -39,6 +64,15 @@ pub(super) fn lower_reflection_method_invoke_call(
             expr,
         ));
     };
+    // php binds a reflected method by its DECLARING class, so a private method of an ancestor
+    // runs on a descendant receiver. A direct `MethodCall` resolves the name on the receiver's
+    // own class and found nothing ("method call to unknown method AppK::secret"); the shell
+    // body's `call_user_func_array` resolves it by the reflected class at run time instead.
+    if matches!(target_kind, ReflectionMethodTargetKind::Instance)
+        && reflected_private_method_escapes_receiver(ctx, &class_name, &reflected_method, &object_arg)
+    {
+        return None;
+    }
     match target_kind {
         ReflectionMethodTargetKind::Static => Some(lower_reflection_static_method_invoke(
             ctx,
@@ -48,13 +82,103 @@ pub(super) fn lower_reflection_method_invoke_call(
             &forwarded_args,
             expr,
         )),
-        ReflectionMethodTargetKind::Instance => Some(lower_reflection_instance_method_invoke(
-            ctx,
-            &reflected_method,
-            &object_arg,
-            &forwarded_args,
-            expr,
-        )),
+        ReflectionMethodTargetKind::Instance => {
+            // php runs the REFLECTED class's method on the receiver, even when the receiver's
+            // class overrides it: `(new ReflectionMethod(P::class, 'get'))->invoke(new C())` is
+            // `P::get`, not `C::get`. A plain `MethodCall` would dispatch virtually.
+            let direct = reflected_method_has_descendant_override(ctx, &class_name, &reflected_method)
+                .then(|| class_name.trim_start_matches('\\').to_string());
+            Some(lower_reflection_instance_method_invoke_scoped(
+                ctx,
+                &reflected_method,
+                &object_arg,
+                &forwarded_args,
+                expr,
+                direct,
+            ))
+        }
+    }
+}
+
+/// Returns whether a descendant of `class_name` redeclares the instance method `method`, so a
+/// virtual call on a descendant receiver would not reach the reflected implementation.
+fn reflected_method_has_descendant_override(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    method: &str,
+) -> bool {
+    let declaring = class_name.trim_start_matches('\\');
+    let key = php_symbol_key(method);
+    let Some(info) = ctx.classes.get(declaring) else {
+        return false;
+    };
+    if info.abstract_methods.contains(&key) || !info.methods.contains_key(&key) {
+        return false;
+    }
+    let reflected_owner = info.method_declaring_classes.get(&key);
+    ctx.classes.iter().any(|(name, candidate)| {
+        name != declaring
+            && candidate.methods.contains_key(&key)
+            && candidate.method_declaring_classes.get(&key) != reflected_owner
+            && {
+                let mut ancestor = candidate.parent.as_deref();
+                let mut found = false;
+                while let Some(parent) = ancestor {
+                    if parent == declaring {
+                        found = true;
+                        break;
+                    }
+                    ancestor = ctx.classes.get(parent).and_then(|info| info.parent.as_deref());
+                }
+                found
+            }
+    })
+}
+
+/// Returns whether a reflected PRIVATE instance method cannot be dispatched statically on the
+/// receiver: private methods are not inherited into a subclass's method table, so any receiver
+/// whose class is not the declaring class (or is not known at all) must go through run-time
+/// resolution by the reflected class.
+fn reflected_private_method_escapes_receiver(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    method: &str,
+    receiver: &Expr,
+) -> bool {
+    let declaring = class_name.trim_start_matches('\\');
+    let is_private = ctx
+        .classes
+        .get(declaring)
+        .and_then(|info| info.method_visibilities.get(&php_symbol_key(method)))
+        == Some(&Visibility::Private);
+    if !is_private {
+        return false;
+    }
+    match instance_callable_object_class(ctx, receiver) {
+        Some(receiver_class) => receiver_class.trim_start_matches('\\') != declaring,
+        None => true,
+    }
+}
+
+/// Normalizes the optional receiver accepted by `ReflectionMethod::getClosure()`.
+fn reflection_method_get_closure_object(
+    _ctx: &LoweringContext<'_, '_>,
+    args: &[Expr],
+) -> Option<Expr> {
+    let args = reflection_class_new_instance_args(args);
+    if args.iter().any(is_spread_arg) {
+        return None;
+    }
+    match args.as_slice() {
+        [] => Some(Expr::new(ExprKind::Null, crate::span::Span::dummy())),
+        [arg] => match &arg.kind {
+            ExprKind::NamedArg { name, value } if php_symbol_key(name) == "object" => {
+                Some((**value).clone())
+            }
+            ExprKind::NamedArg { .. } => None,
+            _ => Some(arg.clone()),
+        },
+        _ => None,
     }
 }
 
@@ -75,13 +199,16 @@ pub(super) fn lower_reflection_static_method_invoke(
     lower_static_method_call(ctx, &receiver, reflected_method, forwarded_args, expr)
 }
 
-/// Lowers an instance reflected-method invocation using the first invoke argument as receiver.
-pub(super) fn lower_reflection_instance_method_invoke(
+/// Lowers an instance reflected-method invocation using the first invoke argument as receiver,
+/// optionally pinning the call to the implementation `direct_class` names instead of dispatching
+/// on the receiver's own class.
+fn lower_reflection_instance_method_invoke_scoped(
     ctx: &mut LoweringContext<'_, '_>,
     reflected_method: &str,
     object_arg: &Expr,
     forwarded_args: &[Expr],
     expr: &Expr,
+    direct_class: Option<String>,
 ) -> LoweredValue {
     let object = lower_expr(ctx, object_arg);
     if value_is_definitely_null(ctx, object.value) {
@@ -98,14 +225,20 @@ pub(super) fn lower_reflection_instance_method_invoke(
             expr,
         );
     }
-    lower_method_call_with_receiver(
+    // Only a receiver the backend can type as an object takes the pinned call.
+    if matches!(ctx.builder.value_php_type(object.value), PhpType::Object(_)) {
+        ctx.direct_method_call_class = direct_class;
+    }
+    let call = lower_method_call_with_receiver(
         ctx,
         object,
         reflected_method,
         forwarded_args,
         Op::MethodCall,
         expr,
-    )
+    );
+    ctx.direct_method_call_class = None;
+    call
 }
 
 /// Splits `ReflectionMethod::invoke($object, ...$args)` into receiver and method args.
@@ -236,4 +369,3 @@ pub(super) fn lower_reflection_method_invoke_unsupported(
     ctx.builder.terminate(Terminator::Fatal { message });
     result
 }
-

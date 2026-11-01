@@ -95,6 +95,19 @@ fn native_attribute_take_arg(bytes: &[u8], offset: &mut usize) -> Option<EvalAtt
             }
             Some(EvalAttributeArg::Array(elements))
         }
+        // Constant references stay expressions here; `eval_resolve_attribute_args` folds them
+        // to their values when reflection reads the arguments, as php does.
+        NATIVE_ATTRIBUTE_ARG_CONST => {
+            let name = native_attribute_take_string(bytes, offset)?;
+            Some(EvalAttributeArg::Expr(Box::new(crate::eval_ir::EvalExpr::ConstFetch(name))))
+        }
+        NATIVE_ATTRIBUTE_ARG_CLASS_CONST => {
+            let class_name = native_attribute_take_string(bytes, offset)?;
+            let constant = native_attribute_take_string(bytes, offset)?;
+            Some(EvalAttributeArg::Expr(Box::new(
+                crate::eval_ir::EvalExpr::ClassConstantFetch { class_name, constant },
+            )))
+        }
         _ => None,
     }
 }

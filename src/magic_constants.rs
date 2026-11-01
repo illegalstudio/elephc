@@ -62,15 +62,16 @@ pub fn substitute_scope_constants_in_file(program: Program, file_path: &Path) ->
     scope_pass::substitute_scope_constants_in_file(program, file_path)
 }
 
-/// Rebinds `__CLASS__` placeholders to `class_name` in `properties` and `methods`
+/// Rebinds `__CLASS__` placeholders to `class_name` in trait constants, properties, and methods
 /// after a trait is flattened into a concrete class. `__METHOD__` and `__TRAIT__`
 /// retain the trait's identity, matching PHP semantics.
 pub fn bind_trait_class_constants(
     properties: Vec<ClassProperty>,
     methods: Vec<ClassMethod>,
+    constants: Vec<ClassConst>,
     class_name: &str,
-) -> (Vec<ClassProperty>, Vec<ClassMethod>) {
-    trait_binding::bind_trait_class_constants(properties, methods, class_name)
+) -> (Vec<ClassProperty>, Vec<ClassMethod>, Vec<ClassConst>) {
+    trait_binding::bind_trait_class_constants(properties, methods, constants, class_name)
 }
 
 /// Converts `name` to its canonical string representation, or returns an empty

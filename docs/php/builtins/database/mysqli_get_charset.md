@@ -2,7 +2,7 @@
 title: "mysqli_get_charset()"
 description: "Returns the connection character set as an object."
 sidebar:
-  order: 132
+  order: 143
 ---
 
 ## mysqli_get_charset()

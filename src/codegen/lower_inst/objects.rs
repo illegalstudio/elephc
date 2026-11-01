@@ -15,7 +15,8 @@
 //!   EIR symbols and non-literal default property expressions until their runtime
 //!   paths land.
 
-use std::collections::HashSet;
+// Matches `SharedCodegenState`'s emitted-method sets, which this module borrows; see there.
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::codegen::platform::Arch;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
@@ -35,12 +36,13 @@ use crate::types::{ClassInfo, InterfaceInfo, PhpType, ScalarWidth};
 
 use super::super::context::FunctionContext;
 use super::{
-    builtins, callables, cast_loaded_mixed_pointer_to_result, direct_call_stack_pad_bytes,
+    box_method_result_as_mixed, builtins, callables, cast_loaded_mixed_pointer_to_result,
+    direct_call_stack_pad_bytes,
     emit_call_arg_temp_cleanups, emit_resolved_method_call, expect_data,
     coerce_loaded_value_to_tagged_scalar, emit_instance_method_descriptor_entry_wrapper,
     emit_loaded_assoc_array_to_mixed,
     emit_loaded_indexed_array_to_mixed, emit_mixed_string_for_persistent_store,
-    emit_ref_arg_writebacks, expect_operand, iterators, load_value_to_first_int_arg,
+    emit_ref_arg_writebacks, exceptions, expect_operand, iterators, load_value_to_first_int_arg,
     materialize_method_call_args_with_receiver_reg_and_refs, resolve_method_call_target,
     property_values, store_if_result, store_method_call_result, RefArgCellLifetime,
 };
@@ -56,6 +58,13 @@ use crate::codegen::literal_defaults::{
 use crate::codegen::{CodegenIrError, Result};
 
 mod reflection;
+
+pub(in crate::codegen) use reflection::emit_reflection_class_table;
+pub(super) use reflection::{
+    lower_refl_at, lower_refl_callable_name, lower_refl_pool_str, lower_refl_row_lookup, lower_refl_word,
+    lower_reflection_fill_members,
+    lower_reflection_materialize,
+};
 
 const RUNTIME_NULL_SENTINEL: i64 = 0x7fff_ffff_ffff_fffe;
 const ITERATOR_ITERATOR_DOWNCAST_MESSAGE: &str =
@@ -78,7 +87,37 @@ pub(super) struct PropertySlot {
     abstract_setter_type_error_prefix: Option<String>,
 }
 
+impl PropertySlot {
+    /// Whether the slot holds its container pointer directly, so an in-place mutation can
+    /// publish into it with a plain store: declared, not packed, not behind a reference cell.
+    pub(super) fn holds_container_directly(&self) -> bool {
+        self.is_declared && !self.is_packed && !self.is_reference
+    }
+
+    /// The type a store releases the slot's PREVIOUS value as.
+    ///
+    /// A Throwable's `trace` slot is declared `array`, which is a boxed `Mixed` for stores, but
+    /// `__rt_throwable_capture_trace` publishes a RAW array there (the reader and the object free
+    /// dispatch on the heap kind for exactly that reason). Releasing the raw array as a box read
+    /// its header as a tag and payload: a trace of 12 frames (tag 12, a global reference marker)
+    /// faulted in `ReflectionProperty::setValue($e, $trace)`, which is how Symfony's
+    /// `ClassExistenceResource::throwOnRequiredClass()` and `ErrorHandler` replace a trace.
+    /// A heap-kind dispatching release is correct for both shapes.
+    pub(super) fn release_type(&self) -> PhpType {
+        if self.property == "trace"
+            && self.offset == crate::codegen_support::throwable_layout::TRACE_OFFSET
+            && !self.is_packed
+            && !self.is_reference
+            && self.php_type.codegen_repr() == PhpType::Mixed
+        {
+            return PhpType::Array(Box::new(PhpType::Mixed));
+        }
+        self.php_type.clone()
+    }
+}
+
 /// Declared-property candidate reachable from a `Mixed` object receiver.
+#[derive(Clone)]
 struct MixedPropertyCandidate {
     class_id: u64,
     slot: PropertySlot,
@@ -107,11 +146,14 @@ enum MixedPropertyReadKind {
     Refuse(String),
     /// Answer from the per-instance dynamic hash, warning `Undefined property` on a READ miss.
     ScopeDynamic,
-    /// Answer php `null` silently until runtime-name `__get` / `__isset` dispatch lands.
+    /// The class declares the accessor php consults first. A literal-name value read or `??` calls
+    /// `__get` (after `__isset` for `??`); `isset()` still answers php `null` silently, and a
+    /// runtime name cannot reach `__get` / `__isset` yet.
     MagicDeferred,
 }
 
 /// Resolved object property default metadata for fixed-offset initialization.
+#[derive(Clone)]
 struct PropertyDefault {
     offset: usize,
     value: LiteralDefaultValue,
@@ -132,6 +174,22 @@ impl PropertyInitialization {
     /// Returns whether initialization requires calling the class's EIR thunk.
     fn uses_thunk(&self) -> bool {
         matches!(self, Self::Thunk { .. })
+    }
+
+    /// Literal defaults the allocator may fold into the class's static object template.
+    fn inline_defaults(&self) -> Vec<PropertyDefault> {
+        match self {
+            Self::Inline(defaults) => defaults.clone(),
+            Self::Thunk { .. } => Vec::new(),
+        }
+    }
+
+    /// Replaces the inline defaults with those the allocator left unassigned; a thunk stays.
+    fn with_remaining_inline(&self, remaining: Vec<PropertyDefault>) -> Self {
+        match self {
+            Self::Inline(_) => Self::Inline(remaining),
+            Self::Thunk { class_id } => Self::Thunk { class_id: *class_id },
+        }
     }
 }
 
@@ -183,10 +241,13 @@ mod dynamic_property_read_resolution;
 mod runtime_property_writes;
 mod named_property_writes;
 mod instanceof_entry;
+mod object_class_id;
+mod class_name_id;
+mod closure_scope_gate;
 mod allocation_clone;
 mod interface_layout;
 mod property_resolution;
-mod property_compatibility;
+pub(in crate::codegen::lower_inst) mod property_compatibility;
 mod property_loads;
 mod property_fetch_for_write;
 mod property_stores;
@@ -197,6 +258,10 @@ mod instanceof_helpers;
 mod mixed_property_type_guard;
 mod extern_fields;
 pub(super) use mixed_property_type_guard::emit_string_into_int_diagnostics;
+mod outlined_dynamic_property;
+mod arm_groups;
+mod readonly_guard;
+mod dynamic_new_table;
 
 #[allow(unused_imports)]
 use fixed_new::*;
@@ -206,6 +271,7 @@ use clone_and_spl::*;
 use iterator_iterator::*;
 #[allow(unused_imports)]
 use throwable_new::*;
+pub(in crate::codegen::lower_inst) use throwable_new::try_lower_builtin_throwable_parent_constructor as lower_builtin_throwable_parent_constructor_call;
 #[allow(unused_imports)]
 use fiber_dynamic_entry::*;
 #[allow(unused_imports)]
@@ -241,6 +307,10 @@ use property_resolution::*;
 #[allow(unused_imports)]
 use property_compatibility::*;
 #[allow(unused_imports)]
+pub(in crate::codegen::lower_inst) use instanceof_helpers::{
+    class_name_immediate, classify_named_target, emit_match_call,
+};
+#[allow(unused_imports)]
 use property_loads::*;
 #[allow(unused_imports)]
 use property_stores::*;
@@ -254,18 +324,45 @@ use instanceof_helpers::*;
 #[allow(unused_imports)]
 use mixed_property_type_guard::*;
 use extern_fields::*;
+pub(in crate::codegen::lower_inst) use mixed_property_type_guard::emit_string_result_into_int_or_jump;
+#[allow(unused_imports)]
+use outlined_dynamic_property::*;
 
+/// Writes the bodies of every shared property helper the function just emitted asked for: the
+/// typed-property guards and the runtime-name ladders. A body may ask for another helper, so the
+/// two drains alternate until neither has anything left.
+pub(in crate::codegen) fn emit_pending_property_guard_helpers(
+    module: &crate::ir::Module,
+    emitter: &mut crate::codegen_support::emit::Emitter,
+    data: &mut crate::codegen::data_section::DataSection,
+    shared: &mut crate::codegen::shared_state::SharedCodegenState,
+) -> Result<()> {
+    loop {
+        mixed_property_type_guard::emit_pending_property_guard_helpers(module, emitter, data, shared)?;
+        if !outlined_dynamic_property::emit_pending_dynamic_property_helpers(
+            module, emitter, data, shared,
+        )? {
+            return Ok(());
+        }
+    }
+}
 pub(super) use dynamic_property_read_entry::{lower_dynamic_prop_get, lower_nullsafe_prop_get};
+pub(super) use dynamic_property_read_resolution::lower_dynamic_prop_ref_cell;
 pub(super) use fiber_dynamic_entry::{
     lower_dynamic_object_new, lower_dynamic_object_new_mixed,
     lower_dynamic_object_new_without_constructor_mixed,
 };
 pub(super) use fixed_new::lower_object_new;
 pub(super) use instanceof_entry::{lower_instanceof, lower_instanceof_dynamic};
+pub(super) use object_class_id::lower_object_class_id;
+pub(super) use class_name_id::lower_class_name_to_id;
+pub(in crate::codegen::lower_inst) use closure_scope_gate::emit_closure_scope_gate;
+pub(in crate::codegen::lower_inst) use class_name_id::emit_class_id_of_value;
 pub(super) use known_property_reads::{
     lower_load_prop_ref_cell, lower_load_prop_ref_cell_checked, lower_prop_get,
     lower_prop_initialized,
 };
+pub(super) use property_stores::lower_bind_prop_ref_cell;
 pub(super) use property_fetch_for_write::lower_prop_get_for_write;
 pub(super) use mixed_property_type_guard::{BOOL_TAG, OBJECT_TAG, RUNTIME_TAGS};
 pub(super) use property_store_values::{lower_packed_field_mixed_to_int, release_adopted_mixed_source};
@@ -296,6 +393,16 @@ pub(super) fn store_mutated_container_property_owner(
     value: ValueId,
 ) -> Result<()> {
     store_mutated_container_property(ctx, object, slot, value)
+}
+
+/// Publishes a container mutated in place through a borrowed property read.
+pub(super) fn store_in_place_container_property_owner(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    slot: &PropertySlot,
+    value: ValueId,
+) -> Result<()> {
+    store_in_place_container_property(ctx, object, slot, value)
 }
 
 /// Stamps a declared property slot with the uninitialized-typed-property marker.
@@ -371,14 +478,27 @@ fn lower_dynamic_prop_unset(
 /// Names the reason a resolved fixed property slot cannot represent PHP's "removed"
 /// state, or `None` when the uninitialized marker is a faithful encoding for it.
 ///
-/// Used only for the diagnostic text; the ordering matters because a slot can be both
-/// undeclared and by-reference, and the by-reference storage is the more specific
-/// obstacle to report.
-fn unset_unsupported_slot_reason(slot: &PropertySlot) -> Option<&'static str> {
+/// A by-reference slot is supported: the removal detaches its cell and installs a fresh
+/// uninitialized one (`detach_and_release_unset_property_value`).
+fn unset_unsupported_slot_reason(
+    ctx: &FunctionContext<'_>,
+    slot: &PropertySlot,
+) -> Option<&'static str> {
     if slot.is_packed {
         return Some("packed class field");
     }
-    if slot.is_reference {
+    // An object-OWNED reference slot (`$x = &$obj->p` promoted it) is broken and re-armed with a
+    // fresh cell by `detach_and_release_unset_property_value`. A BORROWED one -- a promoted
+    // `&$param` -- holds the caller's cell, possibly the address of the caller's frame slot, which
+    // that release would treat as a heap cell: `unset($r->p)` decremented a "header" that was the
+    // neighbouring local and the program crashed on its next use.
+    if slot.is_reference
+        && !ctx
+            .module
+            .class_infos
+            .get(&slot.class_name)
+            .is_some_and(|info| info.owned_reference_properties.contains(&slot.property))
+    {
         return Some("by-reference property");
     }
     if !slot.is_declared && !slot_supports_untyped_unset_marker(slot) {
@@ -407,4 +527,34 @@ fn emit_tagged_scalar_property_default_store(
         object_reg,
         offset + 8,
     );
+}
+
+/// Lowers the object-handle reservation ops around a `new` whose arguments may allocate:
+/// each is one call to a register-preserving runtime helper.
+pub(super) fn lower_object_handle_reservation(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    match inst.op {
+        Op::ObjectHandleReserve => {
+            abi::emit_call_label(ctx.emitter, "__rt_object_handle_reserve");
+            match inst.result {
+                Some(result) => ctx.store_result_value(result),
+                None => Ok(()),
+            }
+        }
+        Op::ObjectHandlePend => {
+            let handle = *inst
+                .operands
+                .first()
+                .ok_or_else(|| CodegenIrError::invalid_module("object_handle_pend needs a handle"))?;
+            ctx.load_value_to_result(handle)?;
+            abi::emit_call_label(ctx.emitter, "__rt_object_handle_pend");
+            Ok(())
+        }
+        _ => {
+            abi::emit_call_label(ctx.emitter, "__rt_object_handle_unpend");
+            Ok(())
+        }
+    }
 }

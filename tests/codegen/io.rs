@@ -38,3 +38,5 @@ mod modify;
 mod streams_ext;
 #[path = "io/symlinks.rs"]
 mod symlinks;
+#[path = "io/proc_open.rs"]
+mod proc_open;

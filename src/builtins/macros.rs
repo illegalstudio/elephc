@@ -102,8 +102,7 @@ macro_rules! builtin {
                                 builtin!(@params [ $($params)* ] -> []);
                             PARAMS
                         },
-                        variadic: builtin!(@opt_str $($variadic)?),
-                        variadic_by_ref: false,
+                        variadic: builtin!(@opt_variadic $($variadic)?),
                         max_args: builtin!(@opt_usize $($max_args)?),
                         min_args: builtin!(@opt_usize $($min_args)?),
                         arity_error: builtin!(@opt_str $($arity_error)?),
@@ -221,6 +220,12 @@ macro_rules! builtin {
     // Helper: optional &'static str — present yields Some, absent yields None.
     (@opt_str $val:expr) => { Some($val) };
     (@opt_str) => { None };
+
+    // Helper: optional by-value variadic metadata for focused inline test contracts.
+    (@opt_variadic $val:expr) => {
+        Some(elephc_builtin_contract::VariadicSpec::value($val))
+    };
+    (@opt_variadic) => { None };
 
     // Helper: optional usize (max_args override) — present yields Some, absent yields None.
     (@opt_usize $val:expr) => { Some($val) };

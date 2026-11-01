@@ -19,17 +19,23 @@ impl FakeOps {
         args: RuntimeCellHandle,
         target: u64,
         repeated: bool,
+        rendered: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         let name = self.string(name)?;
         let factory = self.int(0)?;
         let target = self.int(target as i64)?;
         let repeated = self.bool_value(repeated)?;
+        // `__string` is the slot the emitted materializer fills (see
+        // `codegen::eval_reflection_helpers`), and it holds
+        // `ReflectionAttribute::__toString()`'s text.
+        let rendered = self.string(rendered)?;
         let object = self.alloc(FakeValue::Object(vec![
             ("__name".to_string(), name),
             ("__args".to_string(), args),
             ("__factory".to_string(), factory),
             ("__target".to_string(), target),
             ("__is_repeated".to_string(), repeated),
+            ("__string".to_string(), rendered),
         ]));
         self.object_classes
             .insert(object.as_ptr() as usize, "ReflectionAttribute".to_string());
@@ -71,6 +77,22 @@ impl FakeOps {
             EVAL_REFLECTION_OWNER_INTERSECTION_TYPE => "ReflectionIntersectionType",
             _ => return Err(EvalStatus::RuntimeFatal),
         };
+        // The object store takes a reference to every value handed to it, exactly as the real
+        // property store does by boxing through `__rt_mixed_from_value`. Without this the caller's
+        // own release — `owner_materialization.rs` gives back each member array and object right
+        // after construction, correctly — looked like an over-release, because the fake had
+        // stashed the handle without ever taking a reference to it.
+        let attrs = self.runtime_retain(attrs)?;
+        let interface_names = self.runtime_retain(interface_names)?;
+        let trait_names = self.runtime_retain(trait_names)?;
+        let method_names = self.runtime_retain(method_names)?;
+        let property_names = self.runtime_retain(property_names)?;
+        let method_objects = self.runtime_retain(method_objects)?;
+        let property_objects = self.runtime_retain(property_objects)?;
+        let parent_class = self.runtime_retain(parent_class)?;
+        let constant_value = self.runtime_retain(constant_value)?;
+        let backing_value = self.runtime_retain(backing_value)?;
+        let constructor = self.runtime_retain(constructor)?;
         let name = self.string(reflected_name)?;
         let is_final = self.bool_value((flags & 1) != 0)?;
         let is_abstract = self.bool_value((flags & 2) != 0)?;

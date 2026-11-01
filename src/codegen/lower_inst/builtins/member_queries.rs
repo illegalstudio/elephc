@@ -17,14 +17,154 @@ pub(crate) fn lower_class_like_exists(
 ) -> Result<()> {
     ensure_arg_count_between(inst, name, 1, 2)?;
     let value = expect_operand(inst, 0)?;
+    // An intrinsic class (`Closure`, `WeakReference`, ...) always exists and has no class-table
+    // row for the bridge to find: once a program could reach the eval bridge,
+    // `class_exists('Closure', false)` answered false.
+    if name == "class_exists" {
+        if let Some(symbol_name) = maybe_const_string_operand(ctx, value)? {
+            let bare = symbol_name.trim_start_matches('\\');
+            if crate::types::builtin_classes::intrinsic_class_names()
+                .any(|intrinsic| intrinsic.eq_ignore_ascii_case(bare))
+            {
+                emit_static_bool(ctx, true);
+                return store_if_result(ctx, inst);
+            }
+        }
+    }
+    if matches!(name, "class_exists" | "interface_exists" | "trait_exists" | "enum_exists")
+        && ctx.module.required_runtime_features.eval_bridge
+    {
+        return lower_bridge_class_like_exists(ctx, inst, value, name);
+    }
+    // Compiled interfaces with activation events must consult their request cell
+    // even when the queried name is a literal; immutable metadata alone only
+    // means the compiler retained a possible declaration.
+    if name == "interface_exists" && ctx.module_has_interface_activation_events() {
+        return lower_runtime_interface_exists(ctx, inst, value);
+    }
     if let Some(symbol_name) = maybe_const_string_operand(ctx, value)? {
         let candidates = class_like_exists_candidates(ctx, name);
         let exists = contains_folded(candidates.iter(), &symbol_name);
+        if exists && emit_deferred_class_exists(ctx, inst, &symbol_name)? {
+            return store_if_result(ctx, inst);
+        }
+        // A name no compiled class carries may still be a run-time `class_alias()` of one.
+        if !exists
+            && name == "class_exists"
+            && crate::codegen::frame::module_calls_runtime_fn(ctx.module, |id| {
+                *id == crate::ir::RuntimeFnId::ClassAlias
+            })
+        {
+            lower_dynamic_class_like_exists(ctx, name, value)?;
+            return store_if_result(ctx, inst);
+        }
         emit_static_bool(ctx, exists);
     } else {
         lower_dynamic_class_like_exists(ctx, name, value)?;
     }
     store_if_result(ctx, inst)
+}
+
+/// Lowers interface existence through the native activation overlay.
+fn lower_runtime_interface_exists(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    value: ValueId,
+) -> Result<()> {
+    if ctx.value_php_type(value)?.codegen_repr() != PhpType::Str {
+        return Err(CodegenIrError::unsupported(
+            "interface_exists with non-string dynamic name",
+        ));
+    }
+    let (pointer, length) = abi::string_result_regs(ctx.emitter);
+    ctx.load_string_value_to_regs(value, pointer, length)?;
+    let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let length_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    if name_arg != pointer {
+        ctx.emitter.instruction(&format!("mov {}, {}", name_arg, pointer));
+    }
+    if length_arg != length {
+        ctx.emitter.instruction(&format!("mov {}, {}", length_arg, length));
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_interface_exists");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers class-like existence through the eval bridge when AOT code can register SPL loaders.
+///
+/// A function compiled before an `eval` call does not own an eval-context local, yet PHP still
+/// requires its later `class_exists()` call to invoke request-global SPL callbacks. Passing a null
+/// context selects the bridge's temporary lookup context, which checks generated metadata and
+/// then dispatches those callbacks without depending on any framework-specific loader.
+fn lower_bridge_class_like_exists(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    value: ValueId,
+    name: &str,
+) -> Result<()> {
+    const BRIDGE_STACK_BYTES: usize = 16;
+
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_reserve_temporary_stack(ctx.emitter, BRIDGE_STACK_BYTES);
+    ctx.load_string_value_to_regs(value, ptr_reg, len_reg)?;
+    let context_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    let name_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    let autoload_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    abi::emit_load_int_immediate(ctx.emitter, context_arg, 0);
+    if name_arg != ptr_reg {
+        ctx.emitter
+            .instruction(&format!("mov {}, {}", name_arg, ptr_reg));
+    }
+    if name_len_arg != len_reg {
+        ctx.emitter
+            .instruction(&format!("mov {}, {}", name_len_arg, len_reg));
+    }
+    if let Some(&autoload) = inst.operands.get(1) {
+        ctx.load_value_to_reg(autoload, autoload_arg)?;
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, autoload_arg, 1);
+    }
+    let symbol = ctx.emitter.target.extern_symbol(&format!(
+        "__elephc_eval_dynamic_{}",
+        name
+    ));
+    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_rethrow_probe_throwable(ctx, BRIDGE_STACK_BYTES);
+    abi::emit_release_temporary_stack(ctx.emitter, BRIDGE_STACK_BYTES);
+    store_if_result(ctx, inst)
+}
+
+/// Rethrows the Throwable an autoloader raised inside a class-like probe.
+///
+/// The bridge answers status 2 and parks the owned Throwable box where
+/// `__elephc_eval_take_probe_throwable` returns it (Symfony's
+/// `ClassExistenceResource::throwOnRequiredClass` throws out of `class_exists()`). Any other
+/// status falls through with the probe's answer still in the result register. The throw happens
+/// with the bridge's temporary stack released, as the eval status handler does.
+pub(in crate::codegen::lower_inst::builtins) fn emit_rethrow_probe_throwable(
+    ctx: &mut FunctionContext<'_>,
+    release_bytes: usize,
+) {
+    let no_throw = ctx.next_label("class_probe_no_throwable");
+    let result = abi::int_result_reg(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {}, #2", result));            // did an autoloader raise a Throwable inside the probe?
+            ctx.emitter.instruction(&format!("b.ne {}", no_throw));             // no: keep the probe's boolean answer
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {}, 2", result));             // did an autoloader raise a Throwable inside the probe?
+            ctx.emitter.instruction(&format!("jne {}", no_throw));              // no: keep the probe's boolean answer
+        }
+    }
+    let take = ctx.emitter.target.extern_symbol("__elephc_eval_take_probe_throwable");
+    abi::emit_call_label(ctx.emitter, &take);
+    abi::emit_release_temporary_stack(ctx.emitter, release_bytes);
+    abi::emit_call_label(ctx.emitter, "__rt_throwable_take_boxed");
+    abi::emit_store_reg_to_symbol(ctx.emitter, result, "_exc_value", 0);
+    abi::emit_call_label(ctx.emitter, "__rt_throw_current");
+    ctx.emitter.label(&no_throw);
 }
 
 /// Lowers a dynamic string `class_exists()`-family lookup against known AOT metadata.
@@ -45,24 +185,102 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_class_like_exists(
         return Ok(());
     }
 
+    let list = packed_name_list(&candidates);
+    if name == "class_exists" {
+        // A run-time class_alias() name exists as the class it aliases.
+        let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+        ctx.load_string_value_to_regs(value, ptr_reg, len_reg)?;
+        abi::emit_call_label(ctx.emitter, "__rt_class_alias_resolve");
+        emit_find_regs_in_packed_name_list(ctx, ptr_reg, len_reg, &list);
+    } else {
+        emit_find_in_packed_name_list(ctx, value, &list)?;
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #0");                              // did the shared lookup find the name?
+            ctx.emitter.instruction("cset x0, ge");                             // a found index means the class-like exists
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("not rax");                                 // -1 (missing) becomes 0, an index stays non-zero
+            ctx.emitter.instruction("shr rax, 63");                             // keep the sign of the index as the boolean
+        }
+    }
+    Ok(())
+}
+
+/// Packs names into the `[u16 little-endian length][bytes]` list `__rt_name_list_find_ci` walks.
+///
+/// Each name is stored bare: the routine drops the leading `\` of the runtime name itself.
+pub(in crate::codegen::lower_inst) fn packed_name_list<S: AsRef<str>>(names: &[S]) -> Vec<u8> {
+    let mut list = Vec::new();
+    for name in names {
+        let bytes = crate::string_bytes::literal_bytes(name.as_ref().trim_start_matches('\\'));
+        let len = u16::try_from(bytes.len()).expect("a class-like name fits in 64 KiB");
+        list.extend_from_slice(&len.to_le_bytes());
+        list.extend_from_slice(&bytes);
+    }
+    list
+}
+
+/// Looks the runtime string `value` up in a packed name list through the shared
+/// `__rt_name_list_find_ci` routine, leaving the entry index (or -1) in the integer result
+/// register. The list is content-addressed data, so every site asking about the same names
+/// shares one copy of it.
+pub(in crate::codegen::lower_inst) fn emit_find_in_packed_name_list(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    list: &[u8],
+) -> Result<()> {
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     ctx.load_string_value_to_regs(value, ptr_reg, len_reg)?;
-    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
-
-    let matched_label = ctx.next_label(&format!("{}_dynamic_match", name));
-    let done_label = ctx.next_label(&format!("{}_dynamic_done", name));
-    for candidate in candidates {
-        emit_branch_if_dynamic_class_like_exists_candidate(ctx, &candidate, &matched_label);
-    }
-    emit_static_bool(ctx, false);
-    abi::emit_jump(ctx.emitter, &done_label);
-
-    ctx.emitter.label(&matched_label);
-    emit_static_bool(ctx, true);
-
-    ctx.emitter.label(&done_label);
-    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    emit_find_regs_in_packed_name_list(ctx, ptr_reg, len_reg, list);
     Ok(())
+}
+
+/// [`emit_find_in_packed_name_list`] for a name already held in `ptr_reg`/`len_reg`.
+pub(in crate::codegen::lower_inst) fn emit_find_regs_in_packed_name_list(
+    ctx: &mut FunctionContext<'_>,
+    ptr_reg: &str,
+    len_reg: &str,
+    list: &[u8],
+) {
+    let (list_label, list_len) = ctx.data.add_string(list);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            if ptr_reg != "x1" {
+                ctx.emitter.instruction(&format!("mov x1, {}", ptr_reg));       // name pointer operand
+            }
+            if len_reg != "x2" {
+                ctx.emitter.instruction(&format!("mov x2, {}", len_reg));       // name length operand
+            }
+            abi::emit_symbol_address(ctx.emitter, "x3", &list_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x4", list_len as i64);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov rsi, {}", len_reg));          // name length operand
+            ctx.emitter.instruction(&format!("mov rdi, {}", ptr_reg));          // name pointer operand
+            abi::emit_symbol_address(ctx.emitter, "rdx", &list_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rcx", list_len as i64);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_name_list_find_ci");
+}
+
+/// Loads entry `index` (in the integer result register, from a successful
+/// [`emit_find_in_packed_name_list`]) of a packed name list into the string result registers.
+pub(in crate::codegen::lower_inst) fn emit_packed_name_list_entry(
+    ctx: &mut FunctionContext<'_>,
+    list: &[u8],
+) {
+    let (list_label, _) = ctx.data.add_string(list);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => abi::emit_symbol_address(ctx.emitter, "x3", &list_label),
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // entry index operand
+            abi::emit_symbol_address(ctx.emitter, "rsi", &list_label);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_name_list_entry");
 }
 
 /// Collects deterministic metadata and intrinsic names for literal and dynamic existence probes.
@@ -85,18 +303,6 @@ fn class_like_exists_candidates(ctx: &FunctionContext<'_>, name: &str) -> Vec<St
         _ => {}
     }
     candidates.into_iter().collect()
-}
-
-/// Branches when the saved dynamic class-like string matches a metadata candidate.
-pub(in crate::codegen::lower_inst) fn emit_branch_if_dynamic_class_like_exists_candidate(
-    ctx: &mut FunctionContext<'_>,
-    candidate: &str,
-    matched_label: &str,
-) {
-    let bare_candidate = candidate.trim_start_matches('\\');
-    emit_branch_if_saved_string_matches_ci(ctx, bare_candidate.as_bytes(), matched_label);
-    let qualified_candidate = format!("\\{}", bare_candidate);
-    emit_branch_if_saved_string_matches_ci(ctx, qualified_candidate.as_bytes(), matched_label);
 }
 
 /// Emits one case-insensitive comparison of the string saved in the current 16-byte temporary
@@ -174,9 +380,32 @@ pub(crate) fn lower_is_callable(ctx: &mut FunctionContext<'_>, inst: &Instructio
         }
         PhpType::Object(_) => {
             ctx.load_value_to_result(value)?;
+            if ctx.module.required_runtime_features.eval_bridge {
+                // The object may be an instance of an INTERPRETED subclass (`$this` inside a
+                // compiled base class method) whose `__invoke` the native tables cannot see.
+                // Box it and resolve its owning interpreter context by identity first, exactly as
+                // the boxed-Mixed form does.
+                let null_object = ctx.next_label("is_callable_null_object");
+                let done = ctx.next_label("is_callable_object_done");
+                abi::emit_branch_if_int_result_zero(ctx.emitter, &null_object);
+                crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &value_ty);
+                let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+                abi::emit_push_reg(ctx.emitter, &result_reg);
+                emit_eval_owned_is_callable_from_result(ctx)?;
+                crate::codegen::lower_inst::callables::release_invoker_arg_preserving_result(ctx);
+                abi::emit_jump(ctx.emitter, &done);
+                ctx.emitter.label(&null_object);
+                emit_is_callable_pointer_lookup(ctx, "__rt_is_callable_object");
+                ctx.emitter.label(&done);
+                return store_if_result(ctx, inst);
+            }
             emit_is_callable_pointer_lookup(ctx, "__rt_is_callable_object");
         }
         PhpType::Mixed | PhpType::Union(_) => {
+            if ctx.module.required_runtime_features.eval_bridge {
+                emit_eval_owned_is_callable_or_runtime(ctx, value)?;
+                return store_if_result(ctx, inst);
+            }
             ctx.load_value_to_result(value)?;
             emit_is_callable_pointer_lookup(ctx, "__rt_is_callable_mixed");
         }
@@ -200,6 +429,59 @@ pub(crate) fn lower_is_callable(ctx: &mut FunctionContext<'_>, inst: &Instructio
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Tests a boxed Mixed callback through its retained eval Closure owner before native fallback.
+///
+/// A Closure returned by runtime include/eval can outlive the AOT frame that created its context.
+/// The native mixed predicate cannot inspect Magician's closure registry, so recover the owning
+/// context by object identity first; ordinary runtime values retain the existing native path.
+fn emit_eval_owned_is_callable_or_runtime(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    ctx.load_value_to_result(value)?;
+    emit_eval_owned_is_callable_from_result(ctx)
+}
+
+/// Body of [`emit_eval_owned_is_callable_or_runtime`] for a boxed callback already in the result
+/// register; the box stays borrowed.
+fn emit_eval_owned_is_callable_from_result(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    const CONTEXT_OFFSET: usize = 0;
+    const CALLBACK_OFFSET: usize = 16;
+    const SCRATCH_BYTES: usize = 32;
+
+    let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+    let owner_missing = ctx.next_label("eval_owned_is_callable_runtime");
+    let done = ctx.next_label("eval_owned_is_callable_done");
+
+    abi::emit_reserve_temporary_stack(ctx.emitter, SCRATCH_BYTES);
+    abi::emit_store_to_sp(ctx.emitter, &result_reg, CALLBACK_OFFSET);
+    let callback_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, callback_arg, CALLBACK_OFFSET);
+    let owner_symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_callable_owner_context");
+    abi::emit_call_label(ctx.emitter, &owner_symbol);
+    abi::emit_store_to_sp(ctx.emitter, &result_reg, CONTEXT_OFFSET);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &owner_missing);
+
+    let context_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let callback_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, context_arg, CONTEXT_OFFSET);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, callback_arg, CALLBACK_OFFSET);
+    let is_callable_symbol = ctx.emitter.target.extern_symbol("__elephc_eval_is_callable");
+    abi::emit_call_label(ctx.emitter, &is_callable_symbol);
+    abi::emit_release_temporary_stack(ctx.emitter, SCRATCH_BYTES);
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&owner_missing);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, &result_reg, CALLBACK_OFFSET);
+    abi::emit_release_temporary_stack(ctx.emitter, SCRATCH_BYTES);
+    emit_is_callable_pointer_lookup(ctx, "__rt_is_callable_mixed");
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Calls the runtime `is_callable` helper for pointer-shaped values already in result regs.
@@ -253,15 +535,67 @@ pub(in crate::codegen::lower_inst) fn lower_member_exists(
     if has_eval_context(ctx) {
         return lower_eval_member_exists(ctx, inst, target, member, name);
     }
-    let member_name = const_string_operand(ctx, member)?;
+    // An object an eval context made carries methods and properties the native class tables
+    // never saw (an interpreted subclass of a compiled class). Its owner context answers first.
+    if ctx.module.required_runtime_features.eval_bridge
+        && matches!(
+            ctx.value_php_type(target)?.codegen_repr(),
+            PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_)
+        )
+    {
+        let matched = ctx.next_label("member_exists_eval_owner");
+        let done = ctx.next_label("member_exists_done");
+        emit_eval_member_exists_owner_probe(ctx, target, member, name, &matched)?;
+        lower_native_member_exists(ctx, inst, target, member, name)?;
+        abi::emit_jump(ctx.emitter, &done);
+        ctx.emitter.label(&matched);
+        emit_static_bool(ctx, true);
+        if inst.result.is_some() && inst.result_php_type.codegen_repr() == PhpType::Mixed {
+            crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+        }
+        store_if_result(ctx, inst)?;
+        ctx.emitter.label(&done);
+        return Ok(());
+    }
+    lower_native_member_exists(ctx, inst, target, member, name)
+}
+
+/// Answers `method_exists()` / `property_exists()` from the native class tables.
+fn lower_native_member_exists(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    target: ValueId,
+    member: ValueId,
+    name: &str,
+) -> Result<()> {
+    let Some(member_name) = maybe_const_string_operand(ctx, member)? else {
+        return super::member_exists::lower_dynamic_member_exists(
+            ctx, inst, target, member, name,
+        );
+    };
     let exists = match ctx.value_php_type(target)?.codegen_repr() {
-        PhpType::Object(class_name) => {
-            static_member_exists_on_class(ctx, &class_name, &member_name, name, true)
+        PhpType::Object(_) => {
+            // The declared type does not determine the runtime instance's members.
+            return super::member_exists::lower_dynamic_member_exists(
+                ctx, inst, target, member, name,
+            );
         }
         PhpType::Str => {
-            let class_name = const_string_operand(ctx, target)?;
+            let Some(class_name) = maybe_const_string_operand(ctx, target)? else {
+                return super::member_exists::lower_dynamic_member_exists(
+                    ctx, inst, target, member, name,
+                );
+            };
             static_member_exists_on_class(ctx, &class_name, &member_name, name, false)
         }
+        PhpType::Mixed | PhpType::Union(_) => {
+            return super::member_exists::lower_dynamic_member_exists(
+                ctx, inst, target, member, name,
+            );
+        }
+        // A callable value is a `Closure` object: twig-bridge's `DebugCommand` asks
+        // `method_exists($cb, '__invoke')` of every closure a Twig function wraps.
+        PhpType::Callable => name == "method_exists" && closure_declares_method(&member_name),
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "{} target PHP type {:?}",
@@ -380,12 +714,16 @@ pub(in crate::codegen::lower_inst) fn static_parent_chain_method_exists(
 }
 
 /// Returns whether a method should be visible for a class-string member probe.
-pub(in crate::codegen::lower_inst) fn method_visible_from_class_string(
+pub(in crate::codegen::lower_inst) fn method_visible_from_class_string<S1, S2>(
     resolved_class: &str,
     method_key: &str,
-    visibilities: &std::collections::HashMap<String, Visibility>,
-    declaring_classes: &std::collections::HashMap<String, String>,
-) -> bool {
+    visibilities: &std::collections::HashMap<String, Visibility, S1>,
+    declaring_classes: &std::collections::HashMap<String, String, S2>,
+) -> bool
+where
+    S1: std::hash::BuildHasher,
+    S2: std::hash::BuildHasher,
+{
     visibilities.get(method_key) != Some(&Visibility::Private)
         || declaring_classes
             .get(method_key)
@@ -421,12 +759,16 @@ pub(in crate::codegen::lower_inst) fn static_property_exists_on_class_info(
 }
 
 /// Returns whether a property exists for a class-string or ordinary object probe.
-pub(in crate::codegen::lower_inst) fn property_visible_from_class_string(
+pub(in crate::codegen::lower_inst) fn property_visible_from_class_string<S1, S2>(
     resolved_class: &str,
     property_name: &str,
-    visibilities: &std::collections::HashMap<String, Visibility>,
-    declaring_classes: &std::collections::HashMap<String, String>,
-) -> bool {
+    visibilities: &std::collections::HashMap<String, Visibility, S1>,
+    declaring_classes: &std::collections::HashMap<String, String, S2>,
+) -> bool
+where
+    S1: std::hash::BuildHasher,
+    S2: std::hash::BuildHasher,
+{
     let Some(visibility) = visibilities.get(property_name) else {
         return false;
     };
@@ -456,4 +798,69 @@ pub(in crate::codegen::lower_inst) fn static_method_string_is_callable(
         return false;
     }
     class_info.static_method_visibilities.get(&method_key) == Some(&Visibility::Public)
+}
+
+/// Answers a literal existence probe from the class's request-scoped LOAD flag, when it has one.
+///
+/// A class the autoload pass pulled in only so a probe could be answered is DECLARED from the
+/// first instruction but was never LOADED, which is the distinction `class_exists($n, false)`
+/// exists to report. Returns false when the name carries no flag, leaving the ordinary constant
+/// fold in place.
+///
+/// A probe whose autoload argument is not a literal also keeps the constant fold: deciding it
+/// needs a runtime branch, and every occurrence of this idiom spells the argument out.
+fn emit_deferred_class_exists(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    symbol_name: &str,
+) -> Result<bool> {
+    let folded = symbol_name.trim_start_matches('\\').to_ascii_lowercase();
+    if !ctx.module.deferred_class_loads.contains(&folded) {
+        return Ok(false);
+    }
+    let autoloads = match inst.operands.get(1) {
+        None => true,
+        Some(operand) => match const_bool_operand(ctx, *operand)? {
+            Some(value) => value,
+            None => return Ok(false),
+        },
+    };
+    let flag = crate::codegen::source_units::deferred_class_symbol(&folded);
+    ctx.data.add_comm(flag.clone(), 8);
+    let result = abi::int_result_reg(ctx.emitter);
+    if autoloads {
+        abi::emit_load_int_immediate(ctx.emitter, result, 1);
+        abi::emit_store_reg_to_symbol(ctx.emitter, result, &flag, 0);
+    } else {
+        abi::emit_load_symbol_to_reg(ctx.emitter, result, &flag, 0);
+    }
+    Ok(true)
+}
+
+/// Reads a `const_bool` operand's compile-time value, or None when it is not one.
+fn const_bool_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Option<bool>> {
+    let value_ref = ctx
+        .function
+        .value(value)
+        .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(None);
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    if inst_ref.op != Op::ConstBool {
+        return Ok(None);
+    }
+    match inst_ref.immediate {
+        Some(Immediate::Bool(value)) => Ok(Some(value)),
+        _ => Ok(None),
+    }
+}
+
+/// Whether php's `Closure` class declares `method` (case-insensitively).
+pub(super) fn closure_declares_method(method: &str) -> bool {
+    ["__invoke", "bind", "bindto", "call", "fromcallable"]
+        .contains(&method.to_ascii_lowercase().as_str())
 }

@@ -17,14 +17,18 @@ use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
-/// The hash algorithms elephc-crypto supports, in `hash_algos()` order. Subset of
-/// PHP's `hash_algos()` (we omit gost/haval/snefru/tiger/murmur/xxh — documented
-/// gaps). MUST match `crates/elephc-crypto/src/algos.rs`'s `make()` table.
+/// The hash algorithms elephc-crypto supports, in `php -n` 8.5.6's own `hash_algos()` order.
+/// Subset of PHP's 60 (we omit gost/haval/snefru/tiger/murmur and most xxh — documented gaps),
+/// but the ones we DO advertise now appear in php's relative order: `sha512/224, sha512/256,
+/// sha512` and `adler32, crc32, crc32b, crc32c` were both transposed here.
+/// MUST match `crates/elephc-crypto/src/algos.rs`'s `make()` table and
+/// `crates/elephc-magician/src/interpreter/constants.rs`'s `EVAL_HASH_ALGOS`.
 pub(crate) const HASH_ALGOS: &[&str] = &[
-    "md2", "md4", "md5", "sha1", "sha224", "sha256", "sha384", "sha512",
-    "sha512/224", "sha512/256", "sha3-224", "sha3-256", "sha3-384", "sha3-512",
-    "ripemd128", "ripemd160", "ripemd256", "ripemd320", "whirlpool", "crc32",
-    "crc32b", "crc32c", "adler32", "fnv132", "fnv1a32", "fnv164", "fnv1a64", "joaat",
+    "md2", "md4", "md5", "sha1", "sha224", "sha256", "sha384",
+    "sha512/224", "sha512/256", "sha512", "sha3-224", "sha3-256", "sha3-384", "sha3-512",
+    "ripemd128", "ripemd160", "ripemd256", "ripemd320", "whirlpool", "adler32", "crc32",
+    "crc32b", "crc32c", "fnv132", "fnv1a32", "fnv164", "fnv1a64", "joaat",
+    "xxh128",
 ];
 
 /// Emits the `__rt_hash_algos_list` helper for both targets.

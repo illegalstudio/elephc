@@ -2,7 +2,7 @@
 title: "imagetruecolortopalette()"
 description: "Converts a truecolor image to a palette image in place."
 sidebar:
-  order: 544
+  order: 557
 ---
 
 ## imagetruecolortopalette()

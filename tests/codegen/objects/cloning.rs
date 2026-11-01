@@ -91,6 +91,41 @@ echo $a->child->x . "|" . $b->child->x;
     assert_eq!(out, "7|7");
 }
 
+/// Verifies cloning preserves a declared object union for a following fluent method call.
+#[test]
+fn test_clone_preserves_object_union_for_fluent_dispatch() {
+    let out = compile_and_run(
+        r#"<?php
+final class CloneRoute {
+    public string $path = '';
+
+    public function setPath(string $path): self {
+        $this->path = $path;
+        return $this;
+    }
+}
+
+final class CloneCollection {}
+
+final class CloneHolder {
+    private CloneRoute|CloneCollection $route;
+
+    public function __construct() {
+        $this->route = new CloneRoute();
+    }
+
+    public function route(string $path): CloneRoute {
+        return (clone $this->route)->setPath($path);
+    }
+}
+
+$route = (new CloneHolder())->route('/ready');
+echo $route->path;
+"#,
+    );
+    assert_eq!(out, "/ready");
+}
+
 /// Verifies stdClass dynamic properties are copied into a separate hash table during cloning.
 #[test]
 fn test_clone_copies_stdclass_dynamic_properties_independently() {
@@ -105,6 +140,463 @@ echo $a->name . "|" . $b->name . "|" . (isset($a->extra) ? "Y" : "N");
 "#,
     );
     assert_eq!(out, "source|copy|N");
+}
+
+/// Verifies cloning through an interface uses runtime class metadata rather than treating the
+/// interface name as a concrete object layout.
+#[test]
+fn test_clone_interface_typed_receiver_dispatches_runtime_class() {
+    let out = compile_and_run(
+        r#"<?php
+interface CloneView {
+    public function value(): string;
+}
+
+class CloneViewImpl implements CloneView {
+    public string $name = 'source';
+
+    public function value(): string {
+        return $this->name;
+    }
+
+    public function __clone(): void {
+        $this->name = 'clone';
+    }
+}
+
+function duplicate(CloneView $value): CloneView {
+    return clone $value;
+}
+
+$source = new CloneViewImpl();
+$clone = duplicate($source);
+echo $source->value() . '|' . $clone->value();
+"#,
+    );
+    assert_eq!(out, "source|clone");
+}
+
+/// Verifies cloning an untyped parameter checks and dispatches on its runtime object class.
+#[test]
+fn test_clone_mixed_receiver_dispatches_runtime_class() {
+    let out = compile_and_run(
+        r#"<?php
+class DynamicCloneValue {
+    public string $name = 'source';
+
+    public function __clone(): void {
+        $this->name = 'clone';
+    }
+}
+
+function duplicate_dynamic($value) {
+    return clone $value;
+}
+
+$source = new DynamicCloneValue();
+$clone = duplicate_dynamic($source);
+echo $source->name . '|' . $clone->name;
+"#,
+    );
+    assert_eq!(out, "source|clone");
+}
+
+/// Verifies an `object`-typed receiver can clone a runtime anonymous class and run its hook.
+#[test]
+fn test_clone_object_typed_receiver_dispatches_anonymous_runtime_class() {
+    let out = compile_and_run(
+        r#"<?php
+function duplicate_object(object $value): object {
+    return clone $value;
+}
+
+$value = new class {
+    public function __clone(): void {
+        echo 'cloned;';
+    }
+};
+$copy = duplicate_object($value);
+echo 'done';
+"#,
+    );
+    assert_eq!(out, "cloned;done");
+}
+
+/// Verifies cloning an anonymous class created in a method preserves its runtime layout.
+#[test]
+fn test_clone_object_typed_receiver_dispatches_method_local_anonymous_class() {
+    let out = compile_and_run(
+        r#"<?php
+class AnonymousCloneHolder
+{
+    private object $value;
+
+    public function __construct()
+    {
+        $this->value = new class {
+            public function __clone(): void { echo 'cloned;'; }
+        };
+    }
+
+    public function duplicate(): object { return clone $this->value; }
+}
+
+$holder = new AnonymousCloneHolder();
+$copy = $holder->duplicate();
+echo 'done';
+"#,
+    );
+    assert_eq!(out, "cloned;done");
+}
+
+/// Verifies a clone whose source is untyped remains gradual when passed to a concrete object parameter.
+#[test]
+fn test_clone_mixed_result_can_flow_to_concrete_object_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+class GradualCloneValue {
+    public string $name = 'ready';
+}
+
+function duplicate_gradual($value) {
+    return clone $value;
+}
+
+function read_gradual_clone(GradualCloneValue $value): string {
+    return $value->name;
+}
+
+echo read_gradual_clone(duplicate_gradual(new GradualCloneValue()));
+"#,
+    );
+    assert_eq!(out, "ready");
+}
+
+/// Verifies name resolution reaches a static method call nested under `clone`.
+#[test]
+fn test_clone_resolves_nested_static_method_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+namespace CloneResolution;
+
+class CloneStyle {
+    public string $name = 'ready';
+}
+
+class CloneFactory {
+    public static function make(): CloneStyle {
+        return new CloneStyle();
+    }
+}
+
+class CloneConsumer {
+    public static function read(): string {
+        $copy = clone CloneFactory::make();
+        return $copy->name;
+    }
+}
+
+echo CloneConsumer::read();
+"#,
+    );
+    assert_eq!(out, "ready");
+}
+
+/// Verifies a cloned `string` property survives the SOURCE object's next assignment.
+///
+/// A string is the one owned property payload that carries no refcount: a `string` slot owns an
+/// independent `__rt_str_persist` block, every store into one persists, and every release frees
+/// outright. The clone called `__rt_incref` on the copied pointer, which retained NOTHING, so the
+/// clone and its source shared one block that the source's next assignment freed. This loop —
+/// the shape `Symfony\Component\String\ByteString::split()` is written in — printed `delta` for
+/// every element and 2-byte garbage once the freed block had been reused. The `array` property is
+/// in the fixture on purpose: arrays ARE refcounted, their incref was real, and their surviving
+/// while the strings did not is what made the defect look string-specific.
+#[test]
+fn test_clone_gives_each_copy_its_own_string_property_block() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Chunk {
+    public string $string = '';
+    public array $tags = [];
+}
+
+$chunk = new Chunk();
+$out = [];
+foreach (['alpha', 'bravo', 'charlie', 'delta'] as $piece) {
+    $chunk->string = $piece;
+    $chunk->tags = [$piece];
+    $out[] = clone $chunk;
+}
+foreach ($out as $copy) {
+    echo $copy->string, "|", $copy->tags[0], "\n";
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "alpha|alpha\nbravo|bravo\ncharlie|charlie\ndelta|delta\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies inherited, promoted, and nullable string properties each get their own block too.
+///
+/// The nullable one is a union, so it keeps the refcounted `Mixed` retain; the inherited and
+/// promoted ones are plain `string` slots reached through a different declaration path. Under
+/// `--heap-debug` the pre-fix program stopped at "bad refcount" — the incref writing a refcount
+/// word a string block does not have — which is the other half of the same defect.
+#[test]
+fn test_clone_gives_inherited_and_promoted_string_properties_their_own_blocks() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Base {
+    public string $tag = 'base';
+}
+class Node extends Base {
+    public array $tags = [];
+    public ?string $note = null;
+
+    public function __construct(public string $name = '') {}
+}
+
+$n = new Node();
+$out = [];
+foreach (['alpha', 'bravo', 'charlie', 'delta'] as $chunk) {
+    $n->name = $chunk . '!';
+    $n->tag = strtoupper($chunk);
+    $n->tags = [$chunk];
+    $n->note = $chunk === 'bravo' ? null : $chunk . '?';
+    $out[] = clone $n;
+}
+foreach ($out as $o) {
+    echo $o->name, "|", $o->tag, "|", $o->tags[0], "|", $o->note ?? 'NULL', "\n";
+}
+$a = new Node('x');
+$b = clone $a;
+$a->name = 'changed';
+echo $b->name, "|", $a->name, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "alpha!|ALPHA|alpha|alpha?\nbravo!|BRAVO|bravo|NULL\ncharlie!|CHARLIE|charlie|charlie?\n\
+         delta!|DELTA|delta|delta?\nx|changed\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies `clone $this` in an inherited method copies the RUNTIME class, not the declaring one.
+///
+/// This is Symfony's `ServiceLocator::withContext()` shape: the base declares the cloning method,
+/// the subclass overrides behaviour, and the clone must keep the subclass -- otherwise the
+/// override is silently lost and every property the subclass declares goes with it.
+#[test]
+fn test_clone_of_this_in_inherited_method_keeps_runtime_subclass() {
+    let out = compile_and_run(
+        r#"<?php
+class BaseBox {
+    public string $tag = 'base';
+
+    public function copy(): static {
+        return clone $this;
+    }
+}
+
+class ChildBox extends BaseBox {
+    public string $extra = 'x';
+
+    public function label(): string {
+        return 'child:' . $this->extra;
+    }
+}
+
+$source = new ChildBox();
+$source->extra = 'kept';
+$copy = $source->copy();
+echo get_class($copy) . '|' . $copy->label() . '|' . $copy->tag;
+"#,
+    );
+    assert_eq!(out, "ChildBox|child:kept|base");
+}
+
+/// Verifies a self-clone can be stored in a nullable typed self property and read back.
+#[test]
+fn test_clone_self_stored_in_nullable_self_property_keeps_runtime_class() {
+    let out = compile_and_run(
+        r#"<?php
+class ClonePropertyPass
+{
+    private ?self $copy = null;
+    public string $name = 'source';
+
+    public function cloneIntoProperty(): string
+    {
+        $this->copy = clone $this;
+        $this->copy->name = 'clone';
+        return $this->copy->name;
+    }
+}
+
+echo (new ClonePropertyPass())->cloneIntoProperty();
+"#,
+    );
+    assert_eq!(out, "clone");
+}
+
+/// Verifies a closure rebound to a self-clone observes the clone's runtime class as `$this`.
+#[test]
+fn test_closure_bindto_self_clone_keeps_bound_object() {
+    let out = compile_and_run(
+        r#"<?php
+class CloneBindBase {}
+
+class CloneBindPass extends CloneBindBase
+{
+    public string $name = 'source';
+
+    public function callback(): Closure
+    {
+        $clone = clone $this;
+        $clone->name = 'clone';
+        return (fn (): string => $this->name)->bindTo($clone);
+    }
+}
+
+$callback = (new CloneBindPass())->callback();
+echo $callback();
+"#,
+    );
+    assert_eq!(out, "clone");
+}
+
+/// Verifies `Closure::bindTo()` unboxes a non-null receiver stored in a nullable object property.
+#[test]
+fn test_closure_bindto_nullable_self_property_uses_runtime_object() {
+    let out = compile_and_run(
+        r#"<?php
+class NullableBindPass
+{
+    private ?self $copy = null;
+    public string $name = 'source';
+
+    public function callback(): Closure
+    {
+        $this->copy = new self();
+        $this->copy->name = 'bound';
+        return (fn (): string => $this->name)->bindTo($this->copy);
+    }
+}
+
+echo ((new NullableBindPass())->callback())();
+"#,
+    );
+    assert_eq!(out, "bound");
+}
+
+/// Verifies a subclass-only `__clone()` runs exactly once for a clone taken through the base.
+#[test]
+fn test_clone_through_base_runs_subclass_only_magic_clone_once() {
+    let out = compile_and_run(
+        r#"<?php
+class HookBase {
+    public int $n = 1;
+
+    public function copy(): static {
+        return clone $this;
+    }
+}
+
+class HookChild extends HookBase {
+    public function __clone(): void {
+        echo 'child-hook;';
+        $this->n += 10;
+    }
+}
+
+$source = new HookChild();
+$copy = $source->copy();
+echo get_class($copy) . '|' . $source->n . '|' . $copy->n;
+"#,
+    );
+    assert_eq!(out, "child-hook;HookChild|1|11");
+}
+
+/// Verifies an inherited `__clone()` runs exactly ONCE when the clone dispatches on the subclass.
+///
+/// The hook has two possible emitters -- the IR lowering's ordinary method call and the runtime
+/// clone dispatch's per-candidate call -- and running both would apply it twice.
+#[test]
+fn test_clone_through_base_runs_inherited_magic_clone_once() {
+    let out = compile_and_run(
+        r#"<?php
+class InhBase {
+    public int $n = 1;
+
+    public function __clone(): void {
+        echo 'base-hook;';
+        $this->n += 100;
+    }
+
+    public function copy(): static {
+        return clone $this;
+    }
+}
+
+class InhChild extends InhBase {}
+
+$source = new InhChild();
+$copy = $source->copy();
+echo get_class($copy) . '|' . $source->n . '|' . $copy->n;
+"#,
+    );
+    assert_eq!(out, "base-hook;InhChild|1|101");
+}
+
+/// Verifies an overridden `__clone()` runs the SUBCLASS hook, once, for a clone taken in the base.
+#[test]
+fn test_clone_through_base_runs_overridden_magic_clone_once() {
+    let out = compile_and_run(
+        r#"<?php
+class OvrBase {
+    public int $n = 1;
+
+    public function __clone(): void {
+        echo 'ovr-base;';
+        $this->n += 1;
+    }
+
+    public function copy(): static {
+        return clone $this;
+    }
+}
+
+class OvrChild extends OvrBase {
+    public function __clone(): void {
+        echo 'ovr-child;';
+        $this->n += 2;
+    }
+}
+
+$child = new OvrChild();
+$child_copy = $child->copy();
+$base = new OvrBase();
+$base_copy = $base->copy();
+echo get_class($child_copy) . '|' . $child_copy->n . '|'
+    . get_class($base_copy) . '|' . $base_copy->n;
+"#,
+    );
+    assert_eq!(out, "ovr-child;ovr-base;OvrChild|3|OvrBase|2");
 }
 
 // --- PHP 8.5 `clone()` FUNCTION -------------------------------------------------------------
@@ -1537,27 +2029,34 @@ echo $alias . "|" . $c->p . "|" . $o->p;
 
 /// Verifies an override ARRAY ELEMENT that is itself a reference never reaches the applicator.
 ///
-/// php 8.5 raises `Cannot assign by reference when cloning with updated properties` at run time.
-/// This compiler has no by-reference element representation at all, so both syntactic ways of
-/// building one are refused before any clone runs. The test pins that refusal so the day element
-/// references become representable, the clone path is revisited rather than silently applying an
-/// aliased value.
+/// php 8.5 raises `Cannot assign by reference when cloning with updated properties` at run time,
+/// for both spellings of a reference element (`["n" => &$v]` and `$a["n"] = &$v`), and accepts
+/// the element as a plain value once its alias is gone. Both spellings build an element
+/// reference marker here, which the applicator's per-entry guard has to recognize; before it
+/// did, the aliased value was applied silently.
 #[test]
 fn test_clone_function_never_receives_a_by_reference_override_element() {
-    let source = r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 class R { public int $n = 1; }
 $v = 5;
 $ov = ["n" => &$v];
-clone(new R(), $ov);
-"#;
-    let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
-    let error = elephc::parser::parse(&tokens).expect_err("a by-reference element must be refused");
-    assert!(
-        error
-            .message
-            .contains("Reference elements in array literals"),
-        "unexpected diagnostic: {}",
-        error.message
+try { clone(new R(), $ov); echo "no error|"; } catch (Error $e) { echo $e->getMessage(), "|"; }
+$w = 7;
+$ov2 = [];
+$ov2["n"] = &$w;
+try { clone(new R(), $ov2); echo "no error|"; } catch (Error $e) { echo $e->getMessage(), "|"; }
+$x = 3;
+$ov3 = ["n" => &$x];
+unset($x);
+$c = clone(new R(), $ov3);
+echo $c->n;
+"#,
+    );
+    assert_eq!(
+        out,
+        "Cannot assign by reference when cloning with updated properties|\
+Cannot assign by reference when cloning with updated properties|3"
     );
 }
 
@@ -2276,4 +2775,104 @@ echo "src:" . count($b) . ";";
 "#,
     );
     assert_eq!(out, "ok:5:2;src:2;");
+}
+
+/// Verifies `clone $closure` yields a distinct Closure that keeps `$this`, scope and captures.
+///
+/// Termwind's `Style::apply` clones its `Closure` property before wrapping it; the checker used to
+/// refuse any `clone` of a callable value. A tagged null receiver once reached the rebind helper
+/// as a non-zero word and replaced the captured `$this`. Expected output is real php 8.5 output.
+#[test]
+fn test_clone_closure_keeps_this_scope_and_captures() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    private int $base = 100;
+    public function make(): Closure {
+        return function (int $x): int { return $this->base + $x; };
+    }
+}
+final class Style {
+    public function __construct(private Closure $cb) {}
+    public function apply(int $add): void {
+        $prev = clone $this->cb;
+        $this->cb = static function (int $x) use ($prev, $add): int { return $prev($x) + $add; };
+    }
+    public function __invoke(int $x): int { return ($this->cb)($x); }
+}
+function twice(Closure $c): int { $d = clone $c; return $d(1) + $c(1); }
+$n = 5;
+$c = function (int $x) use ($n): int { return $x * $n; };
+$d = clone $c;
+echo $c(2), ",", $d(2), ",", var_export($c === $d, true), "\n";
+$bound = (new Box)->make();
+$copy = clone $bound;
+echo $bound(1), ",", $copy(2), "\n";
+echo twice(fn(int $x): int => $x + 10), "\n";
+$s = new Style(fn(int $x): int => $x * 2);
+$s->apply(3);
+$s->apply(4);
+echo $s(5), "\n";
+"#,
+    );
+    assert_eq!(out, "10,10,false\n101,102\n22\n17\n");
+}
+
+/// `clone` gives the copy its own share of a `Closure` property: object teardown releases that
+/// descriptor, so a clone that only copied the pointer lost its closure when the original went
+/// away, and calling it jumped into freed memory. Symfony's `ServiceLocator::withContext()` does
+/// exactly `$l = clone $this` on a temporary locator.
+#[test]
+fn test_clone_retains_a_closure_property_for_the_copy() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Loc {
+    public ?string $ctx = null;
+    public function __construct(private \Closure $factory) {}
+    public function withContext(string $c): static { $l = clone $this; $l->ctx = $c; return $l; }
+    public function get($x) { return ($this->factory)($x) . $this->ctx; }
+}
+function make(int $i): Loc { $k = "v" . $i; return (new Loc(fn($x) => $k . $x))->withContext("!"); }
+for ($i = 0; $i < 20; $i++) { $l = make($i); $junk = str_repeat("z", 40 + $i); echo $l->get("a"), ","; }
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        (0..20).map(|i| format!("v{i}a!,")).collect::<String>()
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+
+/// Verifies that the word `clone` used only as a compared string, a method name (also through
+/// `method_exists()`) or a class name does not plan `clone()` override applicators.
+///
+/// Applicators exist for every class once `clone` may reach a callable, so a false trigger costs
+/// a body per class: the tokenizer prelude's keyword table (`$word === "clone"`) generated 583
+/// of them, 12% of a small Symfony probe's instructions. Only a `const_str` of the string pool
+/// counts, and only when it goes somewhere other than a comparison; an `ObjectNew` data id that
+/// happens to equal the string's id names a class-name entry, not the string.
+#[test]
+fn test_compared_clone_word_plans_no_clone_override_applicators() {
+    let source = r#"<?php
+class Sheep { public int $n = 1; public function clone(): Sheep { return clone $this; } }
+class Herd { public array $all = []; }
+$word = "echo" . $argc;
+echo $word === "clone" ? "kw" : "id", ";";
+$s = (new Sheep())->clone();
+$h = new Herd();
+echo $s->n, count($h->all);
+echo method_exists($s, "clone") ? ";m" : ";-";
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "id;10;m");
+    let dir = make_cli_test_dir("elephc_clone_word_plans_no_applicators");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        !user_asm.contains("clone_apply"),
+        "a compared `clone` word must not plan applicators"
+    );
+    let _ = std::fs::remove_dir_all(dir);
 }

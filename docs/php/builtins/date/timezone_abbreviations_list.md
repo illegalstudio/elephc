@@ -2,7 +2,7 @@
 title: "timezone_abbreviations_list()"
 description: "Returns every timezone abbreviation with its offset and DST flag."
 sidebar:
-  order: 247
+  order: 258
 ---
 
 ## timezone_abbreviations_list()

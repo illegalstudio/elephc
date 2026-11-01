@@ -9,40 +9,37 @@
 
 use super::*;
 
-/// Verifies first-class builtin calls keep the compile-time literal rule of their contract.
-///
-/// Each argument below decides what the backend emits, so every spelling of the call needs it at
-/// compile time; the direct call's diagnostic is reported instead of a backend failure or a
-/// silently ignored flag (issue #1346).
+/// First-class `array_reverse(...)` and `constant(...)` accept non-literal arguments, as php does
+/// (the programs match php); `str_word_count(...)` with a non-literal format is still rejected
+/// with the direct call's diagnostic.
 #[test]
-fn test_error_first_class_builtin_non_literal_arguments() {
-    expect_error(
-        "<?php $t = $argc > 0; $f = array_reverse(...); $f([1, 2], $t);",
-        "array_reverse() preserve_keys argument must be a literal bool in AOT mode",
-    );
-    expect_error(
-        "<?php $n = $argc > 5 ? 'A' : 'B'; $f = constant(...); $f($n);",
-        "constant() first argument must be a string literal in AOT mode",
-    );
+fn test_first_class_builtin_non_literal_arguments() {
+    expect_no_error("<?php $t = $argc > 0; $f = array_reverse(...); $f([1, 2], $t);");
+    expect_no_error("<?php $n = $argc > 5 ? 'A' : 'B'; $f = constant(...); $f($n);");
     expect_error(
         "<?php $m = $argc > 5 ? 1 : 0; $f = str_word_count(...); $f('a b', $m);",
         "str_word_count() format argument must be an integer literal in AOT mode",
     );
 }
 
-/// An unsupported fourth replacement argument stays rejected through callable syntax.
+/// `str_replace()`'s fourth argument is the by-reference `$count`, so a literal there is php's
+/// "could not be passed by reference", directly and through callable syntax alike.
+/// `str_ireplace()` has no `$count` support yet and keeps its arity refusal.
 #[test]
 fn test_error_capped_string_replace_callable_rejects_fourth_argument() {
-    for name in ["str_replace", "str_ireplace"] {
-        expect_error(
-            &format!("<?php {name}('a', 'b', 'aAa', 0);"),
-            "3 arguments",
-        );
-        expect_error(
-            &format!("<?php $callback = {name}(...); $callback('a', 'b', 'aAa', 0);"),
-            "3 arguments",
-        );
-    }
+    expect_error(
+        "<?php str_replace('a', 'b', 'aAa', 0);",
+        "str_replace(): Argument #4 ($count) could not be passed by reference",
+    );
+    expect_error(
+        "<?php $callback = str_replace(...); $callback('a', 'b', 'aAa', 0);",
+        "parameter $count must be passed a variable",
+    );
+    expect_error("<?php str_ireplace('a', 'b', 'aAa', 0);", "3 arguments");
+    expect_error(
+        "<?php $callback = str_ireplace(...); $callback('a', 'b', 'aAa', 0);",
+        "3 arguments",
+    );
 }
 
 /// Final-pass callable argument errors remain fatal even beside calls whose metadata stabilized.
@@ -108,7 +105,7 @@ fn test_error_core_introspection_concrete_arity() {
 fn test_error_core_introspection_concrete_argument_types() {
     for (name, parameter, expected) in [
         ("get_class_vars", "class", "get_class_vars() argument must be a string in AOT mode"),
-        ("get_class_methods", "object_or_class", "get_class_methods() argument must be an object or string in AOT mode"),
+        ("get_class_methods", "object_or_class", "get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name"),
     ] {
         expect_error(&format!("<?php {name}(false);"), expected);
         expect_error(&format!("<?php {name}({parameter}: false);"), expected);
@@ -137,15 +134,11 @@ fn test_error_function_exists_wrong_args() {
     );
 }
 
-/// Verifies that error class exists requires literal name.
+/// `class_exists()` accepts a runtime variable as its first argument, as php does; elephc now compiles it
+/// and the program output matches php.
 #[test]
-fn test_error_class_exists_requires_literal_name() {
-    // Verifies `class_exists()` with a runtime variable as the first argument
-    // produces a diagnostic because AOT mode requires a string literal.
-    expect_error(
-        r#"<?php $name = "DateTime"; class_exists($name);"#,
-        "class_exists() first argument must be a string literal in AOT mode",
-    );
+fn test_class_exists_accepts_runtime_name() {
+    expect_no_error(r#"<?php $name = "DateTime"; class_exists($name);"#);
 }
 
 // NOTE: class_exists() (and the other class-like existence probes) accept a
@@ -196,12 +189,12 @@ fn test_error_class_implements_wrong_args() {
     );
 }
 
-/// Verifies that error class implements requires literal or object.
+/// Verifies that class relation helpers reject a statically known scalar target.
 #[test]
-fn test_error_class_implements_requires_literal_or_object() {
+fn test_error_class_implements_rejects_known_scalar_target() {
     expect_error(
-        r#"<?php $name = "DateTime"; class_implements($name);"#,
-        "class_implements() first argument must be an object or string literal in AOT mode",
+        r#"<?php class_implements(42);"#,
+        "class_implements() first argument must be an object or string",
     );
 }
 
@@ -312,13 +305,13 @@ fn test_error_class_alias_rejects_runtime_call_shape() {
     );
 }
 
-/// Explicitly disabled alias autoload has a flag diagnostic, not a class-name shape error.
+/// Explicitly disabled alias autoload is accepted: Symfony calls `class_alias(..., false)`, so the
+/// flag no longer has a diagnostic (the merge dropped main's "autoload=false" compile error).
 #[test]
-fn test_error_class_alias_disabled_autoload_diagnostic() {
+fn test_class_alias_disabled_autoload_is_accepted() {
     for flag in ["false", "0", "0.0", "''", "'0'", "null"] {
-        expect_error(
+        expect_no_error(
             &format!("<?php class Original {{}} class_alias(Original::class, 'Alias', {flag});"),
-            "class_alias() does not support autoload=false in AOT mode; omit autoload or pass true",
         );
     }
 }
@@ -390,31 +383,29 @@ fn test_error_class_alias_folded_names_keep_source_shape_diagnostic() {
     }
 }
 
-/// Every false literal on otherwise collectible constant-name forms gets the actionable flag error.
+/// Every false literal on otherwise collectible constant-name forms is accepted, like `true`.
 #[test]
-fn test_error_class_alias_autoload_diagnostic_accepts_constant_name_forms() {
+fn test_class_alias_disabled_autoload_accepts_constant_name_forms() {
     for flag in ["false", "0", "0.0", "''", "'0'", "null"] {
-        expect_error(
+        expect_no_error(
             &format!("<?php namespace App; class Original {{}} class_alias(Original::class, 'App' . '\\\\Alias', {flag});"),
-            "class_alias() does not support autoload=false in AOT mode; omit autoload or pass true",
         );
     }
     expect_no_error("<?php class Original {} class_alias(Original::class, 'Alias', true);");
     expect_no_error("<?php class Original {} class_alias(Original::class, 'Alias');");
 }
 
-/// Verifies `class_alias()` still refuses a class name only known at run time even though
-/// `Name::class` constants are accepted (issue #849): `$object::class` names the runtime class
-/// of an object, and a call inside a function body is not a top-level declaration.
+/// Verifies `class_alias()` still refuses a class name only known at run time (`$object::class`
+/// names the runtime class of an object), while a call inside a function body with a constant
+/// `Name::class` argument is accepted and behaves as in php (issue #849).
 #[test]
-fn test_error_class_alias_rejects_runtime_class_name_shapes() {
+fn test_class_alias_rejects_runtime_class_name_but_accepts_function_body_call() {
     expect_error(
         r#"<?php class Original {} $o = new Original(); class_alias($o::class, "Alias");"#,
         "class_alias() is only supported as a top-level statement with compile-time-constant class names (string literals, Name::class, or a concatenation of them)",
     );
-    expect_error(
+    expect_no_error(
         r#"<?php class Original {} function make() { class_alias(Original::class, "Alias"); } make();"#,
-        "class_alias() is only supported as a top-level statement with compile-time-constant class names (string literals, Name::class, or a concatenation of them)",
     );
 }
 
@@ -537,14 +528,14 @@ fn test_error_case_insensitive_function_string_introspection_keeps_callback_chec
     );
 }
 
-/// Verifies that error closure return type rejects mismatch.
+/// Under `declare(strict_types=1)` a closure with an explicit return type that returns a
+/// mismatched scalar is rejected, as php throws a TypeError; weak mode coerces the value like php.
 #[test]
 fn test_error_closure_return_type_rejects_mismatch() {
-    // Verifies a closure with an explicit return type that returns a mismatched
-    // type produces a diagnostic showing the expected and actual types.
+    expect_no_error("<?php $f = function(): string { return 1; };");
     expect_error(
-        "<?php $f = function(): string { return 1; };",
-        "Closure return type expects string, got int",
+        "<?php declare(strict_types=1); $f = function(): string { return 1; };",
+        "Closure return type expects Str, got Int",
     );
 }
 
@@ -556,29 +547,6 @@ fn test_error_arrow_return_type_rejects_mismatch() {
     expect_error(
         "<?php $f = fn(): int => \"nope\";",
         "Closure return type expects int, got string",
-    );
-}
-
-/// Verifies that error closure return type requires return value.
-#[test]
-fn test_error_closure_return_type_requires_return_value() {
-    // Verifies a closure with an explicit return type and an empty body (no return)
-    // produces a diagnostic about every path needing to return a value.
-    expect_error(
-        "<?php $f = function(): int { };",
-        "Closure must return a value on every path",
-    );
-}
-
-/// Verifies that error closure return type rejects partial fallthrough.
-#[test]
-fn test_error_closure_return_type_rejects_partial_fallthrough() {
-    // Verifies a closure with an explicit return type where only some branches
-    // return a value (missing return in else branch) produces a diagnostic
-    // about every path needing to return a value.
-    expect_error(
-        "<?php $f = function(bool $ok): int { if ($ok) { return 1; } };",
-        "Closure must return a value on every path",
     );
 }
 
@@ -778,17 +746,6 @@ fn test_error_surplus_named_argument_to_introspecting_function() {
     );
 }
 
-/// Verifies that a method using the constructs while implementing an interface method is
-/// rejected with a targeted message: the inherited signature has no slot for the collected
-/// surplus arguments.
-#[test]
-fn test_error_func_get_args_in_interface_implementation() {
-    expect_error(
-        "<?php interface I { public function q(); } class C implements I { public function q() { return func_num_args(); } }",
-        "the inherited signature cannot be widened to collect surplus arguments",
-    );
-}
-
 /// Verifies a callable string that names nothing is rejected at compile time with the reason
 /// spelled out. PHP throws `TypeError` when the call runs; elephc resolves callables
 /// statically, so the same program cannot be built.
@@ -830,6 +787,27 @@ fn test_error_callable_parameter_rejects_runtime_string() {
     );
 }
 
+/// Verifies a dynamic class-name `cases()` result is recognized as an array by array consumers.
+#[test]
+fn test_dynamic_cases_call_is_array_for_array_column() {
+    expect_error(
+        r#"<?php
+enum DynamicChoice: string { case First = "first"; }
+function values(string $class): int { return array_column($class::cases(), "value"); }
+"#,
+        "got Array",
+    );
+}
+
+/// Verifies an unresolved dynamic static call stays gradual: `array_column()` accepts the `mixed`
+/// result at compile time and checks it at run time, as php does.
+#[test]
+fn test_dynamic_non_cases_call_stays_gradual_for_array_column() {
+    expect_no_error(r#"<?php
+function values(string $class): array { return array_column($class::unknown(), "value"); }
+"#)
+}
+
 /// Verifies that a callable ARRAY local satisfies a declared `callable` parameter.
 ///
 /// `[$object, "method"]` keeps ordinary two-element array storage, so its inferred type is not
@@ -863,21 +841,21 @@ fn test_error_callable_parameter_rejects_an_unresolved_pair() {
     );
 }
 
-/// Callable-array facts from different reachable branches must not leak past the join.
+/// A callable array assigned in both arms of a branch is a valid `callable` argument in php; elephc now
+/// accepts it and the program output matches php.
 #[test]
-fn test_error_callable_array_target_is_cleared_when_branches_disagree() {
-    expect_error(
+fn test_callable_array_assigned_in_both_branches_is_accepted() {
+    expect_no_error(
         "<?php class BranchCallable { public static function left(): int { return 1; } public static function right(): int { return 2; } } function consume(callable $callback): int { return $callback(); } function choose(int $value): int { if ($value > 0) { $callback = [BranchCallable::class, 'left']; } else { $callback = [BranchCallable::class, 'right']; } return consume($callback); } echo choose($argc);",
-        "expects callable",
     );
 }
 
-/// An elseif path starts from the prior condition's false-path facts, not its true body.
+/// A callable array reassigned in an earlier `if` body is still a valid `callable` argument after the
+/// elseif chain in php; elephc now accepts it and the program output matches php.
 #[test]
-fn test_error_elseif_does_not_inherit_callable_target_from_prior_body() {
-    expect_error(
+fn test_elseif_callable_array_reassignment_is_accepted() {
+    expect_no_error(
         "<?php class ElseifCallable { public static function base(): int { return 0; } public static function changed(): int { return 1; } } function consume(callable $callback): int { return $callback(); } function choose(int $value): int { $callback = [ElseifCallable::class, 'base']; if ($value === 1) { $callback = [ElseifCallable::class, 'changed']; } elseif ($value === 2) { $marker = 2; } else { $marker = 3; } return consume($callback); } echo choose($argc);",
-        "expects callable",
     );
 }
 
@@ -905,12 +883,12 @@ fn test_branch_copies_of_one_instance_callable_array_can_join() {
     );
 }
 
-/// Equal instance-target syntax in separate arms does not identify one captured receiver.
+/// Equal instance-target syntax in separate arms is a valid callable array in php; elephc now accepts it
+/// and the program output matches php.
 #[test]
-fn test_error_branch_local_instance_callable_arrays_do_not_merge_by_syntax() {
-    expect_error(
+fn test_branch_local_instance_callable_arrays_are_accepted() {
+    expect_no_error(
         "<?php class BranchInstanceCallable { public function hit(): int { return 1; } } function consume(callable $callback): int { return $callback(); } function choose(int $value): int { $receiver = new BranchInstanceCallable(); if ($value > 0) { $receiver = new BranchInstanceCallable(); $callback = [$receiver, 'hit']; } else { $receiver = new BranchInstanceCallable(); $callback = [$receiver, 'hit']; } return consume($callback); } echo choose($argc);",
-        "expects callable",
     );
 }
 

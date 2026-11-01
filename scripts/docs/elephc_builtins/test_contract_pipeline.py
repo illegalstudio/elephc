@@ -54,12 +54,16 @@ class ContractPipelineTests(unittest.TestCase):
                     # extract.run_gen_builtins), the fifty-four xml_* / xmlwriter_*
                     # functions of the xml prelude, the six procedural random entries
                     # plus the one internal random helper, and the functions the other
-                    # injected preludes declare.
-                    "prelude": 395,
+                    # injected preludes declare (the password, array-edge, user-comparator,
+                    # version_compare, hash_pbkdf2 and get_class_vars preludes among them).
+                    # array_first/array_last and error_log are native registry builtins.
+                    "prelude": 429,
                     # Calls rewritten from their enclosing lexical function frame.
                     "compiler-transform": 3,
                     # The date/calendar procedural families rewritten by the name resolver.
                     "name-resolver-rewrite": 54,
+                    # register_tick_function / unregister_tick_function, documented as pending.
+                    "none": 2,
                 }
             ),
         )

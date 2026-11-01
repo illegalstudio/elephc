@@ -2,19 +2,21 @@
 title: "is_callable()"
 description: "Checks whether a variable can be called as a function."
 sidebar:
-  order: 1036
+  order: 1095
 ---
 
 ## is_callable()
 
 ```php
-function is_callable(mixed $value): bool
+function is_callable(mixed $value, bool $syntax_only = false, ?string $callable_name = null): bool
 ```
 
 Checks whether a variable can be called as a function.
 
 **Parameters**:
 - `$value` (`mixed`)
+- `$syntax_only` (`bool`), default `false`, optional
+- `$callable_name` (`?string`), passed by reference, default `null`, optional
 
 **Returns**: `bool`
 

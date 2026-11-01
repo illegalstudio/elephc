@@ -28,6 +28,16 @@ use elephc_builtin_contract::{
 /// contracts are audited by exactly the same machinery as every other builtin.
 const CURL_SURFACE_LEN: usize = if cfg!(feature = "curl") { 34 } else { 0 };
 
+/// Prelude-provided contracts outside `ext/curl` — the one bucket below that routinely moves.
+///
+/// Named rather than inlined because it is the number a landing prelude family changes, and a
+/// bare literal in the middle of five assertions gives no clue which of them is the live one.
+/// See the derivation note at its use site. 365 = 357 + `addcslashes` + the four
+/// `sodium_crypto_box_*` wrappers `sodium_prelude` declares + `preg_filter` and
+/// `preg_replace_callback_array` (`preg_array_prelude`) + `get_class_vars`
+/// (`class_vars_prelude`).
+const PRELUDE_PROVIDED_NON_CURL: usize = 365;
+
 /// The two curl contracts whose eval route needs caller-addressable storage.
 ///
 /// `curl_multi_exec` writes its running-transfer count and `curl_multi_info_read` its
@@ -67,11 +77,8 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
             contract.name
         );
     }
-    // Five language constructs, one dedicated-syntax surface, three compiler transforms,
-    // the prelude-provided functions outside `ext/curl` (including XML, the tokenizer
-    // surface, and the random surface), and the 54 date/calendar functions the name
-    // resolver rewrites.
-    assert_eq!(exceptional.len(), 424);
+    // Read before the loop below consumes `exceptional`.
+    let exceptional_len = exceptional.len();
 
     let mut language_constructs = 0;
     let mut dedicated_syntax = 0;
@@ -105,6 +112,30 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
             ) => unreachable!("{} is a function contract", contract.name),
         }
     }
+    // WHAT EACH NUMBER COUNTS, so the next person can re-derive it instead of pasting
+    // whatever the failure message reported.
+    //
+    // `exceptional` is every contract whose `aot_support()` is not
+    // `Implemented(Registry)`, minus the `curl_*` surface partitioned off above. That is
+    // exhaustively the five buckets below — `aot_support` maps each `BuiltinKind` to one
+    // `BackendImplementation` and has no sixth answer — so the TOTAL is not an independent
+    // fact and is asserted as the sum rather than as a second literal. A standalone
+    // `assert_eq!(exceptional.len(), 410)` used to sit above the loop; it went stale the
+    // moment a prelude family landed and failed every run while the per-bucket numbers
+    // right here said exactly which bucket had moved.
+    //
+    // - `language_constructs` — compiled as syntax, not calls (`isset` and friends).
+    // - `dedicated_syntax` — the one surface with its own parser production.
+    // - `unsupported` — 3, and it is a SUM of two lists in `support.rs`:
+    //   `is_eval_only_reflection` (`get_called_class`) plus `AOT_IMPLEMENTATION_PENDING`
+    //   (`register_tick_function`, `unregister_tick_function`). `get_class_methods` left the
+    //   first list when it was compiled natively, and `get_class_vars` when
+    //   `crate::class_vars_prelude` began building it, which moved it to `preludes`.
+    // - `rewrites` — the date/calendar names the name resolver rewrites.
+    // - `preludes` — every PHP-declared prelude function outside `ext/curl`. To re-derive:
+    //   count `BuiltinKind::PreludeProvided` contracts whose `area` is not `Area::Curl`
+    //   across `catalog_data.rs`, `catalog_xml.rs` and `catalog_surfaces.rs`. It moves
+    //   whenever a prelude family lands, which is the ONLY number here that routinely does.
     assert_eq!(language_constructs, 5);
     assert_eq!(dedicated_syntax, 1);
     assert_eq!(unsupported, 0);
@@ -113,7 +144,12 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
         BTreeSet::from(["func_get_arg", "func_get_args", "func_num_args"])
     );
     assert_eq!(rewrites, 54);
-    assert_eq!(preludes.len(), 361);
+    assert_eq!(preludes.len(), PRELUDE_PROVIDED_NON_CURL);
+    assert_eq!(
+        exceptional_len,
+        language_constructs + dedicated_syntax + unsupported + rewrites + preludes.len(),
+        "every non-registry contract lands in exactly one of the five buckets"
+    );
     for name in [
         "hash_copy",
         "hash_final",
@@ -240,7 +276,6 @@ fn curl_php_surface_is_a_full_parity_citizen() {
         assert_signature_shape(
             name,
             eval_signature(contract),
-            contract.variadic_by_ref,
             &actual.params,
             actual.required_param_count,
             actual.default_param_count,
@@ -385,7 +420,6 @@ fn backend_signature_shapes_derive_from_shared_contracts() {
             assert_signature_shape(
                 contract.name,
                 contract.signature(),
-                contract.variadic_by_ref,
                 &actual.params,
                 actual.required_param_count,
                 actual.default_param_count,
@@ -404,7 +438,6 @@ fn backend_signature_shapes_derive_from_shared_contracts() {
             assert_signature_shape(
                 contract.name,
                 eval_signature(contract),
-                contract.variadic_by_ref,
                 &actual.params,
                 actual.required_param_count,
                 actual.default_param_count,
@@ -475,7 +508,6 @@ fn eval_registry_coverage_matches_shared_support_records() {
 fn assert_signature_shape(
     name: &str,
     expected: BuiltinSignature,
-    variadic_by_ref: bool,
     actual_params: &[String],
     actual_required: usize,
     actual_defaults: usize,
@@ -486,7 +518,7 @@ fn assert_signature_shape(
         .params
         .iter()
         .map(|param| param.name)
-        .chain(expected.variadic)
+        .chain(expected.variadic.map(|variadic| variadic.name))
         .collect::<Vec<_>>();
     let expected_defaults = expected
         .params
@@ -500,8 +532,8 @@ fn assert_signature_shape(
         .filter(|param| param.by_ref)
         .map(|param| param.name)
         .collect::<Vec<_>>();
-    if variadic_by_ref {
-        expected_by_ref.extend(expected.variadic);
+    if let Some(variadic) = expected.variadic.filter(|variadic| variadic.is_by_reference()) {
+        expected_by_ref.push(variadic.name);
     }
 
     assert_eq!(actual_params, expected_params, "{name} parameter names");
@@ -511,6 +543,10 @@ fn assert_signature_shape(
         "{name} required parameter count"
     );
     assert_eq!(actual_defaults, expected_defaults, "{name} default count");
-    assert_eq!(actual_variadic, expected.variadic, "{name} variadic name");
+    assert_eq!(
+        actual_variadic,
+        expected.variadic.map(|variadic| variadic.name),
+        "{name} variadic name"
+    );
     assert_eq!(actual_by_ref, expected_by_ref, "{name} by-reference params");
 }

@@ -14,6 +14,9 @@ use crate::errors::CompileError;
 use crate::parser::ast::{Expr, Visibility};
 use crate::types::traits::FlattenedClass;
 use crate::types::{ClassInfo, FunctionSig, PhpType, PropertyHookContract};
+// One attribute-argument folding for classes, constants, methods and properties: this module
+// carried its own copy, which missed what the shared one learned (`\Attribute::TARGET_*`).
+use crate::types::collect_attribute_args;
 
 use super::constants::resolve_lexical_class_constant_value;
 
@@ -38,9 +41,11 @@ pub(super) struct ClassBuildState {
     pub(super) property_declared_slots: Vec<bool>,
     pub(super) final_properties: HashSet<String>,
     pub(super) readonly_properties: HashSet<String>,
+    pub(super) backed_hooked_properties: HashSet<String>,
     pub(super) reference_properties: HashSet<String>,
     pub(super) promoted_properties: HashSet<String>,
     pub(super) property_reference_slots: Vec<bool>,
+    pub(super) property_slot_declaring_classes: Vec<String>,
     pub(super) abstract_properties: HashSet<String>,
     pub(super) abstract_property_hooks: HashMap<String, PropertyHookContract>,
     pub(super) property_hooks: HashMap<String, crate::parser::ast::PropertyHooks>,
@@ -50,21 +55,21 @@ pub(super) struct ClassBuildState {
     pub(super) static_property_visibilities: HashMap<String, Visibility>,
     pub(super) declared_static_properties: HashSet<String>,
     pub(super) final_static_properties: HashSet<String>,
-    pub(super) method_sigs: HashMap<String, FunctionSig>,
-    pub(super) static_sigs: HashMap<String, FunctionSig>,
+    pub(super) method_sigs: crate::fast_hash::FastMap<String, FunctionSig>,
+    pub(super) static_sigs: crate::fast_hash::FastMap<String, FunctionSig>,
     pub(super) late_static_method_returns: HashMap<String, crate::parser::ast::TypeExpr>,
     pub(super) late_static_static_method_returns: HashMap<String, crate::parser::ast::TypeExpr>,
-    pub(super) method_visibilities: HashMap<String, Visibility>,
+    pub(super) method_visibilities: crate::fast_hash::FastMap<String, Visibility>,
     pub(super) final_methods: HashSet<String>,
-    pub(super) method_declaring_classes: HashMap<String, String>,
-    pub(super) method_impl_classes: HashMap<String, String>,
+    pub(super) method_declaring_classes: crate::fast_hash::FastMap<String, String>,
+    pub(super) method_impl_classes: crate::fast_hash::FastMap<String, String>,
     pub(super) abstract_methods: HashSet<String>,
     pub(super) vtable_methods: Vec<String>,
     pub(super) vtable_slots: HashMap<String, usize>,
-    pub(super) static_method_visibilities: HashMap<String, Visibility>,
+    pub(super) static_method_visibilities: crate::fast_hash::FastMap<String, Visibility>,
     pub(super) final_static_methods: HashSet<String>,
-    pub(super) static_method_declaring_classes: HashMap<String, String>,
-    pub(super) static_method_impl_classes: HashMap<String, String>,
+    pub(super) static_method_declaring_classes: crate::fast_hash::FastMap<String, String>,
+    pub(super) static_method_impl_classes: crate::fast_hash::FastMap<String, String>,
     pub(super) abstract_static_methods: HashSet<String>,
     pub(super) static_vtable_methods: Vec<String>,
     pub(super) static_vtable_slots: HashMap<String, usize>,
@@ -75,6 +80,10 @@ pub(super) struct ClassBuildState {
     pub(super) property_attribute_names: HashMap<String, Vec<String>>,
     pub(super) property_attribute_args:
         HashMap<String, Vec<Option<Vec<crate::types::AttrArgEntry>>>>,
+    /// The parent's reflection-visible properties this class inherits: all but its privates.
+    pub(super) inherited_reflection_properties: Vec<String>,
+    /// The parent's reflection-visible methods this class inherits: all but its privates.
+    pub(super) inherited_reflection_methods: Vec<String>,
 }
 
 impl ClassBuildState {
@@ -92,10 +101,61 @@ impl ClassBuildState {
             state.inherit_static_methods(parent);
             state.interfaces = parent.interfaces.clone();
             state.allow_dynamic_properties = parent.allow_dynamic_properties;
+            state.inherited_reflection_properties = parent
+                .reflection_properties
+                .iter()
+                .filter(|name| {
+                    let visibility = parent
+                        .property_visibilities
+                        .get(name.as_str())
+                        .or_else(|| parent.static_property_visibilities.get(name.as_str()));
+                    visibility != Some(&Visibility::Private)
+                })
+                .cloned()
+                .collect();
+            state.inherited_reflection_methods = parent
+                .reflection_methods
+                .iter()
+                .filter(|name| {
+                    let key = crate::names::php_symbol_key(name);
+                    let visibility = parent
+                        .method_visibilities
+                        .get(&key)
+                        .or_else(|| parent.static_method_visibilities.get(&key));
+                    visibility != Some(&Visibility::Private)
+                })
+                .cloned()
+                .collect();
             state.property_hooks = parent.property_hooks.clone();
             state.deferred_property_default_error = parent.deferred_property_default_error.clone();
         }
         state
+    }
+
+    /// The class's own methods in declaration order, then what it inherits and does not redeclare.
+    fn reflection_methods(&self, class: &FlattenedClass) -> Vec<String> {
+        let mut seen = HashSet::new();
+        class
+            .methods
+            .iter()
+            .map(|method| &method.name)
+            .chain(self.inherited_reflection_methods.iter())
+            .filter(|name| seen.insert(crate::names::php_symbol_key(name)))
+            .cloned()
+            .collect()
+    }
+
+    /// The class's own declarations in source order, then what it inherits and does not redeclare.
+    fn reflection_properties(&self, class: &FlattenedClass) -> Vec<String> {
+        let mut seen = HashSet::new();
+        class
+            .properties
+            .iter()
+            .map(|property| &property.name)
+            .chain(self.inherited_reflection_properties.iter())
+            .filter(|name| seen.insert(name.as_str()))
+            .cloned()
+            .collect()
     }
 
     /// Consumes `self` and assembles an immutable `ClassInfo` struct.
@@ -133,9 +193,12 @@ impl ClassBuildState {
                 )
             })
             .collect();
+        let reflection_properties = self.reflection_properties(class);
+        let reflection_methods = self.reflection_methods(class);
         Ok(ClassInfo {
             class_id,
             declaration_span: class.span,
+            doc_comment: None,
             is_internal,
             parent: class.extends.clone(),
             is_abstract: class.is_abstract,
@@ -156,7 +219,11 @@ impl ClassBuildState {
                     ))
                 })
                 .collect::<Result<HashMap<_, _>, CompileError>>()?,
-            constant_order: class.constants.iter().map(|c| c.name.clone()).collect(),
+            constant_order: class
+                .constants
+                .iter()
+                .map(|constant| constant.name.clone())
+                .collect(),
             constant_deprecations: class
                 .constants
                 .iter()
@@ -209,12 +276,17 @@ impl ClassBuildState {
             property_declared_slots: self.property_declared_slots,
             final_properties: self.final_properties,
             readonly_properties: self.readonly_properties,
+            backed_hooked_properties: self.backed_hooked_properties,
             reference_properties: self.reference_properties,
             owned_reference_properties: HashSet::new(),
             promoted_properties: self.promoted_properties,
             property_reference_slots: self.property_reference_slots,
+            property_slot_declaring_classes: self.property_slot_declaring_classes,
+            property_owned_reference_slots: Vec::new(),
             abstract_properties: self.abstract_properties,
             abstract_property_hooks: self.abstract_property_hooks,
+            reflection_properties,
+            reflection_methods,
             property_hooks: self.property_hooks,
             static_properties: self.static_prop_types,
             static_defaults: self.static_defaults,
@@ -271,14 +343,6 @@ pub(in crate::types::checker::schema) fn collect_attribute_names(
     out
 }
 
-/// Uses the shared attribute argument collector for class and member metadata.
-/// Class-like and free-function attributes must support the same constant value/key shapes.
-pub(in crate::types::checker::schema) fn collect_attribute_args(
-    groups: &[crate::parser::ast::AttributeGroup],
-) -> Vec<Option<Vec<crate::types::AttrArgEntry>>> {
-    crate::types::collect_attribute_args(groups)
-}
-
 /// Returns `true` if the class declaration carries the PHP 8.2
 /// `#[\AllowDynamicProperties]` marker attribute.
 pub(super) fn class_has_allow_dynamic_properties(class: &FlattenedClass) -> bool {
@@ -316,6 +380,14 @@ impl ClassBuildState {
                     .copied()
                     .unwrap_or_else(|| parent.reference_properties.contains(name)),
             );
+            self.property_slot_declaring_classes.push(
+                parent
+                    .property_slot_declaring_classes
+                    .get(index)
+                    .or_else(|| parent.property_declaring_classes.get(name))
+                    .cloned()
+                    .unwrap_or_default(),
+            );
             if let Some(visibility) = parent.property_visibilities.get(name) {
                 self.property_visibilities
                     .insert(name.clone(), visibility.clone());
@@ -344,6 +416,9 @@ impl ClassBuildState {
             }
             if parent.readonly_properties.contains(name) {
                 self.readonly_properties.insert(name.clone());
+            }
+            if parent.backed_hooked_properties.contains(name) {
+                self.backed_hooked_properties.insert(name.clone());
             }
             if parent.reference_properties.contains(name) {
                 self.reference_properties.insert(name.clone());

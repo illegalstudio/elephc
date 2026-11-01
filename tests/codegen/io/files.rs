@@ -509,3 +509,43 @@ echo "after";
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "bool(false)\nbool(false)\nafter");
 }
+
+/// Verifies `file_put_contents()` honours `FILE_APPEND` and `LOCK_EX` (a literal and a runtime
+/// flags value), writes an array's values concatenated, and answers `false` — not a byte count or
+/// a sentinel — when the file cannot be opened.
+#[test]
+fn test_file_put_contents_flags_array_data_and_failure() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(file_put_contents("flags.txt", "ab", LOCK_EX));
+var_dump(file_put_contents("flags.txt", "cd", FILE_APPEND | LOCK_EX));
+$append = $argc > 5 ? 0 : FILE_APPEND;
+var_dump(file_put_contents("flags.txt", ["x", "y", 3], $append));
+echo file_get_contents("flags.txt"), "\n";
+var_dump(file_put_contents("flags.txt", "new"));
+echo file_get_contents("flags.txt"), "\n";
+var_dump(@file_put_contents("missing-dir/x.txt", "zz", LOCK_EX));
+var_dump(false === @file_put_contents("missing-dir/x.txt", "zz"));
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(2)\nint(2)\nint(3)\nabcdxy3\nint(3)\nnew\nbool(false)\nbool(true)\n"
+    );
+}
+
+/// Verifies interpreted `file_put_contents()` accepts `$flags` and `$context` (Symfony's
+/// `SodiumVault` writes with `LOCK_EX`), appends, and joins array data.
+#[test]
+fn test_eval_file_put_contents_flags_and_context() {
+    let out = compile_and_run(
+        r#"<?php
+eval('var_dump(file_put_contents("eval-flags.txt", "ef", LOCK_EX));
+var_dump(file_put_contents("eval-flags.txt", "gh", FILE_APPEND | LOCK_EX, null));
+var_dump(file_put_contents("eval-flags.txt", ["x", "y", 3], FILE_APPEND));
+var_dump(@file_put_contents("missing-dir/x.txt", "zz"));
+echo file_get_contents("eval-flags.txt");');
+"#,
+    );
+    assert_eq!(out, "int(2)\nint(2)\nint(3)\nbool(false)\nefghxy3");
+}

@@ -9,10 +9,12 @@ sidebar:
 
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
-| [`error_log()`](./web/error_log.md) | `(string $message, int $message_type = 0, ?string $destination = null, ?string $additional_headers = null): bool` | `bool` | ✓ | - |
+| [`error_clear_last()`](./web/error_clear_last.md) | `(): void` | `void` | ✓ | - |
+| [`error_get_last()`](./web/error_get_last.md) | `(): ?array` | `?array` | ✓ | - |
 | [`ini_get()`](./web/ini_get.md) | `(string $option): mixed` | `mixed` | ✓ | - |
 | [`ini_get_all()`](./web/ini_get_all.md) | `(?string $extension = null, bool $details = true): array|false` | `array|false` | ✓ | - |
 | [`ini_set()`](./web/ini_set.md) | `(string $option, string|int|float|bool|null $value): string|false` | `string|false` | ✓ | - |
+| [`register_shutdown_function()`](./web/register_shutdown_function.md) | `(callable $callback, ...$args): void` | `void` | ✓ | - |
 | [`session_abort()`](./web/session_abort.md) | `(): bool` | `bool` | ✓ | - |
 | [`session_cache_expire()`](./web/session_cache_expire.md) | `(?int $value = null): mixed` | `mixed` | ✓ | - |
 | [`session_cache_limiter()`](./web/session_cache_limiter.md) | `(?string $value = null): mixed` | `mixed` | ✓ | - |

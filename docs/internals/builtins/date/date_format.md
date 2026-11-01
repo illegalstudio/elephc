@@ -2,7 +2,7 @@
 title: "date_format() - internals"
 description: "Compiler internals for date_format(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 202
+  order: 213
 ---
 
 ## `date_format()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:1029](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L1029) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:1142](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L1142) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

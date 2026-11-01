@@ -6,10 +6,14 @@
 //!
 //! Key details:
 //! - Borrowed filenames remain owned by the receiver; only the public string getter persists them.
-//! - ErrorException overrides use the filename cell at offset 72 and nullable line words 88/96.
+//! - Every Throwable stores its source file and line in the declared `file`/`line` properties
+//!   (`throwable_layout::FILE_OFFSET`/`LINE_OFFSET`); `ErrorException`'s constructor assigns them,
+//!   so its overrides need no separate cells. Compact (heap kind 6) Throwables keep the creation
+//!   line in the `line` slot, and ordinary classes in the word after their properties.
 //! - Explicit zero lines and empty filenames are known locations; synthesized origins remain unknown.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::throwable_layout::{FILE_OFFSET, LINE_OFFSET};
 
 /// Emits a borrowed location lookup and the PHP-visible ownership adapters.
 pub(crate) fn emit_location(emitter: &mut Emitter) {
@@ -54,6 +58,11 @@ fn emit_borrowed_aarch64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x1", "_script_source_file");
     abi::emit_symbol_address(emitter, "x10", "_script_source_file_len");
     emitter.instruction("ldr x2, [x10]");                                       // borrow the default filename length without clobbering the receiver
+    emitter.instruction(&format!("ldr x10, [x9, #{FILE_OFFSET}]"));             // borrow the receiver's own source file (an included file, or an ErrorException filename)
+    emitter.instruction("cbz x10, __rt_location_default_file");                 // an unset file property keeps the entry script's name
+    emitter.instruction("mov x1, x10");                                         // report the file the Throwable was constructed in
+    emitter.instruction(&format!("ldr x2, [x9, #{}]", FILE_OFFSET + 8));        // pair the pointer with its stored length
+    emitter.label("__rt_location_default_file");
     emitter.instruction("cmp x0, #0");                                          // synthesized creation lines have no trustworthy source origin
     emitter.instruction("cset x3, ne");                                         // record whether a native allocation supplied a line
     emitter.instruction("cmp x2, #0");                                          // an absent default filename cannot identify a source location
@@ -81,20 +90,8 @@ fn emit_borrowed_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_location_absent_metadata");                  // a broken chain must not silently discard location overrides
     emitter.instruction("b __rt_location_ancestry");                            // keep walking until a matching or terminal parent
     emitter.label("__rt_location_overrides");
-    emitter.instruction("ldr x10, [x9, #72]");                                  // borrow the optional boxed filename
-    emitter.instruction("cbz x10, __rt_location_line_override");                // an absent cell preserves the default filename
-    emitter.instruction("ldr x11, [x10]");                                      // inspect the nullable filename tag
-    emitter.instruction("cmp x11, #8");                                         // null requests the original source filename
-    emitter.instruction("b.eq __rt_location_line_override");                    // preserve the default filename for null
-    emitter.instruction("ldr x1, [x10, #8]");                                   // borrow explicit filename bytes from the live receiver
-    emitter.instruction("ldr x2, [x10, #16]");                                  // preserve an explicitly empty filename length
-    emitter.instruction("mov x3, #1");                                          // an explicit filename establishes a location even when empty
-    emitter.label("__rt_location_line_override");
-    emitter.instruction("ldr x10, [x9, #96]");                                  // inspect the nullable scalar line tag
-    emitter.instruction("cmp x10, #8");                                         // null requests the original construction line
-    emitter.instruction("b.eq __rt_location_return");                           // preserve the default line for null
-    emitter.instruction("ldr x0, [x9, #88]");                                   // return the explicit line, including zero or a negative integer
-    emitter.instruction("mov x3, #1");                                          // distinguish explicit zero from an unknown synthesized origin
+    emitter.instruction(&format!("ldr x0, [x9, #{LINE_OFFSET}]"));              // the constructor assigned an explicit line, including zero or a negative integer
+    emitter.instruction("mov x3, #1");                                          // an ErrorException location is known even when its line is zero or its filename empty
     emitter.label("__rt_location_return");
     emitter.instruction("ret");                                                 // return borrowed location words without allocating or retaining
     emitter.label("__rt_location_absent_metadata");
@@ -109,6 +106,12 @@ fn emit_borrowed_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "rax", "_script_source_file");
     abi::emit_symbol_address(emitter, "r11", "_script_source_file_len");
     emitter.instruction("mov rdx, QWORD PTR [r11]");                            // borrow the default filename length
+    emitter.instruction(&format!("mov r9, QWORD PTR [r10 + {FILE_OFFSET}]"));   // borrow the receiver's own source file (an included file, or an ErrorException filename)
+    emitter.instruction("test r9, r9");                                         // an unset file property keeps the entry script's name
+    emitter.instruction("jz __rt_location_default_file");                       // keep the default filename
+    emitter.instruction("mov rax, r9");                                         // report the file the Throwable was constructed in
+    emitter.instruction(&format!("mov rdx, QWORD PTR [r10 + {}]", FILE_OFFSET + 8)); // pair the pointer with its stored length
+    emitter.label("__rt_location_default_file");
     emitter.instruction("xor r8d, r8d");                                        // initialize the location-known flag before its byte assignment
     emitter.instruction("test rcx, rcx");                                       // synthesized creation lines have no trustworthy source origin
     emitter.instruction("setne r8b");                                           // record whether native allocation supplied a line
@@ -139,19 +142,8 @@ fn emit_borrowed_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_location_absent_metadata");                    // a broken chain must not silently discard location overrides
     emitter.instruction("jmp __rt_location_ancestry");                          // keep walking until a matching or terminal parent
     emitter.label("__rt_location_overrides");
-    emitter.instruction("mov r9, QWORD PTR [r10 + 72]");                        // borrow the optional boxed filename
-    emitter.instruction("test r9, r9");                                         // absent cells preserve the default filename
-    emitter.instruction("jz __rt_location_line_override");                      // continue with the independent line override
-    emitter.instruction("cmp QWORD PTR [r9], 8");                               // null requests the original source filename
-    emitter.instruction("je __rt_location_line_override");                      // preserve the default filename for null
-    emitter.instruction("mov rax, QWORD PTR [r9 + 8]");                         // borrow explicit filename bytes from the live receiver
-    emitter.instruction("mov rdx, QWORD PTR [r9 + 16]");                        // preserve an explicitly empty filename length
-    emitter.instruction("mov r8, 1");                                           // an explicit filename establishes a location even when empty
-    emitter.label("__rt_location_line_override");
-    emitter.instruction("cmp QWORD PTR [r10 + 96], 8");                         // null requests the original construction line
-    emitter.instruction("je __rt_location_return");                             // preserve the default line for null
-    emitter.instruction("mov rcx, QWORD PTR [r10 + 88]");                       // return the explicit line, including zero or a negative integer
-    emitter.instruction("mov r8, 1");                                           // distinguish explicit zero from an unknown synthesized origin
+    emitter.instruction(&format!("mov rcx, QWORD PTR [r10 + {LINE_OFFSET}]"));  // the constructor assigned an explicit line, including zero or a negative integer
+    emitter.instruction("mov r8, 1");                                           // an ErrorException location is known even when its line is zero or its filename empty
     emitter.label("__rt_location_return");
     emitter.instruction("ret");                                                 // return borrowed location words without allocating or retaining
     emitter.label("__rt_location_absent_metadata");
@@ -182,7 +174,7 @@ pub(crate) fn emit_creation_line_load(
             emitter.instruction(&format!("ldr {result}, [{object}, {result}]")); // read the ordinary object's dedicated creation line
             emitter.instruction(&format!("b {done}"));                          // skip the compact payload read
             emitter.label(&compact);
-            emitter.instruction(&format!("ldr {result}, [{object}, #32]"));     // read the compact Throwable creation line
+            emitter.instruction(&format!("ldr {result}, [{object}, #{LINE_OFFSET}]")); // read the compact Throwable creation line (its declared `line` slot)
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("movzx {scratch}, BYTE PTR [{object} - 8]")); // inspect the heap kind without GC or magic bits
@@ -196,7 +188,7 @@ pub(crate) fn emit_creation_line_load(
             emitter.instruction(&format!("mov {result}, QWORD PTR [{object} + {result}]")); // read the ordinary object's dedicated creation line
             emitter.instruction(&format!("jmp {done}"));                        // skip the compact payload read
             emitter.label(&compact);
-            emitter.instruction(&format!("mov {result}, QWORD PTR [{object} + 32]")); // read the compact Throwable creation line
+            emitter.instruction(&format!("mov {result}, QWORD PTR [{object} + {LINE_OFFSET}]")); // read the compact Throwable creation line (its declared `line` slot)
         }
     }
     emitter.label(&done);

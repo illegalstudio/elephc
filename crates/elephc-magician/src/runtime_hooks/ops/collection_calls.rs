@@ -26,12 +26,80 @@ macro_rules! impl_collection_call_ops {
         array: RuntimeCellHandle,
         value: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.string_array_push_bytes(array, value.as_bytes())
+    }
+
+    /// Appends raw bytes: the generated wrapper takes a pointer and a length, not UTF-8.
+    fn string_array_push_bytes(
+        &mut self,
+        array: RuntimeCellHandle,
+        value: &[u8],
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe {
             __elephc_eval_value_string_array_push(
                 array.as_ptr(),
                 value.as_ptr(),
                 value.len() as u64,
             )
+        })
+    }
+
+    /// Reads the RAW boxed slot of an indexed Mixed array and reports an invoker by-reference
+    /// marker. The layout read here is the runtime's own: a 24-byte header whose first word is the
+    /// length, element slots after it, and the element value type in bits 8..15 of the heap kind
+    /// word just before the header. Anything that is not boxed-Mixed indexed storage, and any slot
+    /// holding something other than a marker, answers `None`.
+    fn array_invoker_marker_at(
+        &mut self,
+        array: RuntimeCellHandle,
+        position: usize,
+    ) -> Result<Option<(usize, u64)>, EvalStatus> {
+        const BOXED_MIXED_VALUE_TYPE: u64 = 7;
+        const ARRAY_HEADER_BYTES: usize = 24;
+        const TAG_INDEXED_ARRAY: u64 = 4;
+        const TAG_INVOKER_REF_CELL: u64 = 11;
+        if self.type_tag(array)? != TAG_INDEXED_ARRAY {
+            return Ok(None);
+        }
+        let base = self.raw_value_word(array)? as usize;
+        if base == 0 {
+            return Ok(None);
+        }
+        let kind = unsafe { *((base - 8) as *const u64) };
+        if (kind >> 8) & 0x7f != BOXED_MIXED_VALUE_TYPE {
+            return Ok(None);
+        }
+        let len = unsafe { *(base as *const u64) } as usize;
+        if position >= len {
+            return Ok(None);
+        }
+        let cell = unsafe { *((base + ARRAY_HEADER_BYTES + position * 8) as *const usize) };
+        if cell == 0 {
+            return Ok(None);
+        }
+        let cell = RuntimeCellHandle::from_raw(cell as *mut RuntimeCell);
+        if self.type_tag(cell)? != TAG_INVOKER_REF_CELL {
+            return Ok(None);
+        }
+        Ok(Some((
+            self.raw_value_word(cell)? as usize,
+            self.raw_value_high_word(cell)?,
+        )))
+    }
+
+    /// Creates a boxed indexed array whose payload uses raw object-pointer slots.
+    fn object_array_new(&mut self, capacity: usize) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_object_array_new(capacity as u64) })
+    }
+
+    /// Appends one boxed object to a raw object-pointer array, retaining it for the array.
+    fn object_array_push(
+        &mut self,
+        array: RuntimeCellHandle,
+        object: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe {
+            __elephc_eval_value_object_array_push(array.as_ptr(), object.as_ptr())
         })
     }
 
@@ -173,6 +241,7 @@ macro_rules! impl_collection_call_ops {
                 value.as_ptr(),
                 scope_ptr,
                 scope_len,
+                self.context.cast(),
             )
         };
         if ok == 0 {
@@ -180,6 +249,24 @@ macro_rules! impl_collection_call_ops {
         } else {
             Ok(())
         }
+    }
+
+    /// Writes a serialized key onto the declared property slot the compiled decoder would use.
+    fn hydrate_declared_property(
+        &mut self,
+        object: RuntimeCellHandle,
+        property: &str,
+        value: RuntimeCellHandle,
+    ) -> Result<(), EvalStatus> {
+        unsafe {
+            __elephc_eval_value_hydrate_property(
+                object.as_ptr(),
+                property.as_ptr(),
+                property.len() as u64,
+                value.as_ptr(),
+            );
+        }
+        Ok(())
     }
 
     /// Shares eval magic-set recursion state with native property-write lowering.
@@ -337,6 +424,18 @@ macro_rules! impl_collection_call_ops {
         usize::try_from(len).map_err(|_| EvalStatus::RuntimeFatal)
     }
 
+    /// Returns the compiled `(array)` cast of a boxed object the compiled program laid out.
+    fn compiled_object_to_array(
+        &mut self,
+        object: RuntimeCellHandle,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        let result = unsafe { __elephc_eval_value_object_to_array(object.as_ptr()) };
+        if result.is_null() {
+            return Ok(None);
+        }
+        Ok(Some(RuntimeCellHandle::from_raw(result)))
+    }
+
     /// Returns one JSON-visible public property key for a boxed Mixed object.
     fn object_property_iter_key(
         &mut self,
@@ -383,7 +482,39 @@ macro_rules! impl_collection_call_ops {
                 self.context.cast(),
             )
         };
+        if crate::eval_trace::enabled() && !result.is_null() {
+            let words = unsafe { std::slice::from_raw_parts(result.cast::<u64>(), 3) };
+            eprintln!(
+                "[elephc-eval-trace] phase=native_method_bridge_raw method={method:?} result={result:p} arg_array={:p} result_words=[{:#x}, {:#x}, {:#x}]",
+                arg_array.as_ptr(), words[0], words[1], words[2],
+            );
+        }
         self.finish_native_call(result, arg_array)
+    }
+
+    /// Calls a boxed Mixed object method and writes its generated result to caller-owned storage.
+    fn method_call_out(
+        &mut self,
+        object: RuntimeCellHandle,
+        method: &str,
+        args: Vec<RuntimeCellHandle>,
+        result_out: &mut RuntimeCellHandle,
+    ) -> Result<(), EvalStatus> {
+        let (scope_ptr, scope_len) = self.current_class_scope_abi();
+        let arg_array = self.arg_array(args)?;
+        let result = unsafe {
+            __elephc_eval_value_method_call(
+                object.as_ptr(),
+                method.as_ptr(),
+                method.len() as u64,
+                arg_array.as_ptr(),
+                scope_ptr,
+                scope_len,
+                self.context.cast(),
+            )
+        };
+        *result_out = self.finish_native_call(result, arg_array)?;
+        Ok(())
     }
 
     /// Calls an AOT static method through the generated user helper.

@@ -24,6 +24,7 @@ fn test_program_static_method_effects_recognize_pure_static_methods() {
         StmtKind::ClassDecl {
             generics: None,
             name: "Util".to_string(),
+            doc_comment: None,
             extends: None,
             implements: Vec::new(),
             is_abstract: false,
@@ -80,6 +81,7 @@ fn test_program_static_method_effects_resolve_self_receiver() {
         StmtKind::ClassDecl {
             generics: None,
             name: "Util".to_string(),
+            doc_comment: None,
             extends: None,
             implements: Vec::new(),
             is_abstract: false,
@@ -169,6 +171,7 @@ fn test_program_static_method_effects_resolve_parent_receiver() {
             StmtKind::ClassDecl {
                 generics: None,
                 name: "Base".to_string(),
+                doc_comment: None,
                 extends: None,
                 implements: Vec::new(),
                 is_abstract: false,
@@ -212,6 +215,7 @@ fn test_program_static_method_effects_resolve_parent_receiver() {
             StmtKind::ClassDecl {
                 generics: None,
                 name: "Child".to_string(),
+                doc_comment: None,
                 extends: Some(Name::from("Base")),
                 implements: Vec::new(),
                 is_abstract: false,
@@ -269,6 +273,7 @@ fn test_program_private_instance_method_effects_recognize_private_methods() {
         StmtKind::ClassDecl {
             generics: None,
             name: "Util".to_string(),
+            doc_comment: None,
             extends: None,
             implements: Vec::new(),
             is_abstract: false,

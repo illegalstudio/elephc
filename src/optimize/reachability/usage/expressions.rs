@@ -8,13 +8,16 @@
 //! - Local new-object facts refine ordinary method calls without weakening dynamic-call hazards.
 //! - Registry-backed builtin requirements are recorded so checker libraries can be reconciled.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
-use crate::names::{php_symbol_key, property_hook_get_method, property_hook_set_method};
+use crate::names::{
+    php_symbol_key, property_hook_get_method, property_hook_set_method, DYNAMIC_INCLUDE_FUNCTION,
+};
 use crate::parser::ast::{
     CallableTarget, CastType, Expr, ExprKind, InstanceOfTarget, StaticReceiver, TypeExpr,
 };
 use crate::types::FunctionSig;
+use std::sync::Arc;
 
 use super::{type_is_definitely_non_object, Scanner};
 
@@ -23,6 +26,16 @@ impl Scanner<'_> {
     pub(super) fn scan_expr(&mut self, expr: &Expr) {
         match &expr.kind {
             ExprKind::FunctionCall { name, args } => self.scan_function_call(name.as_str(), args),
+            // A run-time `['Closure', 'fromCallable']` resolves to the injected helper the codegen
+            // table points at; this string is the helper's only reference.
+            ExprKind::StringLiteral(text) if crate::closure_from_callable_prelude::names_it(text) => {
+                self.record_static_method(
+                    &crate::parser::ast::StaticReceiver::Named(crate::names::Name::unqualified(
+                        crate::closure_from_callable_prelude::CLOSURE_FACTORY_CLASS,
+                    )),
+                    crate::closure_from_callable_prelude::CLOSURE_FACTORY_METHOD,
+                );
+            }
             ExprKind::FirstClassCallable(target) => self.scan_callable_target(target),
             ExprKind::ExprCall { callee, args } => {
                 self.unresolved_callable_hazard();
@@ -46,6 +59,7 @@ impl Scanner<'_> {
             }
             ExprKind::NewObject { class_name, args } => {
                 let key = self.record_class(class_name.as_str());
+                self.record_reflection_constructor_target(class_name, args);
                 self.usage.instantiated_classes.insert(key.clone());
                 if key == php_symbol_key("IteratorIterator") {
                     if let Some(source) = args.first().map(unwrap_named_arg) {
@@ -65,7 +79,7 @@ impl Scanner<'_> {
                 self.scan_expr(name_expr);
                 self.scan_exprs(args);
                 self.scan_method_signature_arguments(
-                    &HashSet::new(),
+                    &HashSet::default(),
                     "__construct",
                     false,
                     args,
@@ -76,7 +90,7 @@ impl Scanner<'_> {
                 self.record_class(fallback_class.as_str()); self.record_class(required_parent.as_str());
                 self.scan_expr(class_name); self.scan_exprs(args);
                 self.scan_method_signature_arguments(
-                    &HashSet::new(),
+                    &HashSet::default(),
                     "__construct",
                     false,
                     args,
@@ -150,12 +164,25 @@ impl Scanner<'_> {
             }
             ExprKind::ClassConstant { receiver } | ExprKind::ScopedConstantAccess { receiver, .. }
             | ExprKind::StaticPropertyAccess { receiver, .. } => self.scan_receiver(receiver),
+            ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+                self.scan_receiver(receiver);
+                self.scan_expr(property);
+            }
             ExprKind::PropertyAccess { object, property }
             | ExprKind::NullsafePropertyAccess { object, property } => {
                 self.record_instance_method(object, &property_hook_get_method(property));
                 self.scan_expr(object);
             }
             ExprKind::ObjectClassName { object } => self.scan_expr(object),
+            ExprKind::DynamicScopedConstantAccess { receiver, .. } => {
+                let classes = self.expr_classes(receiver);
+                if classes.is_empty() {
+                    self.usage.hazards.dynamic_class = true;
+                } else {
+                    self.usage.classes.extend(classes);
+                }
+                self.scan_expr(receiver);
+            }
             ExprKind::DynamicPropertyAccess { object, property }
             | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
                 self.usage.hazards.dynamic_method = true;
@@ -163,6 +190,12 @@ impl Scanner<'_> {
                 self.scan_expr(property);
             }
             ExprKind::BinaryOp { left, right, .. } => { self.scan_expr(left); self.scan_expr(right); }
+            ExprKind::ArrayReference(e) => {
+                if let ExprKind::Variable(name) = &e.kind {
+                    self.forget_variable(name);
+                }
+                self.scan_expr(e);
+            }
             ExprKind::Negate(e) | ExprKind::Not(e) | ExprKind::BitNot(e) | ExprKind::Throw(e)
             | ExprKind::Clone(e) | ExprKind::ErrorSuppress(e) | ExprKind::Print(e)
             | ExprKind::Spread(e) | ExprKind::YieldFrom(e) => self.scan_expr(e),
@@ -268,6 +301,12 @@ impl Scanner<'_> {
             let class = self.record_class("SensitiveParameterValue");
             self.usage.instantiated_classes.insert(class);
         }
+        if key == "class_alias" {
+            if let Some((original, _)) = crate::autoload::resolved_class_alias_args(args) {
+                let original = self.record_class(&original);
+                self.usage.class_alias_targets.insert(original);
+            }
+        }
         self.record_builtin_requirements(name, args);
         self.scan_builtin_callback_arguments(&key, args);
         self.scan_declaration_arguments(&key, args);
@@ -292,7 +331,31 @@ impl Scanner<'_> {
         for helper in crate::builtins::gmp::prelude_helpers_for(&key) {
             self.record_callable(helper);
         }
-        let normalized = self.normalized_function_arguments(&key, args);
+        // Only the calls matched below read the normalized arguments. Normalizing clones every
+        // argument tree, and doing it for every function call of the program was most of the
+        // declaration-pruning phase on a Symfony build.
+        let reads_arguments = matches!(
+            key.as_str(),
+            "count"
+                | "iterator_apply"
+                | "iterator_count"
+                | "iterator_to_array"
+                | "function_exists"
+                | "array_map"
+                | "is_callable"
+                | "call_user_func"
+                | "call_user_func_array"
+                | "eval"
+                | "class_exists"
+                | "interface_exists"
+                | "enum_exists"
+                | "trait_exists"
+        );
+        let normalized = if reads_arguments {
+            self.normalized_function_arguments(&key, args)
+        } else {
+            Vec::new()
+        };
         let first = normalized.first().map(unwrap_named_arg);
         match key.as_str() {
             "count" => {
@@ -318,13 +381,69 @@ impl Scanner<'_> {
                 self.scan_call_user_func_class_introspection(&key, &normalized);
             }
             "method_exists" => self.method_exists(args),
+            // The result is every method name the scope may call, which programs then call by
+            // name, so declaration reachability cannot drop an uncalled method.
             "get_class_methods" => self.usage.hazards.dynamic_method = true,
             "class_exists" | "interface_exists" | "enum_exists" | "trait_exists" => self.literal_class_or_hazard(first),
             "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" | "unserialize" => self.usage.hazards.dynamic_class = true,
+            // A string-literal fragment that declares nothing is source like any other: what it
+            // reaches is what it names, read with the rules every other statement gets. Treating
+            // `eval('return 1;')` as opaque kept every declaration of the program alive, the
+            // session prelude's interpreter calls among them, and so linked the eval bridge.
+            "eval" if crate::prelude_prune::usage::transparent_literal_eval(args).is_some() => {
+                if let Some(fragment) = crate::prelude_prune::usage::transparent_literal_eval(args) {
+                    self.scan_nested(&fragment, false);
+                }
+            }
             "eval" => self.literal_eval_or_hazard(first),
+            // Runtime include source is just as opaque as `eval()`: it can call any AOT
+            // declaration through the eval bridge after compilation. Keeping only statically
+            // visible methods makes valid calls fail at runtime because no bridge slot was
+            // emitted for their implementation.
+            DYNAMIC_INCLUDE_FUNCTION => self.widen_dynamic_hazards(),
             _ => {}
         }
         self.scan_exprs(args);
+    }
+
+    /// Records the class-like target named by reflection constructors that autoload it in PHP.
+    fn record_reflection_constructor_target(
+        &mut self,
+        constructor: &crate::names::Name,
+        args: &[Expr],
+    ) {
+        let constructor = constructor
+            .as_canonical()
+            .trim_start_matches('\\')
+            .to_ascii_lowercase();
+        if !matches!(
+            constructor.as_str(),
+            "reflectionclass"
+                | "reflectionenum"
+                | "reflectionclassconstant"
+                | "reflectionmethod"
+                | "reflectionproperty"
+        ) {
+            return;
+        }
+        let Some(arg) = args.first() else {
+            return;
+        };
+        let arg = match &arg.kind {
+            ExprKind::NamedArg { value, .. } => value.as_ref(),
+            _ => arg,
+        };
+        match &arg.kind {
+            ExprKind::StringLiteral(class_name) => {
+                self.record_class(class_name);
+            }
+            ExprKind::ClassConstant {
+                receiver: StaticReceiver::Named(class_name),
+            } => {
+                self.record_class(&class_name.as_canonical());
+            }
+            _ => {}
+        }
     }
 
     /// Records class-like declarations and runtime protocols selected by builtin arguments.
@@ -471,7 +590,7 @@ impl Scanner<'_> {
                 names.extend(self.callable_function_names(default));
                 names
             }
-            _ => HashSet::new(),
+            _ => HashSet::default(),
         }
     }
 
@@ -1025,7 +1144,7 @@ impl Scanner<'_> {
                 classes.extend(self.expr_classes(default));
                 classes
             }
-            _ => HashSet::new(),
+            _ => HashSet::default(),
         }
     }
 
@@ -1042,7 +1161,7 @@ impl Scanner<'_> {
                 .iter()
                 .flat_map(|type_expr| self.type_classes(type_expr))
                 .collect(),
-            _ => HashSet::new(),
+            _ => HashSet::default(),
         }
     }
 
@@ -1073,7 +1192,7 @@ impl Scanner<'_> {
     }
 
     /// Applies every reachability-relevant parameter contract shared by calls.
-    fn scan_signature_arguments(&mut self, signatures: &[FunctionSig], args: &[Expr]) {
+    fn scan_signature_arguments(&mut self, signatures: &[Arc<FunctionSig>], args: &[Expr]) {
         for signature in signatures {
             let callable_indices: Vec<_> = signature
                 .params
@@ -1115,7 +1234,7 @@ impl Scanner<'_> {
     fn normalized_function_arguments(&self, function: &str, args: &[Expr]) -> Vec<Expr> {
         self.call_signatures
             .and_then(|signatures| signatures.function(function))
-            .or_else(|| crate::builtins::registry::function_sig(function))
+            .or_else(|| crate::builtins::registry::function_sig(function).map(Arc::new))
             .map(|signature| self.normalized_arguments(&signature, args))
             .unwrap_or_else(|| args.to_vec())
     }
@@ -1139,8 +1258,8 @@ impl Scanner<'_> {
     }
 
     /// Uses the shared argument planner to find storage that a reachable callable may rebind.
-    fn invalidate_ref_arguments(&mut self, signatures: &[FunctionSig], args: &[Expr]) {
-        let mut variables = HashSet::new();
+    fn invalidate_ref_arguments(&mut self, signatures: &[Arc<FunctionSig>], args: &[Expr]) {
+        let mut variables = HashSet::default();
         for signature in signatures {
             if !signature.ref_params.iter().any(|by_ref| *by_ref) {
                 continue;

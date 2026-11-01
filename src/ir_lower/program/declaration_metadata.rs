@@ -18,7 +18,21 @@ pub(super) fn lower_property_init_thunks(
 ) {
     let mut classes = check_result.classes.iter().collect::<Vec<_>>();
     classes.sort_by_key(|(_, class_info)| class_info.class_id);
+    let private_thunk_classes =
+        crate::types::private_property_init_thunk_classes(check_result.classes.iter());
     for (class_name, class_info) in classes {
+        // Lowered for every owner, reflection classes included: the data table only points at
+        // one when the owner's own thunk survives, so an unused private thunk is never read.
+        if private_thunk_classes.contains(&class_name.trim_start_matches('\\').to_ascii_lowercase()) {
+            function::lower_private_property_init_thunk(
+                class_name,
+                class_info,
+                module,
+                check_result,
+                constants,
+                fiber_return_sigs,
+            );
+        }
         if crate::ir_lower::reflection::canonical_builtin_reflection_class_name(class_name).is_some() {
             continue;
         }
@@ -34,7 +48,9 @@ pub(super) fn lower_property_init_thunks(
 }
 
 /// Returns deterministic sorted keys for metadata placeholder tables.
-pub(super) fn sorted_keys<T>(map: &std::collections::HashMap<String, T>) -> Vec<String> {
+pub(super) fn sorted_keys<T, S: std::hash::BuildHasher>(
+    map: &std::collections::HashMap<String, T, S>,
+) -> Vec<String> {
     let mut keys = map.keys().cloned().collect::<Vec<_>>();
     keys.sort();
     keys
@@ -43,7 +59,7 @@ pub(super) fn sorted_keys<T>(map: &std::collections::HashMap<String, T>) -> Vec<
 /// Collects PHP-visible class and enum names in the order `get_declared_classes()` must expose.
 pub(super) fn collect_declared_class_names(
     program: &Program,
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) -> Vec<String> {
     let mut user_names = Vec::new();
     collect_program_declared_names(
@@ -112,6 +128,25 @@ pub(super) fn collect_declared_trait_source_lines(program: &Program) -> HashMap<
     lines
 }
 
+/// Collects source line ranges for user-declared functions, keyed by canonical function name.
+pub(super) fn collect_declared_function_source_lines(
+    program: &Program,
+) -> HashMap<String, (u32, u32)> {
+    let mut lines = HashMap::new();
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::FunctionDecl { name, .. } => {
+                lines.insert(name.clone(), (stmt.span.line, stmt.span.end_line));
+            }
+            StmtKind::NamespaceBlock { body, .. } | StmtKind::Synthetic(body) => {
+                lines.extend(collect_declared_function_source_lines(body));
+            }
+            _ => {}
+        }
+    }
+    lines
+}
+
 /// Collects direct trait-to-trait use declarations keyed by declaring trait name.
 pub(super) fn collect_declared_trait_uses(program: &Program) -> HashMap<String, Vec<String>> {
     let mut uses = HashMap::new();
@@ -139,6 +174,10 @@ pub(super) fn collect_declared_trait_uses(program: &Program) -> HashMap<String, 
 }
 
 /// Collects direct PHP method names declared by each trait in source order.
+///
+/// The declared spelling is kept: PHP matches a trait method case-insensitively but reports it
+/// from `ReflectionMethod::getName()` exactly as it was written, and every consumer of this list
+/// re-keys with `php_symbol_key` before it looks anything up.
 pub(super) fn collect_declared_trait_method_names(program: &Program) -> HashMap<String, Vec<String>> {
     let mut methods = HashMap::new();
     for stmt in program {
@@ -152,7 +191,7 @@ pub(super) fn collect_declared_trait_method_names(program: &Program) -> HashMap<
                     name.clone(),
                     trait_methods
                         .iter()
-                        .map(|method| php_symbol_key(&method.name))
+                        .map(|method| method.name.clone())
                         .collect(),
                 );
             }
@@ -385,9 +424,9 @@ pub(super) fn collect_declared_trait_final_constants(program: &Program) -> HashM
 }
 
 /// Recursively collects source-declared names that are present in checked metadata.
-pub(super) fn collect_program_declared_names<T>(
+pub(super) fn collect_program_declared_names<T, S: std::hash::BuildHasher>(
     program: &Program,
-    known: &HashMap<String, T>,
+    known: &std::collections::HashMap<String, T, S>,
     seen: &mut HashSet<String>,
     out: &mut Vec<String>,
     pick: impl Copy + Fn(&Stmt) -> Option<&str>,
@@ -449,7 +488,7 @@ pub(super) fn value_or_void_ir_type(php_type: &PhpType) -> IrType {
 /// Retains trait origin by comparing composed declarations with the owner's direct source methods.
 /// This also handles aliases and nested trait uses without matching spans or method bodies.
 pub(super) fn collect_imported_trait_method_names(
-    program: &Program, classes: &HashMap<String, ClassInfo>,
+    program: &Program, classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) -> HashMap<String, HashSet<String>> {
     let mut imported = HashMap::new();
     for statement in program {

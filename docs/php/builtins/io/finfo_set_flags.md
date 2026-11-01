@@ -2,7 +2,7 @@
 title: "finfo_set_flags()"
 description: "Changes the persistent fileinfo configuration flags."
 sidebar:
-  order: 327
+  order: 338
 ---
 
 ## finfo_set_flags()

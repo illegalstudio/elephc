@@ -56,6 +56,13 @@ pub enum UnsupportedReason {
     InternalCompilerSurface,
     /// PHP-visible AOT implementation whose Magician implementation has not landed.
     EvalImplementationPending,
+    /// PHP-visible Magician implementation whose AOT counterpart has not landed.
+    ///
+    /// The mirror of `EvalImplementationPending`. The interpreter can grow a surface the compiler
+    /// has no machinery for at all -- `declare(ticks=N)` needs a per-statement hook the AOT
+    /// backend does not emit -- and the registry gate demands that every `Function` contract have
+    /// an AOT binding, so the absence has to be declared rather than left to panic.
+    AotImplementationPending,
 }
 
 /// Expected support for one contract/backend pair.
@@ -130,6 +137,9 @@ pub fn aot_support(contract: &BuiltinContract) -> BackendSupport {
     if matches!(contract.name, "func_get_arg" | "func_get_args" | "func_num_args") {
         return BackendSupport::Implemented(BackendImplementation::CompilerTransform);
     }
+    if is_aot_implementation_pending(contract.id) {
+        return BackendSupport::Unsupported(UnsupportedReason::AotImplementationPending);
+    }
     let implementation = match contract.kind {
         BuiltinKind::Function => BackendImplementation::Registry,
         BuiltinKind::LanguageConstruct => BackendImplementation::LanguageConstruct,
@@ -171,8 +181,69 @@ pub fn eval_support(contract: &BuiltinContract) -> BackendSupport {
 }
 
 /// Prelude-provided surfaces outside `ext/curl` that Magician binds with its own eval homes.
-const EVAL_IMPLEMENTED_PRELUDE_SURFACES: &[&str] =
-    &["hash_copy", "hash_final", "hash_init", "hash_update", "token_get_all", "token_name", "zend_version", "finfo_open", "finfo_close", "finfo_set_flags", "finfo_file", "finfo_buffer", "mime_content_type"];
+///
+/// The three non-hash entries are prelude surfaces INTERPRETED CODE CANNOT REACH: a compiler
+/// prelude is injected into the compiled program, and an `eval()` fragment never runs through
+/// it. Each therefore has a real interpreter implementation rather than a forward:
+/// `interpreter::builtins::core::var_export` (Symfony's routing dumper is interpreted and calls
+/// it), `interpreter::builtins::string::levenshtein`, and
+/// `interpreter::builtins::filesystem::file`. The four
+/// `sodium_crypto_box_*` entries are the
+/// same case: Symfony's `SodiumVault` is interpreted in an eval-heavy build, so
+/// `interpreter::builtins::string::sodium_box` calls `elephc_crypto::sodium` directly.
+/// Leaving one out is not a quiet loss of coverage —
+/// `spec.rs` asserts every binding has an execution route, so the interpreter aborts at startup.
+const EVAL_IMPLEMENTED_PRELUDE_SURFACES: &[&str] = &[
+    "addcslashes",
+    "array_change_key_case",
+    "array_diff_uassoc",
+    "array_diff_ukey",
+    "array_find_key",
+    "array_first",
+    "array_intersect_uassoc",
+    "array_intersect_ukey",
+    "array_last",
+    "array_udiff_assoc",
+    "array_udiff_uassoc",
+    "array_uintersect_assoc",
+    "array_uintersect_uassoc",
+    "file",
+    "finfo_buffer",
+    "finfo_close",
+    "finfo_file",
+    "finfo_open",
+    "finfo_set_flags",
+    "hash_copy",
+    "hash_final",
+    "hash_init",
+    "hash_pbkdf2",
+    "hash_update",
+    "levenshtein",
+    "mime_content_type",
+    "parse_str",
+    "password_algos",
+    "password_get_info",
+    "password_hash",
+    "password_needs_rehash",
+    "password_verify",
+    "preg_filter",
+    "preg_replace_callback_array",
+    "proc_close",
+    "proc_get_status",
+    "proc_nice",
+    "proc_open",
+    "proc_terminate",
+    "sodium_crypto_box_keypair",
+    "sodium_crypto_box_publickey",
+    "sodium_crypto_box_seal",
+    "sodium_crypto_box_seal_open",
+    "strtok",
+    "token_get_all",
+    "token_name",
+    "var_export",
+    "version_compare",
+    "zend_version",
+];
 
 /// Returns the documented execution route for an eval-supported contract.
 pub fn eval_execution(contract: &BuiltinContract) -> Option<EvalExecution> {
@@ -184,10 +255,16 @@ pub fn eval_execution(contract: &BuiltinContract) -> Option<EvalExecution> {
     }
 
     if let Some(runtime_builtin) = runtime_builtin_id(contract.id) {
+        // `headers_sent` joins them for its two by-reference out-parameters, which the boxed-cell
+        // ABI cannot carry: the no-argument form is the shared helper, the others an adapter.
+        // `serialize` / `unserialize` keep the interpreter's own implementation: an object of an
+        // eval-declared class (its `__serialize`, `__sleep`, `Serializable` and hydration) exists
+        // only in the interpreter, so the compiled runtime helper cannot see its declaration.
         return Some(if matches!(
             runtime_builtin,
-            RuntimeBuiltinId::Intval | RuntimeBuiltinId::Round
+            RuntimeBuiltinId::Intval | RuntimeBuiltinId::Round | RuntimeBuiltinId::HeadersSent
                 | RuntimeBuiltinId::MemoryGetUsage | RuntimeBuiltinId::MemoryGetPeakUsage
+                | RuntimeBuiltinId::Serialize | RuntimeBuiltinId::Unserialize
         ) {
             EvalExecution::Adapter {
                 runtime_builtin: Some(runtime_builtin),
@@ -298,33 +375,43 @@ pub fn eval_constant_support(constant: &ConstantContract) -> BackendSupport {
 /// class audit; every name here fails `class_exists()` inside `eval()` today.
 const EVAL_CLASS_IMPLEMENTATION_PENDING: &[&str] = &[];
 
+/// Returns whether a function contract is intentionally available only in Magician.
+fn is_aot_implementation_pending(id: BuiltinId) -> bool {
+    AOT_IMPLEMENTATION_PENDING
+        .iter()
+        .any(|name| id == BuiltinId::from_canonical_name(name))
+}
+
+/// PHP-visible Magician contracts with no AOT implementation yet.
+///
+/// `declare(ticks=N)` runs a handler after every statement of the declared scope. The interpreter
+/// walks statements and can do it; the compiled backend emits no per-statement hook, so these two
+/// have nowhere to bind. Listed rather than silently registered, because a registry binding that
+/// did nothing would report a handler installed and never call it.
+///
+/// `parse_str` used to be listed here for a different reason — a by-reference `$result` with no
+/// compiled-side counterpart of any kind — and is no longer: `crate::parse_str_prelude` declares
+/// it as an injected PHP function, where the out-parameter is an ordinary by-reference parameter.
+const AOT_IMPLEMENTATION_PENDING: &[&str] =
+    &["register_tick_function", "unregister_tick_function"];
+
 /// PHP-visible AOT contracts that do not yet have a Magician implementation binding.
+///
+/// EVERY NAME HERE IS A LATENT WORKER-KILLER, not a cosmetic gap. A call that compiles and runs
+/// in AOT code is an UNCATCHABLE `call to undefined function` the moment the same call is reached
+/// through an `eval()` fragment — which under `--web` means the worker dies before it flushes and
+/// the client sees an empty reply, not an error page. That is exactly how `memory_get_usage()`
+/// blanked every route of the Symfony example in its default environment.
+///
+/// Measured against the Symfony example's `vendor/` (call sites intersected with the files a real
+/// request actually loads, via `get_included_files()`), these are reached on the served request
+/// path: `array_is_list` (12 sites), `unpack` (11), `array_key_first` (7), `array_key_last` (5),
+/// `header_remove` (2); and on the dev/debug path: `setlocale` (4), `dechex` (2). `join` was on
+/// that list too and is now bound, because it is php's documented alias of `implode` and the
+/// implementation already existed. `header_remove` is bound too now, through the shared runtime
+/// builtin that edits the same web bridge list the compiled `header()` fills.
 const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
-    "array_all",
-    "array_any",
-    "array_diff_assoc",
-    "array_find",
-    "array_first",
-    "array_intersect_assoc",
-    "array_is_list",
-    "array_key_first",
-    "array_key_last",
-    "array_last",
-    "array_merge_recursive",
     "array_multisort",
-    "array_replace",
-    "array_replace_recursive",
-    "array_udiff",
-    "array_uintersect",
-    "array_walk_recursive",
-    "bindec",
-    "decbin",
-    "dechex",
-    "decoct",
-    "hexdec",
-    "join",
-    "octdec",
-    "substr_count",
     "zval_free",
     "zval_pack",
     "zval_type",
@@ -344,6 +431,7 @@ mod tests {
         let mut eval_pending = 0;
         let mut aot_registry = 0;
         let mut aot_external = 0;
+        let mut aot_unsupported = 0;
 
         for contract in contracts() {
             match eval_support(contract) {
@@ -363,6 +451,9 @@ mod tests {
                     aot_registry += 1;
                 }
                 BackendSupport::Implemented(_) => aot_external += 1,
+                BackendSupport::Unsupported(UnsupportedReason::AotImplementationPending) => {
+                    aot_unsupported += 1;
+                }
                 other => panic!("unexpected AOT support for {}: {other:?}", contract.name),
             }
         }
@@ -378,7 +469,10 @@ mod tests {
         // raw-memory builtins and `buffer_ptr`, bound in eval through their own registry homes.
         // The tokenizer location helper also uses the shared runtime registry.
         // Five native heap metric bindings share the boxed runtime dispatcher.
-        assert_eq!(eval_registry, 755 + curl_surface);
+        // Main's count plus the Symfony branch's contracts (the three response-header runtime
+        // builtins, the sodium/password/array/preg prelude surfaces, and the eleven array names no
+        // longer eval-pending), measured on the merged catalogs.
+        assert_eq!(eval_registry, 838 + curl_surface);
         // 83 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use, plus the ELEVEN
         // `__elephc_opcache_rt_*` runtime script-cache helpers this branch adds.
@@ -397,10 +491,10 @@ mod tests {
         //
         // None of the eleven is callable from eval'd code. Nor are the four internal aliases
         // the extension-hosting prelude calls (`__elephc_ptr_get`, `__elephc_zval_*`).
-        assert_eq!(eval_internal, 134);
+        assert_eq!(eval_internal, 150);
         // 30 registry builtins awaiting eval homes, plus the 325 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
-        assert_eq!(eval_pending, 359);
+        assert_eq!(eval_pending, 336);
         // The shared mbstring catalog adds sixty-four registry contracts, including
         // its internal INI helper, to the prior compiler registry surface; the eleven
         // `__elephc_opcache_rt_*` runtime script-cache helpers rolled through above add the rest.
@@ -410,10 +504,12 @@ mod tests {
         // Five native heap metric operations use the ordinary AOT registry, and so do the four
         // internal aliases the extension-hosting prelude calls.
         // The PHP 8.5 array value-edge pair adds two AOT-only registry entries.
-        assert_eq!(aot_registry, 824);
+        assert_eq!(aot_registry, 864);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
-        assert_eq!(aot_external, 424 + curl_surface);
+        assert_eq!(aot_external, 458 + curl_surface);
+        // The two tick registrars (`AOT_IMPLEMENTATION_PENDING`).
+        assert_eq!(aot_unsupported, 2);
     }
 
     /// Verifies representative exceptional routes are attached to their contracts.
@@ -428,7 +524,7 @@ mod tests {
             BackendSupport::Implemented(BackendImplementation::Registry)
         );
         assert_eq!(
-            eval_support(lookup("array_all").expect("array_all contract")),
+            eval_support(lookup("array_multisort").expect("array_multisort contract")),
             BackendSupport::Unsupported(UnsupportedReason::EvalImplementationPending)
         );
     }
@@ -459,17 +555,20 @@ mod tests {
 
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         // Includes the internal tokenizer ParseError location operation.
-        // Includes the five native heap metric operations.
+        // Includes the five native heap metric operations, and the two response-header runtime
+        // builtins `headers_list` / `header_remove`.
         assert_eq!(shared_runtime, 91);
-        // Heap usage queries keep a TypeError adapter for non-scalar flags.
-        assert_eq!(hybrid_adapter, 4);
+        // Heap usage queries keep a TypeError adapter for non-scalar flags; `headers_sent` keeps
+        // one for its by-reference out-parameters, and `serialize` / `unserialize` keep the
+        // interpreter's implementation for eval-declared classes.
+        assert_eq!(hybrid_adapter, 7);
         // Includes the four float pointer builtins and `buffer_ptr`, which eval runs through
-        // interpreter adapters, plus the fifty-one GMP homes forwarding to the compiled prelude.
-        assert_eq!(interpreter_adapter, 660 + curl_surface);
+        // interpreter adapters.
+        assert_eq!(interpreter_adapter, 740 + curl_surface);
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own. So do the four
         // internal aliases the extension-hosting prelude calls.
-        assert_eq!(unsupported, 493);
+        assert_eq!(unsupported, 486);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

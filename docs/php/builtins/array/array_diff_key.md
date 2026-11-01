@@ -2,7 +2,7 @@
 title: "array_diff_key()"
 description: "Computes the difference of arrays using keys for comparison."
 sidebar:
-  order: 9
+  order: 10
 ---
 
 ## array_diff_key()

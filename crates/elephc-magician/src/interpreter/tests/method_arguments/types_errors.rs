@@ -108,7 +108,11 @@ return $box->read("not numeric");"#,
     let err = execute_program(&program, &mut scope, &mut values)
         .expect_err("non-numeric string should fail int parameter type");
 
-    assert_eq!(err, EvalStatus::RuntimeFatal);
+    // `php -n` 8.5.6 raises a CATCHABLE TypeError here even WITHOUT `declare(strict_types=1)`:
+    // `Box::read(): Argument #1 ($id) must be of type int, string given, called in ...`, and the
+    // script keeps running. This expectation said `RuntimeFatal`, which made a `catch (\TypeError)`
+    // around such a call impossible to write.
+    assert_eq!(err, EvalStatus::UncaughtThrowable);
 }
 
 /// Verifies eval-declared method class/interface type hints accept matching eval objects.

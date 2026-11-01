@@ -24,7 +24,10 @@
 //!   CONTENT is a separate step from releasing the cell.
 //! - Every expected stdout value is real `php` 8.5 output for the same source.
 
-use crate::support::{compile_and_run_tagged, compile_and_run_with_gc_stats, compile_and_run_with_heap_debug, parse_gc_stats};
+use crate::support::{
+    compile_and_run_capture, compile_and_run_tagged, compile_and_run_with_gc_stats,
+    compile_and_run_with_heap_debug, parse_gc_stats,
+};
 
 /// Asserts a program prints `expected` and allocates exactly as many heap blocks as it frees.
 fn assert_balanced(source: &str, expected: &str) {
@@ -393,4 +396,24 @@ main();
 "#,
         "290,null",
     );
+}
+
+/// A named argument that SKIPS a by-reference parameter leaves it at its declared default, which is
+/// no caller expression: php binds a fresh variable. The checker demanded a variable and refused
+/// to compile `f(1, c: 2)`.
+#[test]
+fn test_named_argument_skipping_a_by_reference_default_compiles() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function f($a, &$b = null, $c = 1) { $b = 5; return $a + $c; }
+var_dump(f(1, c: 2));
+$v = 0;
+var_dump(f(2, $v, c: 3), $v);
+"#,
+    );
+    assert_eq!(out.stdout, r#"int(3)
+int(5)
+int(5)
+"#, "stderr: {}", out.stderr);
+    assert!(!out.stderr.contains("Warning:"), "stderr: {}", out.stderr);
 }

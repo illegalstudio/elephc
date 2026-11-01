@@ -28,11 +28,14 @@ builtin! {
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::None,
         argument_lowering: crate::builtins::semantics::BuiltinArgumentLowering::Standard,
-        callable: BuiltinCallablePolicy::StaticOnly(
-            "runtime-selected strval requires a statically represented source value",
-        ),
+        callable: BuiltinCallablePolicy::Dynamic(callable_accepts_any_source),
         lowering: BuiltinLowering::Eir(lower),
     },
+}
+
+/// `strval(mixed)` accepts every runtime PHP value representation as a callable target.
+fn callable_accepts_any_source(_source: Option<&PhpType>) -> bool {
+    true
 }
 
 /// Returns the effect contract of the reusable EIR string cast.

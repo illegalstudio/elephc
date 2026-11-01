@@ -194,7 +194,9 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             if let Some(rebound) = namespace_fallbacks::resolve_call(&name, &args, span) {
                 return fold_expr(rebound);
             }
-            if name
+            if let Some(folded) = fold_known_class_constant_defined(&name, &args) {
+                folded
+            } else if name
                 .as_canonical()
                 .trim_start_matches('\\')
                 .eq_ignore_ascii_case("function_exists")
@@ -243,6 +245,9 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
                 .map(|(key, value)| (fold_expr(key), fold_expr(value)))
                 .collect(),
         ),
+        ExprKind::ArrayReference(value) => {
+            ExprKind::ArrayReference(Box::new(fold_expr(*value)))
+        }
         ExprKind::ArrayLiteralMixed(entries) => {
             let literal = ExprKind::ArrayLiteralMixed(entries.into_iter()
                 .map(|entry| entry.map_exprs(fold_expr)).collect());
@@ -363,6 +368,14 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             ("PHP_OS_FAMILY", Some(target)) => {
                 ExprKind::StringLiteral(target.platform.php_os_family_name().to_string())
             }
+            // The version surface is fixed by the compile profile, so a version guard
+            // (`if (\PHP_VERSION_ID < 80200) { require … } else { require … }`) is decided here,
+            // before `crate::conditional_classes` counts the class-likes each branch declares.
+            (
+                "PHP_VERSION" | "PHP_VERSION_ID" | "PHP_MAJOR_VERSION" | "PHP_MINOR_VERSION"
+                | "PHP_RELEASE_VERSION",
+                Some(_),
+            ) => php_version_constant_literal(name.trim_start_matches('\\')),
             _ => ExprKind::ConstRef(name),
         },
         ExprKind::NewObject { class_name, args } => ExprKind::NewObject {
@@ -396,6 +409,12 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             object: Box::new(fold_expr(*object)),
             property: Box::new(fold_expr(*property)),
         },
+        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+            ExprKind::DynamicStaticPropertyAccess {
+                receiver,
+                property: Box::new(fold_expr(*property)),
+            }
+        }
         ExprKind::NullsafePropertyAccess { object, property } => ExprKind::NullsafePropertyAccess {
             object: Box::new(fold_expr(*object)),
             property,
@@ -469,6 +488,12 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         ExprKind::ScopedConstantAccess { receiver, name } => {
             ExprKind::ScopedConstantAccess { receiver, name }
         }
+        ExprKind::DynamicScopedConstantAccess { receiver, name } => {
+            ExprKind::DynamicScopedConstantAccess {
+                receiver: Box::new(fold_expr(*receiver)),
+                name,
+            }
+        }
         ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
             receiver,
             args: args.into_iter().map(fold_expr).collect(),
@@ -483,6 +508,19 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         }
     };
     Expr { kind, span }
+}
+
+/// Returns the literal a version constant has under the compile profile, the same values
+/// `codegen_support::prescan::collect_constants` bakes.
+fn php_version_constant_literal(name: &str) -> ExprKind {
+    let version = crate::codegen_support::compile_php_version();
+    match name {
+        "PHP_VERSION" => ExprKind::StringLiteral(version.reported_version_string()),
+        "PHP_VERSION_ID" => ExprKind::IntLiteral(i64::from(version.reported_version_id())),
+        "PHP_MAJOR_VERSION" => ExprKind::IntLiteral(i64::from(version.major())),
+        "PHP_MINOR_VERSION" => ExprKind::IntLiteral(i64::from(version.minor())),
+        _ => ExprKind::IntLiteral(i64::from(version.reported_release())),
+    }
 }
 
 /// Folds the target of an instanceof expression, recursing into the expression form.

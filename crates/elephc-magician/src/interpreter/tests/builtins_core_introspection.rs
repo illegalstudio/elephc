@@ -317,9 +317,15 @@ return true;"#,
 }
 
 /// Verifies stack frames include the active function, arguments, source metadata, and limits.
+///
+/// The fragment runs as `eval()`'d code called from `/tmp/trace.php` line 19, so a frame's file
+/// is php's `FILE(LINE) : eval()'d code` spelling. `php -n` 8.5 prints
+/// `#0 /tmp/trace.php(19) : eval()'d code(9): traced(7)` and reports line 9. The fragment is
+/// parsed and entered the way `execute_parsed_eval` runs one: with source-line markers, inside
+/// the eval'd-code site.
 #[test]
 fn execute_program_materializes_and_prints_backtraces() {
-    let program = parse_fragment(
+    let program = crate::parser::parse_eval_fragment(
         br#"function traced($value) {
     $trace = debug_backtrace();
     echo $trace[0]["function"] . ":" . $trace[0]["args"][0] . ":" . $trace[0]["line"] . "|";
@@ -334,6 +340,7 @@ return function_exists("debug_backtrace");"#,
     .expect("parse eval fragment");
     let mut context = ElephcEvalContext::new();
     context.set_call_site("/tmp/trace.php", "/tmp", 19);
+    context.enter_eval_code_site();
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
@@ -342,15 +349,18 @@ return function_exists("debug_backtrace");"#,
 
     assert_eq!(
         values.output,
-        "traced:7:19|ignored|#0 /tmp/trace.php(19): traced(7)\n"
+        "traced:7:9|ignored|#0 /tmp/trace.php(19) : eval()'d code(9): traced(7)\n"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
 /// Verifies eval printed backtraces use PHP byte escaping for string arguments.
+///
+/// `php -n` 8.5 prints `escaped_trace('a\\b\nc\t\x01\xC3\xA9')` for the same string. The file
+/// spelling and call-site line follow `execute_program_materializes_and_prints_backtraces`.
 #[test]
 fn execute_program_escapes_printed_backtrace_string_arguments() {
-    let program = parse_fragment(
+    let program = crate::parser::parse_eval_fragment(
         br#"function escaped_trace($value) {
     debug_print_backtrace(0, 1);
 }
@@ -361,6 +371,7 @@ return true;"#,
     .expect("parse eval fragment");
     let mut context = ElephcEvalContext::new();
     context.set_call_site("/tmp/escaped-trace.php", "/tmp", 7);
+    context.enter_eval_code_site();
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
@@ -369,12 +380,19 @@ return true;"#,
 
     assert_eq!(
         values.output,
-        "#0 /tmp/escaped-trace.php(7): escaped_trace('a\\\\b\\nc\\t\\x01\\xC3\\xA9')\n"
+        "#0 /tmp/escaped-trace.php(7) : eval()'d code(5): escaped_trace('a\\\\b\\nc\\t\\x01\\xC3\\xA9')\n"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
 /// Verifies nested eval method frames preserve class, object, call type, arguments, and limits.
+///
+/// A negative limit selects no frame (`php -n` 8.5 counts `0`). `php -n` 8.5 prints the two
+/// frames at `eval()'d code(6)` and `eval()'d code(3)`, the lines of the calls; with no
+/// per-statement line markers in an eval fragment, a frame entered from a method body reports
+/// that method's declaration line (5 and 2) instead -- the same known gap as the call-site line
+/// in `execute_program_materializes_and_prints_backtraces`. php also counts a fourth frame, the
+/// `eval()` itself, which this harness does not enter.
 #[test]
 fn execute_program_materializes_nested_method_backtraces() {
     let program = parse_fragment(
@@ -417,12 +435,17 @@ return true;"#,
 
     assert_eq!(
         values.output,
-        "3:inner:EvalTraceFrames:->:object:4|middle:EvalTraceFrames::::static:3|outer:EvalTraceFrames:->:object:2|no-object|0|#0 /tmp/nested-trace.php(31): EvalTraceFrames->inner()\n#1 /tmp/nested-trace.php(31): EvalTraceFrames::middle()\n"
+        "3:inner:EvalTraceFrames:->:object:4|middle:EvalTraceFrames::::static:3|outer:EvalTraceFrames:->:object:2|no-object|0|#0 /tmp/nested-trace.php(31) : eval()'d code(5): EvalTraceFrames->inner()\n#1 /tmp/nested-trace.php(31) : eval()'d code(2): EvalTraceFrames::middle()\n"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
 /// Verifies declaration, scope, extension, include, and visibility-mangled introspection.
+///
+/// `paths:` is php's answer too: `php -n` 8.5 lists `PHP_MAXPATHLEN` under `Core` (and
+/// `PATH_SEPARATOR` under `standard`), and the shared catalog now carries `PHP_MAXPATHLEN`.
+/// The protected and private values come from the eval object's property overlay, where
+/// `get_mangled_object_vars()` read only the public slot mirror and printed them empty.
 #[test]
 fn execute_program_materializes_core_introspection_arrays() {
     let program = parse_fragment(

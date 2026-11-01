@@ -119,6 +119,9 @@ pub(super) fn resolve_expr(
         ExprKind::Throw(inner) => {
             ExprKind::Throw(Box::new(resolve_expr(inner, current_namespace, imports, symbols)))
         }
+        ExprKind::Clone(inner) => {
+            ExprKind::Clone(Box::new(resolve_expr(inner, current_namespace, imports, symbols)))
+        }
         ExprKind::Print(inner) => {
             ExprKind::Print(Box::new(resolve_expr(inner, current_namespace, imports, symbols)))
         }
@@ -184,6 +187,14 @@ pub(super) fn resolve_expr(
                 rewrite_random_procedural_alias(&function_name, &resolved_args)
             {
                 rewritten
+            } else if let Some(rewritten) = rewrite_compact(name, &resolved_args, symbols) {
+                rewritten
+            } else if let Some(rewritten) = rewrite_function_alias(name, &resolved_args, symbols) {
+                rewritten
+            } else if let Some(rewritten) =
+                unwrap_call_user_func_array_references(&function_name, &resolved_args)
+            {
+                rewritten
             } else {
                 ExprKind::FunctionCall {
                     name: function_name,
@@ -208,6 +219,12 @@ pub(super) fn resolve_expr(
                 })
                 .collect(),
         ),
+        ExprKind::ArrayReference(value) => ExprKind::ArrayReference(Box::new(resolve_expr(
+            value,
+            current_namespace,
+            imports,
+            symbols,
+        ))),
         ExprKind::ArrayLiteralMixed(entries) => ExprKind::ArrayLiteralMixed(
             entries
                 .iter()
@@ -290,7 +307,9 @@ pub(super) fn resolve_expr(
             params: resolve_params(params, current_namespace, imports, symbols),
             variadic: variadic.clone(),
             variadic_by_ref: *variadic_by_ref,
-            variadic_type: variadic_type.clone(),
+            variadic_type: variadic_type
+                .as_ref()
+                .map(|ty| resolve_type_expr(ty, current_namespace, imports, symbols)),
             return_type: return_type
                 .as_ref()
                 .map(|ty| resolve_type_expr(ty, current_namespace, imports, symbols)),
@@ -320,16 +339,25 @@ pub(super) fn resolve_expr(
                 .collect(),
         },
         ExprKind::ConstRef(name) => {
-            let resolved = resolved_name(resolve_constant_name(
-                name,
-                current_namespace,
-                imports,
-                symbols,
-            ));
+            let resolved = resolve_constant_name(name, current_namespace, imports, symbols);
+            // An unqualified name this file cannot bind keeps php's global fallback: the
+            // namespaced constant is tried first and the global one after it, so a constant only
+            // another file (or the runtime) defines still resolves. See `Name::function_fallback`.
+            let keeps_global_fallback = name.is_unqualified()
+                && resolved.contains('\\')
+                && !symbols.has_constant(&resolved)
+                && name
+                    .last_segment()
+                    .is_none_or(|segment| !imports.constants.contains_key(segment));
+            let resolved = resolved_name(resolved);
             if !in_constant_expression() && is_mt_rand_php(&resolved) {
                 mt_rand_php_read(expr.span)
             } else {
-                ExprKind::ConstRef(resolved)
+                ExprKind::ConstRef(if keeps_global_fallback {
+                    resolved.with_function_fallback()
+                } else {
+                    resolved
+                })
             }
         }
         // `new Box<int>(...)`. Both halves need resolving and the CATCH-ALL below would resolve
@@ -350,6 +378,17 @@ pub(super) fn resolve_expr(
                 imports,
                 symbols,
             )),
+            args: args
+                .iter()
+                .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))
+                .collect(),
+        },
+        // `new $class(Foo::class)`: the arguments are ordinary expressions in the enclosing
+        // namespace. They were left untouched, so a `::class` argument lost its namespace and
+        // Laravel's `new $collection(...)`/`new $cls(PostResource::class)` handed the callee
+        // `PostResource` instead of `App\Http\Resources\PostResource`.
+        ExprKind::NewDynamic { name_expr, args } => ExprKind::NewDynamic {
+            name_expr: Box::new(resolve_expr(name_expr, current_namespace, imports, symbols)),
             args: args
                 .iter()
                 .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))
@@ -421,6 +460,12 @@ pub(super) fn resolve_expr(
             },
             name: name.clone(),
         },
+        ExprKind::DynamicScopedConstantAccess { receiver, name } => {
+            ExprKind::DynamicScopedConstantAccess {
+                receiver: Box::new(resolve_expr(receiver, current_namespace, imports, symbols)),
+                name: name.clone(),
+            }
+        }
         ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
             receiver: match receiver {
                 StaticReceiver::Named(name) => StaticReceiver::Named(resolved_name(
@@ -512,27 +557,25 @@ pub(super) fn resolve_expr(
                     name: resolved_name("__elephc_list_identifiers".to_string()),
                     args: resolved_args,
                 }
-            } else if method_key == "fromcallable"
+            } else if let Some(rewritten) = (method_key == "fromcallable"
                 && resolved_args.len() == 1
                 && matches!(
                     &resolved_receiver,
                     StaticReceiver::Named(name)
                         if name.last_segment().is_some_and(|segment| segment.eq_ignore_ascii_case("Closure"))
                             && !symbols.declares_class_like(&name.as_canonical())
+                ))
+            .then(|| {
+                closure_from_literal_callable(
+                    &resolved_args[0],
+                    current_namespace,
+                    imports,
+                    symbols,
                 )
-                && matches!(&resolved_args[0].kind, ExprKind::StringLiteral(_))
+            })
+            .flatten()
             {
-                let ExprKind::StringLiteral(candidate) = &resolved_args[0].kind else {
-                    unreachable!("Closure::fromCallable literal guard must hold")
-                };
-                ExprKind::FirstClassCallable(CallableTarget::Function(resolved_name(
-                    resolve_function_name(
-                        &parse_callback_name(candidate),
-                        current_namespace,
-                        imports,
-                        symbols,
-                    ),
-                )))
+                rewritten
             } else {
                 ExprKind::StaticMethodCall {
                     receiver: resolved_receiver,
@@ -586,6 +629,20 @@ pub(super) fn resolve_expr(
             element_type: resolve_type_expr(element_type, current_namespace, imports, symbols),
             len: Box::new(resolve_expr(len, current_namespace, imports, symbols)),
         },
+        ExprKind::Yield { key, value } => ExprKind::Yield {
+            key: key.as_ref().map(|key| {
+                Box::new(resolve_expr(key, current_namespace, imports, symbols))
+            }),
+            value: value.as_ref().map(|value| {
+                Box::new(resolve_expr(value, current_namespace, imports, symbols))
+            }),
+        },
+        ExprKind::YieldFrom(inner) => ExprKind::YieldFrom(Box::new(resolve_expr(
+            inner,
+            current_namespace,
+            imports,
+            symbols,
+        ))),
         // A named argument wraps its value expression — without this arm the value escaped
         // resolution entirely, so e.g. `new self(url: new Url('/'))` left the imported `Url`
         // alias unresolved ("Undefined class: Url").
@@ -766,6 +823,59 @@ fn is_array_rand_function(name: &str) -> bool {
 /// correspond to a known alias. This maps PHP's procedural date API onto elephc's OOP classes
 /// before type checking, so `date_create($s)` becomes `new DateTime($s)`, `date_diff($a, $b)`
 /// becomes `$a->diff($b)`, and so on.
+/// Desugars `compact('a', ['b', 'c'])` with literal names to `['a' => $a ?? null, ...]`.
+///
+/// `compact()` reads the CALLER's variables by name, which compiled code has no table for, so a
+/// call reached nothing (`Call to undefined function compact()`), and Laravel controllers build
+/// every view's data with it. Spelled out as reads, the variables stay visible to the checker,
+/// the optimizer and lowering, so a store only `compact` reads is not dead. The one difference
+/// from php: an UNDEFINED name yields a `null` entry, where php warns and leaves the key out.
+/// Duplicate names collapse to one key as in php. A name that is not a literal (`compact($n)`)
+/// keeps the call.
+fn rewrite_compact(name: &crate::names::Name, args: &[Expr], symbols: &Symbols) -> Option<ExprKind> {
+    if !(name.is_unqualified() || name.is_fully_qualified())
+        || !name
+            .last_segment()
+            .is_some_and(|segment| segment.eq_ignore_ascii_case("compact"))
+        || symbols.declares_function("compact")
+        || args.is_empty()
+    {
+        return None;
+    }
+    fn collect(expr: &Expr, names: &mut Vec<String>) -> bool {
+        match &expr.kind {
+            ExprKind::StringLiteral(value) => {
+                if !names.contains(value) {
+                    names.push(value.clone());
+                }
+                true
+            }
+            ExprKind::ArrayLiteral(items) => items.iter().all(|item| collect(item, names)),
+            _ => false,
+        }
+    }
+    let mut names = Vec::new();
+    if !args.iter().all(|arg| collect(arg, &mut names)) {
+        return None;
+    }
+    let span = args[0].span;
+    Some(ExprKind::ArrayLiteralAssoc(
+        names
+            .into_iter()
+            .map(|variable| {
+                let read = Expr::new(
+                    ExprKind::NullCoalesce {
+                        value: Box::new(Expr::new(ExprKind::Variable(variable.clone()), span)),
+                        default: Box::new(Expr::new(ExprKind::Null, span)),
+                    },
+                    span,
+                );
+                (Expr::new(ExprKind::StringLiteral(variable), span), read)
+            })
+            .collect(),
+    ))
+}
+
 fn rewrite_date_procedural_alias(
     name: &str,
     args: &[Expr],
@@ -854,8 +964,11 @@ fn rewrite_date_procedural_alias(
                 args: full,
             })
         }
-        "date_create" if args.len() <= 2 => Some(new_object("DateTime")),
-        "date_create_immutable" if args.len() <= 2 => Some(new_object("DateTimeImmutable")),
+        // `date_create()` answers `false` for a string it cannot parse, where `new DateTime` throws.
+        "date_create" if args.len() <= 2 => Some(static_call("DateTime", "__elephc_date_create")),
+        "date_create_immutable" if args.len() <= 2 => {
+            Some(static_call("DateTimeImmutable", "__elephc_date_create"))
+        }
         "date_create_from_format" if args.len() == 2 || args.len() == 3 => {
             Some(static_call("DateTime", "createFromFormat"))
         }
@@ -1048,6 +1161,142 @@ fn rewrite_date_procedural_alias(
     }
 }
 
+/// PHP's plain function aliases, as `(alias, canonical)`: the alias behaves exactly like the
+/// function it names, so a call is rewritten to that function and introspection answers for it.
+///
+/// Only aliases whose target elephc implements are listed; a call to any of them used to fail at
+/// run time (`Call to undefined function sizeof()`) and `function_exists()` answered `false`.
+pub(crate) const FUNCTION_ALIASES: &[(&str, &str)] = &[
+    ("sizeof", "count"),
+    ("key_exists", "array_key_exists"),
+    ("pos", "current"),
+    ("strchr", "strstr"),
+    ("fputs", "fwrite"),
+    ("doubleval", "floatval"),
+    ("ini_alter", "ini_set"),
+    ("user_error", "trigger_error"),
+    ("diskfreespace", "disk_free_space"),
+    ("set_file_buffer", "stream_set_write_buffer"),
+    ("stream_register_wrapper", "stream_wrapper_register"),
+    ("socket_set_blocking", "stream_set_blocking"),
+];
+
+/// Returns the function a PHP function alias names, matching the last namespace segment
+/// case-insensitively like the date aliases.
+pub(crate) fn canonical_function_alias(name: &str) -> Option<&'static str> {
+    let bare = name.rsplit('\\').next().unwrap_or("").to_ascii_lowercase();
+    FUNCTION_ALIASES
+        .iter()
+        .find(|(alias, _)| *alias == bare)
+        .map(|(_, canonical)| *canonical)
+}
+
+/// Passes the variables behind `&$x` elements of a literal `call_user_func_array()` argument array
+/// straight to the callback.
+///
+/// php binds a by-reference parameter to the referenced variable, so the callee's write reaches
+/// it; a by-value parameter receives its value either way. The static desugaring of the call
+/// turns the elements into arguments, where an array-reference node is not an expression at all:
+/// the named form panicked the lowering and the positional form was refused ("callback parameter
+/// $v must be passed a variable").
+fn unwrap_call_user_func_array_references(
+    function_name: &crate::names::Name,
+    args: &[Expr],
+) -> Option<ExprKind> {
+    if !function_name
+        .as_canonical()
+        .trim_start_matches('\\')
+        .eq_ignore_ascii_case("call_user_func_array")
+    {
+        return None;
+    }
+    let [callback, array] = args else {
+        return None;
+    };
+    let unwrap = |expr: &Expr| match &expr.kind {
+        ExprKind::ArrayReference(inner) => (**inner).clone(),
+        _ => expr.clone(),
+    };
+    let has_reference = |expr: &Expr| matches!(expr.kind, ExprKind::ArrayReference(_));
+    // A callback held in a variable becomes the direct call `$cb(...)`, the path that writes a
+    // by-reference parameter back to its variable; the static `call_user_func_array` desugaring
+    // could not write a by-reference `mixed` parameter back into a typed local at all.
+    if let ExprKind::Variable(callback_var) = &callback.kind {
+        let call_args = match &array.kind {
+            ExprKind::ArrayLiteral(items) if items.iter().any(has_reference) => {
+                Some(items.iter().map(unwrap).collect::<Vec<_>>())
+            }
+            ExprKind::ArrayLiteralAssoc(pairs)
+                if pairs.iter().any(|(_, value)| has_reference(value)) =>
+            {
+                pairs
+                    .iter()
+                    .map(|(key, value)| match &key.kind {
+                        ExprKind::StringLiteral(name) => Some(Expr::new(
+                            ExprKind::NamedArg {
+                                name: name.clone(),
+                                value: Box::new(unwrap(value)),
+                            },
+                            value.span,
+                        )),
+                        ExprKind::IntLiteral(_) => Some(unwrap(value)),
+                        _ => None,
+                    })
+                    .collect::<Option<Vec<_>>>()
+            }
+            _ => None,
+        };
+        if let Some(args) = call_args {
+            return Some(ExprKind::ClosureCall {
+                var: callback_var.clone(),
+                args,
+            });
+        }
+    }
+    let array_kind = match &array.kind {
+        ExprKind::ArrayLiteral(items) if items.iter().any(has_reference) => {
+            ExprKind::ArrayLiteral(items.iter().map(unwrap).collect())
+        }
+        ExprKind::ArrayLiteralAssoc(pairs) if pairs.iter().any(|(_, value)| has_reference(value)) => {
+            ExprKind::ArrayLiteralAssoc(
+                pairs
+                    .iter()
+                    .map(|(key, value)| (key.clone(), unwrap(value)))
+                    .collect(),
+            )
+        }
+        _ => return None,
+    };
+    Some(ExprKind::FunctionCall {
+        name: function_name.clone(),
+        args: vec![callback.clone(), Expr::new(array_kind, array.span)],
+    })
+}
+
+/// Rewrites a call to a PHP function alias into a call to the function it names.
+///
+/// Like `compact`, only an unqualified or fully qualified spelling qualifies: an unqualified call
+/// inside a namespace falls back to the global function at run time, and the caller has already
+/// ruled out a user function of the same name.
+fn rewrite_function_alias(
+    name: &crate::names::Name,
+    args: &[Expr],
+    symbols: &Symbols,
+) -> Option<ExprKind> {
+    if !(name.is_unqualified() || name.is_fully_qualified()) {
+        return None;
+    }
+    let alias = name.last_segment()?;
+    let canonical = canonical_function_alias(alias)?;
+    if symbols.declares_function(alias) {
+        return None;
+    }
+    Some(ExprKind::FunctionCall {
+        name: crate::names::Name::unqualified(canonical),
+        args: args.to_vec(),
+    })
+}
+
 /// The lowercase names of PHP's procedural date/time aliases, in one enumerable place.
 ///
 /// Mirrors the name set in `rewrite_date_procedural_alias` (the alias arms there minus their
@@ -1173,4 +1422,67 @@ pub(crate) fn date_procedural_alias_arity(name: &str) -> Option<(usize, usize)> 
         _ => return None,
     };
     Some(range)
+}
+
+/// Rewrites `Closure::fromCallable(<literal>)` to the first-class callable php builds from it.
+///
+/// `'name'` becomes `name(...)`, `'Class::m'` and `['Class', 'm']` become `Class::m(...)`,
+/// `[$object, 'm']` becomes `$object->m(...)`, and a closure or first-class callable is returned
+/// as itself (php hands back the same Closure). Anything else stays a runtime call. Only the
+/// function name went through this before; the rest reached the eval bridge, which leaked its
+/// argument and could not accept a compiled Closure at all ("function "" not found").
+/// `arg` is already name-resolved. Callback strings name classes from the root namespace, and
+/// `self`/`parent`/`static` inside one depend on the calling scope, so those stay runtime.
+fn closure_from_literal_callable(
+    arg: &Expr,
+    current_namespace: Option<&str>,
+    imports: &Imports,
+    symbols: &Symbols,
+) -> Option<ExprKind> {
+    let static_target = |class: &str, method: &str| -> Option<ExprKind> {
+        let class = class.trim_start_matches('\\');
+        if class.is_empty()
+            || method.is_empty()
+            || matches!(class.to_ascii_lowercase().as_str(), "self" | "parent" | "static")
+        {
+            return None;
+        }
+        Some(ExprKind::FirstClassCallable(CallableTarget::StaticMethod {
+            receiver: StaticReceiver::Named(resolved_name(class.to_string())),
+            method: php_symbol_key(method),
+        }))
+    };
+    match &arg.kind {
+        ExprKind::StringLiteral(candidate) => match candidate.split_once("::") {
+            Some((class, method)) => static_target(class, method),
+            None => Some(ExprKind::FirstClassCallable(CallableTarget::Function(resolved_name(
+                resolve_function_name(
+                    &parse_callback_name(candidate),
+                    current_namespace,
+                    imports,
+                    symbols,
+                ),
+            )))),
+        },
+        ExprKind::ArrayLiteral(items) => match items.as_slice() {
+            [receiver, method] => {
+                let ExprKind::StringLiteral(method) = &method.kind else {
+                    return None;
+                };
+                if method.contains("::") {
+                    return None;
+                }
+                match &receiver.kind {
+                    ExprKind::StringLiteral(class) => static_target(class, method),
+                    _ => Some(ExprKind::FirstClassCallable(CallableTarget::Method {
+                        object: Box::new(receiver.clone()),
+                        method: php_symbol_key(method),
+                    })),
+                }
+            }
+            _ => None,
+        },
+        ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_) => Some(arg.kind.clone()),
+        _ => None,
+    }
 }

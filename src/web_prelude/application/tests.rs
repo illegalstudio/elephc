@@ -21,8 +21,8 @@ fn application_request_usage(
     let program = crate::parser::parse(&tokens)
         .unwrap_or_else(|error| panic!("fixture parses: {error:?}\n{source}"));
     let injected = inject_with_autoload_usage(
-        program, PhpVersion::Php85, &[], &mut Default::default(), None,
-        autoload_observes_environment,
+        program, PhpVersion::Php85, &[], std::path::Path::new("index.php"), &mut Default::default(),
+        None, autoload_observes_environment,
     );
     let body = injected.iter().find_map(|statement| match &statement.kind {
         StmtKind::FunctionDecl { name, body, .. } if name == "__elephc_web_prepare_request" => Some(body),
@@ -37,7 +37,6 @@ fn application_environment_demand_omits_unobserved_values() {
     for source in [
         "<?php echo 'ok';",
         "<?php echo getenv('PATH');",
-        "<?php echo $_SERVER['PATH'];",
         "<?php $fn = 'strlen'; echo $fn('ok');",
         "<?php $fn = fn() => 'ok'; echo $fn();",
         "<?php session_set_cookie_params(['path' => '/']); session_start();",
@@ -53,6 +52,7 @@ fn application_environment_demand_omits_unobserved_values() {
 fn application_environment_demand_keeps_observable_values() {
     for source in [
         "<?php echo $_ENV['PATH'];",
+        "<?php echo $_SERVER['PATH'];",
         "<?php $_ENV['local'] = 'value';",
         "<?php echo $GLOBALS['_ENV']['PATH'];",
         "<?php $fn = fn() => $_ENV['PATH']; echo $fn();",
@@ -301,7 +301,7 @@ fn application_injection_supports_small_embedder_stacks() {
             }
             let program = vec![s_expr(expression)];
             let mut inventory = crate::optimize::reachability::PreludeInventory::new();
-            let output = inject(program, PhpVersion::Php85, &[], &mut inventory, None);
+            let output = inject(program, PhpVersion::Php85, &[], std::path::Path::new("index.php"), &mut inventory, None);
             let count = output.len();
             crate::compiler_stack::with_compiler_stack(|| drop(output));
             count

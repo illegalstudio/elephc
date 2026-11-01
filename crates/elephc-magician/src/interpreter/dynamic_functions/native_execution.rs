@@ -17,8 +17,34 @@
 
 use super::*;
 
+thread_local! {
+    /// The eval contexts currently inside a call to a registered AOT function, innermost last.
+    ///
+    /// The generated invoker converts a boxed argument into a `callable` descriptor when the
+    /// parameter is typed `callable`/`Closure`, and an interpreted callback that is not a Closure
+    /// object (a function name, an array callable) has no owner context of its own. The context
+    /// that made the call is the one php would resolve that name in.
+    static NATIVE_CALL_CONTEXTS: std::cell::RefCell<Vec<usize>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Returns the eval context of the innermost interpreted call into a registered AOT function.
+pub(crate) fn current_native_call_context() -> *mut ElephcEvalContext {
+    NATIVE_CALL_CONTEXTS.with(|contexts| {
+        contexts
+            .borrow()
+            .last()
+            .map_or(std::ptr::null_mut(), |context| *context as *mut ElephcEvalContext)
+    })
+}
+
 /// Evaluates a registered AOT function through its descriptor-compatible invoker.
+///
+/// `name` is the PHP name the call was written with (`{closure}` for an anonymous function). The
+/// call is recorded as a live frame while the compiled body runs, so a compiled callee that reads
+/// `debug_backtrace()` or builds a throwable sees the interpreted call site that entered it.
 pub(in crate::interpreter) fn eval_native_function(
+    name: &str,
     function: NativeFunction,
     args: &[EvalCallArg],
     context: &mut ElephcEvalContext,
@@ -27,7 +53,15 @@ pub(in crate::interpreter) fn eval_native_function(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     with_eval_call_arguments(args, context, caller_scope, values, |arguments, context, _, values| {
         let bound = bind_evaluated_native_function_args(&function, arguments, context, values)?;
-        eval_native_function_with_values(function, bound, context, values)
+        if !crate::context::native_call_frames_enabled() {
+            return eval_native_function_with_values(function, bound, context, values);
+        }
+        let frame_args = bound.values.clone();
+        let frame = EvalCallFrame::function(name, Some(frame_args), context);
+        context.push_call_frame(frame);
+        let result = eval_native_function_with_values(function, bound, context, values);
+        context.pop_call_frame();
+        result
     })
 }
 
@@ -66,7 +100,26 @@ fn invoke_native_function_with_staged_args(
             return Err(status);
         }
     };
+    // Copy the hooks and scope pointer before invoking generated code: nested
+    // native/eval calls may reenter the context. Synchronize before observing
+    // the native result or performing reference writeback, including errors.
+    let global_sync = context.native_global_sync.zip(context.global_scope_ptr());
+    if let Some((hooks, scope)) = global_sync {
+        unsafe { (hooks.eval_to_native)(scope) };
+    }
+    NATIVE_CALL_CONTEXTS.with(|contexts| {
+        contexts
+            .borrow_mut()
+            .push(context as *mut ElephcEvalContext as usize)
+    });
+    crate::runtime_hooks::publish_native_call_site(context);
     let result = unsafe { function.call(arg_array) };
+    NATIVE_CALL_CONTEXTS.with(|contexts| {
+        contexts.borrow_mut().pop();
+    });
+    if let Some((hooks, scope)) = global_sync {
+        unsafe { (hooks.native_to_eval)(scope) };
+    }
     // Transfer a native exception before any cleanup can run another destructor.
     let result = values.native_call_result(result);
     let writeback = write_back_native_function_ref_args(bound_args, context, values);
@@ -195,7 +248,7 @@ fn write_back_native_function_ref_slot(
             let Some(target) = target else {
                 return Ok(());
             };
-            let value = values.raw_word_value(*tag, word)?;
+            let value = raw_slot_word_value(*tag, word, values)?;
             publish_native_function_ref_value(target, value, context, values)
         }
         BoundNativeFunctionRefSlot::RawString {
@@ -259,11 +312,16 @@ fn publish_native_function_ref_value(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     if let EvalReferenceTarget::Variable { scope, name } = target {
-        let Some(scope) = (unsafe { scope.as_mut() }) else {
-            let _ = eval_release_value(context, values, value);
-            return Err(EvalStatus::RuntimeFatal);
+        let replaced = unsafe { scope.live_mut() }
+            .ok_or(EvalStatus::RuntimeFatal)
+            .and_then(|scope| set_owned_scope_cell(context, scope, name.clone(), value, values));
+        let replaced = match replaced {
+            Ok(replaced) => replaced,
+            Err(status) => {
+                let _ = eval_release_value(context, values, value);
+                return Err(status);
+            }
         };
-        let replaced = set_owned_scope_cell(context, scope, name.clone(), value, values)?;
         let mut result = Ok(());
         for replaced in replaced {
             let released = eval_release_value(context, values, replaced);

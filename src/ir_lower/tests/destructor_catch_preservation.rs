@@ -210,7 +210,9 @@ fn function_assembly(module: &crate::ir::Module, name: &str, target: &str) -> St
 /// Verifies one bounded local retirement distinguishes older and newly produced exceptions.
 fn assert_local_retirement_exception_gate(body: &str, target: &str) {
     let bounded = body
-        .find("__rt_cleanup_preserve_exception")
+        // The bounded retirement is the dedicated `__rt_retire_mixed_slot` helper (it wraps
+        // `__rt_cleanup_preserve_exception` and answers the caught flag the gate below tests).
+        .find("__rt_retire_mixed_slot")
         .unwrap_or_else(|| panic!("{target}: overwrite cleanup must be bounded:\n{body}"));
     let retirement = &body[bounded..];
     let caught_condition = if target == "linux-x86_64" {
@@ -337,7 +339,7 @@ fn scalar_mixed_loop_uses_only_direct_retirement_on_every_target() {
         );
         let body = function_assembly(&module, "accumulateScalars", target);
         assert!(
-            !body.contains("_php_diagnostic_line"),
+            !body.contains("_php_site"),
             "{target}: scalar cleanup must not republish a destructor-only diagnostic site:\n{body}",
         );
         assert!(

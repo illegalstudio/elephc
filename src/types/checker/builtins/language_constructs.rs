@@ -46,9 +46,9 @@ pub(super) fn check(
             }
             if let Some(arg) = args.first() {
                 let ty = checker.infer_type(arg, env)?;
-                // Not relaxed for `int|float`: `exit status for PHP type Mixed` is what the
-                // backend answers for any boxed status, so the checker keeps the clearer word.
-                if ty != PhpType::Int {
+                // A boxed (`mixed`) status is accepted and coerced at run time; `int|float` and
+                // every other static type stay refused with the clearer word.
+                if !matches!(ty, PhpType::Int | PhpType::Mixed) {
                     return Err(CompileError::new(span, "exit() argument must be integer"));
                 }
             }
@@ -59,9 +59,10 @@ pub(super) fn check(
                 return Err(CompileError::new(span, "empty() takes exactly 1 argument"));
             }
             // `empty($never)` is legal PHP and answers `true`; the tolerated root is bound
-            // to `null` for the operand only (see `null_probe`).
-            let probed = null_probe_env(checker, &args[0], env);
-            checker.infer_null_probe_operand(&args[0], probed.as_ref().unwrap_or(env))?;
+            // to `null` for the operand only (see `null_probe`). An object property is the
+            // same silent probe as for `isset()`: `empty($o->private)` from outside the class
+            // answers `true` (or asks `__isset`), where the ordinary read refused it at compile time.
+            check_isset_arg(checker, &args[0], env)?;
             Ok(PhpType::Bool)
         }
         "unset" => {
@@ -143,6 +144,26 @@ fn check_unset_arg(checker: &mut Checker, arg: &Expr, env: &TypeEnv) -> Result<(
         );
         if unset_object_property_probe_is_valid(checker, &object_ty, property, arg)? {
             return Ok(());
+        }
+    }
+    // `unset($o->items[$k])` rewrites the property it indexes: the shortened array is stored back
+    // through the receiver's slot. A boxed receiver cannot prove the slot's refined shape, so the
+    // named property's untyped slot takes the same widening a whole-property `unset()` records.
+    if let ExprKind::ArrayAccess { .. } = &arg.kind {
+        let mut base = arg;
+        while let ExprKind::ArrayAccess { array, .. } = &base.kind {
+            base = array;
+        }
+        if let ExprKind::PropertyAccess { object, property }
+        | ExprKind::NullsafePropertyAccess { object, property } = &base.kind
+        {
+            if let Ok(object_ty) = checker.infer_null_probe_operand(object, env) {
+                crate::types::checker::clone_override_storage::record_property_unset_destination(
+                    checker,
+                    &object_ty,
+                    Some(property),
+                );
+            }
         }
     }
     if let ExprKind::DynamicPropertyAccess { object, property }

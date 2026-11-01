@@ -2436,3 +2436,38 @@ fn test_pcntl_eval_macos_qos_explicit_default_and_target_surface() {
     );
     assert_eq!(out, "visible|no-linux|default");
 }
+
+/// A signal reaches a loop that makes no call: the back edge is a safe point.
+#[test]
+fn test_pcntl_async_signals_reach_a_tight_loop_without_calls() {
+    let out = compile_and_run(
+        "<?php
+        $done = false;
+        function on_alarm(int $signal, array $info): void { global $done; $done = true; }
+        pcntl_signal(SIGALRM, 'on_alarm');
+        pcntl_async_signals(true);
+        pcntl_alarm(1);
+        $i = 0;
+        while (!$done) { if ($i % 2 == 0) { $i = $i + 1; } else { $i = $i + 3; } }
+        echo 'left-loop';",
+    );
+    assert_eq!(out, "left-loop");
+}
+
+/// A signal reaches a loop inside a nested call, and the calls that return afterwards keep running.
+#[test]
+fn test_pcntl_async_signals_reach_a_loop_inside_nested_calls() {
+    let out = compile_and_run(
+        "<?php
+        $done = false;
+        function on_alarm(int $signal, array $info): void { global $done; $done = true; }
+        function inner() { global $done; $n = 0; for (;;) { if ($done) { return $n >= 0 ? 'inner' : 'neg'; } $n++; } }
+        function middle() { return inner() . '>middle'; }
+        function outer() { return middle() . '>outer'; }
+        pcntl_signal(SIGALRM, 'on_alarm');
+        pcntl_async_signals(true);
+        pcntl_alarm(1);
+        echo outer();",
+    );
+    assert_eq!(out, "inner>middle>outer");
+}

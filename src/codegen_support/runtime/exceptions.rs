@@ -11,16 +11,20 @@
 mod boxed_owner;
 mod cleanup_frames;
 mod call_operand_owner;
+mod call_operand_records;
 mod cleanup_previous;
 mod previous_storage;
 mod owned_values;
 mod protected;
 pub(crate) mod deep_cleanup;
 pub(crate) mod guards;
+mod activation;
+mod include_frame;
 mod chain;
 mod cleanup_call;
 mod cleanup_preserve;
 mod class_implements;
+mod class_name_is_a;
 mod dynamic_instanceof;
 mod destructor_throw;
 mod initialize;
@@ -29,20 +33,29 @@ mod location;
 mod scanned_location;
 pub(crate) use location::{emit_location, emit_creation_line_load};
 mod rethrow_current;
+mod throwable_trace;
 mod ref_cell_release;
 mod previous;
 mod throw_current;
 mod uncaught_report;
 
 pub use class_implements::emit_class_implements_interface;
+pub use include_frame::emit_include_frame_reader;
+pub use class_name_is_a::emit_class_name_is_a;
 pub use boxed_owner::emit_throwable_boxed_owners;
 pub use cleanup_frames::emit_exception_cleanup_frames;
 pub use call_operand_owner::emit_cleanup_call_operand_owner;
+pub use call_operand_records::emit_call_operand_records;
 pub(crate) use protected::emit as emit_protected;
 pub(crate) use protected::emit_status as emit_protected_status;
+pub(crate) use protected::PROTECTED_INPUT_OFFSET;
+pub use activation::emit_php_frame_publish;
 pub use chain::emit_exception_chain;
 pub use cleanup_call::emit_cleanup_invoke;
-pub use cleanup_preserve::emit_cleanup_preserve_exception;
+pub use cleanup_preserve::{
+    emit_cleanup_preserve_exception, emit_release_slot_run, emit_release_slot_table,
+    emit_release_slot_table_preserving, emit_retire_slot, RELEASE_SLOT_KINDS,
+};
 pub(crate) use cleanup_call::emit_guarded_cleanup_call;
 pub use dynamic_instanceof::emit_dynamic_instanceof;
 pub use destructor_throw::emit_destructor_throw;
@@ -51,6 +64,7 @@ pub use matches::emit_exception_matches;
 // The fixed-data emitter defines the string this helper prints; both must agree on its bytes.
 pub(crate) use matches::{ABSENT_MESSAGE, ABSENT_MESSAGE_SYMBOL};
 pub use rethrow_current::emit_rethrow_current;
+pub use throwable_trace::emit_throwable_capture_trace;
 pub use ref_cell_release::emit_local_ref_cell_release;
 pub use previous::emit_throwable_previous;
 pub use throw_current::emit_throw_current;

@@ -39,6 +39,7 @@ fn walk_class_heritage<P: Pass>(
         type_params,
         extends_args,
         interface_args,
+        doc_annotated,
     } = *generics;
     let type_params = walk_type_params(type_params, pass, span);
     let (extends, extends_args) = match extends {
@@ -50,7 +51,7 @@ fn walk_class_heritage<P: Pass>(
     };
     let (implements, interface_args) = walk_inherited_list(implements, interface_args, pass, span);
     (
-        GenericDecl::new(type_params, extends_args, interface_args),
+        GenericDecl::with_origin(type_params, extends_args, interface_args, doc_annotated),
         extends,
         implements,
     )
@@ -70,11 +71,12 @@ fn walk_interface_heritage<P: Pass>(
         type_params,
         extends_args: _,
         interface_args,
+        doc_annotated,
     } = *generics;
     let type_params = walk_type_params(type_params, pass, span);
     let (extends, interface_args) = walk_inherited_list(extends, interface_args, pass, span);
     (
-        GenericDecl::new(type_params, Vec::new(), interface_args),
+        GenericDecl::with_origin(type_params, Vec::new(), interface_args, doc_annotated),
         extends,
     )
 }
@@ -119,15 +121,16 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
     let attributes = stmt.attributes.clone();
     let kind = match stmt.kind {
         StmtKind::Synthetic(stmts) => StmtKind::Synthetic(walk_program(stmts, pass)),
-        StmtKind::IncludeOnceMark { label } => StmtKind::IncludeOnceMark { label },
+        StmtKind::IncludeOnceMark { source_path } => StmtKind::IncludeOnceMark { source_path },
         StmtKind::FunctionVariantGroup { name, variants } => {
             StmtKind::FunctionVariantGroup { name, variants }
         }
         StmtKind::FunctionVariantMark { name, variant } => {
             StmtKind::FunctionVariantMark { name, variant }
         }
-        StmtKind::IncludeOnceGuard { label, body } => StmtKind::IncludeOnceGuard {
-            label,
+        StmtKind::IncludeOnceGuard { source_path, required, body } => StmtKind::IncludeOnceGuard {
+            source_path,
+            required,
             body: walk_program(body, pass),
         },
         StmtKind::Echo(e) => StmtKind::Echo(walk_expr(e, pass)),
@@ -186,6 +189,15 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             property,
             value: walk_expr(value, pass),
         },
+        StmtKind::PropertyRefAssign {
+            object,
+            property,
+            source,
+        } => StmtKind::PropertyRefAssign {
+            object: Box::new(walk_expr(*object, pass)),
+            property,
+            source: walk_expr(source, pass),
+        },
         StmtKind::PropertyArrayPush {
             object,
             property,
@@ -233,6 +245,30 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             receiver: walk_static_receiver(receiver, pass, span),
             property,
             index: walk_expr(index, pass),
+            value: walk_expr(value, pass),
+        },
+        StmtKind::StaticPropertyElementRefAssign {
+            receiver,
+            property,
+            index,
+            source,
+        } => StmtKind::StaticPropertyElementRefAssign {
+            receiver: walk_static_receiver(receiver, pass, span),
+            property,
+            index: walk_expr(index, pass),
+            source: walk_expr(source, pass),
+        },
+        StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property,
+            index,
+            append,
+            value,
+        } => StmtKind::DynamicStaticPropertyWrite {
+            receiver: walk_static_receiver(receiver, pass, span),
+            property: Box::new(walk_expr(*property, pass)),
+            index: index.map(|index| walk_expr(index, pass)),
+            append,
             value: walk_expr(value, pass),
         },
         StmtKind::If {
@@ -379,6 +415,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
         StmtKind::ClassDecl {
             name,
             generics,
+            doc_comment,
             extends,
             implements,
             is_abstract,
@@ -387,7 +424,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             trait_uses,
             properties,
             methods,
-        constants,
+            constants,
         } => {
             pass.enter_class(&name);
             let (generics, extends, implements) =
@@ -401,7 +438,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
                 .into_iter()
                 .map(|m| walk_class_method(m, pass))
                 .collect();
-            let constants = constants
+            let new_constants = constants
                 .into_iter()
                 .map(|c| walk_class_constant(c, pass))
                 .collect();
@@ -409,6 +446,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             StmtKind::ClassDecl {
                 name,
                 generics,
+                doc_comment,
                 extends,
                 implements,
                 is_abstract,
@@ -417,7 +455,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
                 trait_uses,
                 properties: new_properties,
                 methods: new_methods,
-            constants,
+                constants: new_constants,
             }
         }
         StmtKind::TraitDecl {
@@ -426,7 +464,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             trait_uses,
             properties,
             methods,
-        constants,
+            constants,
         } => {
             pass.enter_trait(&name);
             // A trait's generic half is its type parameters alone: it has no parent and
@@ -447,7 +485,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
                 .into_iter()
                 .map(|m| walk_class_method(m, pass))
                 .collect();
-            let constants = constants
+            let new_constants = constants
                 .into_iter()
                 .map(|c| walk_class_constant(c, pass))
                 .collect();
@@ -458,7 +496,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
                 trait_uses,
                 properties: new_properties,
                 methods: new_methods,
-            constants,
+                constants: new_constants,
             }
         }
         StmtKind::InterfaceDecl {
@@ -467,7 +505,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             extends,
             properties,
             methods,
-        constants,
+            constants,
         } => {
             pass.enter_class(&name);
             // An interface has no single parent, so every inherited name — and every type
@@ -575,6 +613,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
         | StmtKind::PackedClassDecl { .. }
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ClassLikeActivate { .. }
         | StmtKind::ExternGlobalDecl { .. }) => other,
     };
     pass.transform_stmt(Stmt {

@@ -284,7 +284,8 @@ fn test_by_ref_foreach_nested_json_decode_assoc_payloads() {
 /// `Fatal error: foreach over iterable with unsupported kind` and exit code 70. Reference PHP
 /// 8.5.6 (`php -d xdebug.mode=off`) prints `S` on stdout,
 /// `Warning: foreach() argument must be of type array|object, int given` on stderr, and exits 0;
-/// elephc now matches, minus the ` in <file> on line <n>` tail it does not synthesize.
+/// elephc now matches, including php's ` in <file> on line <n>` tail; the file is the test's
+/// temporary path, so only the message and the line are asserted.
 #[test]
 fn test_mixed_foreach_over_non_iterable_warns_and_preserves_prior_side_effects() {
     let out = compile_and_run_capture(
@@ -301,12 +302,14 @@ fn test_mixed_foreach_over_non_iterable_warns_and_preserves_prior_side_effects()
     );
     assert!(out.success, "program unexpectedly failed: {}", out.stderr);
     assert_eq!(out.stdout, "S");
-    assert_eq!(
-        out.stderr,
-        "Warning: foreach() argument must be of type array|object, int given\n",
+    assert!(
+        out.stderr
+            .starts_with("Warning: foreach() argument must be of type array|object, int given in "),
         "{}",
         out.stderr
     );
+    assert!(out.stderr.ends_with(" on line 7\n"), "{}", out.stderr);
+    assert_eq!(out.stderr.lines().count(), 1, "{}", out.stderr);
 }
 
 /// Verifies `foreach` over an `iterable`-typed `Iterator` implementation emits the correct keys and
@@ -2024,5 +2027,82 @@ echo 'done';
         out.stderr.contains("leak summary: clean"),
         "expected a clean heap-debug leak summary, got: {}",
         out.stderr
+    );
+}
+
+/// Verifies a boxed `mixed` array can cross an iterable return boundary.
+#[test]
+fn test_mixed_array_crosses_iterable_return_boundary() {
+    let out = compile_and_run(
+        r#"<?php
+function dynamic_items(): mixed { return ["a" => 4, "b" => 5]; }
+function return_iterable(): iterable { return dynamic_items(); }
+foreach (return_iterable() as $key => $value) { echo $key, $value; }
+"#,
+    );
+    assert_eq!(out, "a4b5");
+}
+
+
+/// A by-reference `foreach` over a HASH yields the element's VALUE, not the box that holds it.
+///
+/// `iterator_source_kind_from_type` routes every `AssocArray` to `DynamicIterable` — an
+/// associative checker shape can wear compact indexed storage at run time — and the by-reference
+/// arm of that path calls `__rt_hash_to_mixed`, which REWRITES EVERY BUCKET to hold a boxed Mixed
+/// cell before the first iteration. `foreach_ref_value_type` kept answering the DECLARED element
+/// type, so `load_ref_cell` handed back the box POINTER:
+///
+///     $v = ['a' => 1, 'b' => 2];
+///     foreach ($v as $k => &$z) { echo "$k=$z;"; }    // a=4374092928;b=4374092976;
+///
+/// Writing through the variable still worked, because the store overwrites the slot — which is
+/// exactly why this reads as "mutation works, reading does not" and survived so long.
+///
+/// An INDEXED source with concrete elements keeps `Indexed { elem }`, takes
+/// `ensure_unique_static_iter_source` and is never boxed, so the fixture pins that side too: the
+/// asymmetry between them is the whole defect.
+///
+/// Symfony reaches it in `EventDispatcher::optimizeListeners`, whose listener table is keyed by
+/// PRIORITY — a hash — so every route 404ed while the single-listener error page looked perfect.
+///
+/// Oracle: `php -n` prints the asserted lines.
+#[test]
+fn test_a_by_ref_foreach_over_a_hash_reads_values_not_boxes() {
+    let out = compile_and_run(
+        r#"<?php
+$flat = ['a' => 1, 'b' => 2];
+$out = '';
+foreach ($flat as $k => &$z) { $out .= $k . '=' . $z . ';'; }
+unset($z);
+echo $out, "\n";
+echo json_encode($flat), "\n";
+
+$hash = [5 => [1, 2], 9 => [3, 4]];
+$seen = [];
+foreach ($hash as &$row) { foreach ($row as &$v) { $seen[] = $v; } }
+unset($row, $v);
+echo implode(',', $seen), "\n";
+
+$indexed = [[1, 2], [3, 4]];
+$seen = [];
+foreach ($indexed as &$r2) { foreach ($r2 as &$v2) { $seen[] = $v2; } }
+unset($r2, $v2);
+echo implode(',', $seen), "\n";
+
+$doubled = ['a' => 1, 'b' => 2];
+foreach ($doubled as &$d) { $d = $d * 2; }
+unset($d);
+echo json_encode($doubled), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "a=1;b=2;\n",
+            "{\"a\":1,\"b\":2}\n",
+            "1,2,3,4\n",
+            "1,2,3,4\n",
+            "{\"a\":2,\"b\":4}\n",
+        )
     );
 }

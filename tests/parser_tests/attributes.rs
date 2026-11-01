@@ -121,7 +121,7 @@ fn test_qualified_attribute_name_parses() {
     // Fully-qualified names with leading and inner backslashes must be
     // accepted by the attribute parser.
     let stmts =
-        parse_source("<?php #[\\Symfony\\Contracts\\Service\\Attribute\\Required] class C {}");
+        parse_source("<?php #[\\Vendor\\Package\\Service\\Attribute\\Required] class C {}");
     assert_eq!(first_class_decl_name(&stmts), "C");
 }
 
@@ -305,16 +305,16 @@ fn test_property_attribute_is_persisted() {
 /// Verifies qualified attribute name preserves parts.
 #[test]
 fn test_qualified_attribute_name_preserves_parts() {
-    // Fully-qualified attribute name `#[\Symfony\...\Required]` is stored with
+    // A fully-qualified attribute name ending in `Required` is stored with
     // `is_fully_qualified() == true` and the raw string preserved minus the leading backslash.
     let stmts =
-        parse_source("<?php #[\\Symfony\\Contracts\\Service\\Attribute\\Required] class C {}");
+        parse_source("<?php #[\\Vendor\\Package\\Service\\Attribute\\Required] class C {}");
     let (groups, _, _) = class_decl(&stmts);
     let name = &groups[0].attributes[0].name;
     assert!(name.is_fully_qualified(), "expected fully-qualified name");
     assert_eq!(
         name.as_str(),
-        "Symfony\\Contracts\\Service\\Attribute\\Required",
+        "Vendor\\Package\\Service\\Attribute\\Required",
     );
 }
 

@@ -25,27 +25,21 @@ use crate::web_prelude::PhpVersion;
 
 /// Where the compile profile came from.
 ///
-/// The variant set is deliberately open to growth: the resolution ladder this feature is
-/// designed around (an explicit flag, then a Composer platform pin, then `.php-version`, then
-/// a `require.php` constraint, then the newest maintained profile) adds variants here without
-/// touching the reporting logic, which only distinguishes "the user chose" from "elephc
-/// chose".
+/// The variant set is deliberately open to growth: new profile declarations can be added without
+/// touching the reporting logic, which only distinguishes an explicit choice from an assumed one.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Provenance {
     /// An explicit `--php-version` on the command line.
     Flag,
-    /// `composer.lock`'s `platform-overrides.php` — what the project actually installed
-    /// against, and the highest-confidence declaration available.
-    ComposerLock,
-    /// `composer.json`'s `config.platform.php` — Composer's own way of saying "resolve as if
-    /// PHP were exactly this".
-    ComposerPlatform,
-    /// A `.php-version` file, the phpenv/asdf toolchain convention.
+    /// A dependency lock manifest's exact PHP platform override.
+    LockManifest,
+    /// A project manifest's exact PHP platform declaration.
+    ProjectManifest,
+    /// A `.php-version` file containing an exact language-profile declaration.
     PhpVersionFile,
-    /// `composer.json`'s `require.php` CONSTRAINT, honored only where it excludes the newest
-    /// maintained profile — see `resolve::resolve_in` for why that restriction is what makes
-    /// reading a range defensible.
-    ComposerRequire,
+    /// A project manifest's PHP version constraint, used only when it excludes the newest
+    /// maintained profile.
+    ProjectConstraint,
     /// Nothing selected it; the newest maintained profile was assumed.
     Default,
 }
@@ -55,10 +49,10 @@ impl Provenance {
     fn label(self) -> &'static str {
         match self {
             Self::Flag => "--php-version",
-            Self::ComposerLock => "composer.lock",
-            Self::ComposerPlatform => "composer.json",
+            Self::LockManifest => "lock manifest",
+            Self::ProjectManifest => "project manifest",
             Self::PhpVersionFile => ".php-version",
-            Self::ComposerRequire => "composer.json require.php",
+            Self::ProjectConstraint => "project manifest constraint",
             Self::Default => "default",
         }
     }

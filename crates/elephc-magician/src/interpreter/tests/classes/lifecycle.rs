@@ -74,6 +74,58 @@ return $box->label;"#,
     assert_eq!(values.get(result), FakeValue::String("frozen".to_string()));
 }
 
+/// Verifies eval child properties use independent storage above a native parent layout.
+#[test]
+fn execute_program_stores_eval_properties_above_native_parent_layout() {
+    let program = parse_fragment(
+        br#"class EvalNativeOverlayChild extends KnownClass {
+    public string $label = "base";
+    public function __construct(public array $items) {
+        $this->label = "ready";
+    }
+}
+$first = new EvalNativeOverlayChild(["one"]);
+$second = clone $first;
+$second->label = "clone";
+unset($second->items);
+echo $first->label . ":" . $second->label . ":" . $first->items[0];
+return isset($second->items);"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values)
+        .expect("execute eval class with a native parent");
+
+    assert_eq!(values.output, "ready:clone:one");
+    assert_eq!(values.get(result), FakeValue::Bool(false));
+}
+
+/// Verifies chained assignment writes uninitialized typed properties without reading them first.
+#[test]
+fn execute_program_chains_assignment_into_uninitialized_properties() {
+    let program = parse_fragment(
+        br#"class EvalChainedPropertyAssignment {
+    public array $first;
+    public array $second;
+    public function __construct() {
+        $this->first = $this->second = ["ready"];
+    }
+}
+$box = new EvalChainedPropertyAssignment();
+return $box->first[0] . ":" . $box->second[0];"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values)
+        .expect("execute chained property assignment");
+
+    assert_eq!(values.get(result), FakeValue::String("ready:ready".to_string()));
+}
+
 /// Verifies eval object cloning copies properties before running `__clone()`.
 #[test]
 fn execute_program_clones_eval_object_and_runs_clone_hook() {

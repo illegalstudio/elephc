@@ -2,7 +2,7 @@
 title: "date_timestamp_get()"
 description: "Returns a date's Unix timestamp."
 sidebar:
-  order: 216
+  order: 227
 ---
 
 ## date_timestamp_get()

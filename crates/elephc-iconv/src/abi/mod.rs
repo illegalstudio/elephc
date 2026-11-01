@@ -3,7 +3,8 @@
 //! reach through their `__rt_iconv_*` runtime helpers.
 //!
 //! Called from:
-//! - `__rt_iconv_call` and `__rt_iconv_call_bool`, through the `_elephc_iconv_*_fn` slots.
+//! - `__rt_iconv_call`, `__rt_iconv_call_bool`, and `__rt_iconv_call_str`, through the
+//!   `_elephc_iconv_*_fn` slots.
 //!
 //! Key details:
 //! - The whole extension surface goes through one entry point, so the generated runtime

@@ -59,21 +59,20 @@ pub(super) fn lower_assoc_array_key_set_op(
     super::super::ensure_arg_count(inst, name, 2)?;
     let first = expect_operand(inst, 0)?;
     let second = expect_operand(inst, 1)?;
+    if [first, second].into_iter().any(|operand| {
+        ctx.value_php_type(operand).is_ok_and(|ty| {
+            matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        })
+    }) || matches!(
+        inst.result_php_type.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        return lower_gradual_two_hash_arg_builtin(ctx, inst, name, helper, None);
+    }
     let first_ty = assoc_array_key_set_operand_type(ctx.value_php_type(first)?, name, "first")?;
     let _second_ty = assoc_array_key_set_operand_type(ctx.value_php_type(second)?, name, "second")?;
     require_assoc_array_key_set_result_type(name, &first_ty, &inst.result_php_type.codegen_repr())?;
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.load_value_to_reg(first, "x0")?;
-            ctx.load_value_to_reg(second, "x1")?;
-        }
-        Arch::X86_64 => {
-            ctx.load_value_to_reg(first, "rdi")?;
-            ctx.load_value_to_reg(second, "rsi")?;
-        }
-    }
-    abi::emit_call_label(ctx.emitter, helper);
-    store_if_result(ctx, inst)
+    lower_two_hash_arg_builtin(ctx, inst, name, helper, None, true)
 }
 
 /// Sorts a hash receiver by value and republishes it re-keyed `0..n-1`, the way `sort()` does.
@@ -201,7 +200,12 @@ pub(super) fn lower_indexed_array_sort(
     int_helper: &str,
     str_helper: Option<&str>,
 ) -> Result<()> {
-    super::super::ensure_arg_count(inst, name, 1)?;
+    let max_args = if matches!(name, "natsort" | "natcasesort") {
+        1
+    } else {
+        2
+    };
+    ensure_arg_count_between(inst, name, 1, max_args)?;
     let array = expect_operand(inst, 0)?;
     if matches!(name, "sort" | "rsort")
         && ctx.value_php_type(array)?.codegen_repr() == PhpType::Mixed
@@ -548,13 +552,7 @@ pub(super) fn lower_array_key_sort(
     name: &str,
     order: KeySortOrder,
 ) -> Result<()> {
-    if inst.operands.is_empty() || inst.operands.len() > 2 {
-        return Err(CodegenIrError::invalid_module(format!(
-            "{} expected 1 or 2 args, got {}",
-            name,
-            inst.operands.len()
-        )));
-    }
+    ensure_arg_count_between(inst, name, 1, 2)?;
     let array = expect_operand(inst, 0)?;
     let flags = match inst.operands.get(1) {
         Some(flags) => super::HashSortFlags::Value(*flags),
@@ -570,6 +568,16 @@ pub(super) fn lower_array_key_sort(
                 KeySortOrder::Descending => "__rt_hash_krsort",
             };
             lower_hash_link_sort_with_flags(ctx, inst, helper, flags)
+        }
+        // `array<mixed>` promises no storage shape: a keyed write whose key is only known at run
+        // time (`$g[$name] = $c` over a bare `array` parameter's keys) promotes the list to a
+        // hash in place while the static type stays `array<mixed>`. Answering "already sorted"
+        // from the static type left symfony/console's `list` in registration order. The storage
+        // decides: a hash is sorted like any other, a real list keeps the no-op.
+        PhpType::Array(elem)
+            if order == KeySortOrder::Ascending && elem.codegen_repr() == PhpType::Mixed =>
+        {
+            lower_gradual_list_key_sort(ctx, inst, array)
         }
         PhpType::Array(elem)
             if order == KeySortOrder::Ascending
@@ -589,6 +597,22 @@ pub(super) fn lower_array_key_sort(
              before sorting it by key",
             name, elem
         ))),
+        // A boxed `Mixed` receiver is handled above; a union still dispatches on its runtime tag.
+        PhpType::Union(_) => {
+            let helper = match order {
+                KeySortOrder::Ascending => "__rt_ksort",
+                KeySortOrder::Descending => "__rt_krsort",
+            };
+            let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+            ctx.load_value_to_reg(array, array_arg_reg)?;
+            abi::emit_call_label(ctx.emitter, helper);
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                0x7fff_ffff_ffff_fffe,
+            );
+            store_if_result(ctx, inst)
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "{} for PHP type {:?}",
             name, other
@@ -611,8 +635,43 @@ fn emit_float_slot_sort(ctx: &mut FunctionContext<'_>, name: &str) -> Result<()>
     Ok(())
 }
 
-/// Sorts boxed scalar slots with the same stable PHP schedule as raw float slots.
-/// The guard rejects unsupported container, object, resource and callable comparisons first.
+/// Ascending key sort of an `array<mixed>` value, dispatched on its runtime storage.
+fn lower_gradual_list_key_sort(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+) -> Result<()> {
+    let list = ctx.next_label("ksort_gradual_list");
+    let done = ctx.next_label("ksort_gradual_done");
+    let arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    ctx.load_value_to_reg(array, arg)?;
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #3");                              // heap kind 3 is associative hash storage
+            ctx.emitter.instruction(&format!("b.ne {}", list));                 // a real list is already in key order
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 3");                              // heap kind 3 is associative hash storage
+            ctx.emitter.instruction(&format!("jne {}", list));                  // a real list is already in key order
+        }
+    }
+    lower_hash_link_sort(ctx, inst, "__rt_hash_ksort")?;
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&list);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+    store_if_result(ctx, inst)?;
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Sorts an indexed array of boxed `Mixed` cells through `__rt_usort`, with the same stable PHP
+/// schedule as raw float slots.
+///
+/// The comparator is a runtime callback rather than a user function, so no
+/// capture environment is passed and `__rt_usort` keeps its two-argument path.
+/// A runtime guard first rejects container, object, resource, and callable tags,
+/// whose PHP ordering is not implemented by the shared comparator.
 pub(super) fn emit_mixed_slot_sort(ctx: &mut FunctionContext<'_>, name: &str) -> Result<()> {
     let descending = match name {
         "sort" => 0,
@@ -684,6 +743,12 @@ pub(super) fn user_sort_element_type(ty: PhpType, name: &str) -> Result<PhpType>
                     | PhpType::Never
                     | PhpType::Mixed
                     | PhpType::Object(_)
+                    // A list of rows (`usort($serviceTags, fn (array $a, array $b) => ...)`,
+                    // doctrine-bundle's `EntityListenerPass`, psysh's `FuzzyMatcher`) holds one
+                    // refcounted container pointer per slot, which the permuter moves exactly
+                    // like an object handle.
+                    | PhpType::AssocArray { .. }
+                    | PhpType::Array(_)
             ) || (elem == PhpType::Str && name == "usort")
             {
                 return Ok(elem);

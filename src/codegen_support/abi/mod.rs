@@ -25,7 +25,8 @@ mod values;
 pub use bootstrap::emit_copy_frame_pointer;
 pub use bootstrap::{
     emit_cdylib_exit_escape, emit_enable_heap_debug_flag, emit_enable_web_heap_guard_flag,
-    emit_exit, emit_exit_hook, emit_exit_with_result_reg, emit_store_process_args_to_globals,
+    emit_exit, emit_exit_code_helper, emit_exit_hook, emit_exit_with_result_reg,
+    emit_store_process_args_to_globals,
 };
 pub use borrowed_numeric::emit_mixed_numeric_integer_rhs_call;
 pub use calls::{
@@ -40,12 +41,13 @@ pub(crate) use call_operand_scope::{
     CALL_OPERAND_OWNER_RECORD_BYTES,
     emit_link_call_operand_owner_at_stack, emit_pop_call_operand_owner,
     emit_push_call_operand_owner, emit_unlink_call_operand_owner_at_stack,
+    emit_push_call_operand_owner_call, emit_pop_call_operand_owner_call,
 };
 pub use frame::{
     emit_frame_prologue, emit_frame_restore, emit_frame_slot_address, emit_load_from_address,
     emit_teardown_call_alignment,
     emit_reg_move, emit_return, emit_store_to_address, emit_store_zero_to_address,
-    emit_store_zero_to_local_slot, load_at_offset, load_at_offset_scratch, load_from_caller_stack,
+    emit_store_zero_to_local_slot, emit_zero_local_slot_words, load_at_offset, load_at_offset_scratch, load_from_caller_stack,
     store_at_offset, store_at_offset_scratch,
 };
 #[cfg(test)]
@@ -59,9 +61,9 @@ pub use registers::{
     nested_call_reg, process_argc_reg, process_argv_reg, temp_int_reg, IncomingArgCursor,
     OutgoingArgAssignment,
 };
-pub use strings::emit_owned_mixed_string;
+pub use strings::{emit_owned_mixed_string, emit_strip_leading_namespace_separator};
 pub use symbols::{
-    emit_cmp_reg_to_symbol, emit_dec_symbol, emit_extern_symbol_address,
+    emit_call_label_long_range, emit_cmp_reg_to_symbol, emit_dec_symbol, emit_extern_symbol_address,
     emit_load_extern_symbol_to_reg, emit_load_symbol_to_reg, emit_load_symbol_to_result,
     emit_local_symbol_address, emit_store_imm_to_symbol, emit_store_reg_to_extern_symbol,
     emit_store_reg_to_symbol, emit_store_result_to_symbol, emit_store_zero_to_symbol,

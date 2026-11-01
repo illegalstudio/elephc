@@ -5,8 +5,8 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - `check` validates that the first argument is a string literal and registers the
-//!   constant's type in `checker.constants` as a compile-time side effect.
+//! - `check` registers a literal name's type in `checker.constants` as a compile-time side
+//!   effect; a computed name goes to the run-time constant table instead.
 //! - The hook calls `infer_type` on the value argument to obtain its type for registration.
 
 use crate::builtins::spec::BuiltinCheckCtx;
@@ -30,14 +30,35 @@ builtin! {
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let name_str = match &cx.args[0].kind {
         ExprKind::StringLiteral(s) => s.clone(),
+        // A computed name lands in the run-time constant table (`crate::dynamic_define_prelude`),
+        // which the lowering routes the call to; there is nothing to register at compile time.
+        // Checking the call the lowering emits is also what resolves the table's signature: a
+        // function no source calls is never resolved, and the lowering only routes to a resolved one.
         _ => {
-            return Err(CompileError::new(
+            let table_call = crate::parser::ast::Expr::new(
+                ExprKind::FunctionCall {
+                    name: crate::names::Name::unqualified(
+                        crate::dynamic_define_prelude::DYNAMIC_CONSTANTS_NAME,
+                    ),
+                    args: vec![
+                        crate::parser::ast::Expr::new(
+                            ExprKind::IntLiteral(crate::dynamic_define_prelude::OP_DEFINE),
+                            cx.span,
+                        ),
+                        cx.args[0].clone(),
+                        cx.args[1].clone(),
+                    ],
+                },
                 cx.span,
-                "define() first argument must be a string literal",
-            ));
+            );
+            cx.checker.infer_type(&table_call, cx.env)?;
+            return Ok(PhpType::Bool);
         }
     };
     let ty = cx.checker.infer_type(&cx.args[1], cx.env)?;
+    cx.checker
+        .runtime_define_names
+        .insert(name_str.trim_start_matches('\\').to_string());
     cx.checker.constants.entry(name_str).or_insert(ty);
     Ok(PhpType::Bool)
 }

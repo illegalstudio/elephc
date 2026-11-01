@@ -1,0 +1,52 @@
+---
+type: "Decision"
+title: "Assembling the user .s as N contiguous slices in parallel works and is behaviour-identical, but it publishes tens of thousands of symbols and that cost lands on the linker"
+description: "Patch 07 B1, src/linker/asm split.rs + assemble parallel was built and gated on 2026 09 05 at HEAD 283cd2fe4f with a release compiler and frozen bridge archives. It compiles, 49/49 linker tests pass under bins including"
+resource: "src/linker/mod.rs"
+tags: ["session-learning", "compile-time", "assembler", "parallel", "linker", "symfony"]
+timestamp: "2026-09-05T12:05:09.617Z"
+x-kage-id: "repo:lazy-petting-popcorn:decision:assembling-the-user-s-as-n-contiguous-slices-in-parallel-works-and-is-behaviour-"
+x-kage-type: "decision"
+x-kage-status: "approved"
+x-kage-scope: "repo"
+x-kage-visibility: "team"
+x-kage-confidence: 0.7
+x-kage-verified: "verified"
+x-kage-paths: ["src/linker/mod.rs", "src/linker/command.rs", "src/pipeline/backend.rs"]
+x-kage-stack: ["rust", "macos-aarch64", "mach-o"]
+---
+
+# Assembling the user .s as N contiguous slices in parallel works and is behaviour-identical, but it publishes tens of thousands of symbols and that cost lands on the linker
+
+> Patch 07 B1, src/linker/asm split.rs + assemble parallel was built and gated on 2026 09 05 at HEAD 283cd2fe4f with a …
+
+Patch 07 (B1, src/linker/asm_split.rs + assemble_parallel) was built and gated on 2026-09-05 at HEAD 283cd2fe4f with a release compiler and frozen bridge archives. It compiles, 49/49 linker tests pass under `--bins` (including all eleven asm_split tests and both new command.rs ordering tests), zero warnings.
+
+N=8 against N=1 on freshprobe2, same compiler, minutes apart: stdout, exit code and stderr IDENTICAL; `Section __text` 8,278,104 and `Section __data` 1,113,696 on both; nm additions 315, ALL carrying the `_elephc_xslice_` prefix; nm losses 0 (68,381 -> 68,696 symbols). The assemble phase went 4.81 s -> 1.70 s (2.83x). The `.s` was byte-identical across the two runs, so nothing outside the split moved. This also answers the patch header's own residual worry about `-dead_strip`: the user object carries no `.subsections_via_symbols`, so eight objects are eight atoms, and `__text` did not move by a byte.
+
+On the Symfony input the assemble phase went 122.29 s -> 35.32 s (3.46x), and the split reported "8 parallel slices (5831 temporaries promoted, 46843 locals published)".
+
+THE COST NOBODY COSTED. Every local whose references cross a cut is published `.private_extern`, and every cross-cut assembler temporary is renamed and published. That is 46,843 + 5,831 real symbols the linker must resolve on the Symfony input at N=8, and the count scales with the number of cuts. Any scheme that cuts more finely — for instance content-defined chunking to make slices cache-addressable — buys assembler time and hands it to `ld`. Do not assume more slices is better, and do not assume 8 is optimal: measure TOTAL time (assemble + link) at N=2, N=4 and N=8 before choosing. The link is not obviously monotonic in the cut count either: on freshprobe2 the 8-object link took 164 ms against a normal single-object link of about 330 ms. If fine cuts are wanted for caching, evaluate recombining the slice objects into one with `ld -r` before the final link, which keeps the link line at two objects whatever the stride.
+
+A --keep-symbols binary grows by the promoted names: the Symfony binary went 151,514,568 -> 152,156,952 bytes. A stripped build does not carry them.
+
+NOT YET PROVEN: runbook §6.1.1, that ELEPHC_ASM_JOBS=1 reproduces HEAD's binary byte for byte. Both attempts were contaminated — first by the bridge self-rebuild, then by another agent editing src/codegen/lower_inst/builtins/eval* and crates/elephc-magician in the same worktree. It must be redone on a tree nobody else edits, with frozen archives.
+Evidence: cargo test -j 2 -p elephc --bins linker::: 49 passed, 0 failed. diff of stdout/stderr captures: empty. size -m and nm -n captures compared. --timings tables for freshprobe2 (N=1 and N=8) and for the Symfony --web build. The split's own note line in the --timings Notes section.
+Verified by: cargo test -p elephc --bins linker::; elephc --keep-symbols --timings with ELEPHC_ASM_JOBS=1 and =8; cmp/diff/nm/size on the resulting binaries
+
+## Verification
+
+cargo test -j 2 -p elephc --bins linker::: 49 passed, 0 failed. diff of stdout/stderr captures: empty. size -m and nm -n captures compared. --timings tables for freshprobe2 (N=1 and N=8) and for the Symfony --web build. The split's own note line in the --timings Notes section.
+
+# Citations
+
+[1] explicit_capture (2026-09-05T12:05:09.617Z)
+
+## Kage state
+
+Machine state for lossless round-trip; OKF consumers can ignore it.
+
+```json kage-state
+{"schema_version":2,"id":"repo:lazy-petting-popcorn:decision:assembling-the-user-s-as-n-contiguous-slices-in-parallel-works-and-is-behaviour-","title":"Assembling the user .s as N contiguous slices in parallel works and is behaviour-identical, but it publishes tens of thousands of symbols and that cost lands on the linker","summary":"Patch 07 B1, src/linker/asm split.rs + assemble parallel was built and gated on 2026 09 05 at HEAD 283cd2fe4f with a release compiler and frozen bridge archives. It compiles, 49/49 linker tests pass under bins including","body":"Patch 07 (B1, src/linker/asm_split.rs + assemble_parallel) was built and gated on 2026-09-05 at HEAD 283cd2fe4f with a release compiler and frozen bridge archives. It compiles, 49/49 linker tests pass under `--bins` (including all eleven asm_split tests and both new command.rs ordering tests), zero warnings.\n\nN=8 against N=1 on freshprobe2, same compiler, minutes apart: stdout, exit code and stderr IDENTICAL; `Section __text` 8,278,104 and `Section __data` 1,113,696 on both; nm additions 315, ALL carrying the `_elephc_xslice_` prefix; nm losses 0 (68,381 -> 68,696 symbols). The assemble phase went 4.81 s -> 1.70 s (2.83x). The `.s` was byte-identical across the two runs, so nothing outside the split moved. This also answers the patch header's own residual worry about `-dead_strip`: the user object carries no `.subsections_via_symbols`, so eight objects are eight atoms, and `__text` did not move by a byte.\n\nOn the Symfony input the assemble phase went 122.29 s -> 35.32 s (3.46x), and the split reported \"8 parallel slices (5831 temporaries promoted, 46843 locals published)\".\n\nTHE COST NOBODY COSTED. Every local whose references cross a cut is published `.private_extern`, and every cross-cut assembler temporary is renamed and published. That is 46,843 + 5,831 real symbols the linker must resolve on the Symfony input at N=8, and the count scales with the number of cuts. Any scheme that cuts more finely — for instance content-defined chunking to make slices cache-addressable — buys assembler time and hands it to `ld`. Do not assume more slices is better, and do not assume 8 is optimal: measure TOTAL time (assemble + link) at N=2, N=4 and N=8 before choosing. The link is not obviously monotonic in the cut count either: on freshprobe2 the 8-object link took 164 ms against a normal single-object link of about 330 ms. If fine cuts are wanted for caching, evaluate recombining the slice objects into one with `ld -r` before the final link, which keeps the link line at two objects whatever the stride.\n\nA --keep-symbols binary grows by the promoted names: the Symfony binary went 151,514,568 -> 152,156,952 bytes. A stripped build does not carry them.\n\nNOT YET PROVEN: runbook §6.1.1, that ELEPHC_ASM_JOBS=1 reproduces HEAD's binary byte for byte. Both attempts were contaminated — first by the bridge self-rebuild, then by another agent editing src/codegen/lower_inst/builtins/eval* and crates/elephc-magician in the same worktree. It must be redone on a tree nobody else edits, with frozen archives.\nEvidence: cargo test -j 2 -p elephc --bins linker::: 49 passed, 0 failed. diff of stdout/stderr captures: empty. size -m and nm -n captures compared. --timings tables for freshprobe2 (N=1 and N=8) and for the Symfony --web build. The split's own note line in the --timings Notes section.\nVerified by: cargo test -p elephc --bins linker::; elephc --keep-symbols --timings with ELEPHC_ASM_JOBS=1 and =8; cmp/diff/nm/size on the resulting binaries","type":"decision","scope":"repo","visibility":"team","sensitivity":"internal","status":"approved","confidence":0.7,"tags":["session-learning","compile-time","assembler","parallel","linker","symfony"],"paths":["src/linker/mod.rs","src/linker/command.rs","src/pipeline/backend.rs"],"stack":["rust","macos-aarch64","mach-o"],"source_refs":[{"kind":"explicit_capture","captured_at":"2026-09-05T12:05:09.617Z"}],"context":{"fact":"Patch 07 (B1, src/linker/asm_split.rs + assemble_parallel) was built and gated on 2026-09-05 at HEAD 283cd2fe4f with a release compiler and frozen bridge archives. It compiles, 49/49 linker tests pass under `--bins` (including all eleven asm_split tests and both new command.rs ordering tests), zero warnings.","verification":"cargo test -j 2 -p elephc --bins linker::: 49 passed, 0 failed. diff of stdout/stderr captures: empty. size -m and nm -n captures compared. --timings tables for freshprobe2 (N=1 and N=8) and for the Symfony --web build. The split's own note line in the --timings Notes section."},"freshness":{"ttl_days":365,"last_verified_at":"2026-09-05T12:05:09.617Z","path_fingerprints":[{"path":"src/linker/mod.rs","sha256":"5c456015176d4805726acd64d9631d75ebc2786f7e351abb72b885db39ffcf5e","size":15888},{"path":"src/linker/command.rs","sha256":"76e53ee9546b26b50ca068d8b592f24e17e457a8bbc4e833deb521f64ffc0e67","size":28448},{"path":"src/pipeline/backend.rs","sha256":"5763bde9aff298ef85f5bc214e7daa26dd1b60ad3eaab7b5acdedca158f8b061","size":17079}],"path_fingerprint_policy":"source_hash_staleness","verification":"repo_local_agent_capture"},"edges":[],"quality":{"reviewer":"repo-local-agent","votes_up":0,"votes_down":0,"uses_30d":0,"reports_stale":0,"review_boundary":"git_or_pr","promotion_requires_review":true,"discovery_tokens":4000,"discovery_tokens_estimated":true,"score":94,"reasons":["high-value memory type","has source evidence","grounded to repo paths","tagged","actionable rationale or verification"],"risks":[],"duplicate_candidates":[],"stale_reasons":[],"estimated_tokens_saved":742},"created_at":"2026-09-05T12:05:09.617Z","updated_at":"2026-09-05T12:05:09.617Z","author_branch":"reconcile/dirname-symfony"}
+```
+

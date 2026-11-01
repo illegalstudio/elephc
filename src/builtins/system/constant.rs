@@ -6,55 +6,41 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - `check` mirrors `defined()`'s AOT contract: the constant NAME must be a compile-time string
-//!   literal. It also resolves the constant so the call's result type is the constant's own type
-//!   (`int`, `float`, `string`, `bool`, `null`) instead of `mixed`.
-//! - An unknown name is a COMPILE error here, where reference PHP raises
-//!   `Error: Undefined constant "X"` at runtime. A binary with no constant table cannot look the
-//!   name up, and refusing at compile time is strictly more informative than a runtime fatal.
-//! - Class constants and enum cases (`constant('Foo::BAR')`) are NOT supported: the name is
-//!   resolved through the global constant table only.
-//! - Lowering happens one level up, in
+//! - Literal names retain the referenced constant's precise type, while runtime names use the
+//!   boxed `mixed` representation returned by the constant registry.
+//! - An unknown literal name compiles with a warning and, like a bare read of it, lowers to the
+//!   runtime lookup, which throws php's `Error: Undefined constant "X"`.
+//! - A literal class constant or enum case (`constant('Foo::BAR')`) is checked and lowered as
+//!   the `Foo::BAR` expression it names ([`literal_class_constant_expr`]). Any other `Class::NAME`
+//!   name (`constant(Level::class . '::' . $case)`, Monolog's level lookup) is resolved at run time
+//!   by `__rt_constant` through the compiled class-constant table: public class constants and enum
+//!   cases, with php's `Undefined constant` / `Class "X" not found`.
+//! - Literal lowering happens one level up, in
 //!   `crate::ir_lower::expr::constants::lower_static_constant_call()`, which rewrites the call
-//!   into the same EIR a bare `FOO` reference produces. The registry lowering hook below is a
-//!   guard for paths that bypass that rewrite.
+//!   into the same EIR a bare `FOO` reference produces. Other names lower through the typed
+//!   runtime-function path and the closed-world constant registry.
 
-use crate::builtins::semantics::{
-    BuiltinCallablePolicy, BuiltinEffects, BuiltinLowering, BuiltinLoweringContext,
-    BuiltinLoweringError, BuiltinRequirements, BuiltinResultOwnership, BuiltinResultType,
-    BuiltinRuntimeFunctions, BuiltinSemantics, BuiltinTargetStrategy, BuiltinTargetSupport,
-    BuiltinValidation, LoweredBuiltinValue, NormalizedBuiltinCall,
-};
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
-use crate::parser::ast::ExprKind;
+use crate::names::{Name, NameKind};
+use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
+use crate::span::Span;
 use crate::types::PhpType;
 
 builtin! {
     contract: "constant",
     check: check,
-    semantics: BuiltinSemantics {
-        validation: BuiltinValidation::SignatureOnly,
-        result_type: BuiltinResultType::Checked,
-        effects: BuiltinEffects::Static(crate::ir::Effects::READS_GLOBAL),
-        result_ownership: BuiltinResultOwnership::NonHeap,
-        requirements: BuiltinRequirements::Static(&[]),
-        target_strategy: BuiltinTargetStrategy::EirPrimitive,
-        target_support: BuiltinTargetSupport::All,
-        runtime_functions: BuiltinRuntimeFunctions::None,
-        argument_lowering: crate::builtins::semantics::BuiltinArgumentLowering::Standard,
-        callable: BuiltinCallablePolicy::StaticOnly(
-            "constant() needs a compile-time constant name",
-        ),
-        lowering: BuiltinLowering::Eir(lower),
-    },
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::Constant,
+    ),
 }
 
-/// Validates the literal name and returns the referenced constant's own PHP type.
+/// Returns a literal constant's precise type or `mixed` for a runtime name.
 ///
-/// AOT compilation has no runtime constant table, so the name must be a `StringLiteral`. A
-/// leading `\` is stripped the way PHP's own global-constant lookup does. Returns a
-/// `CompileError` for a dynamic name, a class-constant name, or an unknown constant.
+/// A leading `\` is stripped from literal names the way PHP's global-constant lookup does.
+/// Runtime names are resolved by the emitted constant registry, and so are a literal
+/// `Class::NAME` and a literal name nothing defines (recorded so lowering keeps the throwing
+/// lookup).
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
     let literal = match &cx.args[0].kind {
@@ -66,39 +52,50 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         _ => None,
     };
     let Some(name) = literal else {
-        return Err(CompileError::aot_literal_required(
-            cx.span,
-            "constant() first argument must be a string literal in AOT mode",
-        ));
+        return Ok(PhpType::Mixed);
     };
-    let name = elephc_builtin_contract::canonical_constant_name(&name);
+    let name = elephc_builtin_contract::canonical_constant_name(&name).to_string();
+    if let Some(access) = literal_class_constant_expr(&name, cx.span) {
+        return cx.checker.infer_type(&access, cx.env);
+    }
     if name.contains("::") {
-        return Err(CompileError::new(
-            cx.span,
-            "constant() class constants are not supported; reference the constant directly",
-        ));
+        return Ok(PhpType::Mixed);
     }
-    match cx.checker.constants.get(name) {
-        Some(ty) => Ok(ty.clone()),
-        None => Err(CompileError::new(
-            cx.span,
-            &format!("Undefined constant: {}", name),
-        )),
+    if let Some(ty) = cx.checker.constants.get(&name) {
+        return Ok(ty.clone());
     }
+    if !cx.checker.eval_barrier_active {
+        cx.checker.record_undefined_constant_read(&name, cx.span);
+    }
+    Ok(PhpType::Mixed)
 }
 
-/// Rejects a `constant()` call that reached backend-neutral lowering.
+/// Builds the `Foo::BAR` expression a literal `constant('Foo::BAR')` names.
 ///
-/// Direct calls are rewritten into a plain constant reference by
-/// `crate::ir_lower::expr::constants::lower_static_constant_call()` before the registry
-/// lowering runs, so reaching here means the name was not a literal — which `check` already
-/// refuses for every path that type-checks.
-fn lower(
-    _ctx: &mut dyn BuiltinLoweringContext,
-    call: &NormalizedBuiltinCall<'_>,
-) -> Result<LoweredBuiltinValue, BuiltinLoweringError> {
-    Err(BuiltinLoweringError::new(format!(
-        "{}() needs a compile-time constant name",
-        call.name,
-    )))
+/// The string is always fully qualified (`constant()` performs no namespace resolution), and a
+/// relative receiver (`self`, `static`, `parent`) is left to the refusal, since it would bind to
+/// whatever class the call happens to sit in.
+pub(crate) fn literal_class_constant_expr(name: &str, span: Span) -> Option<Expr> {
+    let (class_name, constant) = name.trim_start_matches('\\').split_once("::")?;
+    if class_name.is_empty()
+        || constant.is_empty()
+        || constant.contains("::")
+        || matches!(
+            class_name.to_ascii_lowercase().as_str(),
+            "self" | "static" | "parent"
+        )
+    {
+        return None;
+    }
+    let parts = class_name.split('\\').map(str::to_string).collect::<Vec<_>>();
+    if parts.iter().any(String::is_empty) {
+        return None;
+    }
+    Some(Expr::new(
+        ExprKind::ScopedConstantAccess {
+            receiver: StaticReceiver::Named(Name::from_parts(NameKind::FullyQualified, parts)),
+            name: constant.to_string(),
+        },
+        span,
+    ))
 }

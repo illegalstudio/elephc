@@ -2,7 +2,7 @@
 title: "krsort()"
 description: "Sorts an array by key in descending order, comparing keys under $flags."
 sidebar:
-  order: 59
+  order: 70
 ---
 
 ## krsort()

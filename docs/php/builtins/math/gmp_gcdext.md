@@ -2,7 +2,7 @@
 title: "gmp_gcdext()"
 description: "Extended greatest common divisor."
 sidebar:
-  order: 604
+  order: 617
 ---
 
 ## gmp_gcdext()

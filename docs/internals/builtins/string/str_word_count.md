@@ -2,7 +2,7 @@
 title: "str_word_count() - internals"
 description: "Compiler internals for str_word_count(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 994
+  order: 1044
 ---
 
 ## `str_word_count()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/str_word_count.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/str_word_count.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

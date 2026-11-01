@@ -51,6 +51,57 @@ echo json_encode($object->items[0]); unset($object);
     }
 }
 
+/// A property's array layout must reach inferred forwarding returns and their callers.
+#[test]
+fn inferred_array_property_forwarding_uses_canonical_storage_on_every_target() {
+    use crate::codegen_support::platform::Target;
+    use crate::types::PhpType;
+    use std::path::Path;
+
+    let source = r#"<?php
+class EntrySource {
+    private $entries = ['one', 'two'];
+    public function values() { return $this->entries; }
+}
+class NullEntrySource {
+    private $entries = null;
+    public function __construct() { $this->entries = ['three', 'four']; }
+    public function values() { return $this->entries; }
+}
+function entries(EntrySource $source) { return $source->values(); }
+function relay(EntrySource $source) { return entries($source); }
+function nullEntries(NullEntrySource $source) { return $source->values(); }
+function literalEntries() { return ['independent']; }
+function walk(EntrySource $source): void {
+    $entries = relay($source);
+    foreach ($entries as $value) { echo $value; }
+}
+walk(new EntrySource());
+foreach (nullEntries(new NullEntrySource()) as $value) { echo $value; }
+echo count(literalEntries());
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        for function_name in ["entries", "relay", "nullEntries"] {
+            let function = module.functions.iter().find(|function| function.name.eq_ignore_ascii_case(function_name))
+                .unwrap_or_else(|| panic!("{name}: missing {function_name}"));
+            assert!(matches!(function.return_php_type, PhpType::AssocArray { .. }),
+                "{name}: {function_name} has stale return storage {:?}", function.return_php_type);
+        }
+        for class in ["EntrySource", "NullEntrySource"] {
+            assert!(matches!(module.class_infos[class].methods["values"].return_type, PhpType::AssocArray { .. }),
+                "{name}: {class} getter must expose its property layout");
+        }
+        let literal = module.functions.iter().find(|function| function.name.eq_ignore_ascii_case("literalEntries")).unwrap();
+        assert_eq!(literal.return_php_type, PhpType::Array(Box::new(PhpType::Str)),
+            "{name}: an unrelated literal return must retain its packed storage");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+}
+
 /// A dynamic callable may widen an object local without making its array property unwritable.
 #[test]
 fn widened_object_property_array_push_rewrites_through_a_local_on_every_target() {
@@ -114,29 +165,16 @@ appendWhileIterating([1]);
         );
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{target}: {error:?}"));
-        let classify = if target == "linux-x86_64" {
-            "call __rt_heap_kind"
-        } else {
-            "bl __rt_heap_kind"
-        };
-        let append = if target == "linux-x86_64" {
-            "call __rt_hash_append"
-        } else {
-            "bl __rt_hash_append"
-        };
-        let classify = asm.find(classify).unwrap_or_else(|| panic!("{target}: {asm}"));
-        let append = asm[classify..]
-            .find(append)
-            .map(|offset| classify + offset)
-            .unwrap_or_else(|| panic!("{target}: {asm}"));
-        let window = &asm[classify.saturating_sub(256)..append];
-        if target == "linux-x86_64" {
-            assert!(window.contains("push rax"), "{target}: {window}");
-            assert!(window.contains("pop rdi"), "{target}: {window}");
-        } else {
-            assert!(window.contains("str x0, [sp, #-16]!"), "{target}: {window}");
-            assert!(window.contains("ldr x0, [sp], #16"), "{target}: {window}");
-        }
+        // A boxed receiver is appended through ONE runtime helper, `__rt_mixed_array_append`, which
+        // classifies the heap kind (packed or promoted hash) and appends inside its own frame; the
+        // inline `__rt_heap_kind` ... `__rt_hash_append` sequence whose receiver spill this test
+        // pinned is no longer emitted at the call site.
+        let call = if target == "linux-x86_64" { "call" } else { "bl" };
+        let start = asm.find("_fn_appendWhileIterating:").unwrap_or_else(|| panic!("{target}: {asm}"));
+        let body = &asm[start..];
+        let body = &body[..body[1..].find("@fn name=").map_or(body.len(), |end| end + 1)];
+        assert!(body.contains(&format!("{call} __rt_mixed_array_append")), "{target}: {body}");
+        assert!(!body.contains("__rt_hash_append"), "{target}: {body}");
     }
 }
 
@@ -176,20 +214,21 @@ walkDeclared(["outer" => ["leaf" => 1], 2]);
         );
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+        // `array_walk()` / `array_walk_recursive()` are AST preludes (`array_walk_prelude`): each
+        // call site is a direct call of the helper, which takes the receiver by reference and
+        // separates it itself, so the old `__rt_array_cell_ensure_unique` + `__rt_array_walk_boxed`
+        // pair is gone from the caller. Two plain walks and one recursive walk remain.
         let call = if target == "linux-x86_64" { "call" } else { "bl" };
-        let cow_call = format!("{call} __rt_array_cell_ensure_unique");
-        let walk_call = format!("{call} __rt_array_walk_boxed");
-        let cows = asm.lines().enumerate().filter_map(|(index, line)| {
-            (line.trim() == cow_call).then_some(index)
-        }).collect::<Vec<_>>();
-        let walks = asm.lines().enumerate().filter_map(|(index, line)| {
-            (line.trim() == walk_call).then_some(index)
-        }).collect::<Vec<_>>();
-        assert!(cows.len() >= 3, "{target}: {asm}");
-        assert_eq!(walks.len(), 3, "{target}: {asm}");
-        assert!(walks.iter().enumerate().all(|(index, walk)| {
-            cows.iter().filter(|cow| *cow < walk).count() > index
-        }), "{target}: each walk must separate its own receiver\n{asm}");
+        let label = "_fn_walkDeclared:";
+        let start = asm.find(label).unwrap_or_else(|| panic!("{target}: {asm}"));
+        let body = &asm[start..];
+        let body = &body[..body[1..].find("@fn name=").map_or(body.len(), |end| end + 1)];
+        let count = |symbol: &str| {
+            let wanted = format!("{call} {symbol}");
+            body.lines().filter(|line| line.trim() == wanted).count()
+        };
+        assert_eq!(count("_fn__u__u_elephc_u_array_u_walk"), 2, "{target}: {body}");
+        assert_eq!(count("_fn__u__u_elephc_u_array_u_walk_u_recursive"), 1, "{target}: {body}");
     }
 }
 
@@ -232,13 +271,16 @@ echo $removed[0][0], count($values);
         );
         let function = module.functions.iter()
             .find(|function| function.name == "removeDeclaredRange").unwrap();
+        // The call is routed to the `array_splice_prelude` helper (boxed receiver, not the native
+        // dense-slot splice), and the `: array` return boundary still proves the PHP array result.
         assert!(function.instructions.iter().any(|inst| {
             inst.op == crate::ir::Op::RuntimeCall
                 && inst.result_php_type.is_php_array()
         }), "{target}: splice must preserve the PHP array result proof");
-        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false)
-            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
-        assert!(asm.contains("__rt_array_splice_refcounted"), "{target}");
+        assert_eq!(
+            user_calls_named(function, &module, crate::array_splice_prelude::ARRAY_SPLICE_GRADUAL_NAME),
+            1, "{target}"
+        );
     }
 }
 
@@ -367,11 +409,21 @@ echo count(spliceBoxed($values));
             source, std::path::Path::new("main.php"), std::path::Path::new("."),
             crate::codegen::platform::Target::parse(target).unwrap(),
         );
+        // A by-reference `array` receiver is boxed, so `array_splice` is routed to the key-aware
+        // `array_splice_prelude` helper, which takes the receiver as `mixed &$array` and separates
+        // and rewrites it itself; the native dense-slot splice (`__rt_array_splice_refcounted`)
+        // would drop a boxed hash receiver, so the caller no longer reaches it.
+        let function = module.functions.iter().find(|f| f.name == "spliceBoxed").unwrap();
+        assert_eq!(
+            user_calls_named(function, &module, crate::array_splice_prelude::ARRAY_SPLICE_GRADUAL_NAME),
+            1,
+            "{target}: {}", crate::ir::print_function(function)
+        );
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-        let cell = asm.find("__rt_array_cell_ensure_unique").unwrap();
-        let payload = asm[cell..].find("__rt_array_to_mixed").unwrap();
-        let splice = asm[cell..].find("__rt_array_splice_refcounted").unwrap();
-        assert!(payload < splice, "{target}");
+        let user_start = asm.find("_fn_spliceBoxed:").unwrap();
+        let body = &asm[user_start..];
+        let body = &body[..body[1..].find("@fn name=").map_or(body.len(), |end| end + 1)];
+        assert!(!body.contains("__rt_array_splice_refcounted"), "{target}");
     }
 }
 
@@ -495,11 +547,7 @@ echo count(setFloatMetadata($argc / 4.0));
             ("__rt_array_push_int", 2), ("__rt_array_push_int", 3),
             ("__rt_array_push_int", 10), ("__rt_array_set_int", 2),
         ] {
-            let stamp = if name == "linux-x86_64" {
-                format!("mov r12, {tag}")
-            } else {
-                format!("mov x11, #{tag}")
-            };
+            let stamp = format!("__rt_array_stamp_{tag}");
             assert!(lines.iter().enumerate().any(|(index, line)| {
                 line.contains(helper) && lines.iter().skip(index + 1).take(12)
                     .any(|line| line.contains(&stamp))
@@ -595,7 +643,9 @@ echo mapDynamicCallback(null, ["key" => "kept"])["key"];
         assert!(assembly.contains("__rt_array_map_boxed"), "{name}");
         assert!(assembly.contains("array_map_null_callback"), "{name}");
         assert!(assembly.contains("array_map(): Argument #1 ($callback) must be a valid callback or null"), "{name}");
-        let env = if name == "linux-x86_64" { "lea rdx, [rsp + 48]" } else { "add x2, x2, #48" };
+        // The environment pointer is the stack slot +48 (past the cleanup record); AArch64 now
+        // forms it straight from `sp` instead of adding to a copied base register.
+        let env = if name == "linux-x86_64" { "lea rdx, [rsp + 48]" } else { "add x2, sp, #48" };
         assert!(assembly.contains(env), "{name}: descriptor environment excludes its cleanup record");
     }
 }
@@ -726,12 +776,24 @@ echo count(directMapPhpArray(["key" => $argc]));
     }
 }
 
+/// Counts the user-function calls in `function` whose callee name contains `needle`.
+fn user_calls_named(
+    function: &crate::ir::Function,
+    module: &crate::ir::Module,
+    needle: &str,
+) -> usize {
+    function.instructions.iter().filter(|instruction| {
+        instruction.op == crate::ir::Op::Call
+            && matches!(&instruction.immediate, Some(crate::ir::Immediate::Data(id))
+                if module.data.function_names.get(id.as_raw() as usize).is_some_and(|name| name.contains(needle)))
+    }).count()
+}
+
 /// Mixed/concrete operand pairs in either order and two boxed sources share the merge ABI on all targets.
 #[test]
 fn php_array_merge_uses_boxed_result_storage_on_every_target() {
     use crate::codegen::platform::Target;
     use crate::ir::{Immediate, RuntimeCallTarget, RuntimeFnId};
-    use crate::types::PhpType;
     use std::path::Path;
 
     let source = r#"<?php
@@ -746,24 +808,27 @@ echo count(mergePhpArrays([$argc], ["key" => $argc]));
         let module = super::lower_source_at_for_target(
             source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
         );
-        let mut calls = 0;
+        // Operands declared `array` are boxed packed-or-hash values, and `array_merge` over them
+        // is routed to the key-aware `__elephc_array_merge_gradual` helper (`array_merge_prelude`),
+        // which renumbers integer keys and keeps string keys; the native slot-copy merge never
+        // sees a boxed operand. Each of the three functions makes exactly one helper call.
+        let mut helper_calls = 0;
         for function in &module.functions {
             for instruction in &function.instructions {
-                if matches!(instruction.immediate,
-                    Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::ArrayMerge)))
-                    | Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
-                        target: RuntimeFnId::ArrayMerge, ..
-                    })))
-                {
-                    calls += 1;
-                    assert_eq!(instruction.result_php_type.codegen_repr(), PhpType::Mixed, "{name}");
-                }
+                assert!(
+                    !matches!(instruction.immediate,
+                        Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::ArrayMerge)))
+                        | Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
+                            target: RuntimeFnId::ArrayMerge, ..
+                        }))),
+                    "{name}: boxed operands must not reach the native merge"
+                );
+            }
+            if ["appendPhpArray", "prependPhpArray", "mergePhpArrays"].contains(&function.name.as_str()) {
+                helper_calls += user_calls_named(function, &module, "__elephc_array_merge_gradual");
             }
         }
-        assert_eq!(calls, 3, "{name}");
-        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
-            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
-        assert!(assembly.matches("__rt_array_merge_boxed").count() >= 3, "{name}");
+        assert_eq!(helper_calls, 3, "{name}");
     }
 }
 
@@ -790,19 +855,20 @@ echo count(mergeDescriptor($callback, [$argc], ["key" => $argc]));
             &mut module, "test_merge_wrapper", &signature, false,
         );
         crate::ir::validate_function(&wrapper).unwrap();
-        let merges = wrapper.instructions.iter().filter(|instruction| matches!(
+        // `array_merge(...)` is variadic in php, so the descriptor wrapper spreads its argument
+        // pack into the gradual helper (`__elephc_array_merge_gradual_only_spread`) instead of the
+        // old two-operand native merge that refused any other arity.
+        assert!(!wrapper.instructions.iter().any(|instruction| matches!(
             instruction.immediate,
             Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::ArrayMerge)))
             | Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
                 target: RuntimeFnId::ArrayMerge, ..
             }))
-        )).collect::<Vec<_>>();
-        assert_eq!(merges.len(), 1, "{name}");
-        assert_eq!(merges[0].operands.len(), 2, "{name}");
-        assert_eq!(merges[0].result_php_type.codegen_repr(), crate::types::PhpType::Mixed, "{name}");
-        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-        assert!(assembly.contains("__rt_array_merge_boxed"), "{name}");
-        assert!(assembly.contains("array_merge() takes exactly 2 arguments"), "{name}");
+        )), "{name}");
+        assert_eq!(
+            user_calls_named(&wrapper, &module, "__elephc_array_merge_gradual_only_spread"), 1,
+            "{name}: {}", crate::ir::print_function(&wrapper)
+        );
     }
 }
 
@@ -1212,8 +1278,11 @@ echo count(projectPhpArray([$argc])), count(projectPhpArray(["key" => $argc]));
         let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
         assert!(assembly.contains("__rt_mixed_unbox"), "{name}");
-        assert!(assembly.contains("__rt_array_to_mixed"), "{name}");
-        assert!(assembly.contains("__rt_hash_iter_next"), "{name}");
+        // A boxed array (packed or hash) is first detached into an owned hash by
+        // `__rt_mixed_to_owned_hash` (lowering of `array_values` in `codegen/lower_inst/arrays.rs`),
+        // and the values are then walked with `__rt_hash_iter_next_value`.
+        assert!(assembly.contains("__rt_mixed_to_owned_hash"), "{name}");
+        assert!(assembly.contains("__rt_hash_iter_next_value"), "{name}");
     }
 }
 
@@ -1302,9 +1371,12 @@ fn class_method_inventory_does_not_expand_one_push_per_name() {
     use crate::ir::{Immediate, Op, RuntimeCallTarget, RuntimeFnId};
     use std::path::Path;
 
-    let methods = (0..40).map(|index| format!("public function method{index}(): void {{}}"))
+    // A literal COMPILED class keeps the plain `GetClassMethods` runtime call (visibility follows
+    // the calling scope at run time), so the constant-size projection is exercised on an
+    // interface, which is still answered from the static method list.
+    let methods = (0..40).map(|index| format!("public function method{index}(): void;"))
         .collect::<Vec<_>>().join("\n");
-    let source = format!("<?php class CompactMethods {{ {methods} }} echo count(get_class_methods(CompactMethods::class));");
+    let source = format!("<?php interface CompactMethods {{ {methods} }} echo count(get_class_methods(CompactMethods::class));");
     let expected = (0..40).map(|index| format!("method{index}"))
         .collect::<Vec<_>>().join("\0");
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {

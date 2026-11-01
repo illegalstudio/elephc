@@ -72,6 +72,24 @@ pub(super) fn eval_reflection_method_single_target_arg(
     Ok(arg.value)
 }
 
+/// Resolves the declared spelling of one AOT method from the generated reflection name table.
+///
+/// A method is looked up case-insensitively but reported with the case it was declared with, so
+/// the requested spelling cannot be trusted as the answer. The generated name table carries the
+/// declaration's own case, so the matching entry is the name PHP would report; a class with no
+/// table rows at all (nothing generated for it) falls back to what the caller asked for.
+pub(super) fn eval_reflection_aot_declared_method_name(
+    reflected_name: &str,
+    requested_method_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let names = eval_reflection_aot_member_names(EVAL_REFLECTION_OWNER_METHOD, reflected_name, values)?;
+    Ok(names
+        .into_iter()
+        .find(|name| name.eq_ignore_ascii_case(requested_method_name))
+        .unwrap_or_else(|| requested_method_name.to_string()))
+}
+
 /// Builds a `ReflectionMethod` object when the reflected method exists in eval or AOT metadata.
 pub(super) fn eval_reflection_method_object_result_if_exists(
     class_name: &str,
@@ -82,26 +100,50 @@ pub(super) fn eval_reflection_method_object_result_if_exists(
     let reflected_name = context
         .resolve_class_like_name(class_name)
         .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
-    if !eval_reflection_class_like_exists(&reflected_name, context) {
-        if let Some(method) = eval_reflection_aot_method_metadata_with_signature_if_exists(
-            &reflected_name,
-            requested_method_name,
+    if eval_reflection_is_builtin_closure(&reflected_name, context) {
+        let Some((method_name, method)) =
+            eval_reflection_builtin_closure_method_metadata(requested_method_name)
+        else {
+            return Ok(None);
+        };
+        return eval_reflection_member_object_result(
+            EVAL_REFLECTION_OWNER_METHOD,
+            &method_name,
+            &method,
             context,
             values,
-        )? {
-            let method_name = eval_reflection_aot_declared_method_name(
-                &reflected_name,
+        )
+        .map(Some);
+    }
+    if !eval_reflection_class_like_exists(&reflected_name, context) {
+        // A class's AOT method table holds what it can call, so a PRIVATE method an ancestor
+        // declares is missing from it -- yet php reflects it through the descendant, with the
+        // ancestor as declaring class. `MicroKernelTrait::registerContainerConfiguration()` asks
+        // `new \ReflectionMethod($this, 'configureContainer')` for the trait's private method, so
+        // any kernel subclass failed "Method Child::configureContainer() does not exist".
+        let mut owner = Some(reflected_name.clone());
+        while let Some(current) = owner {
+            if let Some(method) = eval_reflection_aot_method_metadata_with_signature_if_exists(
+                &current,
                 requested_method_name,
-                values,
-            )?;
-            return eval_reflection_member_object_result(
-                EVAL_REFLECTION_OWNER_METHOD,
-                &method_name,
-                &method,
                 context,
                 values,
-            )
-            .map(Some);
+            )? {
+                let method_name = eval_reflection_aot_declared_method_name(
+                    &current,
+                    requested_method_name,
+                    values,
+                )?;
+                return eval_reflection_member_object_result(
+                    EVAL_REFLECTION_OWNER_METHOD,
+                    &method_name,
+                    &method,
+                    context,
+                    values,
+                )
+                .map(Some);
+            }
+            owner = eval_reflection_aot_parent_class_name(&current, values)?;
         }
         return Ok(None);
     }
@@ -111,12 +153,17 @@ pub(super) fn eval_reflection_method_object_result_if_exists(
         requested_method_name,
         context,
     );
-    let Some(method_name) = method_name else {
-        return Ok(None);
-    };
-    let Some(method) = eval_reflection_method_metadata(&reflected_name, &method_name, context)
-    else {
-        return Ok(None);
+    let method = method_name.as_deref().and_then(|method_name| {
+        eval_reflection_method_metadata(&reflected_name, method_name, context)
+            .map(|method| (method_name.to_string(), method))
+    });
+    let Some((method_name, method)) = method else {
+        return eval_reflection_inherited_aot_method_object_result(
+            &reflected_name,
+            requested_method_name,
+            context,
+            values,
+        );
     };
     eval_reflection_member_object_result(
         EVAL_REFLECTION_OWNER_METHOD,
@@ -128,6 +175,46 @@ pub(super) fn eval_reflection_method_object_result_if_exists(
     .map(Some)
 }
 
+/// Builds the `ReflectionMethod` for a method an eval-declared class INHERITS from a compiled one.
+///
+/// The eval metadata only knows the eval side of the hierarchy, so a method the class takes from
+/// a compiled ancestor was reported missing, while `method_exists()` on the same object said
+/// true. MEASURED against php 8.5.10:
+///
+/// ```text
+/// class Base { public function registerCommands(int $x): void {} }     // compiled
+/// eval('class Child extends Base {}');
+/// new ReflectionMethod(new Child(), 'registerCommands')
+///     php     declaring class Base
+///     elephc  ReflectionException: Method Child::registerCommands() does not exist
+/// ```
+///
+/// Symfony's `FrameworkBundle\Console\Application::registerCommands()` asks exactly that of every
+/// bundle (`new \ReflectionMethod($bundle, 'registerCommands')`), and every console command failed
+/// with it. PHP reports the DECLARING class, which is the compiled ancestor, so the AOT metadata of
+/// the first compiled ancestor that has the method is the whole answer.
+fn eval_reflection_inherited_aot_method_object_result(
+    reflected_name: &str,
+    requested_method_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    for ancestor in context.class_parent_names(reflected_name) {
+        if eval_reflection_class_like_exists(&ancestor, context) {
+            continue;
+        }
+        if let Some(result) = eval_reflection_method_object_result_if_exists(
+            &ancestor,
+            requested_method_name,
+            context,
+            values,
+        )? {
+            return Ok(Some(result));
+        }
+    }
+    Ok(None)
+}
+
 /// Builds a `ReflectionMethod` object or throws PHP's catchable reflection error.
 pub(super) fn eval_reflection_method_object_result_or_throw(
     class_name: &str,
@@ -135,6 +222,10 @@ pub(super) fn eval_reflection_method_object_result_or_throw(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    // php's Reflection constructors autoload the class they are handed, as `ReflectionClass`
+    // already does here: Carbon's `Translator.php` opens with
+    // `new ReflectionMethod(Translation\Translator::class, 'trans')` on a class nothing loaded.
+    eval_reflection_autoload_member_owner(class_name, context, values)?;
     if let Some(result) = eval_reflection_method_object_result_if_exists(
         class_name,
         requested_method_name,
@@ -161,6 +252,18 @@ pub(super) fn eval_reflection_method_object_result_or_throw(
         context,
         values,
     )
+}
+
+/// Autoloads the class a member Reflection constructor names when no world declares it yet.
+fn eval_reflection_autoload_member_owner(
+    class_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if !eval_reflection_class_like_or_runtime_exists(class_name, context, values)? {
+        let _ = crate::interpreter::eval_spl_autoload_class(class_name, context, values)?;
+    }
+    Ok(())
 }
 
 /// Builds an eval-backed `ReflectionMethod` object when the reflected method exists in eval.
@@ -190,14 +293,35 @@ pub(super) fn eval_reflection_method_new(
         &[String::from("class_name"), String::from("method_name")],
         evaluated_args,
     )?;
-    let class_name = eval_reflection_class_target_name(args[0], context, values)?;
     let requested_method_name = eval_reflection_string_arg(args[1], values)?;
+    if requested_method_name.eq_ignore_ascii_case("__invoke")
+        && eval_reflection_value_is_closure(args[0], context, values)?
+    {
+        return eval_reflection_closure_invoke_method_new(args[0], context, values);
+    }
+    let class_name = eval_reflection_class_target_name(args[0], context, values)?;
     eval_reflection_method_object_result_or_throw(
         &class_name,
         &requested_method_name,
         context,
         values,
     )
+}
+
+/// Returns whether a value is a `Closure` to php: a compiled closure or first-class callable
+/// (which crosses the ABI as a descriptor) or an eval closure's registered stand-in object.
+fn eval_reflection_value_is_closure(
+    value: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    Ok(match values.type_tag(value)? {
+        EVAL_TAG_CALLABLE => true,
+        EVAL_TAG_OBJECT => context
+            .closure_object_target(values.object_identity(value)?)
+            .is_some(),
+        _ => false,
+    })
 }
 
 /// Builds an eval-backed `ReflectionProperty` object when the reflected property exists in eval.
@@ -285,6 +409,7 @@ pub(super) fn eval_reflection_property_object_result_or_throw(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    eval_reflection_autoload_member_owner(class_name, context, values)?;
     if let Some(result) = eval_reflection_property_object_result_if_exists(
         class_name,
         property_name,
@@ -329,7 +454,19 @@ pub(super) fn eval_reflection_property_new_for_object(
         )
         .map(Some);
     }
-    if !eval_reflection_object_dynamic_property_exists(object, property_name, values)? {
+    if let Some(property) =
+        eval_reflection_aot_property_metadata_if_exists(&class_name, property_name, context, values)?
+    {
+        return eval_reflection_member_object_result(
+            EVAL_REFLECTION_OWNER_PROPERTY,
+            property_name,
+            &property,
+            context,
+            values,
+        )
+        .map(Some);
+    }
+    if !eval_reflection_object_dynamic_property_exists(object, property_name, context, values)? {
         let message = eval_reflection_missing_member_message(
             EVAL_REFLECTION_OWNER_PROPERTY,
             &class_name,
@@ -369,10 +506,23 @@ pub(super) fn eval_reflection_object_class_name(
 pub(super) fn eval_reflection_object_dynamic_property_exists(
     object: RuntimeCellHandle,
     property_name: &str,
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     if property_name.contains('\0') {
         return Ok(false);
+    }
+    // The overlay is checked FIRST because it is the only store a dynamic property on an
+    // eval-declared object ever reaches: the runtime-slot write is guarded on the property
+    // being declared. The slot scan below still matters for an AOT-backed object, whose
+    // properties really do live in slots.
+    let identity = values.object_identity(object)?;
+    if context
+        .dynamic_property_storage_names(identity)
+        .iter()
+        .any(|name| name == property_name)
+    {
+        return Ok(true);
     }
     let property_count = values.object_property_len(object)?;
     for position in 0..property_count {
@@ -471,6 +621,22 @@ pub(super) fn eval_reflection_object_dynamic_property_names(
             names.push(property_name);
         }
     }
+    // A dynamic property on an eval-declared object is in the context overlay and nowhere
+    // else, so the slot scan above cannot see it. The overlay also holds every DECLARED
+    // property, which the visibility filter removes, leaving exactly the undeclared ones.
+    //
+    // The overlay reports its names in creation order, which is the order PHP lists dynamic
+    // properties in, so they are appended as they come.
+    let identity = values.object_identity(object)?;
+    let overlay_names: Vec<String> = context
+        .dynamic_property_storage_names(identity)
+        .into_iter()
+        .filter(|property_name| {
+            eval_reflection_dynamic_property_name_is_visible(reflected_name, property_name, context)
+        })
+        .filter(|property_name| !names.contains(property_name))
+        .collect();
+    names.extend(overlay_names);
     Ok(names)
 }
 
@@ -573,9 +739,12 @@ pub(super) fn eval_reflection_aot_method_metadata_with_signature_if_exists(
         method_name,
         context,
     );
-    let (source_file, source_location) =
-        eval_reflection_aot_method_source_metadata(flags, values)?;
-    Ok(Some(eval_reflection_aot_method_metadata(
+    let (source_file, source_location) = eval_reflection_aot_method_source_metadata(
+        flags,
+        &declaring_class_name,
+        values,
+    )?;
+    let mut metadata = eval_reflection_aot_method_metadata(
         &declaring_class_name,
         method_name,
         flags,
@@ -583,21 +752,29 @@ pub(super) fn eval_reflection_aot_method_metadata_with_signature_if_exists(
         source_file,
         source_location,
         signature.as_ref(),
-    )))
+    );
+    // Parameter attributes arrive as method attributes keyed `method#index` (see the compiler's
+    // `collect_eval_native_parameter_attributes`).
+    for (index, parameter) in metadata.parameters.iter_mut().enumerate() {
+        parameter.attributes = eval_reflection_aot_method_attributes(
+            runtime_class_name,
+            &declaring_class_name,
+            &format!("{}#{}", method_name, index),
+            context,
+        );
+    }
+    Ok(Some(metadata))
 }
 
 /// Returns AOT source-file and line metadata encoded in ReflectionMethod flags.
 pub(super) fn eval_reflection_aot_method_source_metadata(
     flags: u64,
+    class_name: &str,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(Option<String>, Option<EvalSourceLocation>), EvalStatus> {
-    let Some(source_location) = eval_reflection_aot_method_source_location_from_flags(flags) else {
-        return Ok((None, None));
-    };
-    let Some(source_file) = values.reflection_source_file()? else {
-        return Ok((None, None));
-    };
-    Ok((Some(source_file), Some(source_location)))
+    let (source_file, _) = eval_reflection_aot_class_source_metadata(class_name, values)?;
+    let source_location = eval_reflection_aot_method_source_location_from_flags(flags);
+    Ok((source_file, source_location))
 }
 
 /// Decodes AOT ReflectionMethod source lines packed into high flag bits.

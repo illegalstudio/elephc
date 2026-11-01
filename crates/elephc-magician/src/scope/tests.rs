@@ -130,6 +130,18 @@ fn set_from_aot_returns_same_cell_when_dropping_scope_ownership() {
 
 /// Verifies reference binding points two variable names at one runtime cell.
 #[test]
+fn set_borrowed_same_cell_returns_the_previous_scope_owner() {
+    let mut scope = ElephcEvalScope::new();
+    let cell = RuntimeCellHandle::from_raw(1usize as *mut crate::value::RuntimeCell);
+    scope.set("x", cell, ScopeCellOwnership::Owned);
+    assert_eq!(scope.set("x", cell, ScopeCellOwnership::Borrowed), Some(cell));
+    assert_eq!(scope.visible_cell("x"), Some(cell));
+    assert_eq!(scope.entry("x").unwrap().flags().ownership, ScopeCellOwnership::Borrowed);
+    assert_eq!(scope.set("x", cell, ScopeCellOwnership::Borrowed), None);
+}
+
+/// Verifies reference binding points two variable names at one runtime cell.
+#[test]
 fn set_reference_binds_names_to_source_cell() {
     let mut scope = ElephcEvalScope::new();
     let cell = RuntimeCellHandle::from_raw(1usize as *mut crate::value::RuntimeCell);

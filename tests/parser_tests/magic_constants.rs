@@ -104,6 +104,44 @@ fn test_magic_constants_lower_inside_first_class_callable_receiver() {
     }
 }
 
+/// Verifies scope-dependent magic constants are lowered inside every class-like constant value.
+#[test]
+fn test_magic_constants_lower_inside_class_like_constant_values() {
+    let stmts = parse_source(
+        "<?php
+class ClassTarget { public const VALUE = __CLASS__; }
+interface InterfaceTarget { public const VALUE = __CLASS__; }
+trait TraitTarget { public const VALUE = __TRAIT__; }
+enum EnumTarget { public const VALUE = __CLASS__; }
+",
+    );
+    let lowered = elephc::magic_constants::substitute_file_and_scope_constants(
+        stmts,
+        Path::new("/tmp/elephc/main.php"),
+    );
+
+    let values = lowered
+        .iter()
+        .map(|stmt| match &stmt.kind {
+            StmtKind::ClassDecl { constants, .. }
+            | StmtKind::InterfaceDecl { constants, .. }
+            | StmtKind::TraitDecl { constants, .. }
+            | StmtKind::EnumDecl { constants, .. } => &constants[0].value.kind,
+            other => panic!("expected class-like declaration, got {:?}", other),
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        values,
+        vec![
+            &ExprKind::StringLiteral("ClassTarget".into()),
+            &ExprKind::StringLiteral("InterfaceTarget".into()),
+            &ExprKind::StringLiteral("TraitTarget".into()),
+            &ExprKind::StringLiteral("EnumTarget".into()),
+        ]
+    );
+}
+
 /// Verifies that `<?php echo MyClass::class;` parses to a `ClassConstant` with a `StaticReceiver::Named("MyClass")`.
 #[test]
 fn test_parse_class_class_named() {

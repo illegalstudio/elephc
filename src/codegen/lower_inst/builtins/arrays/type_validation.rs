@@ -9,27 +9,23 @@
 
 use super::*;
 
-/// Returns an indexed-array element type compatible with callback runtime helpers.
-pub(super) fn eight_byte_callback_array_element_type(ty: PhpType, name: &str) -> Result<PhpType> {
-    match ty.codegen_repr() {
-        PhpType::Array(elem) => eight_byte_callback_value_type(*elem, name),
-        other => Err(CodegenIrError::unsupported(format!(
-            "{} for PHP type {:?}",
-            name, other
-        ))),
-    }
-}
-
 /// Returns the indexed-array element type accepted by `array_map()` callback runtimes.
 pub(super) fn array_map_callback_array_element_type(ty: PhpType) -> Result<PhpType> {
     match ty.codegen_repr() {
         PhpType::Array(elem) => {
             let elem = elem.codegen_repr();
+            // Arrays, hashes and callable descriptors are one heap pointer each, handed to the
+            // callback exactly as an object is: `array_map(fn($row) => count($row), $rows)` over
+            // a list of lists was refused.
             if matches!(
                 elem,
                 PhpType::Int
                     | PhpType::Bool
                     | PhpType::Str
+                    | PhpType::Object(_)
+                    | PhpType::Array(_)
+                    | PhpType::AssocArray { .. }
+                    | PhpType::Callable
                     | PhpType::Void
                     | PhpType::Never
                     | PhpType::Mixed
@@ -62,6 +58,24 @@ pub(super) fn eight_byte_callback_value_type(ty: PhpType, name: &str) -> Result<
             name, ty
         )))
     }
+}
+
+/// Stores the void sentinel, boxing it when the EIR builtin result slot is Mixed-like.
+pub(super) fn store_void_builtin_result(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        0x7fff_ffff_ffff_fffe,
+    );
+    if inst.result.is_some()
+        && matches!(
+            inst.result_php_type.codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        )
+    {
+        emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+    }
+    store_if_result(ctx, inst)
 }
 
 /// Stores `true` for a builtin whose result is a bool, boxing it when the EIR result slot is

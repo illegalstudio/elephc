@@ -97,7 +97,8 @@ fn expect_operations(inst: &Instruction) -> Result<&[MixedNumericOp]> {
                 && chain
                     .operations()
                     .iter()
-                    .all(|op| !matches!(op, MixedNumericOp::Pow)) =>
+                    .copied()
+                    .all(crate::ir_passes::checked_numeric_chain::is_checked_chain_operation) =>
         {
             Ok(chain.operations())
         }
@@ -160,7 +161,13 @@ fn emit_aarch64_checked_step(
             ctx.emitter.instruction(&compare);                                  // compare the high product with the low half's sign extension
             emit_overflow_branch(ctx, "eq", "jne", overflow_label);
         }
-        MixedNumericOp::Pow => unreachable!("validated checked chains exclude pow"),
+        MixedNumericOp::Pow
+        | MixedNumericOp::Div
+        | MixedNumericOp::BitAnd
+        | MixedNumericOp::BitOr
+        | MixedNumericOp::BitXor => {
+            unreachable!("validated checked chains carry only add/sub/mul")
+        }
     }
 }
 
@@ -230,7 +237,14 @@ fn integer_mnemonic(operation: MixedNumericOp, arch: Arch) -> &'static str {
         (MixedNumericOp::Add, Arch::X86_64) => "add",
         (MixedNumericOp::Sub, Arch::X86_64) => "sub",
         (MixedNumericOp::Mul, Arch::X86_64) => "imul",
-        (MixedNumericOp::Pow, _) => unreachable!("validated checked chains exclude pow"),
+        (
+            MixedNumericOp::Pow
+            | MixedNumericOp::Div
+            | MixedNumericOp::BitAnd
+            | MixedNumericOp::BitOr
+            | MixedNumericOp::BitXor,
+            _,
+        ) => unreachable!("validated checked chains carry only add/sub/mul"),
     }
 }
 
@@ -243,6 +257,13 @@ fn float_mnemonic(operation: MixedNumericOp, arch: Arch) -> &'static str {
         (MixedNumericOp::Add, Arch::X86_64) => "addsd",
         (MixedNumericOp::Sub, Arch::X86_64) => "subsd",
         (MixedNumericOp::Mul, Arch::X86_64) => "mulsd",
-        (MixedNumericOp::Pow, _) => unreachable!("validated checked chains exclude pow"),
+        (
+            MixedNumericOp::Pow
+            | MixedNumericOp::Div
+            | MixedNumericOp::BitAnd
+            | MixedNumericOp::BitOr
+            | MixedNumericOp::BitXor,
+            _,
+        ) => unreachable!("validated checked chains carry only add/sub/mul"),
     }
 }

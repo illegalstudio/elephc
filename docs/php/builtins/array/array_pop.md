@@ -2,7 +2,7 @@
 title: "array_pop()"
 description: "Pops the element off the end of array."
 sidebar:
-  order: 30
+  order: 36
 ---
 
 ## array_pop()

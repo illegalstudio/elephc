@@ -201,3 +201,51 @@ echo count($r), ":", $r["x"], ":", $r[5], ":", $r[6], "\n";
         out.stderr
     );
 }
+
+
+/// A METHOD body creates a local by appending to it, exactly as a function body may.
+///
+/// `$keys[] = ...` against a name nothing has assigned makes the array — PHP auto-vivifies it —
+/// and the read after the loop sees what the loop filled. The checker seeds those names at scope
+/// entry for a function, a closure and file scope; the method pass built its own environment and
+/// did not, so this body was refused with `Undefined variable: $keys` while EIR lowering (which
+/// runs the same scan for every body) would have lowered it. Symfony's
+/// `StubCaster::castEnum()` is the shape that found it.
+///
+/// The loop always runs here on purpose. `isset()` on a local only an append would create is a
+/// separate, older deviation — the entry seed stores an empty array, so `isset()` answers true
+/// where PHP, which never created the variable, answers false. It predates this fix and shows
+/// up identically in a plain function (`scratchpad/vivify/case_isset.php`).
+#[test]
+fn test_method_body_creates_a_local_by_appending_to_it() {
+    let out = compile_and_run(
+        r#"<?php
+class Caster {
+    public static function prefixKeys(array $values): array {
+        if (!$values) {
+            return [];
+        }
+        foreach (array_keys($values) as $k) {
+            $keys[] = '~' . $k;
+        }
+
+        return array_combine($keys, $values);
+    }
+
+    public function collect(array $rows): string {
+        foreach ($rows as $row) {
+            $seen[] = $row * 2;
+        }
+
+        return implode(',', $seen);
+    }
+}
+$out = Caster::prefixKeys(['x' => 1, 'y' => 2]);
+echo implode(',', array_keys($out)), '|', implode(',', $out);
+echo '|', count(Caster::prefixKeys([]));
+$caster = new Caster();
+echo '|', $caster->collect([1, 2, 3]);
+"#,
+    );
+    assert_eq!(out, "~x,~y|1,2|0|2,4,6");
+}

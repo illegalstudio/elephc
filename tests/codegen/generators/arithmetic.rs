@@ -231,19 +231,51 @@ foreach (gen(1, 2, 3, 4, 5, "hi") as $v) {
 
 /// Verifies that a generator with more parameters than the coroutine's start-argument
 /// capacity is rejected with a clear diagnostic rather than silently corrupting adjacent
-/// fiber fields. Parameters are boxed into the fixed `FIBER_START_ARGS_MAX` (7) slots, so
-/// an 8th parameter has nowhere to live.
+/// fiber fields. Parameters are boxed into the fixed `GENERATOR_START_ARGS_MAX` (16) slots, so
+/// a 17th parameter has nowhere to live.
 #[test]
-#[should_panic(expected = "generators support at most 7")]
+#[should_panic(expected = "generators support at most 16")]
 fn test_generator_too_many_parameters_is_rejected() {
     compile_and_run(
         r#"<?php
-function gen(int $a, int $b, int $c, int $d, int $e, int $f, int $g, int $h) {
-    yield $h;
+function gen(int $a, int $b, int $c, int $d, int $e, int $f, int $g, int $h, int $i, int $j,
+    int $k, int $l, int $m, int $n, int $o, int $p, int $q) {
+    yield $q;
 }
-foreach (gen(1, 2, 3, 4, 5, 6, 7, 8) as $v) { echo $v; }
+foreach (gen(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17) as $v) { echo $v; }
 "#,
     );
+}
+
+/// A generator closure with ten parameters and captures fills the trailing generator-only start
+/// slots past the Fiber ones. Laravel's `Query\Builder::orderedLazyById()` returns such a
+/// closure; the seven-slot limit sent the whole query builder to the interpreter.
+#[test]
+fn test_generator_closure_with_ten_parameters_and_captures() {
+    let out = compile_and_run(
+        r#"<?php
+class Q {
+    public function lazy(int $chunk, string $column, ?string $alias, bool $desc) {
+        $label = "q";
+        $ratio = 1.5;
+        $seen = [7];
+        return (function (int $start, string $sep, float $scale) use ($chunk, $column, $alias, $desc, $label, $ratio, $seen) {
+            $last = $start;
+            for ($i = 0; $i < $chunk; $i++) {
+                $last += $desc ? -1 : 1;
+                yield $label . $sep . ($alias ?? $column) . $sep . $last * $scale * $ratio . $sep . count($seen);
+            }
+            return $this;
+        })(10, ':', 2.0);
+    }
+}
+$q = new Q();
+$g = $q->lazy(3, 'id', null, true);
+foreach ($g as $k => $v) { echo $k, "=", $v, "\n"; }
+var_dump($g->getReturn() === $q);
+"#,
+    );
+    assert_eq!(out, "0=q:id:27:1\n1=q:id:24:1\n2=q:id:21:1\nbool(true)\n");
 }
 
 /// Verifies that a user function call embedded in arithmetic is correctly evaluated within a yield expression.

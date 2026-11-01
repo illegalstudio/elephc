@@ -25,6 +25,30 @@ fn test_utf8_bom_before_open_tag_is_stripped() {
     assert_eq!(t[1], Token::Echo);
 }
 
+/// Verifies a leading `#!` line produces no output token and does not renumber the code.
+///
+/// PHP's CLI removes the whole line, newline included -- `php` on this source prints `hi` with
+/// no leading blank line -- while still reporting the `echo` on physical line 3. Without the
+/// removal the line is text before `<?php`, so it lexes as `Echo "#!..."` and every compiled
+/// console entry point prints its own shebang.
+#[test]
+fn test_leading_shebang_is_removed_without_renumbering() {
+    let spanned = tokenize("#!/usr/bin/env php\n<?php\necho \"hi\";").unwrap();
+    let kinds: Vec<Token> = spanned.iter().map(|(t, _)| t.clone()).collect();
+    assert_eq!(kinds[0], Token::OpenTag);
+    assert_eq!(kinds[1], Token::Echo);
+    assert_eq!(spanned[0].1.span.line, 2, "the open tag sits on physical line 2");
+    assert_eq!(spanned[1].1.span.line, 3, "the echo sits on physical line 3");
+}
+
+/// Verifies `#!` is a shebang only at the very start: anywhere else it is an ordinary comment.
+#[test]
+fn test_hash_bang_after_the_open_tag_is_a_comment() {
+    let t = tokens("<?php\n#!/usr/bin/env php\necho \"hi\";");
+    assert_eq!(t[0], Token::OpenTag);
+    assert_eq!(t[1], Token::Echo);
+}
+
 /// Verifies `// ...` line comments are consumed and do not appear in the token stream.
 #[test]
 fn test_line_comment() {

@@ -2,7 +2,7 @@
 title: "scandir() - internals"
 description: "Compiler internals for scandir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 303
+  order: 314
 ---
 
 ## `scandir()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/scandir.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/scandir.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function scandir(string $directory): array
+function scandir(string $directory, int $sorting_order = 0, mixed $context = null): array
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 1–3 arguments (2 optional).
 
 ## Eval interpreter (magician)
 

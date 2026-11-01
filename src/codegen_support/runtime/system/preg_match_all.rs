@@ -56,6 +56,7 @@ pub(crate) fn emit_preg_match_all(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_preg_match_all_linux_x86_64(emitter);
         super::preg_match_all_capture::emit_preg_match_all_capture(emitter);
+        super::preg_named_rekey::emit_preg_rekey_named(emitter);
         return;
     }
 
@@ -160,6 +161,7 @@ pub(crate) fn emit_preg_match_all(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 
     super::preg_match_all_capture::emit_preg_match_all_capture(emitter);
+    super::preg_named_rekey::emit_preg_rekey_named(emitter);
 }
 
 /// Target-specific implementation of `__rt_preg_match_all` for Linux x86_64.

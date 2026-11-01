@@ -1,0 +1,47 @@
+---
+type: "Bug Fix"
+title: "clone copies the RUNTIME class, and the eval bridge drops extra positional arguments"
+description: "Two independent PHP fidelity fixes, both reduced against php n 8.5.10: 1. lower object clone shallow src/codegen/lower inst/objects/clone and spl.rs cloned through the STATIC class's layout and class id. PHP's clone copi"
+resource: "src/codegen/lower_inst/objects/clone_and_spl.rs"
+tags: ["session-learning", "clone", "eval-bridge", "arity", "symfony"]
+timestamp: "2026-09-13T08:31:38.188Z"
+x-kage-id: "repo:lazy-petting-popcorn:bug_fix:clone-copies-the-runtime-class-and-the-eval-bridge-drops-extra-positional-argume"
+x-kage-type: "bug_fix"
+x-kage-status: "approved"
+x-kage-scope: "repo"
+x-kage-visibility: "team"
+x-kage-confidence: 0.7
+x-kage-verified: "verified"
+x-kage-paths: ["src/codegen/lower_inst/objects/clone_and_spl.rs", "crates/elephc-magician/src/interpreter/statements/native_argument_binding.rs", "tests/codegen/objects/cloning.rs", "tests/codegen/eval.rs"]
+---
+
+# clone copies the RUNTIME class, and the eval bridge drops extra positional arguments
+
+> Two independent PHP fidelity fixes, both reduced against php n 8.5.10: 1. lower object clone shallow src/codegen/lowe…
+
+Two independent PHP-fidelity fixes, both reduced against `php -n` 8.5.10:
+
+1. `lower_object_clone_shallow` (src/codegen/lower_inst/objects/clone_and_spl.rs) cloned through the STATIC class's layout and class id. PHP's `clone` copies the object's RUNTIME class, and a method that clones `$this` is routinely inherited -- Symfony's `ServiceLocator::withContext()` is exactly that shape, reached on an `Argument\ServiceLocator` whose `get()` override is the whole reason the subclass exists. The clone answered a base object, so the override was lost and the subclass's extra properties with it. Now: when the static class has a compiled subclass, the existing runtime class-id dispatch is used, with the static layout as the MISS fallback (`CloneMiss::StaticLayout`) rather than the interface path's fatal -- an eval-declared subclass reaching an inherited `clone $this` has no compiled class id to match, and answering its compiled base is the pre-existing behaviour rather than a new abort.
+   Watch the `__clone` hook: the IR lowering already emits an ordinary method call when the STATIC type resolves one, so the per-candidate hook in the dispatch is suppressed in that case or it runs twice.
+
+2. `bind_native_positional_signature_arg` (crates/elephc-magician/src/interpreter/statements/native_argument_binding.rs) returned `RuntimeFatal` for a positional argument past the callable's parameter count. PHP accepts extra positional arguments to a userland function -- they bind to no parameter and are reachable only through `func_get_args()`. Symfony's `ObjectLoader::load()` invokes `$loaderObject->$method($this, $this->env)` against `MicroKernelTrait::loadRoutes(LoaderInterface $loader)`, which declares ONE parameter. The overflow is now returned to the caller, which releases it when owned (it never joins `bound_args`, so nothing else would).
+   Separately: elephc's AOT type checker still REJECTS extra arguments at compile time for plain functions and static methods (`Function 'f' expects 1 arguments, got 2`), which php allows. Unfixed.
+Evidence: Five clone cases (inherited clone-of-this, subclass-only __clone, inherited __clone, overridden __clone, base-only) match `php -n` exactly; regression tests in tests/codegen/objects/cloning.rs. Argument overflow covered by tests/codegen/eval.rs::test_eval_call_into_native_method_drops_extra_positional_arguments.
+Verified by: cargo test --release --test codegen_tests -- objects::cloning; codegen::eval::test_eval_call_into_native_method_drops
+
+## Verification
+
+Five clone cases (inherited clone-of-this, subclass-only __clone, inherited __clone, overridden __clone, base-only) match `php -n` exactly; regression tests in tests/codegen/objects/cloning.rs. Argument overflow covered by tests/codegen/eval.rs::test_eval_call_into_native_method_drops_extra_positional_arguments.
+
+# Citations
+
+[1] explicit_capture (2026-09-13T08:31:38.188Z)
+
+## Kage state
+
+Machine state for lossless round-trip; OKF consumers can ignore it.
+
+```json kage-state
+{"schema_version":2,"id":"repo:lazy-petting-popcorn:bug_fix:clone-copies-the-runtime-class-and-the-eval-bridge-drops-extra-positional-argume","title":"clone copies the RUNTIME class, and the eval bridge drops extra positional arguments","summary":"Two independent PHP fidelity fixes, both reduced against php n 8.5.10: 1. lower object clone shallow src/codegen/lower inst/objects/clone and spl.rs cloned through the STATIC class's layout and class id. PHP's clone copi","body":"Two independent PHP-fidelity fixes, both reduced against `php -n` 8.5.10:\n\n1. `lower_object_clone_shallow` (src/codegen/lower_inst/objects/clone_and_spl.rs) cloned through the STATIC class's layout and class id. PHP's `clone` copies the object's RUNTIME class, and a method that clones `$this` is routinely inherited -- Symfony's `ServiceLocator::withContext()` is exactly that shape, reached on an `Argument\\ServiceLocator` whose `get()` override is the whole reason the subclass exists. The clone answered a base object, so the override was lost and the subclass's extra properties with it. Now: when the static class has a compiled subclass, the existing runtime class-id dispatch is used, with the static layout as the MISS fallback (`CloneMiss::StaticLayout`) rather than the interface path's fatal -- an eval-declared subclass reaching an inherited `clone $this` has no compiled class id to match, and answering its compiled base is the pre-existing behaviour rather than a new abort.\n   Watch the `__clone` hook: the IR lowering already emits an ordinary method call when the STATIC type resolves one, so the per-candidate hook in the dispatch is suppressed in that case or it runs twice.\n\n2. `bind_native_positional_signature_arg` (crates/elephc-magician/src/interpreter/statements/native_argument_binding.rs) returned `RuntimeFatal` for a positional argument past the callable's parameter count. PHP accepts extra positional arguments to a userland function -- they bind to no parameter and are reachable only through `func_get_args()`. Symfony's `ObjectLoader::load()` invokes `$loaderObject->$method($this, $this->env)` against `MicroKernelTrait::loadRoutes(LoaderInterface $loader)`, which declares ONE parameter. The overflow is now returned to the caller, which releases it when owned (it never joins `bound_args`, so nothing else would).\n   Separately: elephc's AOT type checker still REJECTS extra arguments at compile time for plain functions and static methods (`Function 'f' expects 1 arguments, got 2`), which php allows. Unfixed.\nEvidence: Five clone cases (inherited clone-of-this, subclass-only __clone, inherited __clone, overridden __clone, base-only) match `php -n` exactly; regression tests in tests/codegen/objects/cloning.rs. Argument overflow covered by tests/codegen/eval.rs::test_eval_call_into_native_method_drops_extra_positional_arguments.\nVerified by: cargo test --release --test codegen_tests -- objects::cloning; codegen::eval::test_eval_call_into_native_method_drops","type":"bug_fix","scope":"repo","visibility":"team","sensitivity":"internal","status":"approved","confidence":0.7,"tags":["session-learning","clone","eval-bridge","arity","symfony"],"paths":["src/codegen/lower_inst/objects/clone_and_spl.rs","crates/elephc-magician/src/interpreter/statements/native_argument_binding.rs","tests/codegen/objects/cloning.rs","tests/codegen/eval.rs"],"stack":[],"source_refs":[{"kind":"explicit_capture","captured_at":"2026-09-13T08:31:38.188Z"}],"context":{"fact":"Two independent PHP-fidelity fixes, both reduced against `php -n` 8.5.10:","verification":"Five clone cases (inherited clone-of-this, subclass-only __clone, inherited __clone, overridden __clone, base-only) match `php -n` exactly; regression tests in tests/codegen/objects/cloning.rs. Argument overflow covered by tests/codegen/eval.rs::test_eval_call_into_native_method_drops_extra_positional_arguments."},"freshness":{"ttl_days":365,"last_verified_at":"2026-09-13T08:31:38.188Z","path_fingerprints":[{"path":"src/codegen/lower_inst/objects/clone_and_spl.rs","sha256":"6eed60db56639bf98812276c9cbdb1fb5514cd72213d6512fff944f76cbc70e3","size":20701},{"path":"crates/elephc-magician/src/interpreter/statements/native_argument_binding.rs","sha256":"581b8cbeaf94155ad4736c5316d41a12f04d7161ca7fd86156af7aae4c4eccc5","size":18410},{"path":"tests/codegen/objects/cloning.rs","sha256":"db99374848ed73107c6669c50bd8a764f5e971d16b318fb790d4f1bc09ff7ebc","size":12698},{"path":"tests/codegen/eval.rs","sha256":"4fc3f493c1ab3ba706e76b2eef2d34dbda798c07d5cb9a4441932b69f12b538f","size":1119975}],"path_fingerprint_policy":"source_hash_staleness","verification":"repo_local_agent_capture"},"edges":[],"quality":{"reviewer":"repo-local-agent","votes_up":0,"votes_down":0,"uses_30d":0,"reports_stale":0,"review_boundary":"git_or_pr","promotion_requires_review":true,"discovery_tokens":8000,"discovery_tokens_estimated":true,"score":94,"reasons":["high-value memory type","has source evidence","grounded to repo paths","tagged","actionable rationale or verification"],"risks":[],"duplicate_candidates":[],"stale_reasons":[],"estimated_tokens_saved":627},"created_at":"2026-09-13T08:31:38.188Z","updated_at":"2026-09-13T08:31:38.188Z","author_branch":"reconcile/dirname-symfony"}
+```
+

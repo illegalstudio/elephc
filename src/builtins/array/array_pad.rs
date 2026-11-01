@@ -26,16 +26,22 @@ builtin! {
 /// Returns the (shape-preserving) array type for an `array_pad` call.
 ///
 /// Padding keeps the array shape, so the first-argument array/assoc type is returned
-/// unchanged. A non-array first argument is rejected. The first argument is re-inferred
+/// unchanged. A gradual first argument -- `mixed`, a union with an array member, or a declared
+/// `array` -- is only an array at run time: the call answers a declared PHP array and lowers
+/// through `crate::array_gradual_prelude`, whose helper raises php's `TypeError` for a
+/// non-array. A statically non-array argument is rejected. The first argument is re-inferred
 /// here; the registry already inferred every argument once for side effects, and arity
 /// (exactly 3) is pre-validated by the registry.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
-        return Err(CompileError::new(
-            cx.span,
-            "array_pad() first argument must be array",
-        ));
+    if matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+        return Ok(ty);
     }
-    Ok(ty)
+    if crate::types::checker::builtins::array_arg_is_gradually_acceptable(&ty) || ty.is_php_array() {
+        return Ok(PhpType::php_array());
+    }
+    Err(CompileError::new(
+        cx.span,
+        "array_pad() first argument must be array",
+    ))
 }

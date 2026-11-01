@@ -2,7 +2,7 @@
 title: "gmp_legendre()"
 description: "Legendre symbol."
 sidebar:
-  order: 613
+  order: 626
 ---
 
 ## gmp_legendre()

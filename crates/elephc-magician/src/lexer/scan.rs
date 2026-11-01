@@ -9,8 +9,9 @@
 //! Key details:
 //! - Comments and whitespace advance line metadata for `__LINE__`.
 //! - Unterminated strings or block comments return parse errors before grammar parsing.
-//! - Double-quoted literals are expanded by `super::strings` into concatenation token
-//!   streams, so one source character can yield more than one token.
+//! - Double-quoted literals and heredoc bodies are expanded by `super::strings` into
+//!   concatenation token streams, so one source character can yield more than one token.
+//! - Identifier characters follow PHP's byte rule, which admits every byte from `0x80` up.
 
 use super::{Token, TokenKind};
 use crate::errors::EvalParseError;
@@ -39,7 +40,10 @@ pub(super) struct Lexer<'a> {
 
 impl<'a> Lexer<'a> {
     /// Creates a lexer over a UTF-8 eval fragment.
-    fn new(source: &'a str) -> Self {
+    ///
+    /// `super::strings` builds a second lexer over an extracted heredoc body so the body
+    /// runs through the same interpolation scanner a `"…"` literal uses.
+    pub(super) fn new(source: &'a str) -> Self {
         Self {
             source,
             pos: 0,
@@ -74,13 +78,17 @@ impl<'a> Lexer<'a> {
             return Ok(vec![Token::new(TokenKind::Eof, self.line)]);
         };
         let line = self.line;
-        if self.source[self.pos..].starts_with("/**") {
-            let start = self.pos;
-            self.skip_block_comment()?;
-            return Ok(vec![Token::new(TokenKind::DocComment(self.source[start..self.pos].to_string()), line)]);
+        if self.at_doc_comment() {
+            return self.lex_doc_comment(line);
         }
         if ch == '"' {
             return self.lex_double_quoted(line);
+        }
+        if ch == '<'
+            && self.peek_next_char() == Some('<')
+            && self.peek_nth_char(2) == Some('<')
+        {
+            return self.lex_heredoc(line);
         }
         if ch == '?' && self.peek_next_char() == Some('>') {
             return Ok(self.lex_close_tag(line));
@@ -279,7 +287,12 @@ impl<'a> Lexer<'a> {
                     Ok(TokenKind::QuestionArrow)
                 } else if self.peek_char() == Some('?') {
                     self.bump_char();
-                    Ok(TokenKind::QuestionQuestion)
+                    if self.peek_char() == Some('=') {
+                        self.bump_char();
+                        Ok(TokenKind::QuestionQuestionEqual)
+                    } else {
+                        Ok(TokenKind::QuestionQuestion)
+                    }
                 } else {
                     Ok(TokenKind::Question)
                 }
@@ -329,6 +342,10 @@ impl<'a> Lexer<'a> {
                 self.bump_char();
                 Ok(TokenKind::Backslash)
             }
+            '@' => {
+                self.bump_char();
+                Ok(TokenKind::At)
+            }
             '#' if self.peek_next_char() == Some('[') => {
                 self.bump_char();
                 self.bump_char();
@@ -355,6 +372,11 @@ impl<'a> Lexer<'a> {
         if self.peek_char() == Some('{') {
             self.bump_char();
             return Ok(TokenKind::DollarLBrace);
+        }
+        // `$$name`: the name of the variable is the value of `$name`. The inner `$` is lexed on
+        // the next call, so `$$$x` nests the same way.
+        if self.peek_char() == Some('$') {
+            return Ok(TokenKind::Dollar);
         }
         let name = self.lex_ident();
         if name.is_empty() {
@@ -399,16 +421,21 @@ impl<'a> Lexer<'a> {
     /// octal, `_` separators anywhere between digits, and decimal with an optional fraction
     /// and exponent. A literal too large for `i64` becomes a float, as it does in PHP.
     fn lex_number(&mut self) -> Result<TokenKind, EvalParseError> {
+        // A radix prefix needs a digit after it: php lexes `0x` and `0b2` as `0` followed by the
+        // identifier `x` / `b2`, and the PARSER then refuses them in token order.
         if self.peek_char() == Some('0') {
-            if let Some(prefix) = self.peek_next_char() {
-                match prefix {
-                    'x' | 'X' => return self.lex_radix_number(16, |c| c.is_ascii_hexdigit()),
-                    'o' | 'O' => {
-                        return self.lex_radix_number(8, |c| c.is_ascii_digit() && c < '8')
-                    }
-                    'b' | 'B' => return self.lex_radix_number(2, |c| c == '0' || c == '1'),
-                    _ => {}
+            let first = self.peek_nth_char(2);
+            match self.peek_next_char() {
+                Some('x' | 'X') if first.is_some_and(|c| c.is_ascii_hexdigit()) => {
+                    return self.lex_radix_number(16, |c| c.is_ascii_hexdigit())
                 }
+                Some('o' | 'O') if first.is_some_and(|c| c.is_ascii_digit() && c < '8') => {
+                    return self.lex_radix_number(8, |c| c.is_ascii_digit() && c < '8')
+                }
+                Some('b' | 'B') if first.is_some_and(|c| c == '0' || c == '1') => {
+                    return self.lex_radix_number(2, |c| c == '0' || c == '1')
+                }
+                _ => {}
             }
         }
 
@@ -419,14 +446,14 @@ impl<'a> Lexer<'a> {
 
         let has_fraction =
             self.peek_char() == Some('.') && matches!(self.peek_next_char(), Some('0'..='9'));
-        let has_exponent = matches!(self.peek_char(), Some('e') | Some('E'));
+        let has_exponent = self.exponent_follows();
         if has_fraction || has_exponent {
             if has_fraction {
                 digits.push('.');
                 self.bump_char();
                 digits.push_str(&self.lex_digits(|c| c.is_ascii_digit()));
             }
-            if matches!(self.peek_char(), Some('e') | Some('E')) {
+            if self.exponent_follows() {
                 digits.push('e');
                 self.bump_char();
                 if let Some(sign @ ('+' | '-')) = self.peek_char() {
@@ -435,13 +462,11 @@ impl<'a> Lexer<'a> {
                 }
                 digits.push_str(&self.lex_digits(|c| c.is_ascii_digit()));
             }
-            self.reject_trailing_literal_char()?;
             return digits
                 .parse::<f64>()
                 .map(TokenKind::Float)
                 .map_err(|_| EvalParseError::InvalidNumber);
         }
-        self.reject_trailing_literal_char()?;
 
         // A leading zero followed by more digits is PHP's legacy octal spelling. `8` and `9`
         // are not octal digits, so `078` is a PHP parse error ("Invalid numeric literal") and
@@ -476,21 +501,23 @@ impl<'a> Lexer<'a> {
         if digits.is_empty() {
             return Err(EvalParseError::InvalidNumber);
         }
-        self.reject_trailing_literal_char()?;
         Ok(eval_radix_int_or_float(&digits, radix))
     }
 
-    /// Refuses a literal that runs straight into another alphanumeric byte.
+    /// Returns whether an `e`/`E` at the cursor starts an exponent: a digit follows it, after an
+    /// optional sign. `1e` is `1` followed by the identifier `e` in php.
     ///
-    /// `0o78`, `0x1G` and `123abc` are PHP parse errors. Without this the digit scanner would
-    /// simply stop at the offending byte and hand the rest to the next token, turning a
-    /// rejected literal into a silently different program. Mirrors the compiler's own
-    /// `lexer::literals::numbers::validate_no_trailing_alnum`.
-    fn reject_trailing_literal_char(&mut self) -> Result<(), EvalParseError> {
-        match self.peek_char() {
-            Some(ch) if ch.is_alphanumeric() || ch == '_' => Err(EvalParseError::InvalidNumber),
-            _ => Ok(()),
-        }
+    /// A literal running into letters is NOT refused here. php lexes `123abc`, `0x1G` and `0o78`
+    /// as two tokens and its PARSER reports the second ("unexpected identifier"), in token order:
+    /// refusing in the lexer reported a literal deep in an eval'd fragment before an earlier
+    /// syntax error php names first. Only `078`, an invalid legacy octal, is a lexical error.
+    fn exponent_follows(&self) -> bool {
+        matches!(self.peek_char(), Some('e' | 'E'))
+            && match self.peek_next_char() {
+                Some('0'..='9') => true,
+                Some('+' | '-') => matches!(self.peek_nth_char(2), Some('0'..='9')),
+                _ => false,
+            }
     }
 
     /// Reads a run of digits accepted by `is_digit`, dropping PHP's `_` separators.
@@ -553,11 +580,36 @@ impl<'a> Lexer<'a> {
                 (Some('/'), Some('/')) => self.skip_line_comment(),
                 (Some('#'), Some('[')) => return Ok(()),
                 (Some('#'), _) => self.skip_line_comment(),
-                (Some('/'), Some('*')) if self.source[self.pos..].starts_with("/**") => return Ok(()),
+                (Some('/'), Some('*')) if self.at_doc_comment() => return Ok(()),
                 (Some('/'), Some('*')) => self.skip_block_comment()?,
                 _ => return Ok(()),
             }
         }
+    }
+
+    /// Reports whether the cursor opens a doc comment rather than an ordinary block comment.
+    ///
+    /// PHP's scanner rule is `"/**"{WHITESPACE}`: the third star must be followed by a space,
+    /// tab or newline. `token_get_all()` under PHP 8.5 names `/**/`, `/***/` and `/**x*/`
+    /// `T_COMMENT` and only `/** x */` `T_DOC_COMMENT`, so the shorter forms stay trivia.
+    fn at_doc_comment(&self) -> bool {
+        self.peek_char() == Some('/')
+            && self.peek_next_char() == Some('*')
+            && self.peek_nth_char(2) == Some('*')
+            && matches!(self.peek_nth_char(3), Some(' ' | '\t' | '\n' | '\r'))
+    }
+
+    /// Returns one PHP doc comment as a parser-visible metadata token.
+    ///
+    /// Ordinary comments remain trivia, but `/** ... */` is retained verbatim so reflection
+    /// can report the declaration metadata that PHP exposes through `getDocComment()`.
+    fn lex_doc_comment(&mut self, line: i64) -> Result<Vec<Token>, EvalParseError> {
+        let start = self.pos;
+        self.skip_block_comment()?;
+        Ok(vec![Token::new(
+            TokenKind::DocComment(self.source[start..self.pos].to_owned()),
+            line,
+        )])
     }
 
     /// Advances past a `//` or `#` comment, including its trailing newline when present.
@@ -611,6 +663,11 @@ impl<'a> Lexer<'a> {
         self.source[self.pos..].chars().nth(offset)
     }
 
+    /// Returns the unconsumed fragment suffix for multi-line literal scanners.
+    pub(super) fn remaining(&self) -> &str {
+        &self.source[self.pos..]
+    }
+
     /// Advances by one UTF-8 char.
     pub(super) fn bump_char(&mut self) {
         if let Some(ch) = self.peek_char() {
@@ -623,8 +680,17 @@ impl<'a> Lexer<'a> {
 }
 
 /// Returns true for the first character of a PHP variable/function identifier.
+///
+/// PHP's identifier rule is a byte rule, not a Unicode one: every byte from `0x80` up is
+/// accepted, so `class ©` and `class Café` are both legal declarations. `php -n` 8.5.6 runs
+/// `class \xA9 { public const V = 5; } echo \xA9::V;` and prints `5`.
+///
+/// Source bytes that are not valid UTF-8 never reach this scanner as themselves: the parser
+/// entry point rewrites each of them to a private-use marker in `U+F0000..=U+F00FF` first.
+/// Those markers sit above `0x80` too, so the one range test admits an identifier written in
+/// UTF-8 and one written in a single-byte encoding without knowing which it is looking at.
 pub(super) fn is_ident_start(ch: char) -> bool {
-    ch == '_' || ch.is_ascii_alphabetic()
+    ch == '_' || ch.is_ascii_alphabetic() || ch >= '\u{80}'
 }
 
 /// Returns true for subsequent characters in a PHP variable/function identifier.

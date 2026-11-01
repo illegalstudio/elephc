@@ -71,6 +71,8 @@ pub enum Token {
     StringLiteral(String),
     IntLiteral(i64),
     FloatLiteral(f64),
+    /// Verbatim PHP `/** ... */` declaration metadata.
+    DocComment(String),
 
     // Identifiers
     Variable(String),
@@ -185,6 +187,7 @@ pub enum Token {
     Dot,            // .
     Comma,          // ,
     Backslash,      // \
+    Dollar,         // bare `$` before `{`/`$`, resolved contextually by the parser
     LBracket,       // [
     RBracket,       // ]
     Question,       // ?

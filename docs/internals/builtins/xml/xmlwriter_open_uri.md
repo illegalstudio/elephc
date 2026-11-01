@@ -2,7 +2,7 @@
 title: "xmlwriter_open_uri() - internals"
 description: "Compiler internals for xmlwriter_open_uri(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1118
+  order: 1178
 ---
 
 ## `xmlwriter_open_uri()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/xml_prelude/build/writer.rs`:951](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs#L951) (`xmlwriter_open_uri`)
+- **Lowering**: [`src/xml_prelude/build/writer.rs`:961](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs#L961) (`xmlwriter_open_uri`)
 - **Function symbol**: `xmlwriter_open_uri()`
 
 

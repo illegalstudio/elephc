@@ -2,20 +2,20 @@
 title: "lchown()"
 description: "Changes user ownership of a symlink."
 sidebar:
-  order: 289
+  order: 300
 ---
 
 ## lchown()
 
 ```php
-function lchown(string $filename, string $user): bool
+function lchown(string $filename, string|int $user): bool
 ```
 
 Changes user ownership of a symlink.
 
 **Parameters**:
 - `$filename` (`string`)
-- `$user` (`string`)
+- `$user` (`string|int`)
 
 **Returns**: `bool`
 

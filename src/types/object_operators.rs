@@ -12,7 +12,8 @@
 //!   including foreign objects, arrays, resources and null arithmetic.
 
 use elephc_builtin_contract::{
-    lookup_class, ClassContract, ObjectArithmetic, ObjectBitwise, ObjectShift,
+    is_operator_class_name, lookup_class, ClassContract, ObjectArithmetic, ObjectBitwise,
+    ObjectShift,
 };
 use crate::parser::ast::BinOp;
 use crate::types::PhpType;
@@ -25,10 +26,28 @@ pub(crate) struct ObjectOperatorPlan {
     pub comparison: bool,
 }
 
+/// Whether any of the program's declared class `names` has internal operator handlers.
+///
+/// A whole-table scan: the checker and lowering keep its answer per program (see
+/// `Checker::program_has_operator_classes`, `LoweringContext::program_has_operator_classes`)
+/// instead of asking it at every binary operator, which made both quadratic in the class count.
+pub(crate) fn names_an_operator_class<'a>(names: impl IntoIterator<Item = &'a String>) -> bool {
+    #[cfg(test)]
+    OPERATOR_CLASS_SCANS.with(|count| count.set(count.get() + 1));
+    names.into_iter().any(|name| is_operator_class_name(name))
+}
+
+#[cfg(test)]
+std::thread_local! {
+    /// Whole-table operator-class scans (`names_an_operator_class`) on this test thread.
+    pub(crate) static OPERATOR_CLASS_SCANS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 /// Finds internal operator metadata for a non-nullable, statically known object.
 pub(crate) fn operator_class(ty: &PhpType) -> Option<&'static ClassContract> {
     match ty {
-        PhpType::Object(name) => lookup_class(name).filter(|class| class.operators.is_some()),
+        // The allocation-free name test first: almost no class has operator handlers.
+        PhpType::Object(name) if is_operator_class_name(name) => lookup_class(name),
         _ => None,
     }
 }

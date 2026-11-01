@@ -9,6 +9,63 @@
 
 use super::*;
 
+/// Builds the abstract callable-reflection base from the methods shared by its two concrete
+/// children. The abstract contracts contain no storage-dependent bodies; concrete owners retain
+/// their populated slot-backed implementations and override every inherited contract.
+pub(super) fn builtin_reflection_function_abstract_class(
+    function: &FlattenedClass,
+    method: &FlattenedClass,
+) -> FlattenedClass {
+    let method_names = method
+        .methods
+        .iter()
+        .map(|member| php_symbol_key(&member.name))
+        .collect::<HashSet<_>>();
+    let mut methods = function
+        .methods
+        .iter()
+        .filter(|member| {
+            let key = php_symbol_key(&member.name);
+            method_names.contains(&key)
+                && !key.starts_with("__fill")
+                && key != "__type_from"
+                && !matches!(
+                    key.as_str(),
+                    "__construct" | "invoke" | "invokeargs" | "getclosure"
+                )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    // php's methods are concrete: on an object whose engine-side function was never set (a user
+    // subclass such as psysh's `ReflectionLanguageConstruct`, which overrides only what it needs)
+    // they raise this `Error`. Abstract contracts made that subclass fail to compile.
+    for member in &mut methods {
+        member.is_abstract = false;
+        member.has_body = true;
+        member.body = vec![crate::synthetic_class::s_throw(crate::synthetic_class::e_new(
+            "\\Error",
+            vec![crate::synthetic_class::e_str(
+                "Internal error: Failed to retrieve the reflection object",
+            )],
+        ))];
+    }
+    FlattenedClass {
+        name: "ReflectionFunctionAbstract".to_string(),
+        span: dummy(),
+        extends: None,
+        implements: vec!["Reflector".to_string(), "Stringable".to_string()],
+        is_abstract: true,
+        is_final: false,
+        is_readonly_class: false,
+        properties: Vec::new(),
+        methods,
+        attributes: Vec::new(),
+        constants: Vec::new(),
+        used_traits: Vec::new(),
+        trait_aliases: Vec::new(),
+    }
+}
+
 /// Builds a `FlattenedClass` for simple reflection owner classes
 /// with a private `__attrs` array property and two methods: `__construct`
 /// (public, accepting the supplied params) and `getAttributes` (public,
@@ -81,11 +138,21 @@ pub(super) fn builtin_reflection_owner_class(
             Some(mixed_type()),
             false_bool(),
         ));
-        methods.push(builtin_reflection_class_object_method(
-            "getDeclaringClass",
-            "__declaring_class",
-            "ReflectionClass",
-        ));
+        if reflection_declaring_class_is_lazy(name) {
+            properties.push(builtin_property(
+                "__declaring_class_thunk",
+                Visibility::Private,
+                Some(TypeExpr::Int),
+                int_lit(0),
+            ));
+            methods.push(builtin_reflection_lazy_declaring_class_method());
+        } else {
+            methods.push(builtin_reflection_class_object_method(
+                "getDeclaringClass",
+                "__declaring_class",
+                "ReflectionClass",
+            ));
+        }
     }
     if matches!(
         name,
@@ -133,6 +200,39 @@ pub(super) fn builtin_reflection_owner_class(
         }
     }
     if matches!(name, "ReflectionFunction" | "ReflectionMethod") {
+        properties.push(builtin_property(
+            "__file_name",
+            Visibility::Private,
+            Some(TypeExpr::Str),
+            empty_string(),
+        ));
+        properties.push(builtin_property(
+            "__start_line",
+            Visibility::Private,
+            Some(TypeExpr::Int),
+            int_lit(0),
+        ));
+        properties.push(builtin_property(
+            "__end_line",
+            Visibility::Private,
+            Some(TypeExpr::Int),
+            int_lit(0),
+        ));
+        methods.push(builtin_reflection_slot_getter(
+            "getFileName",
+            "__file_name",
+            string_or_bool_type(),
+        ));
+        methods.push(builtin_reflection_slot_getter(
+            "getStartLine",
+            "__start_line",
+            int_or_bool_type(),
+        ));
+        methods.push(builtin_reflection_slot_getter(
+            "getEndLine",
+            "__end_line",
+            int_or_bool_type(),
+        ));
         properties.push(builtin_property(
             "__string",
             Visibility::Private,
@@ -223,8 +323,50 @@ pub(super) fn builtin_reflection_owner_class(
             "__toString",
             "__string",
         ));
+        // A compiled reflector builds its parameter reflectors on first use: `__parameters_filler`
+        // holds the compiled filler's address until then, and `__parameter_count` answers
+        // `getNumberOfParameters()` without building them.
+        properties.push(member_filler_property("__parameters"));
+        properties.push(builtin_property(
+            "__parameter_count",
+            Visibility::Private,
+            Some(TypeExpr::Int),
+            int_lit(0),
+        ));
+        for method in &mut methods {
+            match method.name.as_str() {
+                "getParameters" | "isVariadic" => {
+                    method.body.insert(
+                        0,
+                        if matches!(name, "ReflectionMethod" | "ReflectionFunction") {
+                            reflection_member_fill_preamble_table("__parameters")
+                        } else {
+                            reflection_member_fill_preamble("__parameters")
+                        },
+                    );
+                }
+                "getNumberOfParameters" => {
+                    method.body.insert(0, reflection_unfilled_parameter_count_return());
+                }
+                _ => {}
+            }
+        }
+    }
+    if name == "ReflectionFunction" {
+        properties.push(builtin_property(
+            "__callable",
+            Visibility::Private,
+            Some(mixed_type()),
+            null_expr(),
+        ));
     }
     if name == "ReflectionMethod" {
+        properties.push(builtin_property(
+            "__class",
+            Visibility::Private,
+            Some(TypeExpr::Str),
+            empty_string(),
+        ));
         properties.push(builtin_property(
             "__has_prototype",
             Visibility::Private,
@@ -244,21 +386,62 @@ pub(super) fn builtin_reflection_owner_class(
         methods.push(builtin_reflection_method_get_prototype_method());
         methods.push(builtin_reflection_method_invoke_method());
         methods.push(builtin_reflection_method_invoke_args_method());
+        methods.push(builtin_reflection_get_closure_method(true));
         methods.push(builtin_reflection_method_create_from_method_name_method());
         methods.push(builtin_reflection_set_accessible_method());
     }
     if name == "ReflectionFunction" {
         methods.push(builtin_reflection_function_invoke_method());
         methods.push(builtin_reflection_function_invoke_args_method());
+        methods.push(builtin_reflection_get_closure_method(false));
+        methods.push(builtin_reflection_constant_false_bool_method(
+            "isAnonymous",
+        ));
+        methods.push(builtin_reflection_constant_false_bool_method("isStatic"));
+        methods.push(builtin_reflection_constant_null_mixed_method(
+            "getClosureThis",
+        ));
+        methods.push(builtin_reflection_constant_null_mixed_method(
+            "getClosureScopeClass",
+        ));
+        methods.push(builtin_reflection_constant_null_mixed_method(
+            "getClosureCalledClass",
+        ));
         methods.push(builtin_reflection_constant_empty_array_method(
             "getClosureUsedVariables",
+        ));
+        // Same closure-introspection simplification as `getClosureUsedVariables` above: elephc
+        // resolves a closure's bindings at compile time into a descriptor, so there is no runtime
+        // name-to-value table to hand back. Declaring it keeps programs that merely MENTION the
+        // method compilable — Symfony's `LazyString::resolve()` calls it only while building the
+        // message for a `TypeError` it has already caught.
+        methods.push(builtin_reflection_constant_empty_array_method(
+            "getStaticVariables",
         ));
         methods.push(builtin_reflection_constant_false_bool_method(
             "isDisabled",
         ));
     }
     if name == "ReflectionProperty" {
+        properties.push(builtin_property(
+            "__class",
+            Visibility::Private,
+            Some(TypeExpr::Str),
+            empty_string(),
+        ));
         methods.push(builtin_reflection_set_accessible_method());
+    }
+    // php's `$constant->class`: the declaring class, which every dump of the reflector shows.
+    if matches!(
+        name,
+        "ReflectionClassConstant" | "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase"
+    ) {
+        properties.push(builtin_property(
+            "__class",
+            Visibility::Private,
+            Some(TypeExpr::Str),
+            empty_string(),
+        ));
     }
     properties.push(builtin_property(
         "__attrs",
@@ -277,9 +460,14 @@ pub(super) fn builtin_reflection_owner_class(
         name: name.to_string(),
         span: dummy(),
         extends: None,
-        implements: Vec::new(),
+        implements: vec!["Reflector".to_string()],
         is_abstract: false,
-        is_final: true,
+        // None of the reflection owners php declares is final (`ReflectionProperty`,
+        // `ReflectionClassConstant`, `ReflectionEnum*Case`, ... all report `isFinal() === false`),
+        // and libraries extend them: Doctrine's `RuntimeReflectionProperty extends
+        // \ReflectionProperty` backs every mapped entity field. Declared final, that class could
+        // not be declared at run time and every page reading an entity failed.
+        is_final: false,
         is_readonly_class: false,
         properties,
         methods,
@@ -300,6 +488,98 @@ pub(super) fn reflection_owner_has_doc_comment_method(class_name: &str) -> bool 
             | "ReflectionClassConstant"
             | "ReflectionEnumUnitCase"
             | "ReflectionEnumBackedCase"
+    )
+}
+
+/// Returns true when this member reflector builds its declaring `ReflectionClass` on demand.
+///
+/// A compiled reflector of these classes records the address of the declaring class's shared
+/// materializer in `__declaring_class_thunk` (see `emit_reflection_declaring_class_property`);
+/// one built by the eval bridge still carries the object in `__declaring_class` and a zero thunk.
+pub(super) fn reflection_declaring_class_is_lazy(class_name: &str) -> bool {
+    matches!(class_name, "ReflectionMethod" | "ReflectionProperty")
+}
+
+/// Builds `getDeclaringClass()` for a reflector whose declaring class is built on demand:
+/// `__elephc_reflection_materialize($this->__declaring_class_thunk)` when the reflector recorded
+/// a materializer, else the object the eval bridge stored. Each call returns a fresh object, as
+/// php's does.
+fn builtin_reflection_lazy_declaring_class_method() -> ClassMethod {
+    let span = crate::span::Span::dummy();
+    let materialized = Stmt::new(
+        StmtKind::If {
+            condition: binary_expr(
+                reflection_this_property("__declaring_class_thunk", span),
+                BinOp::StrictNotEq,
+                Expr::new(ExprKind::IntLiteral(0), span),
+                span,
+            ),
+            then_body: vec![Stmt::new(
+                StmtKind::Return(Some(reflection_materialized_declaring_class(span))),
+                span,
+            )],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        span,
+    );
+    ClassMethod {
+        type_params: Vec::new(),
+        name: "getDeclaringClass".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified("ReflectionClass"))),
+        by_ref_return: false,
+        body: vec![
+            materialized,
+            Stmt::new(
+                StmtKind::Return(Some(reflection_this_property("__declaring_class", span))),
+                span,
+            ),
+        ],
+        span,
+        attributes: Vec::new(),
+    }
+}
+
+/// `__elephc_reflection_materialize($this->__declaring_class_thunk)`: a fresh declaring
+/// `ReflectionClass` built by the materializer the reflector recorded.
+fn reflection_materialized_declaring_class(span: crate::span::Span) -> Expr {
+    function_call(
+        "__elephc_reflection_materialize",
+        vec![reflection_this_property("__declaring_class_thunk", span)],
+        span,
+    )
+}
+
+/// `if ($this->__parameters_filler !== 0) { return $this->__parameter_count; }`: the count of
+/// parameters a compiled reflector has not built yet.
+fn reflection_unfilled_parameter_count_return() -> Stmt {
+    let span = crate::span::Span::dummy();
+    Stmt::new(
+        StmtKind::If {
+            condition: binary_expr(
+                reflection_this_property("__parameters_filler", span),
+                BinOp::StrictNotEq,
+                Expr::new(ExprKind::IntLiteral(0), span),
+                span,
+            ),
+            then_body: vec![Stmt::new(
+                StmtKind::Return(Some(reflection_this_property("__parameter_count", span))),
+                span,
+            )],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        span,
     )
 }
 

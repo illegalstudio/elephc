@@ -141,7 +141,10 @@ fn request_now() -> i64 {
 /// `opcache_invalidate($p, true)` through the same path — reference answers `true`, elephc
 /// answered `false`. `invalidate` of a deleted file is exactly when this matters.
 fn cache_key(path: &Path) -> std::path::PathBuf {
-    if let Ok(canonical) = std::fs::canonicalize(path) {
+    // Through the realpath cache, as `include` itself resolves its path: the uncached
+    // `canonicalize` here was one `realpath` syscall per include per request, 3% of a Laravel
+    // request that includes ~120 files, for an answer php trusts for `realpath_cache_ttl`.
+    if let Some(canonical) = crate::realpath_cache::try_canonicalize_cached(path) {
         return canonical;
     }
     match (path.parent(), path.file_name()) {

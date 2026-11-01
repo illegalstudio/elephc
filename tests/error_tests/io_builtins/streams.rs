@@ -30,23 +30,12 @@ fn test_error_fopen_wrong_args() {
     );
 }
 
-/// Verifies the `while` guard narrowing is dropped once the loop exits.
-///
-/// The loop leaves precisely when the guard is false, so after it the variable is back to
-/// `array|false` and a parameter declared `array` must refuse it. Without the restore the
-/// narrowed array type outlives the loop, this snippet COMPILES, and the emitted code reads
-/// a boxed `false` as an array — a silent wrong answer.
-///
-/// The witness is a typed parameter rather than `count()`, which is what this test used
-/// until `count()` learned to raise PHP's TypeError at run time: with the runtime guard in
-/// place, `count()` accepts a union with one countable member exactly as PHP does, so it can
-/// no longer tell the narrowed type from the union. Verified by sentinel mutation in both
-/// directions — dropping the restore makes this snippet compile, and a behavioural probe of
-/// the same loop does NOT distinguish the two (both raise the TypeError), which is why this
-/// stays an error test.
+/// After a `while (($row = fgetcsv($h)) !== false)` loop `$row` is `array|false` again, so passing it
+/// to an `array` parameter is a run-time TypeError in php. elephc accepts the call at compile time
+/// and raises the TypeError at run time (the narrowed array type does not outlive the loop).
 #[test]
-fn test_error_while_guard_narrowing_does_not_outlive_the_loop() {
-    expect_error(
+fn test_while_guard_narrowing_does_not_outlive_the_loop() {
+    expect_no_error(
         r#"<?php
 function takesArray(array $a): int { return count($a); }
 $h = fopen("x.csv", "r");
@@ -54,7 +43,6 @@ while (($row = fgetcsv($h)) !== false) {
 }
 echo takesArray($row);
 "#,
-        "Function 'takesArray' parameter $a expects array, got array<string>|false",
     );
 }
 
@@ -85,7 +73,7 @@ fn test_error_fread_requires_resource_handle() {
 /// Verifies fwrite() produces correct error when called with only one argument.
 #[test]
 fn test_error_fwrite_wrong_args() {
-    expect_error("<?php fwrite(1);", "fwrite() takes exactly 2 arguments");
+    expect_error("<?php fwrite(1);", "fwrite() takes 2 or 3 arguments");
 }
 
 /// Verifies fwrite() produces correct error when passed an int instead of a resource.
@@ -100,7 +88,7 @@ fn test_error_fwrite_requires_resource_handle() {
 /// Verifies fgets() produces correct error when called with no arguments.
 #[test]
 fn test_error_fgets_wrong_args() {
-    expect_error("<?php fgets();", "fgets() takes exactly 1 argument");
+    expect_error("<?php fgets();", "fgets() takes 1 or 2 arguments");
 }
 
 /// Verifies fgets() produces correct error when passed an int instead of a resource.
@@ -196,16 +184,16 @@ fn test_error_tmpfile_rejects_nonempty_static_spread() {
     expect_error("<?php tmpfile(...[1]);", "tmpfile() takes no arguments");
 }
 
-/// Verifies a function with string return type annotation produces an error when returning fgetc() which can return false.
+/// Returning `fgetc()` (`string|false`) from a function declared `: string` is valid in php's weak mode
+/// (`false` coerces to `""`); elephc now accepts it and the program output matches php.
 #[test]
-fn test_error_fgetc_false_return_rejects_string_return_type() {
-    expect_error(
+fn test_fgetc_false_return_coerces_to_declared_string() {
+    expect_no_error(
         r#"<?php
 function read_char(): string {
     return fgetc(STDIN);
 }
 "#,
-        "Function 'read_char' return type expects string, got string|false",
     );
 }
 
@@ -464,7 +452,7 @@ fn test_error_stream_socket_server_wrong_args() {
 fn test_error_stream_socket_client_wrong_args() {
     expect_error(
         "<?php stream_socket_client();",
-        "stream_socket_client() takes exactly 1 argument",
+        "stream_socket_client() takes 1 to 6 arguments",
     );
 }
 
@@ -829,12 +817,12 @@ fn test_error_stream_socket_recvfrom_address_not_variable() {
     );
 }
 
-/// Verifies the invalid-call diagnostic for error stream socket recvfrom address not string.
+/// The `$address` out-parameter of `stream_socket_recvfrom()` accepts any variable in php; elephc now
+/// accepts it and the program output matches php.
 #[test]
-fn test_error_stream_socket_recvfrom_address_not_string() {
-    expect_error(
+fn test_stream_socket_recvfrom_address_accepts_any_variable() {
+    expect_no_error(
         "<?php $n = 1; stream_socket_recvfrom(STDIN, 32, 0, $n);",
-        "stream_socket_recvfrom() parameter $address must be a string",
     );
 }
 
@@ -886,7 +874,7 @@ fn test_error_pclose_requires_resource() {
 /// Verifies the invalid-call diagnostic for error opendir wrong args.
 #[test]
 fn test_error_opendir_wrong_args() {
-    expect_error("<?php opendir();", "opendir() takes exactly 1 argument");
+    expect_error("<?php opendir();", "opendir() takes 1 or 2 arguments");
 }
 
 /// Verifies the invalid-call diagnostic for error readdir wrong args.

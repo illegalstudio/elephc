@@ -19,6 +19,9 @@
 use std::fmt;
 use std::str::FromStr;
 
+/// Patch release the CLI pinned with `--php-version major.minor.patch`; zero otherwise.
+static REPORTED_RELEASE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 /// PHP compatibility versions accepted by the compiler.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum PhpVersion {
@@ -137,6 +140,32 @@ impl PhpVersion {
     /// Returns `PHP_RELEASE_VERSION`, pinned to zero for language profiles.
     pub const fn release(self) -> u32 {
         self.version_id() % 100
+    }
+
+    /// Records the patch release `--php-version 8.5.10` named, for the values the PROGRAM sees.
+    ///
+    /// A profile is a `major.minor` language level; resolution, feature gates and the runtime
+    /// cache keep comparing [`Self::version_id`]. Only what php reports to the script --
+    /// `PHP_VERSION`, `PHP_VERSION_ID`, `PHP_RELEASE_VERSION`, `phpversion()` -- carries the patch,
+    /// so a build pinned to the host's exact php prints what that php prints (`bin/console about`
+    /// showed `8.5.0` beside php's `8.5.10`).
+    pub fn set_reported_release(patch: u32) {
+        REPORTED_RELEASE.store(patch, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// `PHP_RELEASE_VERSION` as the program sees it (see [`Self::set_reported_release`]).
+    pub fn reported_release(self) -> u32 {
+        self.release() + REPORTED_RELEASE.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// `PHP_VERSION_ID` as the program sees it.
+    pub fn reported_version_id(self) -> u32 {
+        self.major() * 10_000 + self.minor() * 100 + self.reported_release()
+    }
+
+    /// `PHP_VERSION` / `phpversion()` as the program sees it.
+    pub fn reported_version_string(self) -> String {
+        format!("{}.{}.{}", self.major(), self.minor(), self.reported_release())
     }
 
     /// Returns the empty prerelease suffix used by stable language profiles.

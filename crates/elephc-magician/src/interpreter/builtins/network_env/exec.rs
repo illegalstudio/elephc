@@ -40,6 +40,107 @@ pub(in crate::interpreter) fn eval_exec_result(
     eval_process_command_result("exec", command, values)
 }
 
+/// Splits command output into php's `exec()` lines: each ends at `\n`, loses its trailing
+/// whitespace (`isspace`: space, `\t`, `\n`, `\v`, `\f`, `\r`), and a final newline opens no
+/// further empty line.
+pub(in crate::interpreter) fn eval_exec_lines(output: &[u8]) -> Vec<Vec<u8>> {
+    let mut lines = Vec::new();
+    let mut rest = output;
+    while !rest.is_empty() {
+        let (line, tail) = match rest.iter().position(|byte| *byte == b'\n') {
+            Some(end) => (&rest[..end], &rest[end + 1..]),
+            None => (rest, &rest[rest.len()..]),
+        };
+        let mut end = line.len();
+        while end > 0 && matches!(line[end - 1], b' ' | b'\t' | b'\r' | 0x0b | 0x0c) {
+            end -= 1;
+        }
+        lines.push(line[..end].to_vec());
+        rest = tail;
+    }
+    lines
+}
+
+/// Evaluates `exec($command, &$output, &$result_code)` with writable reference targets.
+///
+/// Every output line is appended to `$output` (an existing array keeps its elements), the exit
+/// status lands in `$result_code`, and the last line is the result, as in php's `php_exec`.
+pub(in crate::interpreter) fn eval_builtin_exec_call(
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    with_eval_call_arguments(args, context, scope, values, |evaluated, context, _, values| {
+        let (bound, _) =
+            bind_evaluated_ref_builtin_args(&["command", "output", "result_code"], &evaluated, false)?;
+        let command = required_evaluated_ref_arg(&bound, 0)?.value;
+        let output = optional_evaluated_ref_arg(&bound, 1);
+        let status = optional_evaluated_ref_arg(&bound, 2);
+        let command = eval_shell_command_string(command, values)?;
+        let (outcome, exit_code) = eval_shell_command_output_with_status(&command);
+        let bytes = match outcome {
+            EvalShellOutcome::Ran(bytes) => bytes,
+            other => return eval_process_outcome_result("exec", other, values),
+        };
+        let lines = eval_exec_lines(&bytes);
+        let last = lines.last().cloned().unwrap_or_default();
+        if let Some(argument) = output {
+            if let Some(target) = argument.ref_target.clone() {
+                let combined = eval_exec_append_lines(argument.value, &lines, values)?;
+                eval_write_direct_ref_target(
+                    &target,
+                    combined,
+                    context,
+                    values,
+                    Some(ScopeCellOwnership::Owned),
+                )?;
+            }
+        }
+        if let Some(argument) = status {
+            if let Some(target) = argument.ref_target.clone() {
+                let code = values.int(exit_code)?;
+                eval_write_direct_ref_target(
+                    &target,
+                    code,
+                    context,
+                    values,
+                    Some(ScopeCellOwnership::Owned),
+                )?;
+            }
+        }
+        values.string_bytes_value(&last)
+    })
+}
+
+/// Builds the `$output` array: a copy of the current value when it is an array, plus `lines`.
+fn eval_exec_append_lines(
+    current: RuntimeCellHandle,
+    lines: &[Vec<u8>],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut array = if matches!(values.type_tag(current)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        values.array_clone_shallow(current)?
+    } else {
+        values.array_new(lines.len())?
+    };
+    let mut next = 0i64;
+    for position in 0..values.array_len(array)? {
+        let key = values.array_iter_key(array, position)?;
+        if values.type_tag(key)? == EVAL_TAG_INT {
+            next = next.max(eval_int_value(key, values)?.saturating_add(1));
+        }
+        values.release(key)?;
+    }
+    for line in lines {
+        let key = values.int(next)?;
+        let value = values.string_bytes_value(line)?;
+        array = values.array_set(array, key, value)?;
+        next += 1;
+    }
+    Ok(array)
+}
+
 /// Evaluates one eval process-control builtin over a command expression.
 pub(in crate::interpreter) fn eval_builtin_process_command(
     name: &str,
@@ -96,7 +197,12 @@ pub(in crate::interpreter) fn eval_process_outcome_result(
         }
     };
     match name {
-        "exec" | "shell_exec" => values.string_bytes_value(&output),
+        // php's `exec()` answers the last line of output with trailing whitespace stripped.
+        "exec" => {
+            let last = eval_exec_lines(&output).pop().unwrap_or_default();
+            values.string_bytes_value(&last)
+        }
+        "shell_exec" => values.string_bytes_value(&output),
         "system" => {
             eval_echo_process_output(&output, values)?;
             values.string("")
@@ -126,7 +232,14 @@ const EVAL_SHELL_SPAWN_ATTEMPTS: u32 = 5;
 
 /// Spawns the shell with captured output and collects it once, outside the retry boundary.
 fn eval_shell_command_output(command: &str) -> EvalShellOutcome {
-    eval_shell_run_with(
+    eval_shell_command_output_with_status(command).0
+}
+
+/// Like `eval_shell_command_output`, and also answers the child's exit code (`-1` when a signal
+/// ended it or it never ran), which `exec()`'s `$result_code` reports.
+fn eval_shell_command_output_with_status(command: &str) -> (EvalShellOutcome, i64) {
+    let exit_code = std::cell::Cell::new(-1_i64);
+    let outcome = eval_shell_run_with(
         || {
             let _signals = elephc_process_context::SpawnPermit::new();
             Command::new("/bin/sh")
@@ -137,9 +250,15 @@ fn eval_shell_command_output(command: &str) -> EvalShellOutcome {
                 .stderr(Stdio::piped())
                 .spawn()
         },
-        |child| child.wait_with_output().map(|output| output.stdout),
+        |child| {
+            child.wait_with_output().map(|output| {
+                exit_code.set(i64::from(output.status.code().unwrap_or(-1)));
+                output.stdout
+            })
+        },
         std::thread::sleep,
-    )
+    );
+    (outcome, exit_code.get())
 }
 
 /// Retries only transient spawn errors, with injectable operations for deterministic tests.

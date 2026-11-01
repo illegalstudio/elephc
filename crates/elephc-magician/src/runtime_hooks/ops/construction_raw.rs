@@ -44,6 +44,41 @@ macro_rules! impl_construction_raw_ops {
                 scope_ptr,
                 scope_len,
                 self.context.cast(),
+                std::ptr::null(),
+                0,
+            )
+        };
+        let outcome = if ok == 0 {
+            self.take_pending_native_throwable()
+                .map_or(Err(EvalStatus::RuntimeFatal), |thrown| {
+                    self.schedule_pending_throw(thrown)?;
+                    Err(EvalStatus::UncaughtThrowable)
+                })
+        } else {
+            Ok(())
+        };
+        self.release_cells([arg_array])?;
+        outcome
+    }
+
+    /// Calls an AOT constructor through the generated bridge for its resolved declaring class.
+    fn construct_object_for_class(
+        &mut self,
+        class_name: &str,
+        object: RuntimeCellHandle,
+        args: Vec<RuntimeCellHandle>,
+    ) -> Result<(), EvalStatus> {
+        let (scope_ptr, scope_len) = self.current_class_scope_abi();
+        let arg_array = self.arg_array(args)?;
+        let ok = unsafe {
+            __elephc_eval_value_construct_object(
+                object.as_ptr(),
+                arg_array.as_ptr(),
+                scope_ptr,
+                scope_len,
+                self.context.cast(),
+                class_name.as_ptr(),
+                class_name.len() as u64,
             )
         };
         let outcome = if ok == 0 {
@@ -61,22 +96,39 @@ macro_rules! impl_construction_raw_ops {
 
     /// Returns whether the generated AOT class-name table contains the requested class.
     fn class_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
-        Ok(unsafe { __elephc_eval_class_exists(name.as_ptr(), name.len() as u64) != 0 })
+        aot_memo::memoized_existence(name, "#class", || {
+            Ok(unsafe { __elephc_eval_class_exists(name.as_ptr(), name.len() as u64) != 0 })
+        })
     }
 
     /// Returns whether the generated AOT interface-name table contains the requested interface.
     fn interface_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
-        Ok(unsafe { __elephc_eval_interface_exists(name.as_ptr(), name.len() as u64) != 0 })
+        aot_memo::memoized_existence(name, "#interface", || {
+            Ok(unsafe { __elephc_eval_interface_exists(name.as_ptr(), name.len() as u64) != 0 })
+        })
     }
 
     /// Returns whether the generated AOT trait-name table contains the requested trait.
     fn trait_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
-        Ok(unsafe { __elephc_eval_trait_exists(name.as_ptr(), name.len() as u64) != 0 })
+        aot_memo::memoized_existence(name, "#trait", || {
+            Ok(unsafe { __elephc_eval_trait_exists(name.as_ptr(), name.len() as u64) != 0 })
+        })
     }
 
     /// Returns whether the generated AOT enum-name table contains the requested enum.
     fn enum_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
-        Ok(unsafe { __elephc_eval_enum_exists(name.as_ptr(), name.len() as u64) != 0 })
+        aot_memo::memoized_existence(name, "#enum", || {
+            Ok(unsafe { __elephc_eval_enum_exists(name.as_ptr(), name.len() as u64) != 0 })
+        })
+    }
+
+    /// Stores the live interpreter frames in the trace slot of a Throwable eval just allocated.
+    fn capture_throwable_trace(&mut self, object: RuntimeCellHandle) -> Result<(), EvalStatus> {
+        if crate::context::eval_call_frames_are_empty() {
+            return Ok(());
+        }
+        unsafe { __elephc_eval_value_capture_throwable_trace(object.as_ptr()) };
+        Ok(())
     }
 
     /// Tests a boxed Mixed object against generated class/interface metadata.
@@ -157,6 +209,36 @@ macro_rules! impl_construction_raw_ops {
     /// Returns the unboxed Mixed runtime tag for PHP type-predicate builtins.
     fn type_tag(&mut self, value: RuntimeCellHandle) -> Result<u64, EvalStatus> {
         Ok(unsafe { __elephc_eval_value_type_tag(value.as_ptr()) })
+    }
+
+    /// Rebinds a compiled closure descriptor through the runtime's `__rt_closure_bind`.
+    fn bind_native_closure(
+        &mut self,
+        closure: RuntimeCellHandle,
+        new_this: Option<RuntimeCellHandle>,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let receiver = new_this.map_or(std::ptr::null_mut(), |value| value.as_ptr());
+        let bound = unsafe { __elephc_eval_value_closure_bind(closure.as_ptr(), receiver) };
+        if bound.is_null() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        Ok(RuntimeCellHandle::from_raw(bound))
+    }
+
+    /// Returns the first three words of a real runtime cell, for `ELEPHC_EVAL_TRACE` only.
+    ///
+    /// This adapter owns the cell representation, so it is the one implementation that may look.
+    /// Read UNALIGNED: the handle is a `*mut c_void` and nothing promises it is 8-aligned, and
+    /// building a `&[u64]` over it aborts the process on that precondition rather than returning.
+    fn trace_result_words(&mut self, value: RuntimeCellHandle) -> Option<[u64; 3]> {
+        let base = value.as_ptr().cast::<u64>();
+        (!base.is_null()).then(|| unsafe {
+            [
+                base.read_unaligned(),
+                base.add(1).read_unaligned(),
+                base.add(2).read_unaligned(),
+            ]
+        })
     }
 
     /// Creates an invoker-only by-reference marker for a staged Mixed slot.

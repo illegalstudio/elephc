@@ -117,8 +117,15 @@ pub(super) fn dynamic_new_candidate(
             // handed a scalar where the array belongs and produced EMPTY OUTPUT rather than a
             // diagnostic — the worst row of the measured matrix.
             if constructor.params.len() != arg_count || constructor.variadic.is_some() {
+                // Named after the class that IMPLEMENTS the constructor, the same key
+                // `ir_lower` emits it under, so descendants share their ancestor's thunk.
+                let thunk_class_id = crate::ir_lower::dynamic_constructor_thunk_owner(
+                    &ctx.module.class_infos,
+                    class_name,
+                )
+                .map_or(class_info.class_id, |(_, owner)| owner.class_id);
                 let thunk = crate::ir_lower::dynamic_constructor_thunk_name(
-                    class_info.class_id,
+                    thunk_class_id,
                     arg_count,
                 );
                 let emitted = ctx
@@ -171,6 +178,17 @@ pub(super) fn dynamic_new_candidate(
         // cannot supply the element type as-is drops the class from the ladder, which is a MISSING
         // constructor call — the behaviour this class had before the thunk existed — rather than a
         // fabricated integer.
+        // A candidate whose declared parameter cannot hold what this SITE passes can never be the
+        // runtime class: PHP would raise a `TypeError` before the body ran. Dropping it from the
+        // ladder is the same judgement `dynamic_new_uncastable_collector` makes just below, and
+        // without it one unrelated class in the program decided the whole construction site.
+        // Symfony's `Router::getMatcher` is the shape — `new $this->options['matcher_class'](
+        // $routes, $this->context)` passes a `RequestContext` object, and a class whose second
+        // constructor parameter is `?int` turned that into a hard
+        // "conversion from Object(...) to TaggedScalar" for a class that site never builds.
+        if dynamic_new_param_refuses_site_argument(ctx, inst, &param_types)? {
+            return Ok(None);
+        }
         if padding_thunk.is_some()
             && dynamic_new_uncastable_collector(constructor, materialized).is_some()
         {
@@ -191,7 +209,8 @@ pub(super) fn dynamic_new_candidate(
     } else {
         return Ok(None);
     };
-    let property_initialization = collect_property_initialization(class_info, inst);
+    let property_initialization =
+        collect_property_initialization(ctx.module, class_name, class_info, inst);
     Ok(Some(DynamicNewCandidate {
         class_name: class_name.to_string(),
         class_id: class_info.class_id,
@@ -223,7 +242,8 @@ pub(super) fn dynamic_new_without_constructor_candidate(
     if class_interfaces_require_missing_method_symbols(ctx, class_name, class_info) {
         return Ok(None);
     }
-    let property_initialization = collect_property_initialization(class_info, inst);
+    let property_initialization =
+        collect_property_initialization(ctx.module, class_name, class_info, inst);
     Ok(Some(DynamicNewCandidate {
         class_name: class_name.to_string(),
         class_id: class_info.class_id,
@@ -270,6 +290,7 @@ pub(super) fn emit_dynamic_new_class_lookup(
     ctx: &mut FunctionContext<'_>,
     class_name_value: ValueId,
     required_parent: &str,
+    keep_name_for_eval: bool,
 ) -> Result<()> {
     let class_ty = ctx.value_php_type(class_name_value)?.codegen_repr();
     match class_ty {
@@ -284,6 +305,10 @@ pub(super) fn emit_dynamic_new_class_lookup(
         _ => {
             emit_dynamic_new_fatal(ctx, required_parent);
         }
+    }
+    if keep_name_for_eval {
+        // The eval fallback reads the class-string back from temporary slots 0/8.
+        abi::emit_push_result_value(ctx.emitter, &PhpType::Str);
     }
     abi::emit_call_label(ctx.emitter, "__rt_instanceof_lookup");
     Ok(())
@@ -364,14 +389,17 @@ pub(super) fn emit_dynamic_new_candidate(
     candidate: &DynamicNewCandidate,
     constructor_args: &[ValueId],
     result: ValueId,
+    creation_line: u32,
 ) -> Result<()> {
-    emit_object_allocation(
+    let defaults = emit_class_instance_allocation(
         ctx,
+        &candidate.class_name,
         candidate.class_id,
         candidate.property_count,
         candidate.allow_dynamic_properties,
         &candidate.uninitialized_marker_offsets,
         &candidate.owned_reference_property_offsets,
+        candidate.property_initialization.inline_defaults(),
     )?;
     ctx.store_result_value(result)?;
     let needs_construction_guard = candidate.constructor_impl.is_some()
@@ -381,10 +409,15 @@ pub(super) fn emit_dynamic_new_candidate(
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         super::super::callable_guards::begin_unconstructed_object(ctx.emitter)
     } else { 0 };
-    emit_property_initialization(ctx, result, &candidate.property_initialization)?;
+    let initialization = candidate.property_initialization.with_remaining_inline(defaults);
+    emit_property_initialization(ctx, result, &initialization)?;
     if super::super::is_throwable_like_class(ctx, &candidate.class_name) {
         ctx.load_value_to_result(result)?;
         emit_regular_throwable_creation_line(ctx, result, abi::int_result_reg(ctx.emitter), candidate.class_id);
+        // File, line and trace of the `new` site (the branch's location capture).
+        ctx.load_value_to_result(result)?;
+        let object_reg = abi::int_result_reg(ctx.emitter);
+        throwable_new::emit_throwable_creation_site(ctx, object_reg, creation_line);
     }
     if let Some(constructor) = &candidate.constructor_impl {
         emit_constructor_call(
@@ -415,48 +448,21 @@ pub(super) fn emit_dynamic_new_fatal(ctx: &mut FunctionContext<'_>, required_par
     emit_fatal_message(ctx, message.as_bytes());
 }
 
-/// Emits PHP's fatal diagnostic for source-level `new $name` with a missing class.
+/// Throws PHP's catchable `Error` for source-level `new $name` with a missing class:
+/// `Class "<name>" not found`, the name being the one staged on the top of the temporary stack.
+///
+/// php raises a real `Error` here, so a surrounding `try`/`catch (Throwable)` handles it; with no
+/// handler the unwinder prints the same `Fatal error: Uncaught Error: ...` line this used to write
+/// by hand before exiting.
 pub(super) fn emit_dynamic_new_class_not_found_fatal(ctx: &mut FunctionContext<'_>) {
-    let (prefix_label, prefix_len) = ctx
-        .data
-        .add_string(b"Fatal error: Uncaught Error: Class \"");
-    let (suffix_label, suffix_len) = ctx.data.add_string(b"\" not found\n");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2");                              // select stderr for the class-not-found prefix
-            ctx.emitter.adrp("x1", &prefix_label);
-            ctx.emitter.add_lo12("x1", "x1", &prefix_label);
-            ctx.emitter.instruction(&format!("mov x2, #{}", prefix_len));       // pass the class-not-found prefix byte length
-            ctx.emitter.syscall(4);
-            ctx.emitter.instruction("mov x0, #2");                              // select stderr for the missing class name
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 0);
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "x2", 8);
-            ctx.emitter.syscall(4);
-            ctx.emitter.instruction("mov x0, #2");                              // select stderr for the class-not-found suffix
-            ctx.emitter.adrp("x1", &suffix_label);
-            ctx.emitter.add_lo12("x1", "x1", &suffix_label);
-            ctx.emitter.instruction(&format!("mov x2, #{}", suffix_len));       // pass the class-not-found suffix byte length
-            ctx.emitter.syscall(4);
-        }
-        Arch::X86_64 => {
-            abi::emit_symbol_address(ctx.emitter, "rsi", &prefix_label);
-            ctx.emitter.instruction(&format!("mov edx, {}", prefix_len));       // pass the class-not-found prefix byte length
-            ctx.emitter.instruction("mov edi, 2");                              // select stderr for the class-not-found prefix
-            ctx.emitter.instruction("mov eax, 1");                              // select Linux write syscall for the prefix
-            ctx.emitter.instruction("syscall");                                 // write the class-not-found prefix
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 0);
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdx", 8);
-            ctx.emitter.instruction("mov edi, 2");                              // select stderr for the missing class name
-            ctx.emitter.instruction("mov eax, 1");                              // select Linux write syscall for the class name
-            ctx.emitter.instruction("syscall");                                 // write the missing class name
-            abi::emit_symbol_address(ctx.emitter, "rsi", &suffix_label);
-            ctx.emitter.instruction(&format!("mov edx, {}", suffix_len));       // pass the class-not-found suffix byte length
-            ctx.emitter.instruction("mov edi, 2");                              // select stderr for the class-not-found suffix
-            ctx.emitter.instruction("mov eax, 1");                              // select Linux write syscall for the suffix
-            ctx.emitter.instruction("syscall");                                 // write the class-not-found suffix
-        }
-    }
-    abi::emit_exit(ctx.emitter, 1);
+    let (text_ptr, text_len) = abi::string_result_regs(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, text_ptr, 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, text_len, 8);
+    super::super::runtime_class_messages::emit_concat_static_prefix(ctx, "Class \"");
+    super::super::runtime_class_messages::emit_concat_static_suffix(ctx, "\" not found");
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    super::super::exceptions::emit_error_from_string_result(ctx);
 }
 
 /// Emits PHP's fatal diagnostic for `new $name` when the class expression is not a string.
@@ -489,4 +495,57 @@ pub(in crate::codegen::lower_inst) fn emit_fatal_message(ctx: &mut FunctionConte
         }
     }
     abi::emit_exit(ctx.emitter, 1);
+}
+
+/// Reports whether this construction SITE passes an argument no lowering can place in the
+/// candidate's declared parameter, which makes the candidate unreachable at run time.
+///
+/// Only the inline nullable-int shape is judged here, because it is the one declared parameter
+/// whose materialization is partial: `coerce_loaded_value_to_tagged_scalar` converts an int,
+/// bool, callable, string, null or boxed value and has nothing to do with an object, an array or
+/// a float. Every other parameter shape either accepts the argument or boxes it.
+///
+/// A `true` answer means PHP itself would raise a `TypeError` before entering the constructor, so
+/// removing the class from the ladder loses nothing: the site's own unmatched arm reports.
+fn dynamic_new_param_refuses_site_argument(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+    param_types: &[PhpType],
+) -> Result<bool> {
+    // Operand 0 is the runtime class name; the constructor's arguments follow it.
+    let Some(arguments) = inst.operands.get(1..) else {
+        return Ok(false);
+    };
+    for (index, param_ty) in param_types.iter().enumerate() {
+        if !matches!(param_ty, PhpType::TaggedScalar) {
+            continue;
+        }
+        let Some(argument) = arguments.get(index) else {
+            continue;
+        };
+        if !tagged_scalar_param_accepts(&ctx.value_php_type(*argument)?) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Mirrors the source representations `coerce_loaded_value_to_tagged_scalar` can convert.
+///
+/// Kept in lockstep with that function: admitting a representation it refuses turns this filter
+/// back into the hard backend error it exists to prevent, and refusing one it accepts silently
+/// drops a class the site really can build.
+fn tagged_scalar_param_accepts(source: &PhpType) -> bool {
+    matches!(
+        source.codegen_repr(),
+        PhpType::TaggedScalar
+            | PhpType::Int
+            | PhpType::Bool
+            | PhpType::Callable
+            | PhpType::Void
+            | PhpType::Never
+            | PhpType::Mixed
+            | PhpType::Union(_)
+            | PhpType::Str
+    )
 }

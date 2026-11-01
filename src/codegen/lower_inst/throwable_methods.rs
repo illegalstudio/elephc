@@ -43,17 +43,14 @@ pub(super) fn is_throwable_standard_method_call(
 }
 
 /// Returns true for method keys supplied by PHP's built-in `Throwable` surface.
+///
+/// `getTraceAsString()` and `__toString()` are not among them any more: `Exception` and `Error`
+/// emit real bodies for both (see `builtin_exception_to_string_method`), so they dispatch like
+/// any method and a user `__toString()` override is honoured.
 pub(super) fn is_throwable_standard_method_key(method_key: &str) -> bool {
     matches!(
         method_key,
-        "getmessage"
-            | "getcode"
-            | "getfile"
-            | "getline"
-            | "gettrace"
-            | "gettraceasstring"
-            | "getprevious"
-            | "__tostring"
+        "getmessage" | "getcode" | "getfile" | "getline" | "gettrace" | "getprevious"
     )
 }
 
@@ -150,7 +147,7 @@ pub(super) fn lower_throwable_standard_method_loaded(
         "getfile" => lower_throwable_get_file(ctx, object_reg),
         "gettraceasstring" => lower_throwable_empty_string(ctx),
         "getline" => lower_throwable_get_line(ctx, object_reg),
-        "gettrace" => lower_throwable_empty_trace_array(ctx),
+        "gettrace" => lower_throwable_get_trace(ctx, object_reg),
         "getprevious" => lower_throwable_get_previous(ctx, object_reg, inst),
         "__tostring" => lower_throwable_get_message(ctx, object_reg),
         _ => Err(CodegenIrError::unsupported(format!(
@@ -233,6 +230,89 @@ pub(super) fn lower_throwable_get_line(ctx: &mut FunctionContext<'_>, object_reg
     Ok(PhpType::Int)
 }
 
+/// Returns the trace recorded at creation, retained, or a fresh empty array when none was.
+///
+/// `__rt_throwable_capture_trace` fills the declared `trace` slot when interpreter frames are live
+/// at the `new`. A compact payload that recorded nothing holds zero there; a class-declared
+/// layout holds the default empty array. Both nonzero shapes are an owned array the object keeps,
+/// so the caller gets its own reference.
+///
+/// The slot is not always raw. A class-declared layout runs the property initializer, which stores
+/// the `trace` default through the slot's declared storage -- a boxed `Mixed` since the merge made
+/// a declared `array` the packed|hash union -- while `__rt_throwable_capture_trace` writes a raw
+/// array. Reading a box as an array returned its header words as elements: `ErrorException`'s
+/// `getTrace()` gave `[0, 4294967328, 5, 8]`, and Symfony's `ErrorHandler::cleanTrace()` then
+/// refused it. A boxed array or hash is unwrapped; any other box answers a fresh empty array.
+pub(super) fn lower_throwable_get_trace(ctx: &mut FunctionContext<'_>, object_reg: &str) -> Result<PhpType> {
+    let fresh_label = ctx.next_label("throwable_trace_fresh");
+    let raw_label = ctx.next_label("throwable_trace_raw");
+    let done_label = ctx.next_label("throwable_trace_done");
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let payload_reg = crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target);
+    let trace_offset = crate::codegen_support::throwable_layout::TRACE_OFFSET;
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, trace_offset);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &fresh_label);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    emit_branch_if_result_not(ctx, 5, &raw_label);
+    // -- a boxed Mixed slot: hand back its array or hash payload --
+    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, trace_offset);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let boxed_array = ctx.next_label("throwable_trace_boxed_array");
+    emit_branch_if_result_is(ctx, 4, &boxed_array);
+    emit_branch_if_result_is(ctx, 5, &boxed_array);
+    abi::emit_jump(ctx.emitter, &fresh_label);
+    ctx.emitter.label(&boxed_array);
+    abi::emit_reg_move(ctx.emitter, result_reg, payload_reg);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    abi::emit_pop_reg(ctx.emitter, object_reg);
+    abi::emit_jump(ctx.emitter, &done_label);
+    // -- a raw array slot --
+    ctx.emitter.label(&raw_label);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, trace_offset);
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    abi::emit_pop_reg(ctx.emitter, object_reg);
+    abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, trace_offset);
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&fresh_label);
+    abi::emit_pop_reg(ctx.emitter, object_reg);
+    lower_throwable_empty_trace_array(ctx)?;
+    ctx.emitter.label(&done_label);
+    Ok(PhpType::Array(Box::new(PhpType::Mixed)))
+}
+
+/// Branches when the integer result register holds exactly `value`.
+fn emit_branch_if_result_is(ctx: &mut FunctionContext<'_>, value: i64, label: &str) {
+    match ctx.emitter.target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp x0, #{value}"));               // compare the runtime kind or tag
+            ctx.emitter.instruction(&format!("b.eq {label}"));                  // take the matching shape's path
+        }
+        crate::codegen_support::platform::Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp rax, {value}"));              // compare the runtime kind or tag
+            ctx.emitter.instruction(&format!("je {label}"));                    // take the matching shape's path
+        }
+    }
+}
+
+/// Branches when the integer result register holds anything but `value`.
+fn emit_branch_if_result_not(ctx: &mut FunctionContext<'_>, value: i64, label: &str) {
+    match ctx.emitter.target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp x0, #{value}"));               // compare the runtime kind or tag
+            ctx.emitter.instruction(&format!("b.ne {label}"));                  // take the other shape's path
+        }
+        crate::codegen_support::platform::Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp rax, {value}"));              // compare the runtime kind or tag
+            ctx.emitter.instruction(&format!("jne {label}"));                   // take the other shape's path
+        }
+    }
+}
+
 /// Materializes the synthetic empty indexed array used by `Throwable::getTrace()`.
 pub(super) fn lower_throwable_empty_trace_array(ctx: &mut FunctionContext<'_>) -> Result<PhpType> {
     match ctx.emitter.target.arch {
@@ -254,7 +334,7 @@ pub(super) fn lower_throwable_empty_trace_array(ctx: &mut FunctionContext<'_>) -
     Ok(PhpType::Array(Box::new(PhpType::Mixed)))
 }
 
-/// Reads `Throwable::getPrevious()` through runtime layout metadata, retaining a non-null previous.
+/// Loads `Throwable::getPrevious()` from its declared slot, retaining a non-null previous.
 ///
 /// When the EIR result is `Mixed` (`?Throwable`), both the object and null arms box here and
 /// return `Mixed` so the shared intrinsic post-box path does not retag a live object as null
@@ -269,8 +349,86 @@ pub(super) fn lower_throwable_get_previous(
     let done_label = ctx.next_label("throwable_previous_done");
     let result_is_mixed = matches!(inst.result_php_type.codegen_repr(), PhpType::Mixed);
     let object_ty = PhpType::Object("Throwable".to_string());
-    abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
-    abi::emit_call_label(ctx.emitter, "__rt_throwable_previous");
+    // Two producers write this slot with DIFFERENT shapes, so the read discriminates at
+    // runtime instead of trusting either. The compiled `Exception::__construct` assigns
+    // `$this->previous`, whose declared `?Throwable` type stores a BOXED Mixed cell — never a
+    // raw pointer, and never null (a boxed null is a live cell with tag 8). The eval/native
+    // bridge instead materializes a raw object pointer there. Reading every slot as raw made
+    // `getPrevious()` answer non-null for an exception with no previous, which turned Symfony's
+    // `do { ... } while ($prev = $prev->getPrevious());` into a walk off the end; reading every
+    // slot as boxed broke the bridge round-trip instead. Heap kind 5 tells them apart.
+    abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, crate::codegen_support::throwable_layout::PREVIOUS_OFFSET);
+    if result_is_mixed {
+        let boxed_label = ctx.next_label("throwable_previous_boxed");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter
+                    .instruction(&format!("cbz {}, {}", result_reg, null_label)); // an empty slot is a missing previous
+                if result_reg != "x0" {
+                    ctx.emitter.instruction(&format!("mov x0, {}", result_reg));
+                }
+                ctx.emitter.instruction("str x0, [sp, #-16]!");                 // preserve the slot across the kind probe
+                abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+                ctx.emitter.instruction("mov x11, x0");                         // heap kind of the stored value
+                ctx.emitter.instruction("ldr x0, [sp], #16");                   // restore the stored value
+                ctx.emitter.instruction("cmp x11, #5");                         // kind 5 = boxed Mixed cell
+                ctx.emitter.instruction(&format!("b.eq {}", boxed_label));
+                abi::emit_call_label(ctx.emitter, "__rt_incref");               // raw object: caller owns it
+                if result_reg != "x0" {
+                    ctx.emitter.instruction(&format!("mov {}, x0", result_reg));
+                }
+                emit_box_current_value_as_mixed(ctx.emitter, &object_ty);
+                ctx.emitter.instruction(&format!("b {}", done_label));
+
+                ctx.emitter.label(&boxed_label);
+                abi::emit_call_label(ctx.emitter, "__rt_incref");               // boxed cell: retain and hand back as-is
+                if result_reg != "x0" {
+                    ctx.emitter.instruction(&format!("mov {}, x0", result_reg));
+                }
+                ctx.emitter.instruction(&format!("b {}", done_label));
+
+                ctx.emitter.label(&null_label);
+                abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+                emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Void);
+                ctx.emitter.label(&done_label);
+            }
+            Arch::X86_64 => {
+                ctx.emitter
+                    .instruction(&format!("test {}, {}", result_reg, result_reg)); // an empty slot is a missing previous
+                ctx.emitter.instruction(&format!("jz {}", null_label));
+                if result_reg != "rax" {
+                    ctx.emitter.instruction(&format!("mov rax, {}", result_reg));
+                }
+                ctx.emitter.instruction("push rax");                            // preserve the slot across the kind probe
+                ctx.emitter.instruction("sub rsp, 8");                          // keep the stack 16-byte aligned for the call
+                abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+                ctx.emitter.instruction("mov r11, rax");                        // heap kind of the stored value
+                ctx.emitter.instruction("add rsp, 8");                          // undo the alignment padding
+                ctx.emitter.instruction("pop rax");                             // restore the stored value
+                ctx.emitter.instruction("cmp r11, 5");                          // kind 5 = boxed Mixed cell
+                ctx.emitter.instruction(&format!("je {}", boxed_label));
+                abi::emit_call_label(ctx.emitter, "__rt_incref");               // raw object: caller owns it
+                if result_reg != "rax" {
+                    ctx.emitter.instruction(&format!("mov {}, rax", result_reg));
+                }
+                emit_box_current_value_as_mixed(ctx.emitter, &object_ty);
+                ctx.emitter.instruction(&format!("jmp {}", done_label));
+
+                ctx.emitter.label(&boxed_label);
+                abi::emit_call_label(ctx.emitter, "__rt_incref");               // boxed cell: retain and hand back as-is
+                if result_reg != "rax" {
+                    ctx.emitter.instruction(&format!("mov {}, rax", result_reg));
+                }
+                ctx.emitter.instruction(&format!("jmp {}", done_label));
+
+                ctx.emitter.label(&null_label);
+                abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+                emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Void);
+                ctx.emitter.label(&done_label);
+            }
+        }
+        return Ok(PhpType::Mixed);
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
@@ -280,9 +438,7 @@ pub(super) fn lower_throwable_get_previous(
                 ctx.emitter
                     .instruction(&format!("mov x0, {}", result_reg)); // move previous into incref arg
             }
-            if !result_is_mixed {
-                abi::emit_call_label(ctx.emitter, "__rt_incref"); // raw-object results acquire their owner here; boxing acquires its own
-            }
+            abi::emit_call_label(ctx.emitter, "__rt_incref");                   // caller owns the returned previous
             if result_reg != "x0" {
                 ctx.emitter
                     .instruction(&format!("mov {}, x0", result_reg)); // restore result register
@@ -313,9 +469,7 @@ pub(super) fn lower_throwable_get_previous(
                 ctx.emitter
                     .instruction(&format!("mov rax, {}", result_reg)); // move previous into incref arg
             }
-            if !result_is_mixed {
-                abi::emit_call_label(ctx.emitter, "__rt_incref"); // raw-object results acquire their owner here; boxing acquires its own
-            }
+            abi::emit_call_label(ctx.emitter, "__rt_incref");                   // caller owns the returned previous
             if result_reg != "rax" {
                 ctx.emitter
                     .instruction(&format!("mov {}, rax", result_reg)); // restore result register
@@ -367,8 +521,14 @@ mod tests {
                 &mut emitter, "gettrace", &PhpType::Array(Box::new(PhpType::Mixed)),
             );
             let asm = emitter.output();
-            let boxed = asm.find("__rt_mixed_from_value").unwrap();
-            let released = asm.find("__rt_decref_array").unwrap();
+            // A boxed `array<mixed>` takes its Mixed tag from the heap kind (indexed or hash),
+            // since the declared `array` is a packed|hash union: the shared runtime routine
+            // `__rt_mixed_box_container_3` classifies the container and calls
+            // `__rt_mixed_from_value` itself. The invariant is the order: box first, then retire
+            // the getter's own owner.
+            let boxed = asm.find("__rt_mixed_box_container_3").unwrap();
+            // The original owner is retired by heap kind, since the array may be a promoted hash.
+            let released = asm.find("__rt_decref_any").unwrap();
             assert!(boxed < released, "{name}");
 
             let mut emitter = Emitter::new(target);

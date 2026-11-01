@@ -12,7 +12,9 @@ use std::collections::{HashMap, HashSet};
 
 use crate::codegen_support::data_section::comm_directive;
 use crate::codegen_support::platform::Target;
-use crate::codegen_support::sentinels::{SERPROP_FALSE_ONLY_BIT, TAGGED_SCALAR_PROPERTY_TAG};
+use crate::codegen_support::sentinels::{
+    REFERENCE_PROPERTY_TAG_FLAG, SERPROP_FALSE_ONLY_BIT, TAGGED_SCALAR_PROPERTY_TAG,
+};
 use crate::codegen_support::source_method_adapters::{self, MethodAbiPlan, MethodKind};
 use crate::names::{
     enum_case_symbol, function_variant_active_symbol, interface_method_wrapper_symbol, mangle_fqn,
@@ -34,7 +36,12 @@ fn class_property_is_hidden(class_name: &str, property: &str) -> bool {
 
 const EVAL_REFLECTION_CLASS_FLAG_FINAL: u64 = 1;
 const EVAL_REFLECTION_CLASS_FLAG_ABSTRACT: u64 = 2;
+const EVAL_REFLECTION_CLASS_FLAG_INTERFACE: u64 = 4;
 const EVAL_REFLECTION_CLASS_FLAG_READONLY: u64 = 32;
+const EVAL_REFLECTION_CLASS_FLAG_INSTANTIABLE: u64 = 64;
+const EVAL_REFLECTION_CLASS_FLAG_CLONEABLE: u64 = 128;
+const EVAL_REFLECTION_CLASS_FLAG_INTERNAL: u64 = 256;
+const EVAL_REFLECTION_CLASS_FLAG_ITERABLE: u64 = 1024;
 const EVAL_REFLECTION_CLASS_SOURCE_LINE_MASK: u64 = 0x00ff_ffff;
 const EVAL_REFLECTION_CLASS_SOURCE_START_SHIFT: u64 = 16;
 const EVAL_REFLECTION_CLASS_SOURCE_END_SHIFT: u64 = 40;
@@ -77,7 +84,8 @@ pub(crate) fn emit_runtime_data_user(
     trait_names: &[String],
     declared_trait_uses: &HashMap<String, Vec<String>>,
     declared_trait_source_lines: &HashMap<String, u32>,
-    classes: &HashMap<String, ClassInfo>,
+    declared_class_source_files: &HashMap<String, String>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
     enums: &HashMap<String, EnumInfo>,
     property_initializer_ids: &HashSet<u64>,
     allowed_class_names: Option<&HashSet<String>>,
@@ -285,6 +293,7 @@ pub(crate) fn emit_runtime_data_user(
             }
         }
     }
+    emit_interface_ancestor_tables(&mut out, interfaces, &sorted_interfaces);
 
     // Per-class JSON descriptor pointer table — used by __rt_json_encode_object
     // to walk public properties and dispatch JsonSerializable when present.
@@ -433,6 +442,33 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
+    // One 16-byte row per class id: the byte offset of the per-instance dynamic-property hash
+    // when an UNDECLARED name addresses it (`dynamic_property_hash_is_name_addressable`), else 0,
+    // then 1 when php reports the creation of such a property as deprecated. A Mixed-receiver
+    // write of a literal name reads this row once instead of growing one inline arm per class at
+    // every site (`lower_mixed_named_prop_set`). The offset mirrors
+    // `lower_inst::objects::allocation_clone::dynamic_property_hash_offset`. `stdClass` keeps 0:
+    // its writes stay on the dedicated helper.
+    out.push_str(".globl _class_dyn_hash_rows\n_class_dyn_hash_rows:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let (offset, deprecated) =
+                match (class_info_by_id.get(&class_id), class_name_by_id.get(&class_id)) {
+                    (Some(class_info), Some(class_name))
+                        if class_info.dynamic_property_hash_is_name_addressable()
+                            && !crate::types::checker::builtin_stdclass::is_stdclass(class_name) =>
+                    {
+                        (
+                            8 + class_info.properties.len() * 16,
+                            class_info.dynamic_property_creation_is_deprecated() as usize,
+                        )
+                    }
+                    _ => (0, 0),
+                };
+            out.push_str(&format!("    .quad {}\n    .quad {}\n", offset, deprecated));
+        }
+    }
+
     out.push_str(".globl _class_object_payload_sizes\n_class_object_payload_sizes:\n");
     if let Some(max_class_id) = max_class_id {
         for class_id in 0..=max_class_id {
@@ -456,7 +492,7 @@ pub(crate) fn emit_runtime_data_user(
                     (Some(class), Some(name)) => {
                         let offset = crate::codegen_support::throwable_layout::ordinary_creation_line_offset(name, classes);
                         if allocation_size {
-                            class_object_payload_size(name, class) + usize::from(offset.is_some()) * 8
+                            class_object_payload_size(name, class)
                         } else { offset.unwrap_or(0) }
                     }
                     _ => 0,
@@ -475,6 +511,23 @@ pub(crate) fn emit_runtime_data_user(
                 }
                 _ => 0,
             };
+            out.push_str(&format!("    .quad {}\n", flag));
+        }
+    }
+
+    // Per-class flag: does an instance slot belong to a private ancestor property that a
+    // same-named descendant declaration hides? A scoped `__rt_object_to_hash` projection
+    // then keeps the FIRST row it sees under one bare name, because php resolves that
+    // name to the scope's own private property, which the layout always places first.
+    out.push_str(".globl _class_hidden_private_slot_flags\n_class_hidden_private_slot_flags:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let flag = class_info_by_id.get(&class_id).map_or(0, |class_info| {
+                u8::from(
+                    (0..class_info.properties.len())
+                        .any(|index| class_info.property_slot_is_hidden(index)),
+                )
+            });
             out.push_str(&format!("    .quad {}\n", flag));
         }
     }
@@ -685,16 +738,41 @@ pub(crate) fn emit_runtime_data_user(
                             .interfaces
                             .iter()
                             .any(|name| name.eq_ignore_ascii_case(interface))
-                            && class_info
-                                .methods
-                                .get(&method_key)
-                                .is_some_and(|sig| sig.return_type.codegen_repr() == returns)
+                            && class_info.methods.get(&method_key).is_some_and(|sig| {
+                                let repr = sig.return_type.codegen_repr();
+                                repr == returns
+                                    || (method == "offsetGet"
+                                        && raw_value_return_tag(&repr, sig.by_ref_return) != 0)
+                            })
                     })
                     .map(|class_info| source_instance_method_entry(class_info, &method_key, classes))
                     .transpose()?
                     .unwrap_or_else(|| "0".to_string());
                 out.push_str(&format!("    .quad {}\n", entry));
             }
+        }
+    }
+    // The raw return shape of each class's `offsetGet()` (runtime value tag + 1; 0 = a boxed
+    // Mixed cell), read by `__rt_mixed_array_get` to box a narrowed return. Symfony's
+    // `FormView::offsetGet(): self` returns a bare object; it was left out of the table above, so
+    // `$view['title']` on a boxed FormView raised "Cannot use object of type FormView as array"
+    // and every demo form page died.
+    out.push_str(".globl _class_offsetget_ret_tags\n_class_offsetget_ret_tags:\n");
+    if let Some(max_class_id) = max_class_id {
+        let method_key = php_symbol_key("offsetGet");
+        for class_id in 0..=max_class_id {
+            let tag = class_info_by_id
+                .get(&class_id)
+                .filter(|class_info| {
+                    class_info
+                        .interfaces
+                        .iter()
+                        .any(|name| name.eq_ignore_ascii_case("ArrayAccess"))
+                })
+                .and_then(|class_info| class_info.methods.get(&method_key))
+                .map(|sig| raw_value_return_tag(&sig.return_type.codegen_repr(), sig.by_ref_return))
+                .unwrap_or(0);
+            out.push_str(&format!("    .quad {}\n", tag));
         }
     }
 
@@ -885,6 +963,33 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
+    // _class_propinit_private_ptrs: like `_class_propinit_ptrs`, for the thunk holding only a class's OWN private
+    // defaults. `__rt_new_by_name` runs it for every ancestor of a class flagged in
+    // `_class_hidden_private_slot_flags`: that class's own thunk writes `$this-><name>` in its
+    // scope and cannot reach a private ancestor slot a same-named declaration hides.
+    // The predicate MUST match `ir_lower`'s choice of which private thunks to lower.
+    let private_thunk_classes = crate::types::private_property_init_thunk_classes(
+        sorted_classes.iter().map(|(name, class_info)| (*name, *class_info)),
+    );
+    out.push_str(".globl _class_propinit_private_ptrs\n_class_propinit_private_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let needs_thunk = class_name_by_id.get(&class_id).is_some_and(|class_name| {
+                private_thunk_classes
+                    .contains(&class_name.trim_start_matches('\\').to_ascii_lowercase())
+            });
+            if needs_thunk {
+                out.push_str(&format!("    .quad _class_propinit_private_{}\n", class_id));
+            } else {
+                out.push_str("    .quad 0\n");
+            }
+        }
+    }
+
+    emit_class_uninitialized_property_marker_tables(&mut out, max_class_id, &class_info_by_id);
+
+    emit_class_owned_reference_property_tables(&mut out, max_class_id, &class_info_by_id);
+
     // _class_serprop_ptrs: dense class_id-indexed table of serialize property-info
     // tables. Entry = _class_serprop_<id> for an existing class, else
     // _class_serprop_missing. __rt_serialize_object / __rt_unserialize_object index
@@ -1073,6 +1178,7 @@ pub(crate) fn emit_runtime_data_user(
             &sorted_classes,
             &sorted_interfaces,
             declared_trait_source_lines,
+            declared_class_source_files,
         );
         out.push_str(".p2align 3\n");
         emit_eval_reflection_class_interface_lookup_data(&mut out, &sorted_classes, interfaces);
@@ -1141,7 +1247,7 @@ pub(crate) fn emit_runtime_data_user(
             for (idx, name) in info.attribute_names.iter().enumerate() {
                 let name_label = format!("_attr_name_{}", name_id);
                 name_id += 1;
-                out.push_str(&format!(".globl {0}\n{0}:\n", name_label));
+                out.push_str(&format!("{0}:\n", name_label));
                 out.push_str(&format!("    .ascii \"{}\"\n", escaped_ascii(name)));
 
                 let empty_fallback = Vec::new();
@@ -1163,7 +1269,7 @@ pub(crate) fn emit_runtime_data_user(
                                 let label = format!("_attr_arg_str_{}", arg_str_id);
                                 arg_str_id += 1;
                                 let bytes = crate::string_bytes::literal_bytes(value);
-                                out.push_str(&format!(".globl {0}\n{0}:\n", label));
+                                out.push_str(&format!("{0}:\n", label));
                                 out.push_str(&format!(
                                     "    .ascii \"{}\"\n",
                                     escaped_bytes(&bytes)
@@ -1198,7 +1304,7 @@ pub(crate) fn emit_runtime_data_user(
                     out.push_str("    .p2align 3\n");
                     let block_label = format!("_attr_args_{}", args_block_id);
                     args_block_id += 1;
-                    out.push_str(&format!(".globl {0}\n{0}:\n", block_label));
+                    out.push_str(&format!("{0}:\n", block_label));
                     for (tag, lo, hi) in arg_rows {
                         out.push_str(&format!("    .quad {}\n", tag));
                         out.push_str(&format!("    .quad {}\n", lo));
@@ -1288,23 +1394,37 @@ pub(crate) fn emit_runtime_data_user(
         // Per-property name strings used by the JSON descriptor below. We
         // emit them as labels before the descriptor so the descriptor
         // table holds plain (ptr, len) pairs.
-        let mut public_props: Vec<(usize, &(String, PhpType))> = class_info
-            .properties
-            .iter()
-            .enumerate()
-            .filter(|(prop_index, (name, _))| {
-                class_info
-                    .visible_property_index(name)
-                    .is_some_and(|visible_index| visible_index == *prop_index)
-            })
-            .filter(|(_, (name, _))| {
-                !class_property_is_hidden(class_name, name)
-                    && class_info
-                        .property_visibilities
-                        .get(name)
-                        .map_or(true, |v| matches!(v, Visibility::Public))
-            })
-            .collect();
+        // `(json key, slot index, slot type)`: the public properties, or for one of php's own
+        // Reflection classes the `name`/`class` it shows (`builtin_reflection_dump_projection`).
+        let mut public_props: Vec<(usize, (String, PhpType))> =
+            match builtin_reflection_dump_projection(class_info, class_name) {
+                Some(projection) => projection
+                    .into_iter()
+                    .filter_map(|(key, slot)| {
+                        let index = class_info.visible_property_index(&slot)?;
+                        let slot_ty = class_info.properties.get(index)?.1.clone();
+                        Some((index, (key, slot_ty)))
+                    })
+                    .collect(),
+                None => class_info
+                    .properties
+                    .iter()
+                    .enumerate()
+                    .filter(|(prop_index, (name, _))| {
+                        class_info
+                            .visible_property_index(name)
+                            .is_some_and(|visible_index| visible_index == *prop_index)
+                    })
+                    .filter(|(_, (name, _))| {
+                        !class_property_is_hidden(class_name, name)
+                            && class_info
+                            .property_visibilities
+                            .get(name)
+                            .map_or(true, |v| matches!(v, Visibility::Public))
+                    })
+                    .map(|(index, prop)| (index, prop.clone()))
+                    .collect(),
+            };
         if enums.contains_key(class_name.as_str()) {
             // PHP exposes enum names before backing values, independently of slot layout.
             public_props.sort_by_key(|(_, (name, _))| name.as_str() != "name");
@@ -1324,7 +1444,16 @@ pub(crate) fn emit_runtime_data_user(
             .interfaces
             .iter()
             .any(|i| i == "JsonSerializable");
-        let flags: u64 = if implements_jsonserializable { 1 } else { 0 };
+        // Bits 8..15 carry `jsonSerialize()`'s raw return representation as runtime value tag
+        // + 1 (0 = already a boxed Mixed cell). A method declared `: string` hands back a raw
+        // string pair, which the encoder read as a box and encoded as `null`: the demo's
+        // `Tag::jsonSerialize(): string` rendered `data-tags="[null,null,...]"`.
+        let return_tag: u64 = if implements_jsonserializable {
+            json_serialize_return_tag(class_info, classes)
+        } else {
+            0
+        };
+        let flags: u64 = if implements_jsonserializable { 1 | (return_tag << 8) } else { 0 };
         out.push_str(&format!("    .quad {}\n", flags));
         if implements_jsonserializable {
             let key = php_symbol_key("jsonSerialize");
@@ -1338,7 +1467,7 @@ pub(crate) fn emit_runtime_data_user(
         out.push_str(&format!("    .quad {}\n", public_props.len()));
         for (prop_index, (prop_name, prop_ty)) in &public_props {
             let tag = if class_info.property_slot_is_reference(*prop_index, prop_name) {
-                0
+                prop_type_value_tag(prop_ty) | REFERENCE_PROPERTY_TAG_FLAG
             } else if prop_ty.codegen_repr() == PhpType::TaggedScalar {
                 TAGGED_SCALAR_PROPERTY_TAG
             } else if crate::types::is_nullable_pointer_type(prop_ty) {
@@ -1356,7 +1485,7 @@ pub(crate) fn emit_runtime_data_user(
                     PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable => 7,
                     PhpType::Resource(_) => 9,
                     PhpType::TaggedScalar => {
-                        unreachable!("nullable scalar properties use the boxed Mixed representation")
+                        unreachable!("a TaggedScalar-repr property took the inline-slot arm above")
                     }
                     PhpType::Callable
                     | PhpType::Pointer(_)
@@ -1387,8 +1516,12 @@ pub(crate) fn emit_runtime_data_user(
                     out.push_str(", ");
                 }
                 let prop_name = &class_info.properties[i].0;
-                let tag = if class_info.property_slot_is_reference(i, prop_name) {
-                    if class_info.owned_reference_properties.contains(prop_name) { 11 } else { 0 }
+                // Owned cells are decided per physical slot: a hidden ancestor private shares the
+                // child's name, and the name-keyed set left its cell unreleased at destruction.
+                let tag = if class_info.property_slot_is_owned_reference(i) {
+                    11
+                } else if class_info.property_slot_is_reference(i, prop_name) {
+                    0
                 } else if prop_ty.codegen_repr() == PhpType::TaggedScalar {
                     // An inline `{payload, tag}` slot owns no heap reference: reading it as
                     // Mixed (7) handed the integer payload to decref/mark as a cell pointer.
@@ -1411,7 +1544,7 @@ pub(crate) fn emit_runtime_data_user(
                         PhpType::Iterable => 7,
                         PhpType::Resource(_) => 9,
                         PhpType::TaggedScalar => {
-                            unreachable!("nullable scalar properties use the boxed Mixed representation")
+                            unreachable!("a TaggedScalar-repr property took the inline-slot arm above")
                         }
                         PhpType::Callable => 10,
                         PhpType::Pointer(_)
@@ -1427,29 +1560,58 @@ pub(crate) fn emit_runtime_data_user(
             out.push('\n');
         }
 
-        // Serialize property-info table: one row per PHP-visible declared property in
-        // declaration order, including PHP-mangled private keys. Compiler storage
-        // (GMP's `__elephc_num`) is excluded, matching `get_object_vars()`, object casts,
-        // JSON, and PHP's serialized property table. The cast walker separately hides
-        // Reflection's compiler-owned private rows by checking each row's declaring class.
-        // __rt_serialize_object / __rt_unserialize_object walk this by class id.
-        let serialized_props: Vec<(usize, &String, &PhpType)> = class_info
-            .properties
-            .iter()
-            .enumerate()
-            .filter_map(|(prop_index, (prop_name, prop_ty))| {
-                (!class_property_is_hidden(class_name, prop_name))
-                    .then_some((prop_index, prop_name, prop_ty))
-            })
-            .collect();
-        for (prop_index, prop_name, _) in &serialized_props {
-            let (metadata, owner_name) = physical_property_slot_metadata(
-                classes, class_info, class_name, *prop_index, *prop_name,
-            );
-            let mangled = mangled_property_name(metadata, owner_name, *prop_name);
+        // Serialize property-info table: one row per declared property in
+        // declaration order with the PHP-mangled serialize key bytes, the
+        // property's byte offset within the object, and its runtime value tag.
+        // __rt_serialize_object / __rt_unserialize_object walk this by class id, and so do
+        // get_object_vars(), `(array)` and `foreach` over an object (`__rt_object_to_hash`).
+        // One of php's own Reflection classes lists only the public `name`/`class` php shows
+        // (`builtin_reflection_dump_projection`), not its private `__*` metadata slots. For any
+        // other class the cast walker still hides Reflection's compiler-owned private rows by
+        // checking each row's declaring class.
+        // Every row carries its physical slot index as its last field, so the diagnostic table
+        // below stays parallel to these rows whichever source produced them.
+        let serprop_rows: Vec<(Vec<u8>, usize, u64, u64, usize)> =
+            match builtin_reflection_dump_projection(class_info, class_name) {
+                Some(projection) => projection
+                    .into_iter()
+                    .filter_map(|(key, slot)| {
+                        let index = class_info.visible_property_index(&slot)?;
+                        Some((
+                            key.into_bytes(),
+                            class_info.property_slot_offset(index),
+                            prop_slot_value_tag(class_info, index),
+                            class_info.class_id,
+                            index,
+                        ))
+                    })
+                    .collect(),
+                // Compiler storage (GMP's `__elephc_num`) is excluded, matching
+                // `get_object_vars()`, object casts, JSON, and PHP's serialized property table.
+                None => (0..class_info.properties.len())
+                    .filter(|prop_index| {
+                        !class_property_is_hidden(class_name, &class_info.properties[*prop_index].0)
+                    })
+                    .map(|prop_index| {
+                        let (_, declaring_class) =
+                            class_info.property_slot_owner(prop_index, class_name);
+                        (
+                            mangled_property_slot_name(class_info, class_name, prop_index),
+                            class_info.property_slot_offset(prop_index),
+                            prop_slot_value_tag(class_info, prop_index),
+                            all_class_id_by_name
+                                .get(declaring_class)
+                                .copied()
+                                .unwrap_or(class_info.class_id),
+                            prop_index,
+                        )
+                    })
+                    .collect(),
+            };
+        for (row_index, (mangled, _, _, _, _)) in serprop_rows.iter().enumerate() {
             out.push_str(&format!(
                 ".globl _class_serpname_{}_{}\n_class_serpname_{}_{}:\n",
-                class_info.class_id, prop_index, class_info.class_id, prop_index,
+                class_info.class_id, row_index, class_info.class_id, row_index,
             ));
             out.push_str("    .byte ");
             for (i, byte) in mangled.iter().enumerate() {
@@ -1465,23 +1627,13 @@ pub(crate) fn emit_runtime_data_user(
             ".globl _class_serprop_{}\n_class_serprop_{}:\n",
             class_info.class_id, class_info.class_id,
         ));
-        out.push_str(&format!("    .quad {}\n", serialized_props.len()));
-        for (prop_index, prop_name, prop_ty) in &serialized_props {
-            let (metadata, owner_name) = physical_property_slot_metadata(
-                classes, class_info, class_name, *prop_index, *prop_name,
-            );
-            let mangled_len = mangled_property_name(metadata, owner_name, *prop_name).len();
-            let offset = metadata
-                .property_offsets
-                .get(*prop_name)
-                .copied()
-                .unwrap_or(8 + prop_index * 16);
-            let tag = prop_value_tag(metadata, prop_name, prop_ty);
+        out.push_str(&format!("    .quad {}\n", serprop_rows.len()));
+        for (row_index, (mangled, offset, tag, _, _)) in serprop_rows.iter().enumerate() {
             out.push_str(&format!(
                 "    .quad _class_serpname_{}_{}\n",
-                class_info.class_id, prop_index
+                class_info.class_id, row_index
             ));
-            out.push_str(&format!("    .quad {}\n", mangled_len)); // mangled key byte length
+            out.push_str(&format!("    .quad {}\n", mangled.len())); // mangled key byte length
             out.push_str(&format!("    .quad {}\n", offset)); // byte offset within the object
             out.push_str(&format!("    .quad {}\n", tag)); // runtime value tag
         }
@@ -1490,19 +1642,7 @@ pub(crate) fn emit_runtime_data_user(
             ".globl _class_serprop_declaring_{}\n_class_serprop_declaring_{}:\n",
             class_info.class_id, class_info.class_id,
         ));
-        for (prop_index, prop_name, _) in &serialized_props {
-            let (metadata, owner_name) = physical_property_slot_metadata(
-                classes, class_info, class_name, *prop_index, *prop_name,
-            );
-            let declaring_class = metadata
-                .property_declaring_classes
-                .get(*prop_name)
-                .map(String::as_str)
-                .unwrap_or(owner_name);
-            let declaring_class_id = all_class_id_by_name
-                .get(declaring_class)
-                .copied()
-                .unwrap_or(class_info.class_id);
+        for (_, _, _, declaring_class_id, _) in &serprop_rows {
             out.push_str(&format!("    .quad {}\n", declaring_class_id));
         }
 
@@ -1512,11 +1652,13 @@ pub(crate) fn emit_runtime_data_user(
         // and the set of boxed value tags the slot accepts. The runtime store raises PHP's
         // TypeError from this row instead of silently writing the value (#1629). Kept
         // parallel to `_class_serprop_*` so its row index is the same property index.
-        let serprop_diag: Vec<(String, u64, u64)> = serialized_props
+        let serprop_diag: Vec<(String, u64, u64)> = serprop_rows
             .iter()
-            .map(|(prop_index, prop_name, prop_ty)| {
+            .map(|(_, _, _, _, prop_index)| {
+                let (prop_name, prop_ty) = &class_info.properties[*prop_index];
+                let prop_name = prop_name.as_str();
                 let (metadata, owner_name) = physical_property_slot_metadata(
-                    classes, class_info, class_name, *prop_index, *prop_name,
+                    classes, class_info, class_name, *prop_index, prop_name,
                 );
                 // An undeclared (untyped) slot has no PHP declaration to enforce: elephc
                 // infers a storage type from the default, but PHP accepts any value there,
@@ -1524,7 +1666,7 @@ pub(crate) fn emit_runtime_data_user(
                 let declared = metadata.property_slot_is_declared(*prop_index, prop_name);
                 let declaring_class = metadata
                     .property_declaring_classes
-                    .get(*prop_name)
+                    .get(prop_name)
                     .map(String::as_str)
                     .unwrap_or(owner_name);
                 let type_name = if declared {
@@ -1869,7 +2011,13 @@ fn emit_class_name_lookup_data(
         for class_id in 0..=max_class_id {
             if let Some(class_name) = class_name_by_id.get(&class_id) {
                 out.push_str(&format!("    .quad _class_name_{}\n", class_id));
-                out.push_str(&format!("    .quad {}\n", class_name.len()));
+                // The PHP byte length, not the Rust one. A class name may hold a non-ASCII byte
+                // (`symfony/cache` declares `class \xA9`), carried here in the private-use marker
+                // form, and `str::len()` would report the marker's three UTF-8 bytes for one.
+                out.push_str(&format!(
+                    "    .quad {}\n",
+                    crate::string_bytes::literal_byte_len(class_name)
+                ));
             } else {
                 out.push_str("    .quad _class_name_missing\n");
                 out.push_str("    .quad 0\n");
@@ -1887,7 +2035,12 @@ fn emit_class_name_lookup_data(
                 ".globl _class_name_{0}\n_class_name_{0}:\n",
                 class_id
             ));
-            out.push_str(&format!("    .ascii \"{}\"\n", escaped_ascii(class_name)));
+            // `escaped_bytes` over the decoded PHP bytes, for the reason the length above gives.
+            let class_name_bytes = crate::string_bytes::literal_bytes(class_name);
+            out.push_str(&format!(
+                "    .ascii \"{}\"\n",
+                super::instanceof::escaped_bytes(&class_name_bytes)
+            ));
         }
     }
     out.push_str("    .p2align 3\n");
@@ -1905,7 +2058,7 @@ fn emit_name_lookup_data(
     sorted_names.sort();
     for (idx, name) in sorted_names.iter().enumerate() {
         out.push_str(&format!(
-            ".globl {0}_{1}\n{0}_{1}:\n    .ascii \"{2}\"\n",
+            "{0}_{1}:\n    .ascii \"{2}\"\n",
             label_prefix,
             idx,
             escaped_ascii(name)
@@ -1966,23 +2119,27 @@ fn emit_eval_reflection_method_lookup_data(
         .collect::<HashMap<_, _>>();
     let mut index = 0usize;
     for (class_name, class_info) in sorted_classes {
-        let mut methods = class_info.methods.keys().collect::<Vec<_>>();
-        methods.sort();
-        for method_name in methods {
-            let declaring_class = eval_reflection_instance_method_declaring_class(
-                class_name,
-                class_info,
-                method_name,
-            );
+        // php's declaration order, static methods included: an eval-side `getMethods()` lists
+        // them as php does, and a static method needs its own flags and declaring class.
+        for (method_name, is_static) in php_reflection_method_order(class_name, class_info, &class_infos) {
+            let declaring_class = if is_static {
+                eval_reflection_static_method_declaring_class(class_name, class_info, method_name)
+            } else {
+                eval_reflection_instance_method_declaring_class(class_name, class_info, method_name)
+            };
             let declaring_info = class_infos.get(declaring_class).copied().unwrap_or(class_info);
-            let hook_flag = if declaring_info.is_property_hook_method(method_name) {
+            let hook_flag = if !is_static && declaring_info.is_property_hook_method(method_name) {
                 EVAL_REFLECTION_METHOD_FLAG_PROPERTY_HOOK
             } else { 0 };
             let flags = eval_reflection_method_flags_with_source_lines(
-                eval_reflection_instance_method_flags(class_info, method_name) | hook_flag,
+                if is_static {
+                    eval_reflection_static_method_flags(class_info, method_name)
+                } else {
+                    eval_reflection_instance_method_flags(class_info, method_name) | hook_flag
+                },
                 declaring_info,
                 method_name,
-                false,
+                is_static,
             );
             let declared_name = eval_reflection_declared_method_name(
                 &class_infos,
@@ -2037,35 +2194,6 @@ fn emit_eval_reflection_method_lookup_data(
                     declaring_class,
                 );
             }
-        }
-
-        let mut static_methods = class_info.static_methods.keys().collect::<Vec<_>>();
-        static_methods.sort();
-        for method_name in static_methods {
-            let declaring_class =
-                eval_reflection_static_method_declaring_class(class_name, class_info, method_name);
-            let declaring_info = class_infos.get(declaring_class).copied().unwrap_or(class_info);
-            let flags = eval_reflection_method_flags_with_source_lines(
-                eval_reflection_static_method_flags(class_info, method_name),
-                declaring_info,
-                method_name,
-                true,
-            );
-            let declared_name = eval_reflection_declared_method_name(
-                &class_infos,
-                &interface_infos,
-                &[declaring_class, class_name],
-                method_name,
-            );
-            push_eval_reflection_method_lookup_row(
-                out,
-                &mut entries,
-                &mut index,
-                class_name,
-                &declared_name,
-                flags,
-                declaring_class,
-            );
         }
     }
 
@@ -2179,6 +2307,17 @@ fn eval_reflection_declared_method_name(
                 .find(|method| php_symbol_key(&method.name) == method_key)
                 .map(|method| method.name.clone())
         })
+        .or_else(|| {
+            // A method with no declaration (an enum's `tryFrom`) keeps php's spelling here.
+            owners.iter().find_map(|owner| {
+                class_infos
+                    .get(owner.trim_start_matches('\\'))?
+                    .reflection_methods
+                    .iter()
+                    .find(|name| php_symbol_key(name) == method_key)
+                    .cloned()
+            })
+        })
         .unwrap_or_else(|| method_key.to_string())
 }
 
@@ -2196,17 +2335,17 @@ fn push_eval_reflection_method_lookup_row(
     let method_label = format!("_eval_reflection_method_name_{}", *index);
     let declaring_label = format!("_eval_reflection_method_declaring_class_{}", *index);
     out.push_str(&format!(
-        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        "{0}:\n    .ascii \"{1}\"\n",
         class_label,
         escaped_ascii(class_name)
     ));
     out.push_str(&format!(
-        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        "{0}:\n    .ascii \"{1}\"\n",
         method_label,
         escaped_ascii(method_name)
     ));
     out.push_str(&format!(
-        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        "{0}:\n    .ascii \"{1}\"\n",
         declaring_label,
         escaped_ascii(declaring_class)
     ));
@@ -2240,12 +2379,93 @@ fn eval_reflection_method_flags_with_source_lines(
     if start_line == 0 || start_line > EVAL_REFLECTION_METHOD_SOURCE_LINE_MASK {
         return flags;
     }
+    // The parser widens a method's span to its closing brace; a synthesized method has a point
+    // span, and then the start line is the best end there is.
+    let end_line = u64::from(method.span.end_line);
+    let end_line = if end_line < start_line || end_line > EVAL_REFLECTION_METHOD_SOURCE_LINE_MASK {
+        start_line
+    } else {
+        end_line
+    };
     flags
         | (start_line << EVAL_REFLECTION_METHOD_SOURCE_START_SHIFT)
-        | (start_line << EVAL_REFLECTION_METHOD_SOURCE_END_SHIFT)
+        | (end_line << EVAL_REFLECTION_METHOD_SOURCE_END_SHIFT)
 }
 
 /// Returns the class name that declares one visible instance method.
+/// Lists a class's visible methods in the order php's `ReflectionClass::getMethods()` does.
+///
+/// php walks the method table: the class's own methods in DECLARATION order, instance and static
+/// mixed, then each ancestor's in turn. The signature maps are hashed, and the rows used to be
+/// sorted by name, so `getMethods()` came out alphabetical -- symfony's `debug:router` lists
+/// routes in the order the attribute loader meets the controller's methods, and that order was
+/// wrong. A method whose declaring class is not on the parent chain (a trait's) comes last,
+/// by name, so the table stays stable.
+fn php_reflection_method_order<'a>(
+    class_name: &'a str,
+    class_info: &'a ClassInfo,
+    class_infos: &HashMap<&str, &'a ClassInfo>,
+) -> Vec<(&'a String, bool)> {
+    let mut chain: Vec<(&str, &ClassInfo)> = vec![(class_name, class_info)];
+    while let Some(parent) = chain.last().and_then(|(_, info)| info.parent.as_deref()) {
+        let parent = parent.trim_start_matches('\\');
+        if chain.len() > 256 || chain.iter().any(|(name, _)| name.eq_ignore_ascii_case(parent)) {
+            break;
+        }
+        let Some((&name, &info)) = class_infos.get_key_value(parent) else {
+            break;
+        };
+        chain.push((name, info));
+    }
+    let mut members: Vec<(&'a String, bool, usize, u32, u32)> = Vec::new();
+    for (method_name, is_static) in class_info
+        .methods
+        .keys()
+        .map(|name| (name, false))
+        .chain(class_info.static_methods.keys().map(|name| (name, true)))
+    {
+        let declaring = if is_static {
+            eval_reflection_static_method_declaring_class(class_name, class_info, method_name)
+        } else {
+            eval_reflection_instance_method_declaring_class(class_name, class_info, method_name)
+        };
+        let rank = chain
+            .iter()
+            .position(|(name, _)| name.eq_ignore_ascii_case(declaring))
+            .unwrap_or(chain.len());
+        let (line, col) = chain
+            .get(rank)
+            .and_then(|(_, info)| {
+                info.method_decls
+                    .iter()
+                    .find(|method| method.name.eq_ignore_ascii_case(method_name))
+            })
+            .map_or((u32::MAX, u32::MAX), |method| (method.span.line, method.span.col));
+        members.push((method_name, is_static, rank, line, col));
+    }
+    // `reflection_methods` is php's order; the declaring-class rank and source position only
+    // order what it does not list.
+    let listed: HashMap<String, usize> = class_info
+        .reflection_methods
+        .iter()
+        .enumerate()
+        .map(|(position, name)| (crate::names::php_symbol_key(name), position))
+        .collect();
+    members.sort_by_cached_key(|member| {
+        (
+            listed.get(member.0.as_str()).copied().unwrap_or(usize::MAX),
+            member.2,
+            member.3,
+            member.4,
+            member.0.clone(),
+        )
+    });
+    members
+        .into_iter()
+        .map(|(name, is_static, ..)| (name, is_static))
+        .collect()
+}
+
 /// Walks to the class whose `__construct` PHP runs when `class_name` is instantiated.
 ///
 /// The same rule as [`crate::types::constructor_owner`], over the borrowed map this emitter
@@ -2331,6 +2551,15 @@ fn eval_reflection_interface_static_method_declaring_interface<'a>(
 }
 
 /// Returns eval ReflectionMethod bitflags for one instance method entry.
+///
+/// The ABSTRACT bit reads `abstract_methods`, not whether `method_impl_classes` still names an
+/// emitted symbol: codegen's `runtime_class_infos()` trims `method_impl_classes` down to methods
+/// with a live EIR/intrinsic-wrapper symbol so vtable emission never references a dead-code-
+/// eliminated label, and a native class's method is routinely unreachable from AOT-compiled code
+/// when only eval-owned code calls it (that is exactly how a native exception's `getMessage()`
+/// looks to a program whose only compiled entry point is a bootstrap file). `abstract_methods` is
+/// never trimmed, so it stays a faithful "declared abstract in PHP" signal independent of this
+/// build's reachability.
 fn eval_reflection_instance_method_flags(class_info: &ClassInfo, method_name: &str) -> u64 {
     let visibility = class_info
         .method_visibilities
@@ -2350,6 +2579,9 @@ fn eval_reflection_instance_method_flags(class_info: &ClassInfo, method_name: &s
 }
 
 /// Returns eval ReflectionMethod bitflags for one static method entry.
+///
+/// See `eval_reflection_instance_method_flags` for why the ABSTRACT bit reads
+/// `abstract_static_methods` rather than `static_method_impl_classes`.
 fn eval_reflection_static_method_flags(class_info: &ClassInfo, method_name: &str) -> u64 {
     let visibility = class_info
         .static_method_visibilities
@@ -2398,70 +2630,59 @@ fn emit_eval_reflection_property_lookup_data(
     let mut entries = Vec::new();
     let mut index = 0usize;
     for (class_name, class_info) in sorted_classes {
-        for (slot, (property_name, _)) in class_info.properties.iter().enumerate() {
+        // One row per property php's reflection sees on the class, in its order: an ancestor's
+        // private property is not one, so `new ReflectionProperty(Child::class, 'parentPrivate')`
+        // finds no row and raises, and `getProperties()` lists the class's own first. An instance
+        // name can own two slots when the class shadows an ancestor's private property; the
+        // visible one is the class's own, the last.
+        for property_name in &class_info.reflection_properties {
             if class_property_is_hidden(class_name, property_name) {
                 continue;
             }
-            let flags = eval_reflection_instance_property_flags(class_info, slot, property_name);
+            let instance_slot = class_info
+                .properties
+                .iter()
+                .rposition(|(name, _)| name == property_name);
+            let (flags, declaring_class) = if let Some(slot) = instance_slot {
+                (
+                    eval_reflection_instance_property_flags(class_info, slot, property_name),
+                    eval_reflection_instance_property_declaring_class(
+                        class_name,
+                        class_info,
+                        property_name,
+                    ),
+                )
+            } else if let Some(slot) = class_info
+                .static_properties
+                .iter()
+                .position(|(name, _)| name == property_name)
+            {
+                (
+                    eval_reflection_static_property_flags(class_info, slot, property_name),
+                    eval_reflection_static_property_declaring_class(
+                        class_name,
+                        class_info,
+                        property_name,
+                    ),
+                )
+            } else {
+                continue;
+            };
             let class_label = format!("_eval_reflection_property_class_{}", index);
             let property_label = format!("_eval_reflection_property_name_{}", index);
-            let declaring_class = eval_reflection_instance_property_declaring_class(
-                class_name,
-                class_info,
-                property_name,
-            );
             let declaring_label = format!("_eval_reflection_property_declaring_class_{}", index);
             out.push_str(&format!(
-                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+                "{0}:\n    .ascii \"{1}\"\n",
                 class_label,
                 escaped_ascii(class_name)
             ));
             out.push_str(&format!(
-                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+                "{0}:\n    .ascii \"{1}\"\n",
                 property_label,
                 escaped_ascii(property_name)
             ));
             out.push_str(&format!(
-                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
-                declaring_label,
-                escaped_ascii(declaring_class)
-            ));
-            entries.push((
-                class_label,
-                class_name.len(),
-                property_label,
-                property_name.len(),
-                flags,
-                declaring_label,
-                declaring_class.len(),
-            ));
-            index += 1;
-        }
-        for (slot, (property_name, _)) in class_info.static_properties.iter().enumerate() {
-            if class_property_is_hidden(class_name, property_name) {
-                continue;
-            }
-            let flags = eval_reflection_static_property_flags(class_info, slot, property_name);
-            let class_label = format!("_eval_reflection_property_class_{}", index);
-            let property_label = format!("_eval_reflection_property_name_{}", index);
-            let declaring_class = eval_reflection_static_property_declaring_class(
-                class_name,
-                class_info,
-                property_name,
-            );
-            let declaring_label = format!("_eval_reflection_property_declaring_class_{}", index);
-            out.push_str(&format!(
-                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
-                class_label,
-                escaped_ascii(class_name)
-            ));
-            out.push_str(&format!(
-                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
-                property_label,
-                escaped_ascii(property_name)
-            ));
-            out.push_str(&format!(
-                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+                "{0}:\n    .ascii \"{1}\"\n",
                 declaring_label,
                 escaped_ascii(declaring_class)
             ));
@@ -2521,41 +2742,97 @@ fn eval_reflection_static_property_declaring_class<'a>(
         .unwrap_or(reflected_class)
 }
 
-/// Emits AOT class flag rows consumed by eval ReflectionClass metadata probes.
+/// Emits AOT class rows consumed by eval ReflectionClass metadata probes.
+///
+/// Each row stores the canonical name, class flags, an optional doc comment, and an optional
+/// declaration file. The shared row keeps eval bridge lookups keyed identically.
 fn emit_eval_reflection_class_lookup_data(
     out: &mut String,
     sorted_classes: &[(&String, &ClassInfo)],
     sorted_interfaces: &[(&String, &InterfaceInfo)],
     declared_trait_source_lines: &HashMap<String, u32>,
+    declared_class_source_files: &HashMap<String, String>,
 ) {
     let mut entries = Vec::new();
     let mut index = 0usize;
     for (class_name, class_info) in sorted_classes {
-        let flags = eval_reflection_class_flags(class_info);
-        if flags == 0 {
+        let flags = eval_reflection_class_flags(class_name, class_info);
+        let source_file = declared_class_source_file(declared_class_source_files, class_name);
+        if flags == 0 && source_file.is_none() {
             continue;
         }
         let class_label = format!("_eval_reflection_class_name_{}", index);
         out.push_str(&format!(
-            ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+            "{0}:\n    .ascii \"{1}\"\n",
             class_label,
             escaped_ascii(class_name)
         ));
-        entries.push((class_label, class_name.len(), flags));
+        let doc_comment = class_info.doc_comment.as_deref();
+        let doc_label = doc_comment.map(|_| format!("_eval_reflection_class_doc_{}", index));
+        if let (Some(doc_label), Some(doc_comment)) = (&doc_label, doc_comment) {
+            out.push_str(&format!(
+                "{0}:\n    .ascii \"{1}\"\n",
+                doc_label,
+                escaped_ascii(doc_comment)
+            ));
+        }
+        let source_file_label = source_file.map(|_| format!("_eval_reflection_class_file_{}", index));
+        if let (Some(source_file_label), Some(source_file)) = (&source_file_label, source_file) {
+            out.push_str(&format!(
+                "{0}:\n    .ascii \"{1}\"\n",
+                source_file_label,
+                escaped_ascii(source_file)
+            ));
+        }
+        entries.push((
+            class_label,
+            class_name.len(),
+            flags,
+            doc_label,
+            doc_comment.map_or(0, str::len),
+            source_file_label,
+            source_file.map_or(0, str::len),
+        ));
         index += 1;
     }
     for (interface_name, interface_info) in sorted_interfaces {
         let flags = eval_reflection_interface_flags(interface_info);
-        if flags == 0 {
+        let source_file = declared_class_source_file(declared_class_source_files, interface_name);
+        if flags == 0 && source_file.is_none() {
             continue;
         }
         let class_label = format!("_eval_reflection_class_name_{}", index);
         out.push_str(&format!(
-            ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+            "{0}:\n    .ascii \"{1}\"\n",
             class_label,
             escaped_ascii(interface_name)
         ));
-        entries.push((class_label, interface_name.len(), flags));
+        let doc_comment = interface_info.doc_comment.as_deref();
+        let doc_label = doc_comment.map(|_| format!("_eval_reflection_class_doc_{}", index));
+        if let (Some(doc_label), Some(doc_comment)) = (&doc_label, doc_comment) {
+            out.push_str(&format!(
+                "{0}:\n    .ascii \"{1}\"\n",
+                doc_label,
+                escaped_ascii(doc_comment)
+            ));
+        }
+        let source_file_label = source_file.map(|_| format!("_eval_reflection_class_file_{}", index));
+        if let (Some(source_file_label), Some(source_file)) = (&source_file_label, source_file) {
+            out.push_str(&format!(
+                "{0}:\n    .ascii \"{1}\"\n",
+                source_file_label,
+                escaped_ascii(source_file)
+            ));
+        }
+        entries.push((
+            class_label,
+            interface_name.len(),
+            flags,
+            doc_label,
+            doc_comment.map_or(0, str::len),
+            source_file_label,
+            source_file.map_or(0, str::len),
+        ));
         index += 1;
     }
     let mut sorted_trait_lines = declared_trait_source_lines.iter().collect::<Vec<_>>();
@@ -2563,16 +2840,33 @@ fn emit_eval_reflection_class_lookup_data(
         .sort_by(|(left_name, _), (right_name, _)| left_name.cmp(right_name));
     for (trait_name, line) in sorted_trait_lines {
         let flags = eval_reflection_trait_flags(*line);
-        if flags == 0 {
+        let source_file = declared_class_source_file(declared_class_source_files, trait_name);
+        if flags == 0 && source_file.is_none() {
             continue;
         }
         let class_label = format!("_eval_reflection_class_name_{}", index);
         out.push_str(&format!(
-            ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+            "{0}:\n    .ascii \"{1}\"\n",
             class_label,
             escaped_ascii(trait_name)
         ));
-        entries.push((class_label, trait_name.len(), flags));
+        let source_file_label = source_file.map(|_| format!("_eval_reflection_class_file_{}", index));
+        if let (Some(source_file_label), Some(source_file)) = (&source_file_label, source_file) {
+            out.push_str(&format!(
+                "{0}:\n    .ascii \"{1}\"\n",
+                source_file_label,
+                escaped_ascii(source_file)
+            ));
+        }
+        entries.push((
+            class_label,
+            trait_name.len(),
+            flags,
+            None,
+            0,
+            source_file_label,
+            source_file.map_or(0, str::len),
+        ));
         index += 1;
     }
 
@@ -2580,15 +2874,40 @@ fn emit_eval_reflection_class_lookup_data(
     out.push_str(".globl _eval_reflection_class_count\n_eval_reflection_class_count:\n");
     out.push_str(&format!("    .quad {}\n", entries.len()));
     out.push_str(".globl _eval_reflection_classes\n_eval_reflection_classes:\n");
-    for (class_label, class_len, flags) in entries {
+    for (class_label, class_len, flags, doc_label, doc_len, source_file_label, source_file_len) in entries {
         out.push_str(&format!("    .quad {}\n", class_label));
         out.push_str(&format!("    .quad {}\n", class_len));
         out.push_str(&format!("    .quad {}\n", flags));
+        out.push_str(&format!("    .quad {}\n", doc_label.unwrap_or_else(|| "0".to_string())));
+        out.push_str(&format!("    .quad {}\n", doc_len));
+        out.push_str(&format!("    .quad {}\n", source_file_label.unwrap_or_else(|| "0".to_string())));
+        out.push_str(&format!("    .quad {}\n", source_file_len));
     }
 }
 
+/// Finds one declaration source path with PHP's case-insensitive class-name rules.
+fn declared_class_source_file<'a>(
+    source_files: &'a HashMap<String, String>,
+    class_name: &str,
+) -> Option<&'a str> {
+    let class_name = class_name.trim_start_matches('\\');
+    source_files
+        .get(&php_symbol_key(class_name))
+        .map(String::as_str)
+        .or_else(|| {
+            source_files
+                .iter()
+                .find(|(candidate, _)| {
+                    candidate
+                        .trim_start_matches('\\')
+                        .eq_ignore_ascii_case(class_name)
+                })
+                .map(|(_, source_file)| source_file.as_str())
+        })
+}
+
 /// Returns eval ReflectionClass flag bits retained for one generated/AOT class.
-fn eval_reflection_class_flags(class_info: &ClassInfo) -> u64 {
+fn eval_reflection_class_flags(class_name: &str, class_info: &ClassInfo) -> u64 {
     let mut flags = 0;
     if class_info.is_final {
         flags |= EVAL_REFLECTION_CLASS_FLAG_FINAL;
@@ -2599,28 +2918,117 @@ fn eval_reflection_class_flags(class_info: &ClassInfo) -> u64 {
     if class_info.is_readonly_class {
         flags |= EVAL_REFLECTION_CLASS_FLAG_READONLY;
     }
-    flags |= eval_reflection_source_line_flags(class_info.declaration_span.line);
+    // php's `isInstantiable()`: a class you can write `new` in front of. Abstract classes are out,
+    // and so is a class whose constructor is not public -- a singleton with a private constructor
+    // is a shape Symfony's container uses. The flag word carried neither, so every generated class
+    // answered `false`.
+    if eval_reflection_class_is_instantiable(class_info) {
+        flags |= EVAL_REFLECTION_CLASS_FLAG_INSTANTIABLE;
+    }
+    // The run-time `new ReflectionClass($name)` reads these two predicates from this word too, and
+    // it carried neither: every compiled class answered `isCloneable()` false (so DeepClone never
+    // cloned its prototype and built objects through a path that returned null) and
+    // `isIterable()` false for every Iterator.
+    if eval_reflection_class_is_cloneable(class_name, class_info) {
+        flags |= EVAL_REFLECTION_CLASS_FLAG_CLONEABLE;
+    }
+    if !class_info.is_abstract
+        && class_info
+            .interfaces
+            .iter()
+            .any(|name| name == "Iterator" || name == "IteratorAggregate")
+    {
+        flags |= EVAL_REFLECTION_CLASS_FLAG_ITERABLE;
+    }
+    // A class the compiler INJECTED -- ArrayObject and its family -- is internal in php's sense:
+    // it has no source of its own, which is exactly what the dummy declaration span says. Without
+    // the bit the reflection fallback reads "not internal" and answers `isUserDefined()` true for
+    // a builtin, because it derives that answer from this one.
+    if class_info.declaration_span == crate::span::Span::dummy() {
+        flags |= EVAL_REFLECTION_CLASS_FLAG_INTERNAL;
+    }
+    flags |= eval_reflection_source_line_flags(
+        class_info.declaration_span.line,
+        class_info.declaration_span.end_line,
+    );
     flags
+}
+
+/// Returns php's `ReflectionClass::isCloneable()` for one generated class.
+///
+/// A concrete class is cloneable unless it declares a non-public `__clone`. The classes whose
+/// storage the runtime manages -- throwables, generators, fibers, reflection objects -- are not,
+/// in php as in elephc (their `clone` is refused).
+fn eval_reflection_class_is_cloneable(class_name: &str, class_info: &ClassInfo) -> bool {
+    if class_info.is_abstract {
+        return false;
+    }
+    let key = crate::names::php_symbol_key(class_name.trim_start_matches('\\'));
+    let runtime_managed = matches!(
+        key.as_str(),
+        "throwable" | "error" | "exception" | "generator" | "fiber" | "closure"
+    ) || key.starts_with("reflection")
+        || class_info
+            .parent
+            .as_deref()
+            .is_some_and(|parent| {
+                let parent = crate::names::php_symbol_key(parent.trim_start_matches('\\'));
+                matches!(parent.as_str(), "exception" | "error")
+            });
+    if runtime_managed {
+        return false;
+    }
+    let clone = crate::names::php_symbol_key("__clone");
+    match class_info.method_visibilities.get(&clone) {
+        Some(Visibility::Public) | None => true,
+        Some(_) => false,
+    }
+}
+
+/// Returns php's `ReflectionClass::isInstantiable()` for one generated class.
+fn eval_reflection_class_is_instantiable(class_info: &ClassInfo) -> bool {
+    if class_info.is_abstract {
+        return false;
+    }
+    let constructor = crate::names::php_symbol_key("__construct");
+    match class_info.method_visibilities.get(&constructor) {
+        Some(Visibility::Public) | None => true,
+        Some(_) => false,
+    }
 }
 
 /// Returns eval ReflectionClass source-location bits retained for one generated/AOT interface.
 fn eval_reflection_interface_flags(interface_info: &InterfaceInfo) -> u64 {
-    eval_reflection_source_line_flags(interface_info.declaration_span.line)
+    EVAL_REFLECTION_CLASS_FLAG_INTERFACE
+        | eval_reflection_source_line_flags(
+            interface_info.declaration_span.line,
+            interface_info.declaration_span.end_line,
+        )
 }
 
 /// Returns eval ReflectionClass source-location bits retained for one generated/AOT trait.
 fn eval_reflection_trait_flags(line: u32) -> u64 {
-    eval_reflection_source_line_flags(line)
+    eval_reflection_source_line_flags(line, line)
 }
 
 /// Encodes declaration line metadata into high ReflectionClass flag bits.
-fn eval_reflection_source_line_flags(line: u32) -> u64 {
+///
+/// The declaration's START and END lines are different numbers -- php's `getEndLine()` is the line
+/// the closing brace sits on -- and packing the start into both slots made every generated class
+/// report a one-line body.
+fn eval_reflection_source_line_flags(line: u32, end_line: u32) -> u64 {
     let start_line = u64::from(line);
     if start_line == 0 || start_line > EVAL_REFLECTION_CLASS_SOURCE_LINE_MASK {
         return 0;
     }
+    let end_line = u64::from(end_line.max(line));
+    let end_line = if end_line > EVAL_REFLECTION_CLASS_SOURCE_LINE_MASK {
+        start_line
+    } else {
+        end_line
+    };
     (start_line << EVAL_REFLECTION_CLASS_SOURCE_START_SHIFT)
-        | (start_line << EVAL_REFLECTION_CLASS_SOURCE_END_SHIFT)
+        | (end_line << EVAL_REFLECTION_CLASS_SOURCE_END_SHIFT)
 }
 
 /// Emits class-like/interface-name rows consumed by eval ReflectionClass metadata probes.
@@ -2682,12 +3090,12 @@ fn push_eval_reflection_class_interface_row(
     let class_label = format!("_eval_reflection_class_interface_class_{}", *index);
     let interface_label = format!("_eval_reflection_class_interface_name_{}", *index);
     out.push_str(&format!(
-        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        "{0}:\n    .ascii \"{1}\"\n",
         class_label,
         escaped_ascii(class_name)
     ));
     out.push_str(&format!(
-        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        "{0}:\n    .ascii \"{1}\"\n",
         interface_label,
         escaped_ascii(interface_name)
     ));
@@ -2759,12 +3167,12 @@ fn push_eval_reflection_class_trait_row(
     let class_label = format!("_eval_reflection_class_trait_class_{}", *index);
     let trait_label = format!("_eval_reflection_class_trait_name_{}", *index);
     out.push_str(&format!(
-        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        "{0}:\n    .ascii \"{1}\"\n",
         class_label,
         escaped_ascii(class_name)
     ));
     out.push_str(&format!(
-        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        "{0}:\n    .ascii \"{1}\"\n",
         trait_label,
         escaped_ascii(trait_name)
     ));
@@ -2831,23 +3239,61 @@ fn push_eval_reflection_class_trait_alias_row(
     let alias_label = format!("_eval_reflection_class_trait_alias_name_{}", *index);
     let source_label = format!("_eval_reflection_class_trait_alias_source_{}", *index);
     out.push_str(&format!(
-        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        "{0}:\n    .ascii \"{1}\"\n",
         class_label,
         escaped_ascii(class_name)
     ));
     out.push_str(&format!(
-        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        "{0}:\n    .ascii \"{1}\"\n",
         alias_label,
         escaped_ascii(alias)
     ));
     out.push_str(&format!(
-        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        "{0}:\n    .ascii \"{1}\"\n",
         source_label,
         escaped_ascii(source)
     ));
     alias_entries.push((class_label.clone(), class_name.len(), alias_label, alias.len()));
     source_entries.push((class_label, class_name.len(), source_label, source.len()));
     *index += 1;
+}
+
+/// Emits `_interface_ancestor_ptrs`, indexed by interface id, each entry pointing at that
+/// interface's `[count, ancestor_id...]` list (every interface it extends, transitively).
+///
+/// `__rt_class_name_is_a` answers `is_a('Child', 'Base', true)` for two interface NAMES through it:
+/// the class-side matcher walks only a class's parents and implemented interfaces, so Symfony's
+/// `CheckTypeDeclarationsPass` found its DI `ContainerInterface` incompatible with PSR's.
+fn emit_interface_ancestor_tables(
+    out: &mut String,
+    interfaces: &HashMap<String, InterfaceInfo>,
+    sorted_interfaces: &[(&String, &InterfaceInfo)],
+) {
+    out.push_str(".globl _interface_ancestor_ptrs\n_interface_ancestor_ptrs:\n");
+    let Some(max_id) = sorted_interfaces.iter().map(|(_, info)| info.interface_id).max() else {
+        return;
+    };
+    let by_id: HashMap<u64, &String> =
+        sorted_interfaces.iter().map(|(name, info)| (info.interface_id, *name)).collect();
+    for id in 0..=max_id {
+        if by_id.contains_key(&id) {
+            out.push_str(&format!("    .quad _interface_ancestors_{id}\n"));
+        } else {
+            out.push_str("    .quad _class_interfaces_missing\n");
+        }
+    }
+    for (name, info) in sorted_interfaces {
+        out.push_str(&format!("_interface_ancestors_{}:\n", info.interface_id));
+        let ids: Vec<u64> = eval_reflection_interface_parent_names(name, interfaces)
+            .iter()
+            .filter_map(|parent| eval_reflection_interface_entry(parent, interfaces))
+            .map(|(_, parent)| parent.interface_id)
+            .collect();
+        out.push_str(&format!("    .quad {}\n", ids.len()));
+        for id in ids {
+            out.push_str(&format!("    .quad {id}\n"));
+        }
+    }
 }
 
 /// Returns direct and inherited parent interface names for one generated interface.
@@ -3015,14 +3461,14 @@ fn emit_callable_function_data(
 ///                         `class_info.class_id` stamped by
 ///                         `__rt_heap_alloc` callers)
 ///   [24..32) obj_size: class id, properties, optional dynamic hash and
-///                         optional ordinary Throwable creation metadata
+///                         (a Throwable's creation line is its `line` slot)
 ///
 /// The accompanying `_classes_by_name_count` symbol holds the entry count
 /// so the runtime helper can bound its linear scan.
 fn emit_classes_by_name_table(
     out: &mut String,
     sorted_classes: &[(&String, &ClassInfo)],
-    classes: &HashMap<String, ClassInfo>,
+    _classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) {
     for (class_name, class_info) in sorted_classes {
         out.push_str(&format!(
@@ -3036,8 +3482,7 @@ fn emit_classes_by_name_table(
     out.push_str(&format!("    .quad {}\n", sorted_classes.len()));
     out.push_str(".globl _classes_by_name\n_classes_by_name:\n");
     for (class_name, class_info) in sorted_classes {
-        let obj_size = class_object_payload_size(class_name, class_info)
-            + usize::from(crate::codegen_support::throwable_layout::ordinary_creation_line_offset(class_name, classes).is_some()) * 8;
+        let obj_size = class_by_name_allocation_size(class_name, class_info);
         out.push_str(&format!(
             "    .quad _class_by_name_str_{}\n",
             class_info.class_id
@@ -3049,13 +3494,186 @@ fn emit_classes_by_name_table(
 }
 
 /// Returns the PHP object payload bytes required by one class layout.
-fn class_object_payload_size(class_name: &str, class_info: &ClassInfo) -> usize {
-    let dyn_props_slot = if class_uses_dynamic_property_tail(class_name, class_info) {
-        8
+/// Bytes `__rt_new_by_name` allocates (and zeroes) for one class.
+///
+/// `Fiber` and `Generator` are fiber-shaped: `__rt_object_free_deep` releases their coroutine
+/// stack, transfer value, start arguments and yielded key/value at fixed offsets up to
+/// `FIBER_OBJECT_SIZE`, however the object was made -- and skips the property walk, so the
+/// declared-property size (`_class_object_payload_sizes`) stays what it is. Allocated by name at
+/// that declared size -- every interpreter-created generator is -- the object was a few bytes
+/// long, and freeing it read and zeroed the blocks after it: some unrelated live value lost its
+/// storage, and which one depended on heap layout alone. Zeroed at full size, each of those
+/// releases is the no-op it is on a coroutine that never started.
+fn class_by_name_allocation_size(class_name: &str, class_info: &ClassInfo) -> usize {
+    let declared = class_object_payload_size(class_name, class_info);
+    if class_name.eq_ignore_ascii_case("Fiber") || class_name.eq_ignore_ascii_case("Generator") {
+        declared.max(crate::codegen_support::runtime::FIBER_OBJECT_SIZE as usize)
     } else {
-        0
-    };
-    8 + class_info.properties.len() * 16 + dyn_props_slot
+        declared
+    }
+}
+
+/// Returns the bytes `__rt_new_by_name` allocates (and zeroes) for one class layout.
+///
+/// Delegates to the single shared size authority so `_class_object_payload_sizes` (read by
+/// `__rt_object_free_deep`) can never disagree with the allocation sites again.
+fn class_object_payload_size(class_name: &str, class_info: &ClassInfo) -> usize {
+    crate::types::object_payload_size(class_name, class_info)
+}
+
+/// Emits dense per-class metadata for typed property slots that must begin uninitialized.
+/// `__rt_new_by_name` consumes these physical offsets after zeroing a dynamically selected
+/// class layout, preserving the marker used by direct EIR object allocation and `isset()`.
+fn emit_class_uninitialized_property_marker_tables(
+    out: &mut String,
+    max_class_id: Option<u64>,
+    class_info_by_id: &HashMap<u64, &ClassInfo>,
+) {
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let Some(class_info) = class_info_by_id.get(&class_id) else {
+                continue;
+            };
+            let offsets = class_uninitialized_property_marker_offsets(class_info);
+            if offsets.is_empty() {
+                continue;
+            }
+            out.push_str(&format!(
+                ".globl _class_uninit_prop_offsets_{0}\n_class_uninit_prop_offsets_{0}:\n",
+                class_id
+            ));
+            for offset in offsets {
+                out.push_str(&format!("    .quad {}\n", offset));
+            }
+        }
+    }
+
+    out.push_str(".globl _class_uninit_prop_counts\n_class_uninit_prop_counts:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let count = class_info_by_id
+                .get(&class_id)
+                .map(|class_info| class_uninitialized_property_marker_offsets(class_info).len())
+                .unwrap_or(0);
+            out.push_str(&format!("    .quad {}\n", count));
+        }
+    }
+
+    out.push_str(".globl _class_uninit_prop_offset_ptrs\n_class_uninit_prop_offset_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let has_offsets = class_info_by_id
+                .get(&class_id)
+                .is_some_and(|class_info| !class_uninitialized_property_marker_offsets(class_info).is_empty());
+            if has_offsets {
+                out.push_str(&format!("    .quad _class_uninit_prop_offsets_{}\n", class_id));
+            } else {
+                out.push_str("    .quad 0\n");
+            }
+        }
+    }
+}
+
+/// Emits dense per-class metadata for OBJECT-OWNED REFERENCE property slots.
+///
+/// Such a slot does not hold a value: it holds a pointer to a 16-byte ref-cell the object owns,
+/// because somewhere in the program a reference was taken to the property (`$r = &$this->prop`,
+/// or a by-reference return). Every read and every write of that property therefore dereferences
+/// the slot — including the `$this->prop = <default>` statements in `_class_propinit_<id>`.
+///
+/// The direct EIR allocator (`emit_object_allocation`) allocates one cell per such slot right
+/// after zeroing the layout. `__rt_new_by_name` allocates from a class id chosen at RUN time and
+/// so cannot see that list at its call sites; without this table it left the slot at the zero the
+/// layout wipe put there, and the very first property-default store dereferenced null — a SIGSEGV
+/// inside the property-init thunk, with no PHP-level diagnostic. These offsets let the by-name
+/// allocator reproduce the direct allocator's observable state exactly, the same way
+/// `_class_uninit_prop_offsets_*` does for typed-uninitialized slots.
+///
+/// The predicate MUST stay in step with
+/// `crate::codegen::lower_inst::objects::interface_layout::owned_reference_property_offsets`,
+/// which is what the direct allocator uses; the two are the same rule written twice because they
+/// read different halves of the compiler.
+fn emit_class_owned_reference_property_tables(
+    out: &mut String,
+    max_class_id: Option<u64>,
+    class_info_by_id: &HashMap<u64, &ClassInfo>,
+) {
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let Some(class_info) = class_info_by_id.get(&class_id) else {
+                continue;
+            };
+            let offsets = class_owned_reference_property_offsets(class_info);
+            if offsets.is_empty() {
+                continue;
+            }
+            out.push_str(&format!(
+                ".globl _class_ref_prop_offsets_{0}\n_class_ref_prop_offsets_{0}:\n",
+                class_id
+            ));
+            for offset in offsets {
+                out.push_str(&format!("    .quad {}\n", offset));
+            }
+        }
+    }
+
+    out.push_str(".globl _class_ref_prop_counts\n_class_ref_prop_counts:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let count = class_info_by_id
+                .get(&class_id)
+                .map(|class_info| class_owned_reference_property_offsets(class_info).len())
+                .unwrap_or(0);
+            out.push_str(&format!("    .quad {}\n", count));
+        }
+    }
+
+    out.push_str(".globl _class_ref_prop_offset_ptrs\n_class_ref_prop_offset_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let has_offsets = class_info_by_id.get(&class_id).is_some_and(|class_info| {
+                !class_owned_reference_property_offsets(class_info).is_empty()
+            });
+            if has_offsets {
+                out.push_str(&format!("    .quad _class_ref_prop_offsets_{}\n", class_id));
+            } else {
+                out.push_str("    .quad 0\n");
+            }
+        }
+    }
+}
+
+/// Returns the slot offsets of object-owned reference properties for one class layout.
+fn class_owned_reference_property_offsets(class_info: &ClassInfo) -> Vec<usize> {
+    class_info
+        .properties
+        .iter()
+        .enumerate()
+        .filter_map(|(index, _)| {
+            let is_owned_reference = class_info.property_slot_is_owned_reference(index);
+            is_owned_reference.then_some(8 + index * 16)
+        })
+        .collect()
+}
+
+/// Returns high-word offsets for property slots that require the typed-uninitialized marker.
+/// Dynamic construction begins from a zeroed object, so these offsets make its observable state
+/// identical to the direct object allocator before property-default initialization runs.
+fn class_uninitialized_property_marker_offsets(class_info: &ClassInfo) -> Vec<usize> {
+    class_info
+        .properties
+        .iter()
+        .enumerate()
+        .filter_map(|(index, _)| {
+            let is_owned_reference = class_info.property_slot_is_owned_reference(index);
+            let starts_uninitialized = class_info
+                .defaults
+                .get(index)
+                .is_some_and(|default| default.is_none())
+                && !is_owned_reference;
+            starts_uninitialized.then_some(8 + index * 16 + 8)
+        })
+        .collect()
 }
 
 /// Returns whether this class layout stores a dynamic-property hash tail.
@@ -3132,6 +3750,31 @@ pub(crate) const USER_FILTER_VTABLE_SLOTS: usize = 6;
 /// vtable surface dispatched by the runtime with raw arguments.
 pub(crate) fn is_user_wrapper_contract_method(method_key: &str) -> bool {
     USER_WRAPPER_METHOD_NAMES.contains(&method_key)
+}
+
+/// Returns php's `streamWrapper` prototype type for an UNDECLARED contract-method parameter.
+///
+/// The runtime dispatches these methods with raw fixed-ABI arguments (a path as its pointer and
+/// length, an option word as a plain integer), and the interpreter coerces its arguments to the
+/// published signature. An undeclared parameter therefore has to publish the prototype's type:
+/// left at the checker's `int` seed, `include 'mem://...'` handed `stream_open()` the path coerced
+/// to `0`, and a compiled `fopen()` handed it the path pointer as an integer. `None` keeps the
+/// parameter gradual (`stream_metadata()`'s `$value` is any value).
+pub(crate) fn user_wrapper_contract_param_type(method_key: &str, index: usize) -> Option<PhpType> {
+    let types: &[PhpType] = match method_key {
+        "stream_open" => &[PhpType::Str, PhpType::Str, PhpType::Int, PhpType::Str],
+        "stream_read" | "stream_lock" | "stream_truncate" | "stream_cast" => &[PhpType::Int],
+        "stream_write" => &[PhpType::Str],
+        "stream_seek" => &[PhpType::Int, PhpType::Int],
+        "stream_set_option" => &[PhpType::Int, PhpType::Int, PhpType::Int],
+        "url_stat" | "rmdir" | "dir_opendir" => &[PhpType::Str, PhpType::Int],
+        "stream_metadata" => &[PhpType::Str, PhpType::Int],
+        "unlink" => &[PhpType::Str],
+        "rename" => &[PhpType::Str, PhpType::Str],
+        "mkdir" => &[PhpType::Str, PhpType::Int, PhpType::Int],
+        _ => &[],
+    };
+    types.get(index).cloned()
 }
 
 /// Returns true when a method key belongs to the fixed-ABI user-filter
@@ -3260,7 +3903,7 @@ fn class_has_user_filter_method(class_info: &ClassInfo) -> bool {
 fn emit_user_filter_vtable(
     out: &mut String,
     class_info: &ClassInfo,
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) -> Result<(), String> {
     if !class_has_user_filter_method(class_info) {
         return Ok(());
@@ -3319,7 +3962,7 @@ fn emit_user_filter_vtable(
 fn emit_user_wrapper_vtable(
     out: &mut String,
     class_info: &ClassInfo,
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) -> Result<(), String> {
     if !class_has_user_wrapper_method(class_info) {
         return Ok(());
@@ -3456,7 +4099,7 @@ fn interface_method_table_symbol(
     interface_info: &InterfaceInfo,
     method_name: &str,
     impl_class: &str,
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) -> Result<String, String> {
     let interface_sig = interface_info
         .methods
@@ -3507,7 +4150,7 @@ fn interface_method_table_symbol(
 /// The comparison is exact-case on purpose: class names and `parent` links here are the
 /// resolver's canonical spellings (declared case), so `extends reflectionclass` arrives as
 /// `ReflectionClass`. A class registered without name resolution must use PHP's spelling.
-fn class_serialization_denied(class_name: &str, classes: &HashMap<String, ClassInfo>) -> bool {
+fn class_serialization_denied(class_name: &str, classes: &crate::fast_hash::FastMap<String, ClassInfo>) -> bool {
     let mut current = class_name.trim_start_matches('\\');
     for _ in 0..=classes.len() {
         let Some(info) = classes.get(current) else {
@@ -3538,7 +4181,7 @@ fn class_serialization_denied(class_name: &str, classes: &HashMap<String, ClassI
 fn emit_unserialize_refusal_table(
     out: &mut String,
     sorted_classes: &[(&String, &ClassInfo)],
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) {
     let declared: HashSet<String> = sorted_classes
         .iter()
@@ -3572,10 +4215,48 @@ fn emit_unserialize_refusal_table(
 }
 
 /// Resolves one source-ABI instance entry through its physical implementing class.
+/// The raw return representation of a class's `jsonSerialize()` as runtime value tag + 1, or 0
+/// when the method already returns a boxed Mixed cell (`mixed`, unions, untyped).
+fn json_serialize_return_tag(
+    class_info: &ClassInfo,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
+) -> u64 {
+    let key = php_symbol_key("jsonSerialize");
+    let sig = class_info
+        .method_impl_classes
+        .get(&key)
+        .and_then(|impl_class| classes.get(impl_class.as_str()))
+        .and_then(|impl_info| impl_info.methods.get(&key))
+        .or_else(|| class_info.methods.get(&key));
+    let Some(sig) = sig else {
+        return 0;
+    };
+    raw_value_return_tag(&sig.return_type.codegen_repr(), sig.by_ref_return)
+}
+
+/// A method's raw return representation as runtime value tag + 1, for runtime helpers that box
+/// it after an indirect call; 0 when the method already returns a boxed Mixed cell (or returns by
+/// reference, a shape no helper boxes).
+fn raw_value_return_tag(repr: &PhpType, by_ref_return: bool) -> u64 {
+    if by_ref_return {
+        return 0;
+    }
+    match repr {
+        PhpType::Int => 1,
+        PhpType::Str => 2,
+        PhpType::Float => 3,
+        PhpType::Bool | PhpType::False => 4,
+        PhpType::Array(_) => 5,
+        PhpType::AssocArray { .. } => 6,
+        PhpType::Object(_) => 7,
+        _ => 0,
+    }
+}
+
 fn source_instance_method_entry(
     class_info: &ClassInfo,
     method_name: &str,
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) -> Result<String, String> {
     let Some(impl_class) = class_info.method_impl_classes.get(method_name) else {
         return Ok("0".to_string());
@@ -3627,7 +4308,7 @@ fn is_hosted_extension_class(class_info: &ClassInfo) -> bool {
 ///   raise `__debuginfo() must return an array` there).
 fn runtime_debug_info_entry(
     class_info: &ClassInfo,
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) -> Result<(String, bool), String> {
     let none = Ok(("0".to_string(), false));
     let hosted = is_hosted_extension_class(class_info);
@@ -3673,7 +4354,7 @@ fn runtime_debug_info_entry(
 fn source_instance_vtable_entry(
     class_info: &ClassInfo,
     method_name: &str,
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) -> Result<String, String> {
     let Some(impl_class) = class_info.method_impl_classes.get(method_name) else {
         return Ok("0".to_string());
@@ -3698,7 +4379,7 @@ fn source_instance_vtable_entry(
 fn source_static_vtable_entry(
     class_info: &ClassInfo,
     method_name: &str,
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) -> Result<String, String> {
     let Some(impl_class) = class_info.static_method_impl_classes.get(method_name) else {
         return Ok("0".to_string());
@@ -3724,7 +4405,7 @@ fn physical_instance_method_signature<'a>(
     class_info: &'a ClassInfo,
     impl_class: &str,
     method_name: &str,
-    classes: &'a HashMap<String, ClassInfo>,
+    classes: &'a crate::fast_hash::FastMap<String, ClassInfo>,
 ) -> Result<Option<&'a FunctionSig>, String> {
     physical_method_signature(
         class_info,
@@ -3741,7 +4422,7 @@ fn physical_static_method_signature<'a>(
     class_info: &'a ClassInfo,
     impl_class: &str,
     method_name: &str,
-    classes: &'a HashMap<String, ClassInfo>,
+    classes: &'a crate::fast_hash::FastMap<String, ClassInfo>,
 ) -> Result<Option<&'a FunctionSig>, String> {
     physical_method_signature(
         class_info,
@@ -3758,8 +4439,8 @@ fn physical_method_signature<'a>(
     class_info: &'a ClassInfo,
     impl_class: &str,
     method_name: &str,
-    classes: &'a HashMap<String, ClassInfo>,
-    methods: impl Fn(&'a ClassInfo) -> &'a HashMap<String, FunctionSig>,
+    classes: &'a crate::fast_hash::FastMap<String, ClassInfo>,
+    methods: impl Fn(&'a ClassInfo) -> &'a crate::fast_hash::FastMap<String, FunctionSig>,
     kind: &str,
 ) -> Result<Option<&'a FunctionSig>, String> {
     if let Some(impl_info) = classes.get(impl_class) {
@@ -3783,7 +4464,7 @@ fn interface_method_needs_return_wrapper(
     interface_info: &InterfaceInfo,
     method_name: &str,
     impl_class: &str,
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) -> bool {
     let Some(interface_sig) = interface_info.methods.get(method_name) else {
         return false;
@@ -3800,29 +4481,26 @@ fn interface_method_needs_return_wrapper(
         && !matches!(actual_sig.return_type.codegen_repr(), PhpType::Mixed)
 }
 
-/// Returns a property's PHP-mangled `serialize()` key bytes: `name` for a public
-/// property, `\0*\0name` for protected, and `\0DeclaringClass\0name` for private
-/// (matching the keys the PHP interpreter emits inside `O:...{...}`).
-fn mangled_property_name(class_info: &ClassInfo, class_name: &str, prop_name: &str) -> Vec<u8> {
-    match class_info.property_visibilities.get(prop_name) {
-        Some(Visibility::Protected) => {
+/// Returns one property slot's PHP-mangled `serialize()` key bytes: `name` for a
+/// public property, `\0*\0name` for protected, and `\0DeclaringClass\0name` for
+/// private (matching the keys the PHP interpreter emits inside `O:...{...}`). A
+/// private ancestor slot hidden by a same-named child property keeps its own key.
+fn mangled_property_slot_name(class_info: &ClassInfo, class_name: &str, index: usize) -> Vec<u8> {
+    let prop_name = class_info.properties[index].0.as_str();
+    match class_info.property_slot_owner(index, class_name) {
+        (Visibility::Protected, _) => {
             let mut out = vec![0u8, b'*', 0u8];
             out.extend_from_slice(prop_name.as_bytes());
             out
         }
-        Some(Visibility::Private) => {
-            let declaring = class_info
-                .property_declaring_classes
-                .get(prop_name)
-                .map(String::as_str)
-                .unwrap_or(class_name);
+        (Visibility::Private, declaring) => {
             let mut out = vec![0u8];
             out.extend_from_slice(declaring.as_bytes());
             out.push(0u8);
             out.extend_from_slice(prop_name.as_bytes());
             out
         }
-        _ => prop_name.as_bytes().to_vec(),
+        (Visibility::Public, _) => prop_name.as_bytes().to_vec(),
     }
 }
 
@@ -3832,7 +4510,7 @@ fn mangled_property_name(class_info: &ClassInfo, class_name: &str, prop_name: &s
 /// PHP annotates the key with the property's visibility: `"p"` for public,
 /// `"p":protected`, and `"p":"C":private` where `C` is the DECLARING class (a
 /// private property inherited into a subclass keeps the parent's name). The
-/// declaring class comes from `property_declaring_classes`, the same source
+/// declaring class comes from `ClassInfo::property_slot_owner`, the same source
 /// serialize's NUL-mangling uses, so the two renderings can never disagree.
 /// One rendered row of a `_class_vd_desc_*` table: everything
 /// `__rt_var_dump_object` needs to print a single `["key"]=> value` pair.
@@ -3862,11 +4540,13 @@ struct VarDumpRow {
 /// Builds the `var_dump` rows for a class: the `__debugInfo()` projection when the
 /// class declares a foldable one, otherwise every declared property in layout order.
 fn var_dump_descriptor_rows(
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
     class_info: &ClassInfo,
     class_name: &str,
 ) -> Vec<VarDumpRow> {
-    if let Some(projection) = var_dump_debug_info_projection(class_info) {
+    let projection = builtin_reflection_dump_projection(class_info, class_name)
+        .or_else(|| var_dump_debug_info_projection(class_info));
+    if let Some(projection) = projection {
         return projection
             .into_iter()
             .filter_map(|(key, prop_name)| {
@@ -3908,15 +4588,11 @@ fn var_dump_descriptor_rows(
                 return None;
             }
             Some(VarDumpRow {
-                key: var_dump_property_key(metadata, owner_name, prop_name),
-                print_r_key: print_r_property_key(metadata, owner_name, prop_name),
+                key: var_dump_property_slot_key(class_info, class_name, layout_index),
+                print_r_key: print_r_property_slot_key(class_info, class_name, layout_index),
                 plain_key: prop_name.clone(),
-                offset: metadata
-                    .property_offsets
-                    .get(prop_name)
-                    .copied()
-                    .unwrap_or(8 + layout_index * 16),
-                tag: prop_value_tag(metadata, prop_name, prop_ty),
+                offset: class_info.property_slot_offset(layout_index),
+                tag: prop_slot_value_tag(class_info, layout_index),
                 type_name: var_dump_property_type_name(prop_ty),
             })
         })
@@ -3936,7 +4612,7 @@ fn var_dump_descriptor_rows(
 ///
 /// WHY THE DECLARING CLASS. A user class may legitimately declare its own private
 /// `__`-prefixed property, and PHP's `var_dump` shows it. The skip is therefore gated on
-/// the property's DECLARING class — the same source `var_dump_property_key` uses for the
+/// the property's DECLARING class — the same source `var_dump_property_slot_key` uses for the
 /// `:private` annotation — rather than the instance class, so an instance of a user
 /// subclass of a Reflection class still hides the slots it inherits. `class_name` is only
 /// the fallback when the declaring class is unknown.
@@ -3969,7 +4645,7 @@ fn is_reflection_backing_slot(class_info: &ClassInfo, class_name: &str, prop_nam
 /// ancestry for a hidden index recovers its original owner, visibility and byte offset for
 /// renderers and serialization alike, without applying a `__debugInfo()` projection.
 fn physical_property_slot_metadata<'a>(
-    classes: &'a HashMap<String, ClassInfo>,
+    classes: &'a crate::fast_hash::FastMap<String, ClassInfo>,
     class_info: &'a ClassInfo,
     class_name: &'a str,
     layout_index: usize,
@@ -3990,6 +4666,38 @@ fn physical_property_slot_metadata<'a>(
         metadata = parent_info;
         owner_name = parent;
     }
+}
+
+/// The properties php shows for one of its own Reflection classes, as `(key, backing slot)`.
+///
+/// php's reflectors expose only `name` (and `class` on a member reflector); elephc's carry
+/// their metadata in private `__*` slots, which every dump printed -- 43 of them for a
+/// `ReflectionClass`. The projection is the same row list a foldable `__debugInfo()` produces.
+/// Only the compiler-injected class gets it: a user subclass keeps its declared properties.
+fn builtin_reflection_dump_projection(
+    class_info: &ClassInfo,
+    class_name: &str,
+) -> Option<Vec<(String, String)>> {
+    if class_info.declaration_span != crate::span::Span::dummy() {
+        return None;
+    }
+    let keys: &[(&str, &str)] = match class_name {
+        "ReflectionClass" | "ReflectionObject" | "ReflectionEnum" | "ReflectionFunction"
+        | "ReflectionParameter" | "ReflectionAttribute" => &[("name", "__name")],
+        "ReflectionMethod" | "ReflectionProperty" | "ReflectionClassConstant"
+        | "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase" => {
+            &[("name", "__name"), ("class", "__class")]
+        }
+        "ReflectionNamedType" | "ReflectionUnionType" | "ReflectionIntersectionType"
+        | "ReflectionType" | "ReflectionReference" => &[],
+        _ => return None,
+    };
+    Some(
+        keys.iter()
+            .filter(|(_, slot)| class_info.visible_property(slot).is_some())
+            .map(|(key, slot)| (key.to_string(), slot.to_string()))
+            .collect(),
+    )
 }
 
 /// Folds a class's `__debugInfo()` into the `(array key, property name)` pairs
@@ -4084,18 +4792,14 @@ fn var_dump_debug_info_projection(class_info: &ClassInfo) -> Option<Vec<(String,
 
 /// Renders the text PHP prints between the `[` and `]` of a declared property's
 /// `var_dump` key line, including its visibility suffix.
-fn var_dump_property_key(class_info: &ClassInfo, class_name: &str, prop_name: &str) -> String {
-    match class_info.property_visibilities.get(prop_name) {
-        Some(Visibility::Protected) => format!("\"{}\":protected", prop_name),
-        Some(Visibility::Private) => {
-            let declaring = class_info
-                .property_declaring_classes
-                .get(prop_name)
-                .map(String::as_str)
-                .unwrap_or(class_name);
+fn var_dump_property_slot_key(class_info: &ClassInfo, class_name: &str, index: usize) -> String {
+    let prop_name = class_info.properties[index].0.as_str();
+    match class_info.property_slot_owner(index, class_name) {
+        (Visibility::Protected, _) => format!("\"{}\":protected", prop_name),
+        (Visibility::Private, declaring) => {
             format!("\"{}\":\"{}\":private", prop_name, declaring)
         }
-        _ => format!("\"{}\"", prop_name),
+        (Visibility::Public, _) => format!("\"{}\"", prop_name),
     }
 }
 
@@ -4138,32 +4842,37 @@ fn enum_case_property_offset(class_info: &ClassInfo, property_name: &str) -> i64
 /// `print_r` annotates visibility like `var_dump` does but WITHOUT quoting either
 /// the property name or the declaring class: `x`, `y:protected`, `z:C:private`
 /// (verified against PHP 8.4). The declaring class comes from the same
-/// `property_declaring_classes` map `var_dump_property_key` reads, so the two
+/// `ClassInfo::property_slot_owner` `var_dump_property_slot_key` reads, so the two
 /// renderings can never name a different class for one property.
-fn print_r_property_key(class_info: &ClassInfo, class_name: &str, prop_name: &str) -> String {
-    match class_info.property_visibilities.get(prop_name) {
-        Some(Visibility::Protected) => format!("{}:protected", prop_name),
-        Some(Visibility::Private) => {
-            let declaring = class_info
-                .property_declaring_classes
-                .get(prop_name)
-                .map(String::as_str)
-                .unwrap_or(class_name);
-            format!("{}:{}:private", prop_name, declaring)
-        }
-        _ => prop_name.to_string(),
+fn print_r_property_slot_key(class_info: &ClassInfo, class_name: &str, index: usize) -> String {
+    let prop_name = class_info.properties[index].0.as_str();
+    match class_info.property_slot_owner(index, class_name) {
+        (Visibility::Protected, _) => format!("{}:protected", prop_name),
+        (Visibility::Private, declaring) => format!("{}:{}:private", prop_name, declaring),
+        (Visibility::Public, _) => prop_name.to_string(),
     }
 }
 
 /// Renders the declared type name PHP prints inside `uninitialized(...)` for a
 /// typed property read before its first write.
 ///
-/// PHP echoes the SOURCE type text; `ClassInfo` only retains the resolved
-/// `PhpType`, so this reconstructs the canonical spelling for the shapes a
-/// property declaration can actually take. Unions and intersections collapse to
-/// `mixed` — a property can only be uninitialized when it is typed and
+/// PHP prints the type's REFLECTION spelling, not the source text: `int|null`,
+/// `?int` and `null|int` all render `?int` (verified against PHP 8.4). A union of
+/// exactly one type plus `null` is therefore rendered `?<type>`, which is the whole
+/// nullable family — `?int`, `?string`, `?Foo`. Wider unions keep the `mixed`
+/// fallback: PHP reorders their members by its own canonical ranking
+/// (`int|string` prints `string|int`), and nothing in `ClassInfo` records that
+/// ranking. A property can only be uninitialized when it is typed and
 /// default-less, and the walker's `uninitialized(...)` line is the only consumer.
 fn var_dump_property_type_name(prop_ty: &PhpType) -> String {
+    if let PhpType::Union(members) = prop_ty {
+        let mut non_null = members.iter().filter(|m| !matches!(m, PhpType::Void));
+        if let (Some(only), None) = (non_null.next(), non_null.next()) {
+            if members.iter().any(|m| matches!(m, PhpType::Void)) {
+                return format!("?{}", var_dump_property_type_name(only));
+            }
+        }
+    }
     match prop_ty {
         PhpType::Int => "int".to_string(),
         PhpType::Float => "float".to_string(),
@@ -4331,8 +5040,60 @@ fn serprop_widens_int_to_float(prop_ty: &PhpType) -> bool {
 /// property holds its callable descriptor directly (tag 10), never a Mixed box.
 fn prop_value_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType) -> u64 {
     if class_info.reference_properties.contains(prop_name) {
-        return 7;
+        return prop_type_value_tag(prop_ty) | REFERENCE_PROPERTY_TAG_FLAG;
     }
+    if is_raw_throwable_trace_slot(
+        prop_name,
+        prop_ty,
+        class_info
+            .property_offsets
+            .get(prop_name)
+            .copied()
+            .unwrap_or(usize::MAX),
+    ) {
+        return 4;
+    }
+    prop_type_value_tag(prop_ty)
+}
+
+/// Whether this descriptor row describes a Throwable's `trace` slot.
+///
+/// PHP declares it `array`, but elephc declares it `Mixed` (stores publish a boxed cell in some
+/// paths) while `__rt_throwable_capture_trace` writes a RAW array pointer there. Describing the
+/// row as a boxed Mixed cell made every reader treat the array header as a cell: `(array)$e`
+/// reported the trace as an integer and VarDumper's `Caster::castObject` faulted on a non-empty
+/// trace. The slot is always an indexed frame list, so the array tag is the readable shape; the
+/// release side already special-cases the same slot (`PropertySlot::release_type`).
+fn is_raw_throwable_trace_slot(prop_name: &str, prop_ty: &PhpType, offset: usize) -> bool {
+    prop_name == "trace"
+        && offset == crate::codegen_support::throwable_layout::TRACE_OFFSET
+        && prop_ty.codegen_repr() == PhpType::Mixed
+}
+
+/// Returns the runtime value tag of one physical property slot.
+///
+/// A hidden private ancestor slot shares its name with the visible slot, so its
+/// by-reference flag comes from the slot itself rather than the name-keyed set.
+fn prop_slot_value_tag(class_info: &ClassInfo, index: usize) -> u64 {
+    let (prop_name, prop_ty) = &class_info.properties[index];
+    if !class_info.property_slot_is_hidden(index) {
+        return prop_value_tag(class_info, prop_name, prop_ty);
+    }
+    if is_raw_throwable_trace_slot(
+        prop_name,
+        prop_ty,
+        class_info.property_slot_offset(index),
+    ) {
+        return 4;
+    }
+    if class_info.property_slot_is_reference(index, prop_name) {
+        return prop_type_value_tag(prop_ty) | REFERENCE_PROPERTY_TAG_FLAG;
+    }
+    prop_type_value_tag(prop_ty)
+}
+
+/// Returns the runtime value tag a non-reference property of this type stores.
+fn prop_type_value_tag(prop_ty: &PhpType) -> u64 {
     if prop_ty.codegen_repr() == PhpType::TaggedScalar {
         return TAGGED_SCALAR_PROPERTY_TAG;
     }
@@ -4355,8 +5116,6 @@ fn prop_value_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType) ->
 
 #[cfg(test)]
 mod boxed_result_mask_tests {
-    use std::collections::HashMap;
-
     use crate::types::{FunctionSig, PhpType};
 
     use super::{
@@ -4385,7 +5144,7 @@ mod boxed_result_mask_tests {
     /// Builds a class info whose named methods carry the given return types.
     fn class_with(methods: &[(&str, PhpType)]) -> crate::types::ClassInfo {
         let mut class_info = super::tests::empty_class_info(1, "stream_open");
-        class_info.methods = HashMap::new();
+        class_info.methods = crate::fast_hash::FastMap::default();
         for (name, return_type) in methods {
             class_info
                 .methods
@@ -4506,12 +5265,11 @@ mod tests {
 
     use crate::codegen_support::platform::{Arch, Platform, Target};
 
-    use crate::parser::ast::Visibility;
     use crate::types::{ClassInfo, FunctionSig, PhpType};
 
     use super::{
-        emit_runtime_data_user, source_instance_method_entry, source_instance_vtable_entry,
-        source_static_vtable_entry, NOT_SERIALIZABLE_BUILTIN_CLASSES,
+        emit_eval_reflection_class_lookup_data, emit_runtime_data_user, source_instance_method_entry,
+        source_instance_vtable_entry, source_static_vtable_entry, NOT_SERIALIZABLE_BUILTIN_CLASSES,
     };
     use super::{dedup_class_string_data, rewrite_symbols_via_map};
 
@@ -4557,7 +5315,7 @@ mod tests {
         child
             .static_method_impl_classes
             .insert("build".to_string(), "Parent".to_string());
-        let classes = HashMap::from([
+        let classes = crate::fast_hash::FastMap::from_iter([
             ("Parent".to_string(), parent),
             ("Child".to_string(), child.clone()),
         ]);
@@ -4593,12 +5351,12 @@ mod tests {
             info.static_method_impl_classes.remove("make").as_deref(),
             Some("StaticMetadata"),
         );
-        let classes = HashMap::from([("StaticMetadata".to_string(), info)]);
+        let classes = crate::fast_hash::FastMap::from_iter([("StaticMetadata".to_string(), info)]);
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let asm = emit_runtime_data_user(
                 &HashSet::new(), &HashMap::new(), &HashMap::new(), &HashSet::new(),
                 &HashMap::new(), &[], &[], &HashMap::new(), &HashMap::new(),
-                &classes, &HashMap::new(), &HashSet::new(), None, true, None,
+                &HashMap::new(), &classes, &HashMap::new(), &HashSet::new(), None, true, None,
                 Target::parse(name).expect("supported target"),
             )
             .unwrap();
@@ -4634,13 +5392,13 @@ mod tests {
             info.method_declaring_classes.insert(method.clone(), "HookMetadata".to_string());
             info.method_impl_classes.insert(method, "HookMetadata".to_string());
         }
-        let classes = HashMap::from([("HookMetadata".to_string(), info)]);
+        let classes = crate::fast_hash::FastMap::from_iter([("HookMetadata".to_string(), info)]);
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let target = Target::parse(name).expect("supported target");
             let asm = emit_runtime_data_user(
                 &HashSet::new(), &HashMap::new(), &HashMap::new(), &HashSet::new(),
                 &HashMap::new(), &[], &[], &HashMap::new(), &HashMap::new(),
-                &classes, &HashMap::new(), &HashSet::new(), None, true, None, target,
+                &HashMap::new(), &classes, &HashMap::new(), &HashSet::new(), None, true, None, target,
             )
             .unwrap();
             let properties = asm.split("_eval_reflection_properties:\n").nth(1).unwrap();
@@ -4659,13 +5417,13 @@ mod tests {
     /// The initializer pointer table follows emitted EIR symbols even for default-less typed slots.
     #[test]
     fn property_initializer_table_uses_emitted_symbols_on_all_targets() {
-        let classes = HashMap::from([("TypedOnly".to_string(), empty_class_info(1, "run"))]);
+        let classes = crate::fast_hash::FastMap::from_iter([("TypedOnly".to_string(), empty_class_info(1, "run"))]);
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             for emitted in [HashSet::new(), HashSet::from([1])] {
                 let asm = emit_runtime_data_user(
                     &HashSet::new(), &HashMap::new(), &HashMap::new(), &HashSet::new(),
                     &HashMap::new(), &[], &[], &HashMap::new(), &HashMap::new(),
-                    &classes, &HashMap::new(), &emitted, None, false, None, Target::parse(name).unwrap(),
+                    &HashMap::new(), &classes, &HashMap::new(), &emitted, None, false, None, Target::parse(name).unwrap(),
                 )
                 .unwrap();
                 let expected = if emitted.is_empty() { ".quad 0" } else { ".quad _class_propinit_1" };
@@ -4677,7 +5435,7 @@ mod tests {
 
     /// Provides the Empty class info helper used by the user module.
     pub(super) fn empty_class_info(class_id: u64, method_name: &str) -> ClassInfo {
-        let mut method_impl_classes = HashMap::new();
+        let mut method_impl_classes = crate::fast_hash::FastMap::default();
         method_impl_classes.insert(method_name.to_string(), "Exception".to_string());
 
         let mut vtable_slots = HashMap::new();
@@ -4686,6 +5444,7 @@ mod tests {
         ClassInfo {
             class_id,
             declaration_span: crate::span::Span::dummy(),
+            doc_comment: None,
             is_internal: false,
             parent: None,
             is_abstract: false,
@@ -4722,12 +5481,17 @@ mod tests {
             property_declared_slots: Vec::new(),
             final_properties: HashSet::new(),
             readonly_properties: HashSet::new(),
+            backed_hooked_properties: HashSet::new(),
             reference_properties: HashSet::new(),
             owned_reference_properties: HashSet::new(),
             promoted_properties: HashSet::new(),
             property_reference_slots: Vec::new(),
+            property_slot_declaring_classes: Vec::new(),
+            property_owned_reference_slots: Vec::new(),
             abstract_properties: HashSet::new(),
             abstract_property_hooks: HashMap::new(),
+            reflection_properties: Vec::new(),
+            reflection_methods: Vec::new(),
             property_hooks: HashMap::new(),
             static_properties: Vec::new(),
             static_defaults: Vec::new(),
@@ -4736,23 +5500,23 @@ mod tests {
             declared_static_properties: HashSet::new(),
             final_static_properties: HashSet::new(),
             method_decls: Vec::new(),
-            methods: HashMap::new(),
-            static_methods: HashMap::new(),
+            methods: crate::fast_hash::FastMap::default(),
+            static_methods: crate::fast_hash::FastMap::default(),
             late_static_method_returns: HashMap::new(),
             late_static_static_method_returns: HashMap::new(),
             callable_method_return_sigs: HashMap::new(),
             callable_array_method_return_sigs: HashMap::new(),
-            method_visibilities: HashMap::<String, Visibility>::new(),
+            method_visibilities: crate::fast_hash::FastMap::default(),
             final_methods: HashSet::new(),
-            method_declaring_classes: HashMap::new(),
+            method_declaring_classes: crate::fast_hash::FastMap::default(),
             method_impl_classes,
             abstract_methods: HashSet::new(),
             vtable_methods: vec![method_name.to_string()],
             vtable_slots,
-            static_method_visibilities: HashMap::new(),
+            static_method_visibilities: crate::fast_hash::FastMap::default(),
             final_static_methods: HashSet::new(),
-            static_method_declaring_classes: HashMap::new(),
-            static_method_impl_classes: HashMap::new(),
+            static_method_declaring_classes: crate::fast_hash::FastMap::default(),
+            static_method_impl_classes: crate::fast_hash::FastMap::default(),
             abstract_static_methods: HashSet::new(),
             static_vtable_methods: Vec::new(),
             static_vtable_slots: HashMap::new(),
@@ -4765,7 +5529,7 @@ mod tests {
     /// Verifies that emit runtime data user can filter built in classes.
     #[test]
     fn test_emit_runtime_data_user_can_filter_built_in_classes() {
-        let mut classes = HashMap::new();
+        let mut classes = crate::fast_hash::FastMap::default();
         classes.insert(
             "Exception".to_string(),
             empty_class_info(0, "__construct"),
@@ -4786,6 +5550,7 @@ mod tests {
             &HashMap::new(),
             &[],
             &[],
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &classes,
@@ -4813,7 +5578,7 @@ mod tests {
     /// broken ancestor chain was indistinguishable from a class that simply had no parent.
     #[test]
     fn test_emit_runtime_data_user_keeps_dense_class_tables_when_ids_start_at_one() {
-        let mut classes = HashMap::new();
+        let mut classes = crate::fast_hash::FastMap::default();
         classes.insert("Animal".to_string(), empty_class_info(1, "label"));
         classes.insert("Dog".to_string(), empty_class_info(2, "label"));
         classes.insert("Cat".to_string(), empty_class_info(3, "label"));
@@ -4826,6 +5591,7 @@ mod tests {
             &HashMap::new(),
             &[],
             &[],
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &classes,
@@ -4856,7 +5622,7 @@ mod tests {
             .property_offsets
             .insert("callback".to_string(), 8);
 
-        let mut classes = HashMap::new();
+        let mut classes = crate::fast_hash::FastMap::default();
         classes.insert("CallableOwner".to_string(), class_info);
 
         let asm = emit_runtime_data_user(
@@ -4867,6 +5633,7 @@ mod tests {
             &HashMap::new(),
             &[],
             &[],
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &classes,
@@ -4880,6 +5647,32 @@ mod tests {
         .unwrap();
 
         assert!(asm.contains("_class_gc_desc_1:\n    .byte 10\n"));
+    }
+
+    /// Reflection lookup rows retain the source file for the AOT class they name.
+    #[test]
+    fn eval_reflection_class_rows_include_declaration_source_files() {
+        let class_name = "ReflectionSourceTarget".to_string();
+        let class_info = empty_class_info(1, "run");
+        let sorted_classes = [(&class_name, &class_info)];
+        let source_files = HashMap::from([(
+            "reflectionsourcetarget".to_string(),
+            "/project/src/ReflectionSourceTarget.php".to_string(),
+        )]);
+        let mut asm = String::new();
+
+        emit_eval_reflection_class_lookup_data(
+            &mut asm,
+            &sorted_classes,
+            &[],
+            &HashMap::new(),
+            &source_files,
+        );
+
+        assert!(asm.contains(
+            "_eval_reflection_class_file_0:\n    .ascii \"/project/src/ReflectionSourceTarget.php\"\n"
+        ));
+        assert!(asm.contains("    .quad _eval_reflection_class_file_0\n    .quad 39\n"));
     }
 
     /// Every name the serializers refuse is a catalogued builtin class spelled as PHP declares it,
@@ -4904,7 +5697,7 @@ mod tests {
         builtin.is_internal = true;
         let mut subclass = empty_class_info(2, "run");
         subclass.parent = Some("ReflectionClass".to_string());
-        let classes = HashMap::from([
+        let classes = crate::fast_hash::FastMap::from_iter([
             ("ReflectionClass".to_string(), builtin),
             ("Mine".to_string(), subclass),
             ("CurlHandle".to_string(), empty_class_info(3, "run")),
@@ -4918,6 +5711,7 @@ mod tests {
             &HashMap::new(),
             &[],
             &[],
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &classes,

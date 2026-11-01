@@ -154,3 +154,39 @@ f(...[10], ...["b" => 7, "x" => 30, "y" => 40]);
     );
     assert_eq!(out, "10:7:{\"x\":30,\"y\":40}");
 }
+
+/// Verifies `collect(...$hash)` into a user variadic binds string keys as named extras in
+/// `$args`, as PHP does: through a function, a relay variadic, an instance method and a static
+/// method, with and without a leading positional argument, and for a hash returned by a call.
+#[test]
+fn test_spread_of_a_hash_into_a_user_variadic_keeps_the_string_keys() {
+    let out = compile_and_run(
+        r#"<?php
+function collect(...$args) { return json_encode($args); }
+function relay(...$args) { return collect(...$args); }
+function mk(int $n) { $r = []; for ($i = 0; $i < $n; $i++) { $r["k$i"] = $i; } return $r; }
+class Bag {
+    public function take(...$args) { return json_encode($args); }
+    public static function grab(...$args) { return json_encode($args); }
+}
+$p = ['view' => 'v', 'data' => [1]];
+$list = [1, 2, 3];
+$bag = new Bag();
+echo collect(...$p), "\n";
+echo collect(...$list), "\n";
+echo collect(...mk(2)), "\n";
+echo collect(0, ...$p), "\n";
+echo relay(...$p), "\n";
+echo $bag->take(...$p), "\n";
+echo $bag->take(0, ...$p), "\n";
+echo Bag::grab(...$p), "\n";
+echo Bag::grab(7, ...$p), "\n";
+$empty = [];
+echo collect(...$empty), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"view\":\"v\",\"data\":[1]}\n[1,2,3]\n{\"k0\":0,\"k1\":1}\n{\"0\":0,\"view\":\"v\",\"data\":[1]}\n{\"view\":\"v\",\"data\":[1]}\n{\"view\":\"v\",\"data\":[1]}\n{\"0\":0,\"view\":\"v\",\"data\":[1]}\n{\"view\":\"v\",\"data\":[1]}\n{\"0\":7,\"view\":\"v\",\"data\":[1]}\n[]\n"
+    );
+}

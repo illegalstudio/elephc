@@ -9,53 +9,26 @@
 //! - Publishing a slot may consume its source; another consumer must retain a separate lease.
 //! - Evaluation slots cleared with UnsetLocal transfer their owner and do not match this query.
 
-use std::collections::HashSet;
-
-use crate::ir::{Function, Immediate, InstId, Op, ValueId};
+#[cfg(test)]
+use crate::ir::{Function, InstId, ValueId};
 
 /// Returns whether a scoped caller slot will retire this SSA owner's reference.
+#[cfg(test)]
 pub(super) fn has_scoped_cleanup(
     function: &Function,
     value: ValueId,
     current: Option<InstId>,
 ) -> bool {
-    let stores = function.instructions.iter().enumerate()
-        .filter_map(|(index, inst)| {
-            if inst.op != Op::StoreLocal || inst.operands != [value]
-                || current == Some(InstId::from_raw(index as u32))
-            {
-                return None;
-            }
-            match inst.immediate {
-                Some(Immediate::LocalSlot(slot)) => Some((index, slot)),
-                _ => None,
-            }
-        })
-        .collect::<Vec<_>>();
-    if stores.is_empty() {
-        return false;
-    }
-    let slots = stores.iter().map(|(_, slot)| *slot).collect::<HashSet<_>>();
-    let published = function.instructions.iter()
-        .filter_map(|inst| {
-            let Some(Immediate::LocalSlot(slot)) = inst.immediate else { return None; };
-            (inst.op == Op::PushCallOperandOwner && slots.contains(&slot)).then_some(slot)
-        })
-        .collect::<HashSet<_>>();
-    function.instructions.iter().enumerate().any(|(release_index, inst)| {
-        let Some(Immediate::LocalSlot(slot)) = inst.immediate else { return false; };
-        inst.op == Op::ReleaseLocalSlot
-            && published.contains(&slot)
-            && stores.iter().any(|(store_index, store_slot)| {
-                *store_slot == slot && *store_index < release_index
-            })
-    })
+    // Codegen asks through the body's cached `ValueUseIndex`; this entry builds one for a single
+    // question, which is what the unit tests below exercise.
+    super::value_uses::ValueUseIndex::build(function)
+        .has_scoped_cleanup(value, current.map(|inst| inst.as_raw()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::{Builder, IrType, LocalKind, Ownership};
+    use crate::ir::{Builder, Immediate, IrType, LocalKind, Op, Ownership};
     use crate::types::PhpType;
 
     /// A caller's published slot blocks another consumer, but not its own publishing store.

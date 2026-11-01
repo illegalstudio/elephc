@@ -316,7 +316,10 @@ echo $removed[0][0];
 }
 
 /// Verifies that an inner array in array_diff output survives unset of the original.
-/// Fixture: left contains inner array and another element, right contains only the other element, diff, unset left and inner, read result.
+/// Fixture: left holds two inner arrays, right holds a string; diff, unset left and inner, read.
+/// `array_diff()` compares elements as strings, so every inner array is `"Array"` (with a
+/// warning, silenced here) and differs from `"x"`: both survive into the result. A right side
+/// of `[[8]]` matches BOTH inner arrays and leaves php's result empty.
 /// Regression: ensures array_diff output preserves GC alias for nested inner arrays.
 #[test]
 fn test_gc_array_diff_borrowed_array_survives_unset() {
@@ -324,8 +327,8 @@ fn test_gc_array_diff_borrowed_array_survives_unset() {
         r#"<?php
 $inner = [6];
 $left = [$inner, [8]];
-$right = [[8]];
-$diff = array_diff($left, $right);
+$right = ["x"];
+$diff = @array_diff($left, $right);
 unset($left);
 unset($inner);
 echo $diff[0][0];
@@ -336,6 +339,8 @@ echo $diff[0][0];
 
 /// Verifies that an inner array in array_intersect output survives unset of the originals.
 /// Fixture: left contains inner array and another element, right contains inner array, intersect, unset all, read result.
+/// Elements compare as the string `"Array"`, so BOTH left entries intersect and keep their keys;
+/// key 1 is the shared `$inner`.
 /// Regression: ensures array_intersect output preserves GC alias for nested inner arrays.
 #[test]
 fn test_gc_array_intersect_borrowed_array_survives_unset() {
@@ -344,11 +349,11 @@ fn test_gc_array_intersect_borrowed_array_survives_unset() {
 $inner = [9];
 $left = [[1], $inner];
 $right = [$inner];
-$both = array_intersect($left, $right);
+$both = @array_intersect($left, $right);
 unset($left);
 unset($right);
 unset($inner);
-echo $both[0][0];
+echo $both[1][0];
 "#,
     );
     assert_eq!(out, "9");

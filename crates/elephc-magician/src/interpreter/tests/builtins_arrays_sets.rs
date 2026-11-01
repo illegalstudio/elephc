@@ -451,10 +451,12 @@ fn execute_program_dispatches_array_search_builtins() {
     let program = parse_fragment(
         br#"echo in_array(2, [1, 2, 3]) ? "Y" : "bad";
 echo ":"; echo in_array(4, [1, 2, 3]) ? "bad" : "N";
+echo ":"; echo in_array("1", [1], true) ? "bad" : "S";
 echo ":" . array_search(20, [10, 20, 30]);
 echo ":" . array_search("Grace", ["name" => "Grace"]);
 echo ":"; echo array_search("x", ["name" => "Grace"]) === false ? "F" : "bad";
 echo ":"; echo call_user_func("in_array", "b", ["a", "b"]) ? "C" : "bad";
+echo ":"; echo call_user_func("in_array", "1", [1], true) ? "bad" : "I";
 $found = call_user_func_array("array_search", ["v", ["k" => "v"]]);
 echo ":" . $found;
 echo ":"; echo function_exists("in_array");
@@ -466,7 +468,7 @@ return function_exists("array_search");"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "Y:N:1:name:F:C:k:1");
+    assert_eq!(values.output, "Y:N:S:1:name:F:C:I:k:1");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 

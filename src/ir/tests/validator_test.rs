@@ -76,6 +76,37 @@ fn array_fetch_for_write_keeps_typed_keys_integer_only() {
     }
 }
 
+fn source_marker_module(immediate: crate::ir::Immediate) -> crate::ir::Module {
+    use crate::ir::{Module, Op, Ownership, SourceCatalog};
+    let catalog = SourceCatalog::from_units([crate::resolver::SourceUnit {
+        canonical_path: "/fixture.php".into(), mode: crate::source::SourceMode::Php,
+        source: "<?php".into(),
+    }]).unwrap();
+    let mut module = Module::with_source_catalog(crate::codegen::platform::Target::detect_host(), catalog);
+    let mut function = Function::new("marker".into(), IrType::Void, PhpType::Void);
+    let mut builder = Builder::new(&mut function);
+    let entry = builder.create_named_block("entry", vec![]);
+    builder.set_entry(entry);
+    builder.position_at_end(entry);
+    builder.emit(Op::IncludeOnceMark, vec![], Some(immediate), IrType::Void, PhpType::Void, Ownership::NonHeap);
+    builder.terminate(Terminator::Return { value: None });
+    module.add_function(function);
+    module
+}
+
+#[test]
+fn source_marker_validation_rejects_unknown_ids_and_unresolved_paths() {
+    use crate::ir::{validate_module, Immediate, SourceId};
+    assert!(validate_module(&source_marker_module(Immediate::Source(SourceId::from_raw(0)))).is_ok());
+    assert_eq!(validate_module(&source_marker_module(Immediate::Source(SourceId::from_raw(1)))),
+        Err(ValidationError::UnknownSource(SourceId::from_raw(1))));
+    let path = std::path::PathBuf::from("/missing.php");
+    assert_eq!(validate_module(&source_marker_module(Immediate::UnresolvedSource(Box::new(path.clone())))),
+        Err(ValidationError::UnresolvedSource(path)));
+    assert!(matches!(validate_module(&source_marker_module(Immediate::Data(crate::ir::DataId::from_raw(0)))),
+        Err(ValidationError::MissingImmediate { expected: "source id", .. })));
+}
+
 /// An empty function has no valid entry block and fails validation.
 #[test]
 fn empty_function_fails_validation() {

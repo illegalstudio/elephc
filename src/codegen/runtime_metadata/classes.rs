@@ -10,7 +10,7 @@
 use super::*;
 
 /// Returns class metadata trimmed to method symbols emitted by the EIR backend.
-pub(in crate::codegen) fn runtime_class_infos(module: &Module) -> HashMap<String, ClassInfo> {
+pub(in crate::codegen) fn runtime_class_infos(module: &Module) -> crate::fast_hash::FastMap<String, ClassInfo> {
     let emitted_methods = emitted_class_method_keys(module);
     let emitted_property_init_thunks = module
         .functions
@@ -18,7 +18,21 @@ pub(in crate::codegen) fn runtime_class_infos(module: &Module) -> HashMap<String
         .filter(|function| is_property_init_thunk_function(function))
         .map(|function| function.name.as_str())
         .collect::<HashSet<_>>();
-    let mut classes = module.class_infos.clone();
+    // Do not clone the entire class map at once: on a framework-scale program each
+    // `method_decls` entry still owns its AST body, so a whole-map clone doubles the
+    // largest compiler graph during code generation. Runtime metadata needs method names,
+    // visibility and signatures, but not ordinary method bodies. Build one trimmed clone at a
+    // time; keep `__debugInfo` intact because its runtime projection inspects that body.
+    let mut classes = crate::fast_hash::FastMap::default();
+    for (name, original) in &module.class_infos {
+        let mut class_info = original.clone();
+        for method in &mut class_info.method_decls {
+            if !method.name.eq_ignore_ascii_case("__debugInfo") {
+                method.body.clear();
+            }
+        }
+        classes.insert(name.clone(), class_info);
+    }
     for class_info in classes.values_mut() {
         class_info
             .method_impl_classes
@@ -40,13 +54,25 @@ pub(in crate::codegen) fn runtime_class_infos(module: &Module) -> HashMap<String
 
 /// Returns classes that EIR object allocation or named `instanceof` can reference at runtime.
 pub(in crate::codegen) fn runtime_referenced_class_names(module: &Module) -> HashSet<String> {
+    (*module.runtime_referenced_class_names(|| scan_runtime_referenced_class_names(module))).clone()
+}
+
+/// Walks the module for [`runtime_referenced_class_names`].
+fn scan_runtime_referenced_class_names(module: &Module) -> HashSet<String> {
     let mut names = HashSet::new();
     if module.functions.iter().any(|function| function.signature.as_ref().is_some_and(|signature|
         signature.param_attributes.iter().flatten().flat_map(|group| &group.attributes)
             .any(|attribute| attribute.name.as_canonical().eq_ignore_ascii_case("SensitiveParameter")))) {
         names.insert("SensitiveParameterValue".to_string());
     }
-    if module_contains_generator(module) {
+    // `module_contains_generator` only sees a `yield` in THIS module's own compiled AST. The
+    // eval bridge (an `include`/`eval` whose target is only known at run time) can execute a
+    // generator function or method the compiler never parsed, exactly like
+    // `runtime_referenced_interfaces` already widens to every known interface once the bridge is
+    // in play. Without this, `values.new_object("Generator")` found no registered class, and
+    // `eval_generator_new` turned that into a bare `RuntimeFatal` the outer `Call`/`MethodCall`
+    // then mislabeled as "unsupported ... expression".
+    if module_contains_generator(module) || module.required_runtime_features.eval_bridge {
         names.insert("Generator".to_string());
     }
     if module_uses_dynamic_instanceof(module) {
@@ -87,11 +113,89 @@ pub(in crate::codegen) fn runtime_referenced_class_names(module: &Module) -> Has
             names.insert(class_name);
         }
     }
+    if module_uses_dynamic_class_name_constant_lookup(module) {
+        names.extend(
+            module
+                .class_infos
+                .iter()
+                .filter(|(_, class_info)| !class_info.constants.is_empty())
+                .map(|(class_name, _)| class_name.clone()),
+        );
+    }
+    if module_binds_closure_to_runtime_scope(module) {
+        // A class-name string scope resolves through the name table, so every user class a
+        // bound closure could be scoped to must be addressable there.
+        names.extend(
+            module
+                .class_infos
+                .iter()
+                .filter(|(_, class_info)| !class_info.is_internal)
+                .map(|(class_name, _)| class_name.clone()),
+        );
+    }
     seed_runtime_throwable_class_names(module, &mut names);
     seed_runtime_stdclass_name(module, &mut names);
     seed_builtin_reflection_class_names(module, &mut names);
     expand_class_dependencies(&mut names, &module.class_infos);
     names
+}
+
+/// Returns whether a `Closure::bind()` / `bindTo()` takes its scope from a run-time value, which
+/// may be a class-name string that the class name table must resolve.
+fn module_binds_closure_to_runtime_scope(module: &Module) -> bool {
+    module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+        .flat_map(|function| function.instructions.iter())
+        .any(|instruction| {
+            instruction.op == Op::ClosureBind
+                && matches!(
+                    instruction.immediate,
+                    Some(crate::ir::Immediate::ClosureBindObjectScope(_))
+                )
+        })
+}
+
+/// Returns whether EIR needs name metadata for a runtime `$class::CONSTANT` lookup.
+///
+/// A class referenced only by `SomeClass::class` has no object allocation or static-member
+/// opcode, so ordinary reachability intentionally omits it. Once the class string feeds a
+/// dynamic constant access, however, every already-known class that declares constants must be
+/// addressable by the shared name-to-id table; no extra source files are introduced here.
+fn module_uses_dynamic_class_name_constant_lookup(module: &Module) -> bool {
+    module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+        .any(|function| {
+            function
+                .instructions
+                .iter()
+                .any(|instruction| {
+                    instruction.op == Op::ClassNameToId
+                        // `constant($name)` resolves a `Class::NAME` through the same table, to
+                        // tell `Undefined constant C::X` from `Class "C" not found`.
+                        || matches!(
+                            instruction.immediate,
+                            Some(crate::ir::Immediate::RuntimeCall(
+                                crate::ir::RuntimeCallTarget::Function(
+                                    crate::ir::RuntimeFnId::Constant
+                                )
+                            ))
+                        )
+                })
+        })
 }
 
 /// Returns whether emitted EIR can deserialize a runtime-selected declared class.
@@ -156,16 +260,31 @@ pub(in crate::codegen) fn seed_runtime_throwable_class_names(module: &Module, na
     //   a catchable `UnhandledMatchError` there, so this is a real gap; closing it will add
     //   an EIR reference, which is exactly what makes the class survive this gate.
     // A program that names one of them still gets it — `throw new AssertionError(...)` is an
-    // EIR reference. Only eval can conjure one from a string with nothing to scan, and the
-    // eval constructor bridge emits helpers for the whole family (see
-    // `codegen::eval_constructor_helpers::BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES`).
+    // EIR reference. Only eval can conjure one from a string with nothing to scan — and eval
+    // can conjure ANY of them, which is why the clause below is the whole family and not the
+    // three names that used to sit here.
+    //
+    // THE ALLOCATION HALF OF THE EVAL CONSTRUCTOR BRIDGE. `eval_constructor_helpers` emits a
+    // constructor helper for every name in BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES under exactly
+    // this gate. Constructing needs two things: a constructor, and something to construct. The
+    // second is this table — `runtime_referenced_class_names` becomes `allowed_class_names`,
+    // which is what `runtime::data::user` retains before emitting `_classes_by_name`, the table
+    // `__rt_new_by_name` scans. Ship one half and the interpreter's
+    // `throw new RuntimeException(...)` allocates null, `RuntimeValueOps::new_object` maps that
+    // to `EvalStatus::RuntimeFatal`, and the bridge reports fatal status 2 where PHP throws a
+    // catchable Throwable that the very next `catch (\Throwable $e)` would have taken.
+    //
+    // Measured before the fix, `php -n` 8.5.6 as the oracle: a runtime-included file doing
+    // `throw new RuntimeException("boom")` inside `try { } catch (\Throwable $e) { }` printed
+    // `Fatal error: eval() runtime failed` and exited 1, where PHP printed the caught message
+    // and exited 0. `new Exception` worked in the same file, because the eight unconditional
+    // seeds above already carried it — which is what made the divergence look class-specific.
+    // Reading the list from the constructor side is the point: adding a 26th class there now
+    // brings its metadata along instead of shipping a constructor with nothing to construct.
     if module.required_runtime_features.eval_bridge {
-        for class_name in [
-            "AssertionError", "UnhandledMatchError", "ClosedGeneratorException",
-            "CompileError", "ParseError", "RequestParseBodyException",
-        ] {
-            if module.class_infos.contains_key(class_name) {
-                names.insert(class_name.to_string());
+        for class_name in crate::codegen::eval_constructor_helpers::BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES {
+            if module.class_infos.contains_key(*class_name) {
+                names.insert((*class_name).to_string());
             }
         }
     }
@@ -210,6 +329,13 @@ pub(in crate::codegen) fn seed_runtime_stdclass_name(module: &Module, names: &mu
 
 /// Adds builtin reflection classes whose objects can be materialized by metadata helpers.
 pub(in crate::codegen) fn seed_builtin_reflection_class_names(module: &Module, names: &mut HashSet<String>) {
+    // One walk, not one per name: this used to scan every class method for EACH of the
+    // fourteen names below, allocating a lowercased owner AND a lowercased name per method.
+    let native_owners: crate::fast_hash::FastSet<String> = module
+        .class_methods
+        .iter()
+        .filter_map(|function| current_function_class(function).map(php_symbol_key))
+        .collect();
     for class_name in [
         "ReflectionAttribute",
         "ReflectionClass",
@@ -226,10 +352,7 @@ pub(in crate::codegen) fn seed_builtin_reflection_class_names(module: &Module, n
         "ReflectionUnionType",
         "ReflectionIntersectionType",
     ] {
-        let emitted_natively = module.class_methods.iter().any(|function| {
-            current_function_class(function)
-                .is_some_and(|owner| php_symbol_key(owner) == php_symbol_key(class_name))
-        });
+        let emitted_natively = native_owners.contains(&php_symbol_key(class_name));
         if module.class_infos.contains_key(class_name)
             && (module.required_runtime_features.eval_bridge || emitted_natively)
         {
@@ -322,10 +445,17 @@ pub(in crate::codegen) fn module_uses_dynamic_instanceof(module: &Module) -> boo
 
 /// Returns class names safe to include in dynamic lookup metadata for the current EIR slice.
 pub(in crate::codegen) fn dynamic_instanceof_class_names(module: &Module) -> HashSet<String> {
+    let emitted_methods = emitted_class_method_keys(module);
     module
         .class_infos
         .keys()
-        .filter(|name| class_metadata_supported_for_dynamic_instanceof(name, module))
+        .filter(|name| {
+            class_metadata_supported_for_dynamic_instanceof_with_methods(
+                name,
+                module,
+                &emitted_methods,
+            )
+        })
         .cloned()
         .collect()
 }
@@ -342,9 +472,12 @@ pub(in crate::codegen) fn dynamic_instanceof_interface_names(module: &Module) ->
         .collect()
 }
 
-/// Returns true when class metadata can be emitted for dynamic `instanceof` lookup.
-pub(in crate::codegen) fn class_metadata_supported_for_dynamic_instanceof(class_name: &str, module: &Module) -> bool {
-    let emitted_methods = emitted_class_method_keys(module);
+/// Returns whether one class is safe for dynamic lookup using precomputed emitted methods.
+fn class_metadata_supported_for_dynamic_instanceof_with_methods(
+    class_name: &str,
+    module: &Module,
+    emitted_methods: &HashSet<(String, String, bool)>,
+) -> bool {
     let mut seen = HashSet::new();
     let mut current = Some(class_name);
     while let Some(name) = current {
@@ -363,7 +496,7 @@ pub(in crate::codegen) fn class_metadata_supported_for_dynamic_instanceof(class_
             false,
             &class_info.vtable_methods,
             &class_info.method_impl_classes,
-            &emitted_methods,
+            emitted_methods,
         ) {
             return false;
         }
@@ -373,7 +506,7 @@ pub(in crate::codegen) fn class_metadata_supported_for_dynamic_instanceof(class_
             true,
             &class_info.static_vtable_methods,
             &class_info.static_method_impl_classes,
-            &emitted_methods,
+            emitted_methods,
         ) {
             return false;
         }
@@ -408,12 +541,12 @@ pub(in crate::codegen) fn eir_class_method_keys(module: &Module) -> HashSet<(Str
 }
 
 /// Returns true when all vtable methods resolve to emitted EIR method symbols.
-pub(in crate::codegen) fn class_method_symbols_supported(
+pub(in crate::codegen) fn class_method_symbols_supported<S: std::hash::BuildHasher>(
     class_info: &ClassInfo,
     fallback_class: &str,
     is_static: bool,
     methods: &[String],
-    impl_classes: &HashMap<String, String>,
+    impl_classes: &std::collections::HashMap<String, String, S>,
     emitted_methods: &HashSet<(String, String, bool)>,
 ) -> bool {
     methods.iter().all(|method_name| {
@@ -463,7 +596,7 @@ pub(in crate::codegen) fn interface_metadata_supported_for_dynamic_instanceof(
 }
 
 /// Adds parent classes needed by runtime class-id tables.
-pub(in crate::codegen) fn expand_class_dependencies(names: &mut HashSet<String>, classes: &HashMap<String, ClassInfo>) {
+pub(in crate::codegen) fn expand_class_dependencies(names: &mut HashSet<String>, classes: &crate::fast_hash::FastMap<String, ClassInfo>) {
     loop {
         let mut changed = false;
         let snapshot = names.iter().cloned().collect::<Vec<_>>();

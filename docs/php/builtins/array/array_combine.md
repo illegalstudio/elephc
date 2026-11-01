@@ -2,7 +2,7 @@
 title: "array_combine()"
 description: "Creates an array by using one array for keys and another for values."
 sidebar:
-  order: 5
+  order: 6
 ---
 
 ## array_combine()

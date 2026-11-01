@@ -100,8 +100,7 @@ pub fn emit_file_put_contents(emitter: &mut Emitter) {
     }
     let open_ok = emitter.platform.branch_on_syscall_success("__rt_fpc_opened");
     emitter.instruction(&open_ok);                                              // continue only when open succeeded
-    emitter.instruction("mov x0, #-1");                                         // file_put_contents()'s failure result
-    emitter.instruction("b __rt_fpc_return");                                   // nothing was opened, so nothing to close
+    emitter.instruction("b __rt_fpc_open_failed");                              // nothing was opened: return false without touching a descriptor
     emitter.label("__rt_fpc_opened");
     emitter.instruction("str x0, [sp, #8]");                                    // save fd on stack
 
@@ -151,6 +150,11 @@ pub fn emit_file_put_contents(emitter: &mut Emitter) {
     emitter.label("__rt_fpc_lock_failed");
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload fd
     emitter.syscall(6);
+    emitter.instruction("mov x0, #-1");                                         // file_put_contents()'s failure result
+    emitter.instruction("b __rt_fpc_return");                                   // the descriptor is closed
+
+    // -- a failed open: nothing to close --
+    emitter.label("__rt_fpc_open_failed");
     emitter.instruction("mov x0, #-1");                                         // file_put_contents()'s failure result
 
     emitter.label("__rt_fpc_return");
@@ -215,6 +219,9 @@ fn emit_file_put_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_fpc_open_linux_x86_64");
     emitter.instruction("mov rdx, 0x1A4");                                      // pass mode 0644 for newly created files
     emitter.instruction("call open");                                           // open the destination file through libc open()
+    emitter.instruction("test eax, eax");                                       // did open() fail?
+    emitter.instruction("js __rt_fpc_open_failed_linux_x86_64");                // -1: return PHP false without touching a descriptor
+    emitter.instruction("movsxd rax, eax");                                     // widen the descriptor
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the opened file descriptor for the later write() and close() calls
 
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the PHP flags
@@ -252,6 +259,10 @@ fn emit_file_put_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the file descriptor
     emitter.instruction("call close");                                          // release the descriptor the refused lock leaves open
     emitter.instruction("mov rax, -1");                                         // file_put_contents()'s failure result
+    emitter.instruction("jmp __rt_fpc_return_linux_x86_64");                    // the descriptor is closed
+
+    emitter.label("__rt_fpc_open_failed_linux_x86_64");
+    emitter.instruction("mov rax, -1");                                         // a failed open: nothing to close
 
     emitter.label("__rt_fpc_return_linux_x86_64");
     emitter.instruction("add rsp, 48");                                         // release the aligned stack locals used by file_put_contents

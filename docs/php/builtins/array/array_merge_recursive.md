@@ -1,8 +1,8 @@
 ---
 title: "array_merge_recursive()"
-description: "Recursively merges two arrays, combining scalar collisions into lists."
+description: "Recursively merges any number of arrays, combining scalar collisions into lists."
 sidebar:
-  order: 27
+  order: 33
 ---
 
 ## array_merge_recursive()
@@ -11,7 +11,7 @@ sidebar:
 function array_merge_recursive(...$arrays): array
 ```
 
-Recursively merges two arrays, combining scalar collisions into lists.
+Recursively merges any number of arrays, combining scalar collisions into lists.
 
 **Parameters**:
 - `...$arrays` - variadic: collects excess arguments into `$arrays`.
@@ -21,7 +21,7 @@ Recursively merges two arrays, combining scalar collisions into lists.
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_recursive.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_recursive.rs)).
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -101,6 +101,25 @@ pub(crate) fn publish_elephc_cipher_function_pointers(emitter: &mut Emitter) {
     }
 }
 
+/// Publishes the sealed-box bridge entry used by `__rt_sodium_box`.
+///
+/// Separate from the hash and cipher publishers so only programs that reach the sodium
+/// prelude reference `elephc_crypto_sodium`.
+pub(crate) fn publish_elephc_sodium_function_pointers(emitter: &mut Emitter) {
+    let extern_sym = emitter.target.extern_symbol("elephc_crypto_sodium");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_extern_symbol_address(emitter, "x9", &extern_sym);
+            abi::emit_symbol_address(emitter, "x10", "_elephc_crypto_sodium_fn");
+            emitter.instruction("str x9, [x10]");                               // publish the elephc-crypto sodium entry into its runtime slot
+        }
+        Arch::X86_64 => {
+            abi::emit_extern_symbol_address(emitter, "r9", &extern_sym);
+            abi::emit_store_reg_to_symbol(emitter, "r9", "_elephc_crypto_sodium_fn", 0); // publish the elephc-crypto sodium entry into its runtime slot
+        }
+    }
+}
+
 /// Emits a catchable `\ValueError` for the unknown-algorithm paths of `hash()`
 /// and `hash_hmac()`.
 ///
@@ -160,8 +179,7 @@ fn emit_throw_value_error_aarch64(
     message_symbol: &str,
     message_len: usize,
 ) {
-    emitter.instruction("mov x0, #56");                                         // request Throwable payload storage (message/code/previous)
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the ValueError object payload
+    crate::codegen_support::throwable_layout::emit_allocate(emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
     emitter.instruction("mov x9, #6");                                          // heap kind 6 = object instance
     emitter.instruction("str x9, [x0, #-8]");                                   // stamp allocation as a runtime object
     emitter.instruction("bl __rt_object_handle_acquire");                       // bind the new object to its PHP object handle
@@ -174,7 +192,7 @@ fn emit_throw_value_error_aarch64(
     emitter.instruction("str x9, [x0, #16]");                                   // store exception message length
     emitter.instruction("str xzr, [x0, #24]");                                  // exception code defaults to zero
     crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "x0");
-    emitter.instruction("str xzr, [x0, #40]");                                  // previous defaults to null
+    emitter.instruction(&format!("str xzr, [x0, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous defaults to null
     abi::emit_symbol_address(emitter, "x9", "_exc_value");
     emitter.instruction("str x0, [x9]");                                        // publish the active exception object
     emitter.instruction("b __rt_throw_current");                                // enter the standard exception unwinder
@@ -190,8 +208,7 @@ fn emit_throw_value_error_x86_64(
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for exception allocation
     emitter.instruction("mov rbp, rsp");                                        // establish aligned helper frame
     emitter.instruction("sub rsp, 16");                                         // keep the nested heap allocation call 16-byte aligned
-    emitter.instruction("mov rax, 56");                                         // request Throwable payload storage (message/code/previous)
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the ValueError object payload
+    crate::codegen_support::throwable_layout::emit_allocate(emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
     emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp allocation as a runtime object
     emitter.instruction("call __rt_object_handle_acquire");                     // bind the new object to its PHP object handle
@@ -202,7 +219,7 @@ fn emit_throw_value_error_x86_64(
     emitter.instruction(&format!("mov QWORD PTR [rax + 16], {}", message_len)); // store static ValueError message length
     emitter.instruction("mov QWORD PTR [rax + 24], 0");                         // exception code defaults to zero
     crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "rax");
-    emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // previous defaults to null
+    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous defaults to null
     abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0); // publish the active exception object
     emitter.instruction("mov rsp, rbp");                                        // release helper frame before throwing
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing

@@ -2,7 +2,7 @@
 title: "mysqli_stmt_store_result() - internals"
 description: "Compiler internals for mysqli_stmt_store_result(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 180
+  order: 191
 ---
 
 ## `mysqli_stmt_store_result()` - internals

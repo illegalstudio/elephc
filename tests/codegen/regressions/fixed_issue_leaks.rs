@@ -390,3 +390,109 @@ echo $t, "\n";
         out.stderr
     );
 }
+
+/// An object whose constructor throws is destroyed WITHOUT running `__destruct`, also when the
+/// constructor let it escape first. `new C(...)` of a statically known class kept the allocation's
+/// only reference in the instruction result, so the throw stranded it (one block per failed
+/// construction); the construction guard releases it on unwind and suppresses the destructor.
+/// Output captured from php 8.5.
+#[test]
+fn test_failed_static_construction_releases_the_object_without_its_destructor() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Boom {
+    public function __construct(string $why) { throw new RuntimeException($why); }
+    public function __destruct() { echo "|destructor-ran"; }
+}
+class Escapes {
+    public function __construct() { global $kept; $kept = $this; throw new LogicException("escaped"); }
+    public function __destruct() { echo "|escape-destructor-ran"; }
+}
+function build(string $why) {
+    try { new Boom($why); } catch (RuntimeException $e) { echo "caught:", $e->getMessage(); }
+}
+for ($i = 0; $i < 3; $i++) { build("b$i"); echo "|"; }
+$kept = null;
+try { new Escapes(); } catch (LogicException $e) { echo "caught:", $e->getMessage(); }
+echo $kept instanceof Escapes ? "|alive" : "|gone";
+$kept = null;
+echo "|done\n";
+"#,
+    );
+    assert!(out.success, "program exited non-zero: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "caught:b0|caught:b1|caught:b2|caught:escaped|alive|done\n",
+        "stderr: {}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// A by-reference `foreach` over a string-keyed hash retains the keys of the next two entries as
+/// relocation anchors; a throw out of the body skipped `iter_end` and stranded them (two blocks per
+/// walk). The frame's cleanup releases them. Output captured from php 8.5.
+#[test]
+fn test_throw_out_of_a_by_reference_hash_foreach_releases_its_key_anchors() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function walk(array &$array, $callback) {
+    foreach ($array as $key => &$value) { $callback($value, $key); }
+    return true;
+}
+$items = ["keyAAA" => 1, "keyBBB" => 2, "keyCCC" => 3, "keyDDD" => 4];
+$callback = function ($value, $key): void { throw new RuntimeException("walk:" . $key); };
+for ($i = 0; $i < 3; $i++) {
+    try { walk($items, $callback); } catch (RuntimeException $error) { echo $error->getMessage(), "|"; unset($error); }
+}
+echo implode(",", array_keys($items)), "\n";
+"#,
+    );
+    assert!(out.success, "program exited non-zero: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "walk:keyAAA|walk:keyAAA|walk:keyAAA|keyAAA,keyBBB,keyCCC,keyDDD\n",
+        "stderr: {}",
+        out.stderr
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A boxed value handed to a `string` parameter through a Mixed receiver is cast into a string the
+/// caller owns; the dispatch never released it, so every call leaked one block.
+#[test]
+fn test_mixed_receiver_string_argument_cast_is_released() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Greeter { public function shout(string $text): string { return strtoupper($text); } }
+function pick(): mixed { return new Greeter(); }
+$object = pick();
+$text = $argc > 0 ? "hi" . $argc : 5;
+for ($i = 0; $i < 3; $i++) { echo $object->shout($text), "|"; }
+echo "\n";
+"#,
+    );
+    assert!(out.success, "program exited non-zero: {}", out.stderr);
+    assert_eq!(out.stdout, "HI1|HI1|HI1|\n", "stderr: {}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// `array_map("strval", ...)` over strings casts through a boxed operand; the wrapper kept the
+/// cast's own copy besides the persisted result, one block per element.
+#[test]
+fn test_array_map_strval_releases_the_wrapper_cast() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function run(): int { $a = ["x", "y"]; $r = array_map("strval", $a); return count($r); }
+for ($i = 0; $i < 3; $i++) { echo run(); }
+echo json_encode(array_map("strval", [1, 2.5, "z", true])), "\n";
+"#,
+    );
+    assert!(out.success, "program exited non-zero: {}", out.stderr);
+    assert_eq!(out.stdout, "222[\"1\",\"2.5\",\"z\",\"1\"]\n", "stderr: {}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

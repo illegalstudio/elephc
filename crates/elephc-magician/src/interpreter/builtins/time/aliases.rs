@@ -62,7 +62,7 @@ pub(in crate::interpreter) fn eval_date_procedural_alias_with_values(
         .copied()
         .map(|value| EvaluatedCallArg {
             name: None,
-            value,
+            value: value.borrowed(),
             ref_target: None,
         })
         .collect();
@@ -97,9 +97,9 @@ fn eval_date_alias_result(
     match name {
         "idate" => eval_idate_alias(args, context, values),
         "mktime" | "gmmktime" => eval_mktime_alias(name, args, context, values),
-        "date_create" => eval_new_datetime_alias("DateTime", args, context, values),
+        "date_create" => eval_static_alias("DateTime", "__elephc_date_create", args, context, values),
         "date_create_immutable" => {
-            eval_new_datetime_alias("DateTimeImmutable", args, context, values)
+            eval_static_alias("DateTimeImmutable", "__elephc_date_create", args, context, values)
         }
         "date_create_from_format" => {
             eval_static_alias("DateTime", "createFromFormat", args, context, values)
@@ -374,12 +374,7 @@ fn eval_timezone_identifiers_country_error<T>(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
-    let exception = values.new_object("ValueError")?;
-    let message = values.string(EVAL_DATETIMEZONE_PER_COUNTRY_ERROR)?;
-    let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
+    eval_throw_builtin_exception_with_code("ValueError", EVAL_DATETIMEZONE_PER_COUNTRY_ERROR, 0, context, values)
 }
 
 /// Calls one object-method alias with selected argument indices.

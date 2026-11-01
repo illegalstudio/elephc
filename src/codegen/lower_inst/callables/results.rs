@@ -19,7 +19,10 @@ pub(super) fn emit_unbox_owned_descriptor_result(
     ty: &PhpType,
     ownership: Ownership,
 ) -> Result<()> {
-    if *ty == PhpType::Str && ownership != Ownership::Owned {
+    // A `MaybeOwned` string is released through the heap-range check, which frees the buffer
+    // the cast detached; the EIR keeps call-result strings conservative by design, so an
+    // interface-receiver first-class callable (`$iface->m(...)`) reached this as `MaybeOwned`.
+    if *ty == PhpType::Str && !matches!(ownership, Ownership::Owned | Ownership::MaybeOwned) {
         return Err(CodegenIrError::invalid_module(format!(
             "concrete descriptor string result must own its detached buffer, got {ownership:?}",
         )));
@@ -43,8 +46,20 @@ pub(super) fn emit_unbox_owned_descriptor_result(
         PhpType::Float => "__rt_mixed_cast_float",
         PhpType::Str => "__rt_mixed_cast_string",
         PhpType::TaggedScalar => "__rt_mixed_unbox",
-        PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed => {
-            emit_detach_owned_mixed_array_result(emitter);
+        // Any container or object payload sits in the box's low word: retain it, retire the
+        // box. A narrower inferred return type -- `array<string, mixed>` from a callback that
+        // returns `get_object_vars()` -- reached this as an unsupported result type.
+        PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Object(_)
+        | PhpType::Iterable => {
+            emit_detach_owned_mixed_array_result(emitter, &PhpType::Array(Box::new(PhpType::Mixed)));
+            return Ok(());
+        }
+        // A closure returned by a closure (`return function () use (&$s) { ... };`) travels as a
+        // descriptor pointer in the box's payload word; it is retained like any callable value.
+        PhpType::Callable => {
+            emit_detach_owned_mixed_array_result(emitter, &PhpType::Callable);
             return Ok(());
         }
         other => return Err(CodegenIrError::unsupported(format!(
@@ -104,11 +119,12 @@ fn emit_object_descriptor_result(emitter: &mut Emitter, ty: &PhpType) {
     abi::emit_release_temporary_stack(emitter, 16);
 }
 
-/// Transfers an array payload out of its owned Mixed result box.
+/// Transfers a container or object payload out of its owned Mixed result box.
 ///
-/// `Array(Mixed)` may use indexed or promoted hash storage at runtime. Both shapes expose their
-/// container pointer in the low Mixed payload word, and the generic retain preserves either kind.
-fn emit_detach_owned_mixed_array_result(emitter: &mut Emitter) {
+/// An array may use indexed or promoted hash storage at runtime, and an object is a single
+/// pointer too. Every such shape exposes its pointer in the low Mixed payload word, and the
+/// generic retain preserves any heap kind.
+fn emit_detach_owned_mixed_array_result(emitter: &mut Emitter, retained_ty: &PhpType) {
     let result = abi::int_result_reg(emitter);
     abi::emit_push_reg(emitter, result);
     abi::emit_call_label(emitter, "__rt_mixed_unbox");
@@ -120,8 +136,7 @@ fn emit_detach_owned_mixed_array_result(emitter: &mut Emitter) {
             emitter.instruction("mov rax, rdi");                                // move the borrowed array payload into the raw array result register
         }
     }
-    let array_ty = PhpType::Array(Box::new(PhpType::Mixed));
-    abi::emit_incref_if_refcounted(emitter, &array_ty);
+    abi::emit_incref_if_refcounted(emitter, retained_ty);
     abi::emit_push_reg(emitter, result);
     abi::emit_load_temporary_stack_slot(emitter, result, 16);
     abi::emit_call_label(emitter, "__rt_decref_mixed");
@@ -209,18 +224,27 @@ mod tests {
     }
 
     /// A concrete descriptor string must carry the owner produced by its Mixed cast.
+    ///
+    /// `MaybeOwned` is accepted on purpose: the EIR keeps call-result strings conservative, so an
+    /// interface-receiver first-class callable (`$iface->m(...)`) reaches this with `MaybeOwned`,
+    /// and the release goes through the heap-range check that frees the buffer the cast detached
+    /// (`ic.php`-style programs print the same bytes as php with a clean heap). A value that is
+    /// borrowed, persistent or not a heap string at all still fails closed, with nothing emitted.
     #[test]
     fn concrete_string_descriptor_results_fail_closed_without_owned_metadata() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            for ownership in [Ownership::Borrowed, Ownership::Persistent, Ownership::NonHeap, Ownership::Moved] {
+                let mut emitter = Emitter::new(Target::parse(name).unwrap());
+                let error = emit_unbox_owned_descriptor_result(&mut emitter, &PhpType::Str, ownership)
+                    .unwrap_err();
+                assert!(error.to_string().contains("must own its detached buffer"), "{name}: {error}");
+                assert!(emitter.output().is_empty(), "{name}");
+            }
             let mut emitter = Emitter::new(Target::parse(name).unwrap());
-            let error = emit_unbox_owned_descriptor_result(
-                &mut emitter,
-                &PhpType::Str,
-                Ownership::MaybeOwned,
-            )
-            .unwrap_err();
-            assert!(error.to_string().contains("must own its detached buffer"), "{name}: {error}");
-            assert!(emitter.output().is_empty(), "{name}");
+            emit_unbox_owned_descriptor_result(&mut emitter, &PhpType::Str, Ownership::MaybeOwned)
+                .unwrap();
+            let asm = emitter.output();
+            assert!(asm.find("__rt_mixed_cast_string").unwrap() < asm.find("__rt_decref_mixed").unwrap(), "{name}");
         }
     }
 

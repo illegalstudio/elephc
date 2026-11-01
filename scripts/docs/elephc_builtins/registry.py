@@ -324,6 +324,8 @@ PARAM_TYPES: Dict[str, List[Optional[ParamSpec]]] = {
     'finfo_set_flags': ['finfo', 'int'],
     'mime_content_type': ['string|resource'],
     '__elephc_gmmktime_raw': ['int', 'int', 'int', 'int', 'int', 'int'],
+    '__elephc_last_error_int': [('int', 'field')],
+    '__elephc_last_error_str': [('int', 'field')],
     '__elephc_mktime_raw': ['int', 'int', 'int', 'int', 'int', 'int'],
     '__elephc_strtotime_raw': ['string', 'int'],
     'abs': ['int'],
@@ -357,8 +359,8 @@ PARAM_TYPES: Dict[str, List[Optional[ParamSpec]]] = {
     'array_push': ['array'],
     'array_rand': ['array'],
     'array_reduce': ['array', 'callable', 'mixed'],
-    'array_replace': ['array', 'array'],
-    'array_replace_recursive': ['array', 'array'],
+    'array_replace': ['array'],
+    'array_replace_recursive': ['array'],
     'array_reverse': ['array', 'bool'],
     'array_search': ['mixed', 'array', 'bool'],
     'array_shift': ['array'],
@@ -1006,6 +1008,14 @@ DESCRIPTION_OVERRIDES: Dict[str, str] = {
 # Notes for compiler-internal helpers. These appear on the internals pages for
 # the __elephc_* builtins that have no user-facing reference.
 INTERNAL_NOTES: Dict[str, List[str]] = {
+    "__elephc_last_error_int": [
+        "Internal reader of the native last-diagnostic record, used by error_get_last() and error_clear_last().",
+        "Field 0 answers the level (0 when nothing is recorded), 1 the line, and 2 clears the record.",
+    ],
+    "__elephc_last_error_str": [
+        "Internal reader of the native last-diagnostic record, used by error_get_last().",
+        "Field 0 answers the message and 1 the file, each as a fresh owned string.",
+    ],
     "__elephc_mktime_raw": [
         "Internal helper used by the mktime() builtin.",
         "Bypasses timezone handling and calls the runtime mktime helper directly.",

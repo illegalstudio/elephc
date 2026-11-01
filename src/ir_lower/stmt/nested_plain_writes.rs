@@ -12,14 +12,23 @@
 
 use super::*;
 
+/// Lowers the stored RHS of a nested write and roots it like any other operand. An `&$x` /
+/// `&$a[..]` marker (`$a[$k][] = &$x`) must go through the marker-aware lowering: plain
+/// `lower_expr` refuses `ArrayReference` nodes.
+fn lower_stored_value(
+    ctx: &mut LoweringContext<'_, '_>, value: &Expr, span: Span,
+) -> (LoweredValue, Option<crate::ir::LocalSlotId>) {
+    let value = lower_array_reference_or_value(ctx, value);
+    super::nested_array_writes::root_static_update_receiver(ctx, value, span)
+}
+
 /// Writes a leaf only after evaluating its computed dimensions and RHS.
 pub(super) fn lower_store(
     ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: &Expr, span: Span,
 ) {
     let mut sources = Vec::new();
     let target = super::nested_write_sources::capture_target(ctx, target, &mut sources);
-    let value = lower_expr(ctx, value);
-    let (value, value_owner) = super::nested_array_writes::root_static_update_receiver(ctx, value, span);
+    let (value, value_owner) = lower_stored_value(ctx, value, span);
     let target = super::nested_array_writes::bind_concrete_static_update_root(ctx, &target, &target)
         .map_or(target, |(_, write)| write);
     let ExprKind::ArrayAccess { array, index } = &target.kind else { unreachable!() };
@@ -46,8 +55,7 @@ pub(super) fn lower_append(
 ) {
     let mut sources = Vec::new();
     let target = super::nested_write_sources::capture_target(ctx, target, &mut sources);
-    let value = lower_expr(ctx, value);
-    let (value, value_owner) = super::nested_array_writes::root_static_update_receiver(ctx, value, span);
+    let (value, value_owner) = lower_stored_value(ctx, value, span);
     let target = super::nested_array_writes::bind_concrete_static_update_root(ctx, &target, &target)
         .map_or(target, |(_, write)| write);
     let parent = super::nested_array_writes::lower_nested_assign_parent_for_store(ctx, &target, span);

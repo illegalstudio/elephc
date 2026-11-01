@@ -155,13 +155,22 @@ fn hash_usage_reports_hash_extension_loaded() {
     );
 }
 
-/// Verifies a bridge-free program does not report BCMath merely because its names are known.
+/// Verifies a bridge-free program STILL reports BCMath, because elephc can provide every one of
+/// php's 14 `bc*` functions to any program that asks for one.
+///
+/// This assertion was `no` until `extension_loaded()` was re-derived from the function surface.
+/// The old answer read the LINK SET, which is circular for the question callers actually ask:
+/// a program that gates `bcadd()` on `extension_loaded('bcmath')` never calls it, so the bridge
+/// never links, so the gate stays false and the working implementation is unreachable. The answer
+/// now describes what elephc CAN provide, which is also what `function_exists('bcadd')` has always
+/// answered here — the two could not agree while this said `no`.
 #[test]
-fn unused_bcmath_reports_extension_not_loaded() {
+fn unused_bcmath_still_reports_extension_loaded() {
     let dir = make_test_dir("ext_no_bcmath");
-    let src = "<?php echo extension_loaded('bcmath') ? 'yes' : 'no';";
+    let src = "<?php echo extension_loaded('bcmath') ? 'yes' : 'no', '|', \
+        function_exists('bcadd') ? 'yes' : 'no';";
     let bin = compile_with_flags(&dir, src, "app", &[]);
-    assert_eq!(run_binary(&bin), "no");
+    assert_eq!(run_binary(&bin), "yes|yes");
 }
 
 /// Verifies using `bcadd()` auto-links the bridge and exposes its canonical extension name.
@@ -286,13 +295,24 @@ fn pdo_and_mysqli_usage_reports_both() {
     );
 }
 
-/// Verifies PCNTL stays absent when its bridge is neither forced nor selected by a builtin.
+/// Verifies a bridge-free program STILL reports PCNTL, and that the seven Linux-only names php
+/// itself does not ship on macOS are not counted against it.
+///
+/// MEASURED on php 8.5.10 / macOS aarch64: php answers `extension_loaded('pcntl')` true while
+/// `function_exists('pcntl_unshare')` is false, and elephc's macOS surface is missing exactly the
+/// same seven names (`pcntl_unshare`, `pcntl_setns`, `pcntl_rfork`, `pcntl_sigtimedwait`,
+/// `pcntl_sigwaitinfo`, `pcntl_getcpuaffinity`, `pcntl_setcpuaffinity`). Judging completeness
+/// against php's LINUX function list would report the extension absent on the one target where the
+/// two surfaces are identical, which is why `builtin_absent_by_php_platform_rule` exists.
 #[test]
-fn unused_pcntl_reports_extension_not_loaded() {
+fn unused_pcntl_still_reports_extension_loaded() {
     let dir = make_test_dir("ext_no_pcntl");
-    let src = "<?php echo extension_loaded('pcntl') ? 'yes' : 'no';";
+    // `pcntl_unshare` is deliberately NOT asserted: it exists on Linux and not on macOS, in php
+    // and in elephc alike, so pinning it here would make the test platform-specific for no gain.
+    let src = "<?php echo extension_loaded('pcntl') ? 'yes' : 'no', '|', \
+        function_exists('pcntl_fork') ? 'yes' : 'no';";
     let bin = compile_with_flags(&dir, src, "app", &[]);
-    assert_eq!(run_binary(&bin), "no");
+    assert_eq!(run_binary(&bin), "yes|yes");
 }
 
 /// Verifies `--with-pcntl` links the bridge and reports the canonical extension name.
@@ -321,13 +341,14 @@ fn extension_name_matching_is_case_insensitive() {
     );
 }
 
-/// Verifies a bridge-free program reports only the always-present core set: json loaded,
-/// every bridge extension (PDO/hash/openssl) and the never-linked curl not loaded.
+/// Verifies a bridge-free CLI program reports its built-in json/session modules while leaving
+/// bridge-backed extensions (PDO/hash/openssl/curl) unloaded.
 #[test]
 fn bridge_free_program_reports_only_core_extensions() {
     let dir = make_test_dir("ext_core_only");
     let src = "<?php \
         var_dump(extension_loaded('json')); \
+        var_dump(extension_loaded('session')); \
         var_dump(extension_loaded('PDO')); \
         var_dump(extension_loaded('hash')); \
         var_dump(extension_loaded('openssl')); \
@@ -336,9 +357,44 @@ fn bridge_free_program_reports_only_core_extensions() {
     let out = run_binary(&bin);
     assert_eq!(
         out,
-        "bool(true)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\n",
-        "bridge-free: only core json loaded; no bridge extensions reported"
+        "bool(true)\nbool(true)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\n",
+        "CLI core json/session loaded; no bridge extensions reported"
     );
+}
+
+/// Verifies the PHP CLI profile exposes the built-in session extension even without HTTP mode.
+/// PHP's session extension is present in this host's ordinary CLI and `php -n` profiles, so
+/// `extension_loaded()`, `function_exists()`, and `get_loaded_extensions()` must agree.
+#[test]
+fn cli_profile_reports_session_extension_and_api_loaded() {
+    let dir = make_test_dir("ext_session_cli");
+    let src = "<?php \
+        echo extension_loaded('session') ? 'loaded' : 'missing', '|', \
+             function_exists('session_start') ? 'available' : 'missing', '|', \
+             in_array('session', get_loaded_extensions()) ? 'listed' : 'missing';";
+    let bin = compile_with_flags(&dir, src, "app", &[]);
+    assert_eq!(run_binary(&bin), "loaded|available|listed");
+}
+
+/// Verifies the real CLI session implementation starts in PHP_SESSION_NONE and persists data
+/// through the file handler when restarted in the same process.
+#[test]
+fn cli_session_start_reads_and_writes_the_file_handler() {
+    let dir = make_test_dir("session_cli_roundtrip");
+    let src = r#"<?php
+session_save_path(__DIR__);
+session_id('elephc-cli-session');
+echo session_status(), ':';
+session_start();
+$_SESSION['answer'] = 42;
+session_write_close();
+session_id('elephc-cli-session');
+session_start();
+echo session_status(), ':', $_SESSION['answer'];
+session_destroy();
+"#;
+    let bin = compile_with_flags(&dir, src, "app", &[]);
+    assert_eq!(run_binary(&bin), "1:2:42");
 }
 
 /// Verifies a NON-LITERAL argument resolves against the same effective extension set as a
@@ -470,13 +526,19 @@ fn get_loaded_extensions_dynamic_flag_tracks_linked_bridges() {
     );
 }
 
-/// Verifies a bridge-free program does not report iconv merely because its names are known.
+/// Verifies a bridge-free program STILL reports iconv: elephc declares all 10 of php's iconv
+/// functions, so it can serve any caller that asks.
+///
+/// The measured defect this replaced: `extension_loaded('iconv')` answered `false` in the very
+/// same program where `function_exists('iconv')` answered `true`. A library reading the first
+/// ships its own slower replacement for a function elephc already has.
 #[test]
-fn unused_iconv_reports_extension_not_loaded() {
+fn unused_iconv_still_reports_extension_loaded() {
     let dir = make_test_dir("ext_no_iconv");
-    let src = "<?php echo extension_loaded('iconv') ? 'yes' : 'no';";
+    let src = "<?php echo extension_loaded('iconv') ? 'yes' : 'no', '|', \
+        function_exists('iconv') ? 'yes' : 'no';";
     let bin = compile_with_flags(&dir, src, "app", &[]);
-    assert_eq!(run_binary(&bin), "no");
+    assert_eq!(run_binary(&bin), "yes|yes");
 }
 
 /// Verifies calling `iconv_strlen()` auto-links the bridge and reports its extension name.
@@ -495,4 +557,147 @@ fn with_iconv_reports_extension_loaded() {
     let src = "<?php echo extension_loaded('iconv') ? 'yes' : 'no';";
     let bin = compile_with_flags(&dir, src, "app", &["--with-iconv"]);
     assert_eq!(run_binary(&bin), "yes");
+}
+
+/// Recomputes [`elephc_builtin_contract::PhpModule::covers_php_function_surface`] from the shared
+/// catalog and the vendored php-src baseline, and fails with the exact per-module diff when the
+/// two disagree.
+///
+/// THIS IS THE TEETH ON `extension_loaded()`. The reported set is derived at compile time from
+/// this one fact per module; the fact itself is a `const fn` because codegen needs it without a
+/// JSON parser. That leaves exactly one way for the answer to rot: someone adds (or removes) a
+/// catalog function and the completeness of its module changes without the `const fn` moving. So
+/// this test rebuilds the verdict from the two sources that cannot lie — every `BuiltinContract`
+/// in the catalog, and php 8.5.10's own snapshot in `scripts/docs/php_baseline.json` — and
+/// compares module by module.
+///
+/// MUTATION-CHECKED: adding `Mbstring` to the `const fn`, or dropping `Iconv` from it, must fail
+/// here. The message names the module and the missing functions so the fix is mechanical.
+#[test]
+fn extension_surface_completeness_matches_php_baseline() {
+    use elephc_builtin_contract::PhpModule;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let baseline_path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/docs/php_baseline.json");
+    let raw = std::fs::read_to_string(&baseline_path)
+        .unwrap_or_else(|err| panic!("cannot read {}: {err}", baseline_path.display()));
+    let baseline: serde_json::Value =
+        serde_json::from_str(&raw).expect("php_baseline.json must be valid JSON");
+    let functions = baseline["functions"]
+        .as_object()
+        .expect("php_baseline.json must carry a flat functions map");
+
+    // php's exported function names, keyed by the LOWERCASE module name `PhpModule::php_name`
+    // uses, which is the key the snapshot itself is generated with.
+    let mut php_by_module: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for (function, module) in functions {
+        let module = module.as_str().expect("baseline module names are strings");
+        php_by_module
+            .entry(module.to_ascii_lowercase())
+            .or_default()
+            .insert(function.to_ascii_lowercase());
+    }
+
+    let mut wrong: Vec<String> = Vec::new();
+    for module in PhpModule::ALL.iter().copied() {
+        if !module.is_php() {
+            continue;
+        }
+        let php: BTreeSet<String> = php_by_module
+            .get(module.php_name())
+            .cloned()
+            .unwrap_or_default();
+        let elephc: BTreeSet<String> = elephc_builtin_contract::module_php_functions(module)
+            .map(|contract| contract.name.to_ascii_lowercase())
+            .collect();
+        let missing: Vec<&String> = php.difference(&elephc).collect();
+
+        // php exports no procedural functions for `Reflection`; elephc provides it as classes, so
+        // the function comparison is vacuous and the module is complete by fiat. Every other
+        // module needs php to actually export something AND elephc to declare all of it — the
+        // second condition is what stops a module elephc has nothing for from counting as
+        // "complete" because nothing is missing from nothing.
+        let expected = if module == PhpModule::Reflection {
+            true
+        } else {
+            !php.is_empty() && missing.is_empty()
+        };
+        if expected != module.covers_php_function_surface() {
+            let detail = if missing.is_empty() {
+                format!("elephc declares {} of php's {}", elephc.len(), php.len())
+            } else {
+                let shown: Vec<&str> = missing.iter().take(6).map(|name| name.as_str()).collect();
+                format!(
+                    "elephc declares {} of php's {}; missing {} incl. {:?}",
+                    php.len() - missing.len(),
+                    php.len(),
+                    missing.len(),
+                    shown
+                )
+            };
+            wrong.push(format!(
+                "{}: covers_php_function_surface() says {} but the catalog says {expected} ({detail})",
+                module.php_name(),
+                module.covers_php_function_surface()
+            ));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "PhpModule::covers_php_function_surface() disagrees with the catalog + php {} baseline:\n  {}",
+        baseline["php_version"].as_str().unwrap_or("?"),
+        wrong.join("\n  ")
+    );
+
+    // Anchors, so a future refactor that makes the loop vacuous still fails here.
+    assert!(!PhpModule::Mbstring.covers_php_function_surface());
+    assert!(!PhpModule::Ctype.covers_php_function_surface());
+    assert!(PhpModule::Iconv.covers_php_function_surface());
+    assert!(PhpModule::Json.covers_php_function_surface());
+}
+
+/// Verifies the two answers about one extension cannot disagree, on a program that names both.
+///
+/// `extension_loaded('mbstring')` used to be `true` while `mb_strtoupper` did not exist, which is
+/// the shape every `symfony/polyfill-*`-style package reads to decide whether to declare its
+/// replacements: told the extension is there, it declines, and the first call fatals. The pairing
+/// below is the framework-free version of that — for each extension, a function elephc HAS and one
+/// it does NOT — so the over-claim is visible without any library.
+#[test]
+fn partially_covered_extensions_report_not_loaded() {
+    let dir = make_test_dir("ext_partial");
+    let src = "<?php \
+        var_dump(extension_loaded('mbstring'), function_exists('mb_strtoupper'), function_exists('mb_substr')); \
+        var_dump(extension_loaded('ctype'), function_exists('ctype_alnum'), function_exists('ctype_upper')); \
+        var_dump(extension_loaded('iconv'), function_exists('iconv'), function_exists('iconv_strlen'));";
+    let bin = compile_with_flags(&dir, src, "app", &[]);
+    let out = run_binary(&bin);
+    assert_eq!(
+        out,
+        // mbstring: 4 of php's 65, so not loaded even though `mb_strtoupper` is real.
+        // ctype: 4 of php's 11, same shape.
+        // iconv: 10 of php's 10, so loaded, with no gap behind it.
+        "bool(false)\nbool(true)\nbool(false)\n\
+         bool(false)\nbool(true)\nbool(false)\n\
+         bool(true)\nbool(true)\nbool(true)\n",
+        "a partially covered extension must report not-loaded; a complete one must report loaded"
+    );
+}
+
+/// Verifies `extension_loaded()` and `get_loaded_extensions()` answer from one set.
+///
+/// They did not for `Zend OPcache` at one point in this change: its `opcache_*` contracts are
+/// prelude declarations the pipeline injects on demand, so the catalog walk found them absent and
+/// answered `false` while `get_loaded_extensions(true)` still listed the extension. Every name the
+/// array reports must satisfy the membership test, both ways.
+#[test]
+fn listing_and_membership_agree_on_every_name() {
+    let dir = make_test_dir("ext_agree");
+    let src = "<?php \
+        foreach (get_loaded_extensions() as $e) { if (!extension_loaded($e)) { echo 'listed-but-absent:', $e, \"\\n\"; } } \
+        foreach (get_loaded_extensions(true) as $e) { if (!extension_loaded($e)) { echo 'zend-listed-but-absent:', $e, \"\\n\"; } } \
+        echo 'ok', \"\\n\";";
+    let bin = compile_with_flags(&dir, src, "app", &[]);
+    assert_eq!(run_binary(&bin), "ok\n");
 }

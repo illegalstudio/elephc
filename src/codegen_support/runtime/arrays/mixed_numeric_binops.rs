@@ -52,9 +52,29 @@ pub fn emit_mixed_numeric_binops(emitter: &mut Emitter) {
 
     // -- classify operands so float payloads force floating-point arithmetic --
     emitter.instruction("bl __rt_mixed_unbox");                                 // inspect the left boxed payload tag and value words
+    emitter.instruction("cmp x0, #1");                                          // does the left operand hold a numeric string candidate?
+    emitter.instruction("b.ne __rt_mixed_numeric_left_classified");             // keep non-string runtime tags unchanged
+    emitter.instruction("bl __rt_cstr");                                        // copy the bounded left string into numeric scratch storage
+    emitter.instruction("bl __rt_php_num_scan");                                // classify integer-like versus decimal/exponent syntax
+    emitter.instruction("cbz x2, __rt_mixed_numeric_left_string_int");           // integer-like strings stay on the checked integer path
+    emitter.instruction("mov x0, #2");                                          // decimal/exponent strings force floating-point arithmetic
+    emitter.instruction("b __rt_mixed_numeric_left_classified");                // publish the effective left numeric tag
+    emitter.label("__rt_mixed_numeric_left_string_int");
+    emitter.instruction("mov x0, #1");                                          // preserve integer-like string classification
+    emitter.label("__rt_mixed_numeric_left_classified");
     emitter.instruction("str x0, [sp, #24]");                                   // save the left runtime value tag for numeric dispatch
     emitter.instruction("ldr x0, [sp, #8]");                                    // load the boxed right operand pointer for unboxing
     emitter.instruction("bl __rt_mixed_unbox");                                 // inspect the right boxed payload tag and value words
+    emitter.instruction("cmp x0, #1");                                          // does the right operand hold a numeric string candidate?
+    emitter.instruction("b.ne __rt_mixed_numeric_right_classified");            // keep non-string runtime tags unchanged
+    emitter.instruction("bl __rt_cstr");                                        // copy the bounded right string into numeric scratch storage
+    emitter.instruction("bl __rt_php_num_scan");                                // classify integer-like versus decimal/exponent syntax
+    emitter.instruction("cbz x2, __rt_mixed_numeric_right_string_int");          // integer-like strings stay on the checked integer path
+    emitter.instruction("mov x0, #2");                                          // decimal/exponent strings force floating-point arithmetic
+    emitter.instruction("b __rt_mixed_numeric_right_classified");               // publish the effective right numeric tag
+    emitter.label("__rt_mixed_numeric_right_string_int");
+    emitter.instruction("mov x0, #1");                                          // preserve integer-like string classification
+    emitter.label("__rt_mixed_numeric_right_classified");
     emitter.instruction("str x0, [sp, #32]");                                   // save the right runtime value tag for numeric dispatch
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the left runtime value tag
     emitter.instruction("cmp x9, #2");                                          // does the left operand hold a double payload?
@@ -206,9 +226,35 @@ fn emit_mixed_numeric_binops_linux_x86_64(emitter: &mut Emitter) {
 
     // -- classify operands so float payloads force floating-point arithmetic --
     emitter.instruction("call __rt_mixed_unbox");                               // inspect the left boxed payload tag and value words
+    emitter.instruction("cmp rax, 1");                                          // does the left operand hold a numeric string candidate?
+    emitter.instruction("jne __rt_mixed_numeric_left_classified_linux_x86_64"); // keep non-string runtime tags unchanged
+    emitter.instruction("mov rax, rdi");                                        // move the left string pointer into the C-string ABI
+    emitter.instruction("call __rt_cstr");                                      // copy the bounded left string into numeric scratch storage
+    emitter.instruction("mov rdi, rax");                                        // pass the scratch pointer to the numeric scanner
+    emitter.instruction("call __rt_php_num_scan");                              // classify integer-like versus decimal/exponent syntax
+    emitter.instruction("test rdi, rdi");                                       // did the string use decimal or exponent syntax?
+    emitter.instruction("jz __rt_mixed_numeric_left_string_int_linux_x86_64");   // integer-like strings stay on the checked integer path
+    emitter.instruction("mov rax, 2");                                          // decimal/exponent strings force floating-point arithmetic
+    emitter.instruction("jmp __rt_mixed_numeric_left_classified_linux_x86_64"); // publish the effective left numeric tag
+    emitter.label("__rt_mixed_numeric_left_string_int_linux_x86_64");
+    emitter.instruction("mov rax, 1");                                          // preserve integer-like string classification
+    emitter.label("__rt_mixed_numeric_left_classified_linux_x86_64");
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the left runtime value tag for numeric dispatch
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // load the boxed right operand pointer for unboxing
     emitter.instruction("call __rt_mixed_unbox");                               // inspect the right boxed payload tag and value words
+    emitter.instruction("cmp rax, 1");                                          // does the right operand hold a numeric string candidate?
+    emitter.instruction("jne __rt_mixed_numeric_right_classified_linux_x86_64"); // keep non-string runtime tags unchanged
+    emitter.instruction("mov rax, rdi");                                        // move the right string pointer into the C-string ABI
+    emitter.instruction("call __rt_cstr");                                      // copy the bounded right string into numeric scratch storage
+    emitter.instruction("mov rdi, rax");                                        // pass the scratch pointer to the numeric scanner
+    emitter.instruction("call __rt_php_num_scan");                              // classify integer-like versus decimal/exponent syntax
+    emitter.instruction("test rdi, rdi");                                       // did the string use decimal or exponent syntax?
+    emitter.instruction("jz __rt_mixed_numeric_right_string_int_linux_x86_64");  // integer-like strings stay on the checked integer path
+    emitter.instruction("mov rax, 2");                                          // decimal/exponent strings force floating-point arithmetic
+    emitter.instruction("jmp __rt_mixed_numeric_right_classified_linux_x86_64"); // publish the effective right numeric tag
+    emitter.label("__rt_mixed_numeric_right_string_int_linux_x86_64");
+    emitter.instruction("mov rax, 1");                                          // preserve integer-like string classification
+    emitter.label("__rt_mixed_numeric_right_classified_linux_x86_64");
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the right runtime value tag for numeric dispatch
     emitter.instruction("cmp QWORD PTR [rbp - 32], 2");                         // does the left operand hold a double payload?
     emitter.instruction("je __rt_mixed_numeric_float_path_linux_x86_64");       // any double payload makes the whole operation double-valued

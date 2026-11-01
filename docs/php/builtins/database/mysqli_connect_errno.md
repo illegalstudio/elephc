@@ -2,7 +2,7 @@
 title: "mysqli_connect_errno()"
 description: "Returns the error code of the last connection attempt."
 sidebar:
-  order: 109
+  order: 120
 ---
 
 ## mysqli_connect_errno()

@@ -26,10 +26,10 @@ pub(super) fn emit(emitter: &mut Emitter) {
 /// Releases one native owner inside the protected callback's handler record.
 fn release_body(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::AArch64 {
-        emitter.instruction("ldr x0, [sp, #232]");                              // pass the retained owner to the native GC convention
+        emitter.instruction(&format!("ldr x0, [sp, #{}]", crate::codegen_support::runtime::exceptions::PROTECTED_INPUT_OFFSET + 8));                              // pass the retained owner to the native GC convention
         emitter.instruction("bl __rt_decref_any");                              // consume native string or boxed-value ownership
     } else {
-        emitter.instruction("mov rax, QWORD PTR [rsp + 232]");                  // pass the retained owner to the native GC convention
+        emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", crate::codegen_support::runtime::exceptions::PROTECTED_INPUT_OFFSET + 8));                  // pass the retained owner to the native GC convention
         emitter.instruction("call __rt_decref_any");                            // consume native string or boxed-value ownership
     }
 }

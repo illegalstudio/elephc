@@ -15,7 +15,7 @@ use crate::names::php_symbol_key;
 use crate::types::traits::FlattenedClass;
 use crate::types::ClassInfo;
 
-mod constants;
+pub(super) mod constants;
 mod enum_interfaces;
 mod interfaces;
 mod methods;
@@ -45,6 +45,34 @@ pub(super) use methods::validate_method_shape;
 /// class recursively, collects properties and methods, validates interface contracts, and finally
 /// inserts the completed `ClassInfo` into `checker.classes`. Each class gets a unique `next_class_id`.
 pub(crate) fn build_class_info_recursive(
+    class_name: &str,
+    class_map: &HashMap<String, FlattenedClass>,
+    checker: &mut Checker,
+    next_class_id: &mut u64,
+    building: &mut HashSet<String>,
+) -> Result<(), CompileError> {
+    // Name the class an error was raised for. The recursion into a parent goes back through
+    // this wrapper, so the innermost class wins (`within_declaration` keeps a name already set)
+    // and a parent's schema error is attributed to the parent, not to the child that asked.
+    // A class absent from the map is not the one at fault: the error belongs to whoever named
+    // it (a child whose parent is missing), and that caller's own wrapper tags it.
+    let known = class_map.contains_key(class_name);
+    let already_building = building.contains(class_name);
+    build_class_info_recursive_untagged(class_name, class_map, checker, next_class_id, building)
+        .map_err(|error| {
+            // A class whose build FAILED is not still being built. Leaving its name in `building`
+            // made the next request for it (a later sibling naming it, or the retry after the
+            // deferral pass dropped another file) report "Circular inheritance detected" in place
+            // of the real error: Carbon's own refusal was hidden behind that message.
+            if !already_building {
+                building.remove(class_name);
+            }
+            if known { error.within_declaration(class_name) } else { error }
+        })
+}
+
+/// The body of [`build_class_info_recursive`], before its errors are attributed to the class.
+fn build_class_info_recursive_untagged(
     class_name: &str,
     class_map: &HashMap<String, FlattenedClass>,
     checker: &mut Checker,
@@ -139,6 +167,7 @@ fn build_loaded_class_info(
         building,
     )?;
     interfaces::ensure_concrete_class_implements_abstracts(&state, &class)?;
+    interfaces::append_implicit_stringable(&mut state, &class);
 
     let constructor_param_to_prop = constructor_param_to_prop_for(&class, parent_info.as_ref());
     // Builtins registered without source carry no source span; a prelude's classes do, but come

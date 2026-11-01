@@ -66,6 +66,7 @@ pub(super) fn lower_try_push_handler(ctx: &mut FunctionContext<'_>, inst: &Instr
     );
     abi::emit_frame_slot_address(ctx.emitter, scratch, handler_offset);
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_handler_top", 0);
+    emit_aot_handler_top_trace(ctx, 1, token, handler_offset, false)?;
     abi::emit_frame_slot_address(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 0),
@@ -84,12 +85,49 @@ pub(super) fn lower_try_pop_handler(ctx: &mut FunctionContext<'_>, inst: &Instru
     ctx.emitter.comment("pop EIR exception handler");
     abi::load_at_offset(ctx.emitter, scratch, handler_offset);
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_handler_top", 0);
+    emit_aot_handler_top_trace(ctx, 2, token, handler_offset, true)?;
     abi::load_at_offset(
         ctx.emitter,
         scratch,
         handler_offset - TRY_HANDLER_DIAG_DEPTH_OFFSET,
     );
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_rt_diag_suppression", 0);
+    Ok(())
+}
+
+/// Emits optional handler-stack diagnostics without changing normal codegen.
+fn emit_aot_handler_top_trace(
+    ctx: &mut FunctionContext<'_>,
+    event: i64,
+    token: i64,
+    handler_offset: usize,
+    use_saved_previous: bool,
+) -> Result<()> {
+    if !ctx.module.required_runtime_features.eval_bridge
+        || std::env::var_os("ELEPHC_CODEGEN_HANDLER_TRACE").is_none()
+    {
+        return Ok(());
+    }
+    let (function_label, function_len) = ctx.data.add_string(ctx.function.name.as_bytes());
+    let event_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let token_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    let top_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    let function_ptr_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    let function_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
+    abi::emit_load_int_immediate(ctx.emitter, event_arg, event);
+    abi::emit_load_int_immediate(ctx.emitter, token_arg, token);
+    if use_saved_previous {
+        abi::load_at_offset(ctx.emitter, top_arg, handler_offset);
+    } else {
+        abi::emit_frame_slot_address(ctx.emitter, top_arg, handler_offset);
+    }
+    abi::emit_symbol_address(ctx.emitter, function_ptr_arg, &function_label);
+    abi::emit_load_int_immediate(ctx.emitter, function_len_arg, function_len as i64);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_trace_aot_handler_top");
+    abi::emit_call_label(ctx.emitter, &symbol);
     Ok(())
 }
 

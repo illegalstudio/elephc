@@ -2,7 +2,7 @@
 title: "xmlwriter_write_pi() - internals"
 description: "Compiler internals for xmlwriter_write_pi(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1145
+  order: 1205
 ---
 
 ## `xmlwriter_write_pi()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/xml_prelude/build/writer.rs`:1193](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs#L1193) (`xmlwriter_write_pi`)
+- **Lowering**: [`src/xml_prelude/build/writer.rs`:1203](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs#L1203) (`xmlwriter_write_pi`)
 - **Function symbol**: `xmlwriter_write_pi()`
 
 

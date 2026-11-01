@@ -112,6 +112,20 @@ fn test_parse_static_method_call() {
     }
 }
 
+/// Parses a class constant read through an object expression.
+#[test]
+fn test_parse_dynamic_scoped_constant_access() {
+    let statements = parse_source("<?php echo $container::IGNORE_ON_UNINITIALIZED_REFERENCE;");
+    let StmtKind::Echo(expression) = &statements[0].kind else {
+        panic!("expected Echo");
+    };
+    let ExprKind::DynamicScopedConstantAccess { receiver, name } = &expression.kind else {
+        panic!("expected DynamicScopedConstantAccess");
+    };
+    assert!(matches!(&receiver.kind, ExprKind::Variable(variable) if variable == "container"));
+    assert_eq!(name, "IGNORE_ON_UNINITIALIZED_REFERENCE");
+}
+
 /// Parses `RegexIterator::MATCH` and verifies keyword-like class constants after `::`.
 #[test]
 fn test_parse_scoped_constant_named_like_keyword() {

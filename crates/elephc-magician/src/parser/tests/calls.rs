@@ -48,6 +48,28 @@ fn parse_fragment_preserves_php_string_escape_semantics() {
         ])))]
     );
 }
+
+/// Verifies a nowdoc lowers to the same literal EvalIR form as a single-quoted string.
+#[test]
+fn parse_fragment_accepts_flexible_nowdoc_source() {
+    let program = parse_fragment(b"return <<<'EOT'\n    literal $value\\n\n    EOT;").expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::Const(EvalConst::String(
+            "literal $value\\n".to_string()
+        ))))]
+    );
+}
+
+/// Verifies non-UTF-8 bytes inside PHP string literals remain byte-exact EvalIR constants.
+#[test]
+fn parse_fragment_preserves_binary_string_literal_bytes() {
+    let program = parse_fragment(b"return '\xa9';").expect("binary string should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::Const(EvalConst::Bytes(vec![0xa9]))))]
+    );
+}
 /// Verifies call expressions preserve their callee name and source-order arguments.
 #[test]
 fn parse_fragment_accepts_call_expression_source() {

@@ -17,7 +17,7 @@ mod array_access;
 mod basic;
 mod buffer_merges;
 mod class_refs;
-mod effects;
+pub(in crate::types::checker) mod effects;
 mod calls_objects;
 mod null_coalesce;
 mod static_closure;
@@ -43,6 +43,7 @@ impl Checker {
             | ExprKind::IntLiteral(_)
             | ExprKind::FloatLiteral(_)
             | ExprKind::Variable(_)
+            | ExprKind::ArrayReference(_)
             | ExprKind::Negate(_)
             | ExprKind::Not(_)
             | ExprKind::ErrorSuppress(_)
@@ -85,6 +86,7 @@ impl Checker {
             | ExprKind::NullsafePropertyAccess { .. }
             | ExprKind::NullsafeDynamicPropertyAccess { .. }
             | ExprKind::StaticPropertyAccess { .. }
+            | ExprKind::DynamicStaticPropertyAccess { .. }
             | ExprKind::MethodCall { .. }
             | ExprKind::NullsafeMethodCall { .. }
             | ExprKind::NullsafeDynamicMethodCall { .. }
@@ -94,6 +96,7 @@ impl Checker {
             | ExprKind::ClassConstant { .. }
             | ExprKind::ObjectClassName { .. }
             | ExprKind::ScopedConstantAccess { .. }
+            | ExprKind::DynamicScopedConstantAccess { .. }
             | ExprKind::NewScopedObject { .. }
             | ExprKind::Yield { .. }
             | ExprKind::YieldFrom(_)
@@ -110,8 +113,27 @@ impl Checker {
     ) -> Result<PhpType, CompileError> {
         env.get(name)
             .cloned()
+            .or_else(|| self.globals_alias_type(name))
             .or_else(|| self.eval_barrier_active.then_some(PhpType::Mixed))
-            .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", name)))
+            .ok_or_else(|| {
+                CompileError::new(
+                    span,
+                    &format!("Undefined variable: {}", crate::globals_array::display_name(name)),
+                )
+            })
+    }
+
+    /// Returns the storage type of a literal-key `$GLOBALS` alias.
+    ///
+    /// Ordinary globals use boxed `Mixed` storage; request superglobal aliases preserve their
+    /// associative-array contract. An absent literal key remains gradual instead of becoming a
+    /// compile-time undefined-variable error, matching PHP's runtime global creation semantics.
+    fn globals_alias_type(&self, name: &str) -> Option<PhpType> {
+        let target = crate::globals_array::alias_target(name)?;
+        if crate::superglobals::is_superglobal(target) {
+            return Some(crate::superglobals::superglobal_type());
+        }
+        Some(PhpType::Mixed)
     }
 
     /// Merges ordinary elements and spread values for a literal that may carry string keys.

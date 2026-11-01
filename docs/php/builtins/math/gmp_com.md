@@ -2,7 +2,7 @@
 title: "gmp_com()"
 description: "One's complement of a GMP number."
 sidebar:
-  order: 595
+  order: 608
 ---
 
 ## gmp_com()

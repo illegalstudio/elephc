@@ -60,6 +60,7 @@ pub(crate) fn lower(
         PcntlRuntime::GetQosClass => lower_getqos_class(ctx, inst),
         PcntlRuntime::SetCpuAffinity => lower_setcpuaffinity(ctx, inst),
         PcntlRuntime::SetNs => lower_setns(ctx, inst),
+        PcntlRuntime::Kill => lower_kill(ctx, inst),
         PcntlRuntime::SetProcessGroup => lower_set_process_group(ctx, inst),
         PcntlRuntime::SetPriority => lower_setpriority(ctx, inst),
         PcntlRuntime::SetQosClass => lower_setqos_class(ctx, inst),
@@ -918,6 +919,26 @@ fn lower_daemon(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()>
         }
     }
     ctx.emitter.bl_c("elephc_pcntl_daemon");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `posix_kill()` with the process identifier and signal preserved in source order.
+fn lower_kill(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "posix_kill", 2)?;
+    load_as_int(ctx, expect_operand(inst, 0)?, "posix_kill process_id")?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    load_as_int(ctx, expect_operand(inst, 1)?, "posix_kill signal")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x1, x0");                              // C arg1 = signal number
+            abi::emit_pop_reg(ctx.emitter, "x0");                              // C arg0 = target process id
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rsi, rax");                            // C arg1 = signal number
+            abi::emit_pop_reg(ctx.emitter, "rdi");                             // C arg0 = target process id
+        }
+    }
+    ctx.emitter.bl_c("elephc_posix_kill");
     store_if_result(ctx, inst)
 }
 

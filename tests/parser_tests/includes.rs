@@ -191,3 +191,24 @@ fn test_assign_require_parses_as_include_value() {
         other => panic!("Expected Assign, got {:?}", other),
     }
 }
+
+/// Verifies that `require` parses as a general binary-expression operand instead of only as a
+/// direct assignment or return value.
+#[test]
+fn test_require_as_binary_operand_parses_as_include_value() {
+    let stmts = parse_source("<?php $y = 10 + (require 'five.php');");
+    match &stmts[0].kind {
+        StmtKind::Assign { name, value } => {
+            assert_eq!(name, "y");
+            match &value.kind {
+                ExprKind::BinaryOp { left, op, right } => {
+                    assert_eq!(op, &BinOp::Add);
+                    assert_eq!(left.kind, ExprKind::IntLiteral(10));
+                    assert_eq!(assert_include_value(&right.kind), (false, true));
+                }
+                other => panic!("Expected BinaryOp value, got {:?}", other),
+            }
+        }
+        other => panic!("Expected Assign, got {:?}", other),
+    }
+}

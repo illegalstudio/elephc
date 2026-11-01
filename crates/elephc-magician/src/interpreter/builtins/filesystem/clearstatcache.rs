@@ -35,6 +35,11 @@ pub(in crate::interpreter) fn eval_clearstatcache_declared_values_result(
     if evaluated_args.len() > 2 {
         return Err(EvalStatus::RuntimeFatal);
     }
+    // `clearstatcache(true)` also empties the realpath cache; any argument is taken as that
+    // request, since forgetting too much only costs a lookup.
+    if !evaluated_args.is_empty() {
+        values.filesystem_paths_changed();
+    }
     values.null()
 }
 
@@ -50,6 +55,9 @@ pub(in crate::interpreter) fn eval_builtin_clearstatcache(
     }
     for arg in args {
         eval_expr(arg, context, scope, values)?;
+    }
+    if !args.is_empty() {
+        values.filesystem_paths_changed();
     }
     values.null()
 }

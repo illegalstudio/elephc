@@ -60,12 +60,20 @@ return $d;
 
 /// Builds a cross-conversion factory (`createFromInterface` / `createFromImmutable` /
 /// `createFromMutable`) returning a fresh `target_class` that carries the source object's
-/// instant and timezone. Static; the body is the parsed `CREATE_FROM_OBJECT_SRC`. `$object`
-/// is typed `DateTimeInterface` (the common supertype) because the body only needs interface
-/// methods; the return type is declared explicitly as `target_class` since synthetic builtin
-/// methods do not get body-driven return-type inference.
+/// instant and timezone. Static; the body is the parsed `CREATE_FROM_OBJECT_SRC`, which only needs
+/// interface methods. `$object` carries php's own type for each factory (`DateTimeImmutable` for
+/// `createFromImmutable`, `DateTime` for `createFromMutable`, `DateTimeInterface` for
+/// `createFromInterface`): it is the contract an overriding subclass is checked against, and the
+/// common supertype refused an override with php's exact signature. The return type is declared
+/// explicitly as `target_class` since synthetic builtin methods do not get body-driven return-type
+/// inference.
 pub(super) fn datetime_create_from_object(method_name: &str, target_class: &str) -> ClassMethod {
     let body = super::bodies::create_from_object(target_class);
+    let object_class = match method_name {
+        "createFromImmutable" => "DateTimeImmutable",
+        "createFromMutable" => "DateTime",
+        _ => "DateTimeInterface",
+    };
     ClassMethod {
         type_params: Vec::new(),
         name: method_name.to_string(),
@@ -76,7 +84,7 @@ pub(super) fn datetime_create_from_object(method_name: &str, target_class: &str)
         has_body: true,
         params: vec![(
             "object".to_string(),
-            Some(TypeExpr::Named(Name::unqualified("DateTimeInterface"))),
+            Some(TypeExpr::Named(Name::unqualified(object_class))),
             None,
             false,
         )],
@@ -103,8 +111,10 @@ $d = $d->setMicrosecond(intval(round(($timestamp - $secs) * 1000000)));
 return $d;
 "#;
 
-/// Builds the static `createFromTimestamp($timestamp): static` factory for `class_name`. `$timestamp`
-/// is typed `mixed` (PHP accepts int or float). The whole-second part uses `floor()` (so negative
+/// Builds the static `createFromTimestamp(int|float $timestamp): static` factory for `class_name`.
+/// `$timestamp` carries php's own `int|float`: it is the contract an overriding subclass is checked
+/// against, and `mixed` refused every narrower override php accepts (Carbon's
+/// `float|int|string $timestamp`). The whole-second part uses `floor()` (so negative
 /// fractional timestamps round toward -inf like PHP) and the remaining fraction becomes microseconds
 /// via `setMicrosecond()`. Self-contained parsed source; the return type is declared as `class_name`
 /// since synthetic builtin methods get no body-driven return inference.
@@ -120,7 +130,7 @@ pub(super) fn datetime_create_from_timestamp(class_name: &str) -> ClassMethod {
         has_body: true,
         params: vec![(
             "timestamp".to_string(),
-            Some(TypeExpr::Named(Name::unqualified("mixed"))),
+            Some(TypeExpr::Union(vec![TypeExpr::Int, TypeExpr::Float])),
             None,
             false,
         )],

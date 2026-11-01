@@ -123,6 +123,11 @@ pub(super) fn lower(
                     "class_parents",
                 )
         }),
+        RuntimeFnId::GetClassMethods => Some({
+            crate::codegen::lower_inst::builtins::get_class_methods::lower_get_class_methods(
+                ctx, inst,
+            )
+        }),
         RuntimeFnId::ClassUses => Some({
             crate::codegen::lower_inst::builtins::class_relations::lower_class_relation(
                     ctx,

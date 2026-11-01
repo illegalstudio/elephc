@@ -56,7 +56,7 @@
 
 use crate::codegen_support::callable_descriptor::CALLABLE_DESC_INVOKER_OFFSET;
 use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET,
+    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
 };
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -69,6 +69,15 @@ use super::slots;
 // than corrupting a `longjmp` at runtime.
 const _: () = assert!(TRY_HANDLER_DIAG_DEPTH_OFFSET == 16);
 const _: () = assert!(TRY_HANDLER_JMP_BUF_OFFSET == 24);
+
+/// Offset of the AArch64 adapter's first field: right after the complete handler record.
+///
+/// The record is `TRY_HANDLER_SLOT_SIZE` bytes, which holds glibc's 312-byte AArch64 `jmp_buf`.
+/// Laying the fields at a literal 224 put the descriptor and the saved frame pointer inside the
+/// `jmp_buf` that `setjmp` fills on Linux.
+const CURL_CALLBACK_FIELDS: usize = TRY_HANDLER_SLOT_SIZE;
+/// AArch64 adapter frame bytes: the handler record plus ten field words.
+const CURL_CALLBACK_FRAME: usize = CURL_CALLBACK_FIELDS + 80;
 
 /// Byte stride of one `CallArg` triple in the bridge's `argv` array.
 const CALL_ARG_STRIDE: i64 = 24;
@@ -87,23 +96,24 @@ pub fn emit_curl_invoke_callback(emitter: &mut Emitter) {
     emitter.comment("--- runtime: curl_invoke_callback ---");
     emitter.label_global("__rt_curl_invoke_callback");
 
-    // Stack frame (304 bytes):
-    //   [sp, #0]   = handler record (224 bytes): next@0, survivor@8, diag@16,
+    // Stack frame (CURL_CALLBACK_FRAME bytes; field offsets below are relative to
+    // CURL_CALLBACK_FIELDS, written for a 224-byte record):
+    //   [sp, #0]   = handler record (TRY_HANDLER_SLOT_SIZE bytes): next@0, survivor@8, diag@16,
     //                jmp_buf@24 (matches TRY_HANDLER_* / __rt_throw_current).
     //   [sp, #224] = descriptor    [sp, #232] = CurlHandle object  [sp, #240] = spec
     //   [sp, #248] = args array    [sp, #256] = boxed args cell    [sp, #264] = boxed return
     //   [sp, #272] = loop index    [sp, #280] = integer result
     //   [sp, #288] = saved x29     [sp, #296] = saved x30
-    emitter.instruction("sub sp, sp, #304");                                    // allocate the callback-adapter frame
-    emitter.instruction("stp x29, x30, [sp, #288]");                            // save frame pointer and return address
-    emitter.instruction("add x29, sp, #288");                                   // establish the adapter frame pointer
+    emitter.instruction(&format!("sub sp, sp, #{}", CURL_CALLBACK_FRAME));                                    // allocate the callback-adapter frame
+    emitter.instruction(&format!("stp x29, x30, [sp, #{}]", CURL_CALLBACK_FIELDS + 64));                            // save frame pointer and return address
+    emitter.instruction(&format!("add x29, sp, #{}", CURL_CALLBACK_FIELDS + 64));                                   // establish the adapter frame pointer
 
-    emitter.instruction("str x0, [sp, #224]");                                  // save the callable descriptor pointer
-    emitter.instruction("str x1, [sp, #232]");                                  // save the CurlHandle object pointer
-    emitter.instruction("str x2, [sp, #240]");                                  // save the bridge's CallSpec pointer
-    emitter.instruction("str xzr, [sp, #256]");                                 // no argument container allocated yet
-    emitter.instruction("str xzr, [sp, #264]");                                 // no boxed return held yet
-    emitter.instruction("str xzr, [sp, #280]");                                 // default integer result is 0
+    emitter.instruction(&format!("str x0, [sp, #{}]", CURL_CALLBACK_FIELDS));                                  // save the callable descriptor pointer
+    emitter.instruction(&format!("str x1, [sp, #{}]", CURL_CALLBACK_FIELDS + 8));                                  // save the CurlHandle object pointer
+    emitter.instruction(&format!("str x2, [sp, #{}]", CURL_CALLBACK_FIELDS + 16));                                  // save the bridge's CallSpec pointer
+    emitter.instruction(&format!("str xzr, [sp, #{}]", CURL_CALLBACK_FIELDS + 32));                                 // no argument container allocated yet
+    emitter.instruction(&format!("str xzr, [sp, #{}]", CURL_CALLBACK_FIELDS + 40));                                 // no boxed return held yet
+    emitter.instruction(&format!("str xzr, [sp, #{}]", CURL_CALLBACK_FIELDS + 56));                                 // default integer result is 0
 
     // -- a descriptor without a uniform invoker cannot be called: report "did nothing" --
     emitter.instruction(&format!("ldr x9, [x0, #{}]", CALLABLE_DESC_INVOKER_OFFSET)); // load the invoker slot
@@ -114,31 +124,31 @@ pub fn emit_curl_invoke_callback(emitter: &mut Emitter) {
     emitter.instruction("add x0, x10, #1");                                     // capacity = argc + 1 (slot 0 is $ch)
     emitter.instruction("mov x1, #8");                                          // boxed Mixed slots store one pointer each
     emitter.instruction("bl __rt_array_new");                                   // x0 = indexed array backing storage
-    emitter.instruction("str x0, [sp, #248]");                                  // save the args array pointer
+    emitter.instruction(&format!("str x0, [sp, #{}]", CURL_CALLBACK_FIELDS + 24));                                  // save the args array pointer
 
     // -- argument 0: the CurlHandle object, boxed as runtime tag 6 --
-    emitter.instruction("ldr x1, [sp, #232]");                                  // payload lo = the object pointer
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", CURL_CALLBACK_FIELDS + 8));                                  // payload lo = the object pointer
     emitter.instruction("mov x2, #0");                                          // objects use no high payload word
     emitter.instruction("mov x0, #6");                                          // runtime tag 6 = object (from_value increfs it)
     emitter.instruction("bl __rt_mixed_from_value");                            // x0 = owned boxed Mixed for $ch
-    emitter.instruction("str x0, [sp, #264]");                                  // stash the cell across the append
+    emitter.instruction(&format!("str x0, [sp, #{}]", CURL_CALLBACK_FIELDS + 40));                                  // stash the cell across the append
     emitter.instruction("mov x1, x0");                                          // append value = the boxed object cell
-    emitter.instruction("ldr x0, [sp, #248]");                                  // append target = the args array
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", CURL_CALLBACK_FIELDS + 24));                                  // append target = the args array
     emitter.instruction("bl __rt_array_push_refcounted");                       // append (and retain) the cell
-    emitter.instruction("str x0, [sp, #248]");                                  // save the (possibly grown) args array
-    emitter.instruction("ldr x0, [sp, #264]");                                  // reload the boxed object cell
+    emitter.instruction(&format!("str x0, [sp, #{}]", CURL_CALLBACK_FIELDS + 24));                                  // save the (possibly grown) args array
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", CURL_CALLBACK_FIELDS + 40));                                  // reload the boxed object cell
     emitter.instruction("bl __rt_decref_any");                                  // drop the temp retain (the array owns it)
-    emitter.instruction("str xzr, [sp, #264]");                                 // the stash slot is free again
+    emitter.instruction(&format!("str xzr, [sp, #{}]", CURL_CALLBACK_FIELDS + 40));                                 // the stash slot is free again
 
     // -- arguments 1..argc: one boxed Mixed per (tag, lo, hi) triple the bridge built --
-    emitter.instruction("str xzr, [sp, #272]");                                 // loop index k = 0
+    emitter.instruction(&format!("str xzr, [sp, #{}]", CURL_CALLBACK_FIELDS + 48));                                 // loop index k = 0
     emitter.label("__rt_curl_invoke_cb_loop");
-    emitter.instruction("ldr x9, [sp, #272]");                                  // reload the loop index
-    emitter.instruction("ldr x10, [sp, #240]");                                 // reload the spec pointer
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", CURL_CALLBACK_FIELDS + 48));                                  // reload the loop index
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", CURL_CALLBACK_FIELDS + 16));                                 // reload the spec pointer
     emitter.instruction("ldr x10, [x10, #0]");                                  // spec.argc
     emitter.instruction("cmp x9, x10");                                         // has every bridge argument been boxed?
     emitter.instruction("b.ge __rt_curl_invoke_cb_loop_done");                  // yes → box the container
-    emitter.instruction("ldr x11, [sp, #240]");                                 // reload the spec pointer
+    emitter.instruction(&format!("ldr x11, [sp, #{}]", CURL_CALLBACK_FIELDS + 16));                                 // reload the spec pointer
     emitter.instruction("ldr x11, [x11, #8]");                                  // spec.argv base pointer
     emitter.instruction(&format!("mov x12, #{}", CALL_ARG_STRIDE));             // CallArg stride (tag@0, lo@8, hi@16)
     emitter.instruction("mul x13, x9, x12");                                    // byte offset of argv[k]
@@ -147,27 +157,27 @@ pub fn emit_curl_invoke_callback(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [x11, #8]");                                   // payload lo (int value, or string pointer)
     emitter.instruction("ldr x2, [x11, #16]");                                  // payload hi (string byte length)
     emitter.instruction("bl __rt_mixed_from_value");                            // x0 = owned boxed Mixed argument
-    emitter.instruction("str x0, [sp, #264]");                                  // stash the cell across the append
+    emitter.instruction(&format!("str x0, [sp, #{}]", CURL_CALLBACK_FIELDS + 40));                                  // stash the cell across the append
     emitter.instruction("mov x1, x0");                                          // append value = the boxed argument
-    emitter.instruction("ldr x0, [sp, #248]");                                  // append target = the args array
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", CURL_CALLBACK_FIELDS + 24));                                  // append target = the args array
     emitter.instruction("bl __rt_array_push_refcounted");                       // append (and retain) the cell
-    emitter.instruction("str x0, [sp, #248]");                                  // save the (possibly grown) args array
-    emitter.instruction("ldr x0, [sp, #264]");                                  // reload the boxed argument cell
+    emitter.instruction(&format!("str x0, [sp, #{}]", CURL_CALLBACK_FIELDS + 24));                                  // save the (possibly grown) args array
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", CURL_CALLBACK_FIELDS + 40));                                  // reload the boxed argument cell
     emitter.instruction("bl __rt_decref_any");                                  // drop the temp retain (the array owns it)
-    emitter.instruction("str xzr, [sp, #264]");                                 // the stash slot is free again
-    emitter.instruction("ldr x9, [sp, #272]");                                  // reload the loop index
+    emitter.instruction(&format!("str xzr, [sp, #{}]", CURL_CALLBACK_FIELDS + 40));                                 // the stash slot is free again
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", CURL_CALLBACK_FIELDS + 48));                                  // reload the loop index
     emitter.instruction("add x9, x9, #1");                                      // advance it
-    emitter.instruction("str x9, [sp, #272]");                                  // persist the loop index
+    emitter.instruction(&format!("str x9, [sp, #{}]", CURL_CALLBACK_FIELDS + 48));                                  // persist the loop index
     emitter.instruction("b __rt_curl_invoke_cb_loop");                          // box the next argument
     emitter.label("__rt_curl_invoke_cb_loop_done");
 
     // -- box the argument array itself as a Mixed indexed array (tag 4 increfs it) --
-    emitter.instruction("ldr x1, [sp, #248]");                                  // Mixed payload lo = the args array
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", CURL_CALLBACK_FIELDS + 24));                                  // Mixed payload lo = the args array
     emitter.instruction("mov x2, #0");                                          // heap payloads use no high word
     emitter.instruction("mov x0, #4");                                          // runtime tag 4 = indexed array
     emitter.instruction("bl __rt_mixed_from_value");                            // x0 = boxed Mixed argument container
-    emitter.instruction("str x0, [sp, #256]");                                  // save the container (released in cleanup)
-    emitter.instruction("ldr x0, [sp, #248]");                                  // reload the raw args array
+    emitter.instruction(&format!("str x0, [sp, #{}]", CURL_CALLBACK_FIELDS + 32));                                  // save the container (released in cleanup)
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", CURL_CALLBACK_FIELDS + 24));                                  // reload the raw args array
     emitter.instruction("bl __rt_decref_any");                                  // drop the extra retain (the box owns it)
 
     // -- push a setjmp firewall so a PHP throw cannot unwind through libcurl --
@@ -184,11 +194,11 @@ pub fn emit_curl_invoke_callback(emitter: &mut Emitter) {
     emitter.instruction("cbnz x0, __rt_curl_invoke_cb_threw");                  // nonzero → arrived via longjmp
 
     // -- normal path: invoke the PHP callable through its uniform invoker (offset 56) --
-    emitter.instruction("ldr x0, [sp, #224]");                                  // arg0 = the callable descriptor
-    emitter.instruction("ldr x1, [sp, #256]");                                  // arg1 = the boxed argument container
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", CURL_CALLBACK_FIELDS));                                  // arg0 = the callable descriptor
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", CURL_CALLBACK_FIELDS + 32));                                  // arg1 = the boxed argument container
     emitter.instruction(&format!("ldr x9, [x0, #{}]", CALLABLE_DESC_INVOKER_OFFSET)); // uniform invoker
     emitter.instruction("blr x9");                                              // call the PHP callable → OWNED boxed Mixed return
-    emitter.instruction("str x0, [sp, #264]");                                  // save the boxed return for decode + release
+    emitter.instruction(&format!("str x0, [sp, #{}]", CURL_CALLBACK_FIELDS + 40));                                  // save the boxed return for decode + release
 
     // -- pop the firewall before any further runtime call --
     emitter.instruction("ldr x10, [sp, #0]");                                   // record.next
@@ -197,23 +207,23 @@ pub fn emit_curl_invoke_callback(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0); // restore it
 
     // -- decode the return according to spec.result_kind --
-    emitter.instruction("ldr x11, [sp, #240]");                                 // spec pointer
+    emitter.instruction(&format!("ldr x11, [sp, #{}]", CURL_CALLBACK_FIELDS + 16));                                 // spec pointer
     emitter.instruction("ldr x11, [x11, #16]");                                 // spec.result_kind
     emitter.instruction("cbnz x11, __rt_curl_invoke_cb_string");                // 1 = string-into-buffer
 
     // result_kind 0: PHP's own `zval_get_long` of the return value.
-    emitter.instruction("ldr x0, [sp, #264]");                                  // boxed return
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", CURL_CALLBACK_FIELDS + 40));                                  // boxed return
     emitter.instruction("bl __rt_mixed_cast_int");                              // x0 = the return cast to a PHP int
-    emitter.instruction("str x0, [sp, #280]");                                  // publish it as this adapter's result
+    emitter.instruction(&format!("str x0, [sp, #{}]", CURL_CALLBACK_FIELDS + 56));                                  // publish it as this adapter's result
     emitter.instruction("b __rt_curl_invoke_cb_release_return");                // release the owned integer-return cell
 
     // result_kind 1: copy a STRING return into the bridge's buffer, capped at out_cap.
     emitter.label("__rt_curl_invoke_cb_string");
-    emitter.instruction("ldr x0, [sp, #264]");                                  // boxed return
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", CURL_CALLBACK_FIELDS + 40));                                  // boxed return
     emitter.instruction("bl __rt_mixed_unbox");                                 // x0 = tag, x1 = lo, x2 = hi
     emitter.instruction("cmp x0, #1");                                          // is the return a PHP string?
     emitter.instruction("b.ne __rt_curl_invoke_cb_release_return");             // no → out_len stays 0 (EOF)
-    emitter.instruction("ldr x11, [sp, #240]");                                 // spec pointer
+    emitter.instruction(&format!("ldr x11, [sp, #{}]", CURL_CALLBACK_FIELDS + 16));                                 // spec pointer
     emitter.instruction("ldr x12, [x11, #24]");                                 // spec.out_buf
     emitter.instruction("cbz x12, __rt_curl_invoke_cb_release_return");         // no buffer → nothing to copy
     emitter.instruction("ldr x13, [x11, #32]");                                 // spec.out_cap
@@ -228,7 +238,7 @@ pub fn emit_curl_invoke_callback(emitter: &mut Emitter) {
 
     // -- release the invoker's owned boxed return --
     emitter.label("__rt_curl_invoke_cb_release_return");
-    emitter.instruction("ldr x0, [sp, #264]");                                  // boxed return
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", CURL_CALLBACK_FIELDS + 40));                                  // boxed return
     emitter.instruction("cbz x0, __rt_curl_invoke_cb_cleanup");                 // nothing to release
     emitter.instruction("bl __rt_decref_mixed");                                // release it (bytes already copied out)
     emitter.instruction("b __rt_curl_invoke_cb_cleanup");                       // continue with argument-container cleanup
@@ -242,27 +252,27 @@ pub fn emit_curl_invoke_callback(emitter: &mut Emitter) {
     // `_exc_value` is deliberately LEFT SET: the throwable stays pending so
     // `__rt_curl_rethrow_pending` can re-raise it once libcurl has unwound its own
     // frames. Swallowing it here (as the PDO adapters do) would lose the exception.
-    emitter.instruction("ldr x11, [sp, #240]");                                 // spec pointer
+    emitter.instruction(&format!("ldr x11, [sp, #{}]", CURL_CALLBACK_FIELDS + 16));                                 // spec pointer
     emitter.instruction("mov x10, #-1");                                        // status -1 = the callable threw
     emitter.instruction("str x10, [x11, #48]");                                 // spec.status = -1
     emitter.instruction("str xzr, [x11, #40]");                                 // spec.out_len = 0 (nothing was produced)
 
     // -- shared cleanup: release the argument container --
     emitter.label("__rt_curl_invoke_cb_cleanup");
-    emitter.instruction("ldr x0, [sp, #256]");                                  // boxed argument container
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", CURL_CALLBACK_FIELDS + 32));                                  // boxed argument container
     emitter.instruction("cbz x0, __rt_curl_invoke_cb_done");                    // never allocated
     emitter.instruction("bl __rt_decref_any");                                  // release it (cascades to the boxed args)
     emitter.label("__rt_curl_invoke_cb_done");
-    emitter.instruction("ldr x0, [sp, #280]");                                  // the integer result the bridge reads
-    emitter.instruction("ldp x29, x30, [sp, #288]");                            // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #304");                                    // release the adapter frame
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", CURL_CALLBACK_FIELDS + 56));                                  // the integer result the bridge reads
+    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", CURL_CALLBACK_FIELDS + 64));                            // restore frame pointer and return address
+    emitter.instruction(&format!("add sp, sp, #{}", CURL_CALLBACK_FRAME));                                    // release the adapter frame
     emitter.instruction("ret");                                                 // return to the bridge trampoline
 
     // -- fast path: no uniform invoker → nothing allocated, nothing to release --
     emitter.label("__rt_curl_invoke_cb_bail");
     emitter.instruction("mov x0, #0");                                          // report "the callable did nothing"
-    emitter.instruction("ldp x29, x30, [sp, #288]");                            // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #304");                                    // release the adapter frame
+    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", CURL_CALLBACK_FIELDS + 64));                            // restore frame pointer and return address
+    emitter.instruction(&format!("add sp, sp, #{}", CURL_CALLBACK_FRAME));                                    // release the adapter frame
     emitter.instruction("ret");                                                 // return to the bridge trampoline
 }
 

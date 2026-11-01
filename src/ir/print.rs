@@ -20,6 +20,13 @@ use crate::ir::value::{Ownership, ValueId};
 pub fn print_module(module: &Module) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "module target={} {{", module.target);
+    if let Some(catalog) = module.source_catalog() {
+        out.push_str("  sources {\n");
+        for (id, source) in catalog.iter() {
+            let _ = writeln!(out, "    source[{}] = {:?}", id.as_raw(), source.canonical_path);
+        }
+        out.push_str("  }\n");
+    }
     print_data_pool(&mut out, &module.data);
     for function in module
         .functions
@@ -183,8 +190,39 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::ImplicitIntCast => {
             let _ = write!(out, " implicit_int_cast");
         }
+        Immediate::InPlacePropertyWrite => {
+            let _ = write!(out, " in_place_property_write");
+        }
         Immediate::Data(id) => {
             let _ = write!(out, " data[{}]", id.as_raw());
+        }
+        Immediate::Source(id) => {
+            let _ = write!(out, " source[{}]", id.as_raw());
+        }
+        Immediate::IncludeFrame(frame) => {
+            let _ = write!(
+                out,
+                " include_frame[{}:{}:slot{}]",
+                frame.source.as_raw(),
+                if frame.required { "require_once" } else { "include_once" },
+                frame.slot
+            );
+        }
+        Immediate::ClassLikeActivation(activation) => {
+            let _ = write!(out, " declaration[{}:{}:{}:{:?}:data[{}]]",
+                activation.source.as_raw(), activation.site.line, activation.site.col,
+                activation.kind, activation.name.as_raw());
+        }
+        Immediate::UnresolvedSource(path) => {
+            let _ = write!(out, " unresolved_source[{:?}]", path);
+        }
+        Immediate::NominalObject { target, boundary } => {
+            let _ = write!(
+                out,
+                " nominal_object[{}:{:?}]",
+                target.as_raw(),
+                boundary
+            );
         }
         Immediate::LocalSlot(id) => {
             let _ = write!(out, " slot[{}]", id.as_raw());
@@ -290,6 +328,14 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         }
         Immediate::TypeName(id) => {
             let _ = write!(out, " type_name[{}]", id.as_raw());
+        }
+        Immediate::ParameterType { name, strict_types } => {
+            let _ = write!(
+                out,
+                " parameter_type[{}] strict_types={}",
+                name.as_raw(),
+                strict_types
+            );
         }
         Immediate::Capacity(capacity) => {
             let _ = write!(out, " capacity={}", capacity);

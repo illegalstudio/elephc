@@ -25,6 +25,9 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     // Preserve host status handling and shared mbstring MIME metadata for header operations.
     io::emit_http_response_code(emitter, features.web);
     io::emit_header(emitter, features.web, mbstring);
+    io::emit_header_remove(emitter, features.web);
+    io::emit_headers_list(emitter, features.web);
+    io::emit_headers_sent(emitter);
     io::emit_cstr(emitter);
     io::emit_disk_space(emitter);
     io::emit_fopen(emitter);
@@ -186,6 +189,9 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_ob_gated_ops(emitter);
     io::emit_ob_get_pop_ops(emitter);
     io::emit_ob_flush_all(emitter);
+    // The shared flush-and-exit tail every process-exit site branches to; it calls
+    // __rt_ob_flush_all, so it is emitted right after it.
+    crate::codegen_support::abi::emit_exit_code_helper(emitter);
     io::emit_ob_apply_handler(emitter);
     io::emit_ob_result_to_bytes(emitter);
     io::emit_ob_invoke_descriptor(emitter);
@@ -195,6 +201,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_ob_get_status(emitter);
     io::emit_ob_list_handlers(emitter);
     io::emit_file_get_contents(emitter);
+    io::emit_file_get_contents_stdin(emitter);
     io::emit_file_get_contents_range(emitter);
     io::emit_file_put_contents(emitter);
     io::emit_file(emitter);

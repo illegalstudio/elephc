@@ -72,7 +72,41 @@ pub fn emit_copy_frame_pointer(emitter: &mut Emitter, dest: &str) {
 /// Executable mode never returns. An active cdylib boundary records
 /// `ELEPHC_STATUS_RUNTIME_FAILURE` and unwinds through `__rt_throw_current` instead.
 pub fn emit_exit(emitter: &mut Emitter, code: u32) {
-    emit_cdylib_exit_escape(emitter);
+    if emitter.cdylib_boundary {
+        emit_cdylib_exit_escape(emitter);
+        emit_inline_process_exit(emitter, code);
+        return;
+    }
+    match (emitter.target.platform, emitter.target.arch) {
+        (super::super::platform::Platform::MacOS, Arch::AArch64)
+        | (super::super::platform::Platform::Linux, Arch::AArch64) => {
+            emitter.instruction(&format!("mov x0, #{}", code));                 // load the requested process exit code into the helper's argument register
+            emitter.instruction(&format!("b {}", EXIT_CODE_HELPER));            // tail into the shared flush-and-exit tail (this path never returns)
+        }
+        (super::super::platform::Platform::Linux, Arch::X86_64) => {
+            emitter.instruction(&format!("mov edi, {}", code));                 // load the requested process exit code into the helper's argument register
+            emitter.instruction(&format!("jmp {}", EXIT_CODE_HELPER));          // tail into the shared flush-and-exit tail (this path never returns)
+        }
+        (super::super::platform::Platform::MacOS, Arch::X86_64) => {
+            panic!("process exit emission is not implemented yet for target macos-x86_64");
+        }
+        (super::super::platform::Platform::Windows, _) => {
+            panic!("Windows target is not yet supported (see issue #379)");
+        }
+    }
+}
+
+/// The shared flush-and-exit tail every process-exit site branches to.
+///
+/// Not a mangled runtime symbol: it is reached by `b`/`jmp` from compiled code in the same object,
+/// like the other `__rt_*` helpers.
+pub(crate) const EXIT_CODE_HELPER: &str = "__rt_exit_code";
+
+/// Emits the process-exit sequence in line, for the one caller that cannot share the helper.
+///
+/// A cdylib boundary prefixes the exit with [`emit_cdylib_exit_escape`], whose test-and-unwind
+/// depends on the emitter's own boundary flag, so those sites are not the shared sequence.
+fn emit_inline_process_exit(emitter: &mut Emitter, code: u32) {
     match (emitter.target.platform, emitter.target.arch) {
         (super::super::platform::Platform::MacOS, Arch::AArch64)
         | (super::super::platform::Platform::Linux, Arch::AArch64) => {
@@ -114,6 +148,56 @@ pub fn emit_exit_hook(emitter: &mut Emitter) {
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("call {symbol}"));                     // run request and module shutdown of the hosted PHP extensions
+        }
+    }
+}
+
+/// Emits [`EXIT_CODE_HELPER`]: drain the output buffers, then exit with the code in the argument
+/// register.
+///
+/// One copy per module, branched to rather than called. Inlining this at every site that can
+/// terminate cost 1,163,364 of the 29,113,610 lines the Symfony `--web` build emitted -- 4.0% of
+/// the artifact for a sequence that differs only in the code.
+///
+/// The code has to survive the flush, so it is parked in a callee-saved register (x19 / rbx) the
+/// helper is free to clobber: nothing returns through here.
+pub fn emit_exit_code_helper(emitter: &mut Emitter) {
+    // A target whose exit sequence is unimplemented emits no helper at all. `emit_exit` panics for
+    // those, but only at a site that actually exits; this runs for EVERY module, so panicking here
+    // would turn "unsupported target cannot exit" into "unsupported target cannot compile".
+    if matches!(
+        (emitter.target.platform, emitter.target.arch),
+        (super::super::platform::Platform::MacOS, Arch::X86_64)
+            | (super::super::platform::Platform::Windows, _)
+    ) {
+        return;
+    }
+    emitter.blank();
+    emitter.comment("--- runtime: shared process-exit tail ---");
+    emitter.label_global(EXIT_CODE_HELPER);
+    match (emitter.target.platform, emitter.target.arch) {
+        (super::super::platform::Platform::MacOS, Arch::AArch64)
+        | (super::super::platform::Platform::Linux, Arch::AArch64) => {
+            emitter.instruction("mov x19, x0");                                 // stash the exit code in a callee-saved register (this path never returns)
+            emitter.instruction("bl __rt_ob_flush_all");                        // drain still-active output buffers to stdout before terminating
+            emit_exit_hook(emitter);
+            emitter.instruction("mov x0, x19");                                 // restore the exit code into the syscall argument register
+            emitter.syscall(1);
+        }
+        (super::super::platform::Platform::Linux, Arch::X86_64) => {
+            emitter.instruction("mov rbx, rdi");                                // stash the exit code in a callee-saved register (this path never returns)
+            emitter.instruction("and rsp, -16");                                // realign the stack for the flush call (this path never returns)
+            emitter.instruction("call __rt_ob_flush_all");                      // drain still-active output buffers to stdout before terminating
+            emit_exit_hook(emitter);
+            emitter.instruction("mov edi, ebx");                                // move the stashed exit code into the SysV exit argument register
+            emitter.instruction("mov eax, 231");                                // Linux x86_64 syscall 231 = exit_group
+            emitter.instruction("syscall");                                     // terminate the process through the Linux x86_64 syscall ABI
+        }
+        (super::super::platform::Platform::MacOS, Arch::X86_64) => {
+            panic!("process exit emission is not implemented yet for target macos-x86_64");
+        }
+        (super::super::platform::Platform::Windows, _) => {
+            panic!("Windows target is not yet supported (see issue #379)");
         }
     }
 }
@@ -183,20 +267,11 @@ pub fn emit_exit_with_result_reg(emitter: &mut Emitter) {
     match (emitter.target.platform, emitter.target.arch) {
         (super::super::platform::Platform::MacOS, Arch::AArch64)
         | (super::super::platform::Platform::Linux, Arch::AArch64) => {
-            emitter.instruction("mov x19, x0");                                 // stash the exit code in a callee-saved register (this path never returns)
-            emitter.instruction("bl __rt_ob_flush_all");                        // drain still-active output buffers to stdout before terminating
-            emit_exit_hook(emitter);
-            emitter.instruction("mov x0, x19");                                 // restore the exit code into the syscall argument register
-            emitter.syscall(1);
+            emitter.instruction(&format!("b {}", EXIT_CODE_HELPER));            // the return value is already in x0, which is the helper's argument register
         }
         (super::super::platform::Platform::Linux, Arch::X86_64) => {
-            emitter.instruction("mov rbx, rax");                                // stash the exit code in a callee-saved register (this path never returns)
-            emitter.instruction("and rsp, -16");                                // realign the stack for the flush call (this path never returns)
-            emitter.instruction("call __rt_ob_flush_all");                      // drain still-active output buffers to stdout before terminating
-            emit_exit_hook(emitter);
-            emitter.instruction("mov edi, ebx");                                // move the stashed return value into the SysV exit argument register
-            emitter.instruction("mov eax, 231");                                // Linux x86_64 syscall 231 = exit_group
-            emitter.instruction("syscall");                                     // terminate the process with the bridge return code
+            emitter.instruction("mov edi, eax");                                // move the C return value into the helper's argument register
+            emitter.instruction(&format!("jmp {}", EXIT_CODE_HELPER));          // tail into the shared flush-and-exit tail (this path never returns)
         }
         (super::super::platform::Platform::MacOS, Arch::X86_64) => {
             panic!("process exit emission is not implemented yet for target macos-x86_64");

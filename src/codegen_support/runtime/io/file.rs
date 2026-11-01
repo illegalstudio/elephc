@@ -109,8 +109,10 @@ pub fn emit_file(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #16]");                                   // update array pointer after possible growth
     emitter.label("__rt_file_last_skip");
 
-    // -- return array pointer --
+    // -- release the read payload (every line was copied out), then return the array pointer --
     emitter.label("__rt_file_ret");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the owned file payload __rt_file_get_contents returned
+    emitter.instruction("bl __rt_heap_free_safe");                              // free it: the lines are independent copies
     emitter.instruction("ldr x0, [sp, #16]");                                   // return array pointer
     emitter.instruction("b __rt_file_epilogue");                                // skip the failure result on the success path
 
@@ -237,6 +239,8 @@ fn emit_file_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_file_last_skip");
 
     emitter.label("__rt_file_cleanup");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // the owned file payload __rt_file_get_contents returned
+    emitter.instruction("call __rt_heap_free_safe");                            // free it: the lines are independent copies
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the result array pointer in the canonical x86_64 integer result register
     emitter.instruction("jmp __rt_file_epilogue");                              // skip the failure result on the success path
 

@@ -125,6 +125,16 @@ pub fn build_intervals(func: &Function, liveness: &LivenessInfo) -> Vec<LiveInte
         }
     };
 
+    // Operands a callable value captured, keyed by every value that carries that callable. A
+    // callback consumer (`usort($a, $o->cmp(...))`, `usort($a, [$o, 'cmp'])`) may bind the
+    // callable statically: codegen then walks back from its callback operand to the literal that
+    // built it -- through `Acquire` or a local it was stored in -- and reads the captured receiver
+    // THERE, at the consumer. That read is a use the operand lists do not show, so without it the
+    // receiver's slot was handed to a later value and `usort` ran the comparator with the
+    // descriptor, or another object, as `$this`.
+    let captures = callable_captures(func);
+    let last_position = numbering.block_end.values().copied().max().unwrap_or(0);
+
     for &block_id in &numbering.order {
         let block = func.block(block_id).expect("ordered block exists");
 
@@ -140,6 +150,17 @@ pub fn build_intervals(func: &Function, liveness: &LivenessInfo) -> Vec<LiveInte
             for operand in &inst.operands {
                 extend(*operand, position, &mut ends);
                 *weights.entry(*operand).or_insert(0) += 1;
+                if let Some(captured) = captures.get(operand) {
+                    for value in captured {
+                        // A use placed before the definition is reached through a back edge: the
+                        // receiver has to survive the whole loop, so keep it to the end.
+                        let reach = match starts.get(value) {
+                            Some(start) if *start > position => last_position,
+                            _ => position,
+                        };
+                        extend(*value, reach, &mut ends);
+                    }
+                }
             }
             if !instruction_is_volatile_safe(func, inst) {
                 clobbers.push(position);
@@ -179,6 +200,79 @@ pub fn build_intervals(func: &Function, liveness: &LivenessInfo) -> Vec<LiveInte
         .collect();
     intervals.sort_by_key(|iv| (iv.start, iv.value.as_raw()));
     intervals
+}
+
+/// Maps every value that carries a callable to the operands that callable captured (see the
+/// `captures` comment in [`build_intervals`]): a `FirstClassCallableNew` result, a two-slot
+/// `[$object, 'method']` literal, an `Acquire` of a carrier, and any load of a local a carrier was
+/// stored into. Locals are tracked function-wide, as a union over every store, because the
+/// consumer can sit in another block than the literal; over-approximating only keeps a receiver
+/// alive longer. The flow through locals is iterated to a fixed point.
+fn callable_captures(func: &Function) -> HashMap<ValueId, Vec<ValueId>> {
+    use crate::ir::{Immediate, LocalSlotId, Op};
+    let mut captures: HashMap<ValueId, Vec<ValueId>> = HashMap::new();
+    let mut slot_captures: HashMap<LocalSlotId, Vec<ValueId>> = HashMap::new();
+    let merge = |into: &mut Vec<ValueId>, from: &[ValueId]| {
+        let before = into.len();
+        for value in from {
+            if !into.contains(value) {
+                into.push(*value);
+            }
+        }
+        into.len() != before
+    };
+    loop {
+        let mut changed = false;
+        for inst in &func.instructions {
+            match inst.op {
+                Op::FirstClassCallableNew => {
+                    if let (Some(result), false) = (inst.result, inst.operands.is_empty()) {
+                        changed |= merge(captures.entry(result).or_default(), &inst.operands);
+                    }
+                }
+                // Wider literals are not callables, so their elements keep their own ranges.
+                Op::ArrayNew => {
+                    if let (Some(result), Some(Immediate::Capacity(2))) = (inst.result, &inst.immediate) {
+                        captures.entry(result).or_default();
+                    }
+                }
+                Op::ArrayPush => {
+                    if let (Some(array), Some(value)) = (inst.operands.first(), inst.operands.get(1)) {
+                        if let Some(captured) = captures.get_mut(array) {
+                            changed |= merge(captured, &[*value]);
+                        }
+                    }
+                }
+                Op::Acquire => {
+                    if let (Some(result), Some(source)) = (inst.result, inst.operands.first()) {
+                        if let Some(captured) = captures.get(source).cloned() {
+                            changed |= merge(captures.entry(result).or_default(), &captured);
+                        }
+                    }
+                }
+                Op::StoreLocal => {
+                    if let (Some(Immediate::LocalSlot(slot)), Some(value)) =
+                        (&inst.immediate, inst.operands.first())
+                    {
+                        if let Some(captured) = captures.get(value).cloned() {
+                            changed |= merge(slot_captures.entry(*slot).or_default(), &captured);
+                        }
+                    }
+                }
+                Op::LoadLocal => {
+                    if let (Some(result), Some(Immediate::LocalSlot(slot))) = (inst.result, &inst.immediate) {
+                        if let Some(captured) = slot_captures.get(slot).cloned() {
+                            changed |= merge(captures.entry(result).or_default(), &captured);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if !changed {
+            return captures;
+        }
+    }
 }
 
 /// Returns true when no clobber position lies in the closed range

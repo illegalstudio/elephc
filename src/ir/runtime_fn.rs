@@ -131,6 +131,12 @@ pub enum RuntimeFnId {
     ArraySearch,
     ArrayShift,
     ArraySlice,
+    /// INTERNAL, not a PHP builtin: materializes the source of a `...` spread.
+    ///
+    /// Passes an indexed array straight through and rebuilds the two elements of a
+    /// CALLABLE DESCRIPTOR (`[$object, 'method']` written as a `callable`), which the
+    /// plain unbox would read as array metadata.
+    MixedSpreadArray,
     ArraySplice,
     ArraySum,
     ArrayUdiff,
@@ -164,8 +170,10 @@ pub enum RuntimeFnId {
     ClassParents,
     ClassUses,
     EnumExists,
+    GetClassMethods,
     FunctionExists,
     GetClass,
+    GetDebugType,
     GetObjectVars,
     GetDeclaredClasses,
     GetDeclaredInterfaces,
@@ -417,6 +425,8 @@ pub enum RuntimeFnId {
     Sqrt,
     Tan,
     Tanh,
+    ElephcDiagSuppressed,
+    ElephcCloneApplyOne,
     ElephcCloneOverrideReferenceGuard,
     ElephcObjectIsEnum,
     ElephcObjectPropCount,
@@ -514,6 +524,8 @@ pub enum RuntimeFnId {
     CurlVersion,
     /// Raises PHP's warning for a `curl_setopt()` option this build cannot apply.
     CurlSetoptUnsupportedWarning,
+    /// Internal: raises one php-level `E_WARNING` through the diagnostic channel, for preludes.
+    ElephcInternalWarning,
     /// Reads a `long`-typed `CURLINFO_*` field from an easy handle's most recent transfer
     /// (`CURLINFO_HTTP_CODE` only, for `curl_getinfo()`).
     CurlEasyGetinfoLong,
@@ -605,6 +617,10 @@ pub enum RuntimeFnId {
     OpensslDecrypt,
     OpensslEncrypt,
     OpensslGetCipherMethods,
+    /// One libsodium-compatible sealed-box operation behind the sodium prelude.
+    SodiumBox,
+    /// The status the last `SodiumBox` call recorded.
+    SodiumStatus,
     Iconv,
     IconvGetEncoding,
     IconvMimeDecode,
@@ -617,6 +633,8 @@ pub enum RuntimeFnId {
     IconvSubstr,
     Htmlentities,
     Htmlspecialchars,
+    HighlightFile,
+    HighlightString,
     Implode,
     InetNtop,
     InetPton,
@@ -735,6 +753,7 @@ pub enum RuntimeFnId {
     StrWordCount,
     Strcasecmp,
     Strcmp,
+    Strcspn,
     Strncasecmp,
     Strncmp,
     StripTags,
@@ -742,9 +761,13 @@ pub enum RuntimeFnId {
     Strpos,
     Strripos,
     Strrpos,
+    Strpbrk,
+    Strspn,
     Strtr,
     Strstr,
+    Strrchr,
     Substr,
+    SubstrCompare,
     SubstrCount,
     SubstrReplace,
     Trim,
@@ -756,6 +779,12 @@ pub enum RuntimeFnId {
     ElephcGmmktimeRaw,
     ElephcMktimeRaw,
     ElephcStrtotimeRaw,
+    ElephcLastErrorInt,
+    /// INTERNAL: native descriptor behind a stream resource (`proc_open()` prelude).
+    ElephcStreamFd,
+    /// INTERNAL: wraps an owned native descriptor in a fresh stream resource.
+    ElephcFdToStream,
+    ElephcLastErrorStr,
     Checkdate,
     ClassAttributeArgs,
     ClassAttributeNames,
@@ -763,9 +792,12 @@ pub enum RuntimeFnId {
     Date,
     DateDefaultTimezoneGet,
     DateDefaultTimezoneSet,
+    Constant,
     Define,
     Defined,
+    ErrorLog,
     Exec,
+    Extract,
     ExtensionLoaded,
     Getdate,
     Getenv,
@@ -773,6 +805,9 @@ pub enum RuntimeFnId {
     Gmdate,
     Gmmktime,
     Header,
+    HeaderRemove,
+    HeadersList,
+    HeadersSent,
     Hrtime,
     HttpResponseCode,
     JsonDecode,
@@ -796,17 +831,23 @@ pub enum RuntimeFnId {
     Passthru,
     PhpUname,
     Phpversion,
+    PregGrep,
+    PregLastError,
+    PregLastErrorMsg,
     PregMatch,
     PregMatchAll,
+    PregQuote,
     PregReplace,
     PregSplit,
     Putenv,
     Serialize,
+    Setlocale,
     ShellExec,
     Sleep,
     Strtotime,
     System,
     Time,
+    Unpack,
     Unserialize,
     Usleep,
     GetResourceId,
@@ -865,6 +906,8 @@ impl RuntimeFnId {
         }
         match self {
             RuntimeFnId::ArrayPtrSeek => Some((3, Some(3))),
+            // Lowering-owned: injected by the spread narrowing, never written in PHP.
+            RuntimeFnId::MixedSpreadArray => Some((1, Some(1))),
             RuntimeFnId::ArrayPtrKey | RuntimeFnId::ArrayPtrValue => Some((2, Some(2))),
             _ => None,
         }
@@ -907,6 +950,11 @@ impl RuntimeFnId {
             }
             RuntimeFnId::ArrayMerge if arg_types.iter().any(PhpType::is_php_array) => {
                 PhpType::php_array()
+            }
+            RuntimeFnId::ArrayMerge => {
+                let concrete = arg_types.iter().map(PhpType::codegen_repr).collect::<Vec<_>>();
+                crate::builtins::array_merge_indexed_result_type(&concrete)
+                    .unwrap_or_else(|| declared.clone())
             }
             RuntimeFnId::ArrayValues => match arg_types.first().map(PhpType::codegen_repr) {
                 Some(PhpType::Array(element)) => PhpType::Array(element),
@@ -954,6 +1002,7 @@ impl RuntimeFnId {
             | RuntimeFnId::BcDivmod | RuntimeFnId::BcNumberDivmod
             | RuntimeFnId::Explode
             | RuntimeFnId::Glob
+            | RuntimeFnId::HeadersList
             | RuntimeFnId::Scandir
             | RuntimeFnId::SplClasses => PhpType::Array(Box::new(PhpType::Str)),
             RuntimeFnId::ClassGetAttributes => PhpType::Array(Box::new(PhpType::Object(
@@ -1035,6 +1084,13 @@ impl RuntimeFnId {
                 let result_element = result_element.codegen_repr();
                 result_element == source_element || result_element == PhpType::Mixed
             }
+            // The split helper always fills boxed-Mixed element slots, so only an `array<mixed>`
+            // or a boxed `array|false` describes what it returns.
+            RuntimeFnId::PregSplit => match checked.codegen_repr() {
+                PhpType::Array(element) => element.codegen_repr() == PhpType::Mixed,
+                PhpType::Mixed => true,
+                _ => false,
+            },
             _ => true,
         }
     }
@@ -1053,6 +1109,12 @@ impl RuntimeFnId {
                 // Preserve null in both direct operands and generated callable wrappers.
                 if let Some((_, name_ty)) = sig.params.get_mut(0) {
                     *name_ty = PhpType::Union(vec![PhpType::Str, PhpType::Void]);
+                }
+            }
+            RuntimeFnId::MbStrtolower | RuntimeFnId::MbStrtoupper => {
+                // A null `$encoding` selects UTF-8 while `""` is rejected, so keep it nullable.
+                if let Some((_, encoding_ty)) = sig.params.get_mut(1) {
+                    *encoding_ty = PhpType::Union(vec![PhpType::Str, PhpType::Void]);
                 }
             }
             RuntimeFnId::PregReplaceCallback => {
@@ -1124,6 +1186,21 @@ impl RuntimeFnId {
                 set_callable_param_type(sig, 0, PhpType::Mixed);
             }
             RuntimeFnId::Count => truncate_callable_params(sig, 1),
+            // A callback receives the array only; `$filter_value`/`$strict`
+            // select the direct call's search form, which the one-argument helper does not take.
+            RuntimeFnId::ArrayKeys => {
+                truncate_callable_params(sig, 1);
+                set_callable_param_type(sig, 0, PhpType::Mixed);
+            }
+            // A type probe by run-time name passes the value only; `$syntax_only` and the
+            // by-reference `$callable_name` belong to the direct call.
+            RuntimeFnId::IsCallable => {
+                truncate_callable_params(sig, 1);
+                set_callable_param_type(sig, 0, PhpType::Mixed);
+            }
+            // The by-reference `$count` is served by `crate::str_replace_count_prelude` for a
+            // DIRECT four-argument call; the native helper behind a callable wrapper takes three.
+            RuntimeFnId::StrReplace => truncate_callable_params(sig, 3),
             RuntimeFnId::CloneWith => {
                 set_callable_param_type(sig, 0, PhpType::Mixed);
                 // Dynamic callable arguments reach the runtime before their PHP parameter type
@@ -1147,6 +1224,23 @@ impl RuntimeFnId {
                 set_callable_param_type(sig, 0, PhpType::php_array());
                 sig.return_type = PhpType::Mixed;
             }
+            RuntimeFnId::Fclose
+            | RuntimeFnId::FileGetContents
+            | RuntimeFnId::Fileperms
+            | RuntimeFnId::Rmdir
+            | RuntimeFnId::Unlink => truncate_callable_params(sig, 1),
+            RuntimeFnId::Chgrp
+            | RuntimeFnId::Chmod
+            | RuntimeFnId::Chown
+            | RuntimeFnId::FilePutContents
+            | RuntimeFnId::Fopen
+            | RuntimeFnId::Lchgrp
+            | RuntimeFnId::Lchown
+            | RuntimeFnId::Link
+            | RuntimeFnId::Rename
+            | RuntimeFnId::Symlink
+            | RuntimeFnId::Tempnam => truncate_callable_params(sig, 2),
+            RuntimeFnId::Mkdir | RuntimeFnId::Touch => truncate_callable_params(sig, 3),
             RuntimeFnId::Clamp => {
                 set_callable_param_type(sig, 0, PhpType::Int);
                 set_callable_param_type(sig, 1, PhpType::Int);
@@ -1293,7 +1387,6 @@ impl RuntimeFnId {
             RuntimeFnId::Abs |
             RuntimeFnId::Acos |
             RuntimeFnId::ArrayColumn |
-            RuntimeFnId::ArrayCombine |
             RuntimeFnId::ArrayDiff |
             RuntimeFnId::ArrayDiffAssoc |
             RuntimeFnId::ArrayDiffKey |
@@ -1339,6 +1432,7 @@ impl RuntimeFnId {
             RuntimeFnId::Fmod |
             RuntimeFnId::GetResourceId |
             RuntimeFnId::GetResourceType |
+            RuntimeFnId::GetDebugType |
             RuntimeFnId::Gettype |
             RuntimeFnId::GraphemeStrrev |
             RuntimeFnId::HashAlgos |
@@ -1379,7 +1473,9 @@ impl RuntimeFnId {
             RuntimeFnId::StrStartsWith |
             RuntimeFnId::Strcasecmp |
             RuntimeFnId::Strcmp |
+            RuntimeFnId::PregQuote |
             RuntimeFnId::Strstr |
+            RuntimeFnId::Strrchr |
             RuntimeFnId::Substr |
             RuntimeFnId::SubstrReplace |
             RuntimeFnId::Tan |
@@ -1388,7 +1484,8 @@ impl RuntimeFnId {
             RuntimeFnId::Ucfirst |
             RuntimeFnId::Ucwords => crate::ir::Effects::empty(),
             // These raise reference PHP's catchable `ValueError` for out-of-range
-            // arguments (`array_chunk()` non-positive length, `clamp()` inverted bounds,
+            // arguments (`array_chunk()` non-positive length, `array_combine()` mismatched
+            // cardinalities, `clamp()` inverted bounds,
             // `array_fill()` negative count, `array_pad()` oversized length, `explode()`
             // empty separator, `str_pad()` empty pad string or bad pad type,
             // `str_repeat()` negative count, `str_split()` non-positive length,
@@ -1396,6 +1493,7 @@ impl RuntimeFnId {
             // `range()` zero/negative/oversized `$step`, `round()` unknown rounding mode,
             // `strncmp()`/`strncasecmp()` negative compare length,
             // `strpos()`/`strrpos()`/`stripos()`/`strripos()` `$offset` outside the haystack,
+            // `substr_compare()` `$offset` past the haystack end or a negative `$length`,
             // `substr_count()` empty needle or out-of-subject offset/length,
             // `wordwrap()` empty break or zero cutting width, `min()`/`max()` over an
             // empty array, `parse_url()` unknown `$component` identifier), so they must not
@@ -1403,6 +1501,7 @@ impl RuntimeFnId {
             // as removable pure calls: dead-code elimination would drop the diagnostic, and
             // the try-prefix hoist would move the call out of the `try` that must catch it.
             RuntimeFnId::ArrayChunk
+            | RuntimeFnId::ArrayCombine
             | RuntimeFnId::ArrayFill
             | RuntimeFnId::CountChars
             | RuntimeFnId::ArrayPad
@@ -1422,17 +1521,27 @@ impl RuntimeFnId {
             | RuntimeFnId::Strpos
             | RuntimeFnId::Strripos
             | RuntimeFnId::Strrpos
+            | RuntimeFnId::Strpbrk
+            | RuntimeFnId::SubstrCompare
             | RuntimeFnId::SubstrCount
             | RuntimeFnId::BaseConvert
             | RuntimeFnId::ChunkSplit
             | RuntimeFnId::ParseUrl
             | RuntimeFnId::Wordwrap => crate::ir::Effects::MAY_THROW,
+            RuntimeFnId::Constant => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_GLOBAL.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::MAY_THROW.bits(),
+            ),
             RuntimeFnId::FunctionExists
             | RuntimeFnId::Defined
             | RuntimeFnId::JsonLastError
             | RuntimeFnId::JsonLastErrorMsg
+            | RuntimeFnId::PregLastError
+            | RuntimeFnId::PregLastErrorMsg
             | RuntimeFnId::DateDefaultTimezoneGet
-            | RuntimeFnId::ObGetLevel => crate::ir::Effects::READS_GLOBAL,
+            | RuntimeFnId::ObGetLevel
+            | RuntimeFnId::ElephcDiagSuppressed => crate::ir::Effects::READS_GLOBAL,
             RuntimeFnId::SplAutoloadExtensions => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_GLOBAL.bits()
                     | crate::ir::Effects::WRITES_GLOBAL.bits(),
@@ -1443,6 +1552,18 @@ impl RuntimeFnId {
             ),
             // The clone override guard only reads one hash entry's reference state, and
             // raises the catchable refusal itself when that entry is still a PHP reference.
+            // One override entry goes through the ordinary property-write lowering of the clone's
+            // class, so it may do anything an assignment may do.
+            RuntimeFnId::ElephcCloneApplyOne => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::WRITES_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::REFCOUNT_OP.bits()
+                    | crate::ir::Effects::MAY_THROW.bits()
+                    | crate::ir::Effects::MAY_FATAL.bits()
+                    | crate::ir::Effects::MAY_WARN.bits()
+                    | crate::ir::Effects::OUTPUT.bits(),
+            ),
             RuntimeFnId::ElephcCloneOverrideReferenceGuard => {
                 crate::ir::Effects::from_bits_retain(
                     crate::ir::Effects::READS_HEAP.bits()
@@ -1567,6 +1688,15 @@ impl RuntimeFnId {
             RuntimeFnId::MemoryResetPeakUsage => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_GLOBAL.bits() | crate::ir::Effects::WRITES_GLOBAL.bits(),
             ),
+            // The last-diagnostic record is process state every diagnostic rewrites; field 2
+            // clears it, and the string reader allocates its owned copy.
+            RuntimeFnId::ElephcLastErrorInt | RuntimeFnId::ElephcLastErrorStr => {
+                crate::ir::Effects::from_bits_retain(
+                    crate::ir::Effects::READS_GLOBAL.bits()
+                        | crate::ir::Effects::WRITES_GLOBAL.bits()
+                        | crate::ir::Effects::ALLOC_HEAP.bits(),
+                )
+            }
             // `getmypid()` is not a constant: a `pcntl_fork()` child reads its own id.
             RuntimeFnId::Time | RuntimeFnId::Getmypid => crate::ir::Effects::READS_PROCESS,
             RuntimeFnId::Microtime | RuntimeFnId::Hrtime => {
@@ -1582,6 +1712,7 @@ impl RuntimeFnId {
             RuntimeFnId::Gethostname => {
                 crate::ir::Effects::from_bits_retain(
                     crate::ir::Effects::READS_PROCESS.bits()
+                        | crate::ir::Effects::ALLOC_HEAP.bits()
                         | crate::ir::Effects::ALLOC_CONCAT.bits(),
                 )
             }
@@ -1604,7 +1735,9 @@ impl RuntimeFnId {
                         | crate::ir::Effects::MAY_THROW.bits(),
                 )
             }
-            RuntimeFnId::Sleep | RuntimeFnId::Usleep => crate::ir::Effects::WRITES_PROCESS,
+            RuntimeFnId::ErrorLog | RuntimeFnId::Sleep | RuntimeFnId::Usleep => {
+                crate::ir::Effects::WRITES_PROCESS
+            }
             // `intval($value, $base)` only inspects the subject's bytes: the string parser
             // allocates nothing, and the boxed-`Mixed` entry point reads the cell before
             // handing a non-string payload to the ordinary integer cast.
@@ -1618,6 +1751,7 @@ impl RuntimeFnId {
             // A `%s` conversion can invoke arbitrary userland `__toString()` code. Keep the
             // full externally observable call surface here so AST try/catch pruning retains
             // handlers and propagation never treats state touched by that method as stable.
+            // `implode()` shares this hazard but is classified above with `array_flip()`.
             RuntimeFnId::Fprintf
             | RuntimeFnId::Printf
             | RuntimeFnId::Sprintf
@@ -1639,6 +1773,16 @@ impl RuntimeFnId {
                         | crate::ir::Effects::MAY_THROW.bits()
                         | crate::ir::Effects::MAY_FATAL.bits()
                         | crate::ir::Effects::MAY_WARN.bits(),
+                )
+            }
+            // mbstring's case mapping reads the subject and encoding name, allocates the
+            // result, and throws a `ValueError` for a refused encoding; it touches no process
+            // state and prints nothing, so an unused call may only go once it cannot throw.
+            RuntimeFnId::MbStrtolower | RuntimeFnId::MbStrtoupper => {
+                crate::ir::Effects::from_bits_retain(
+                    crate::ir::Effects::READS_HEAP.bits()
+                        | crate::ir::Effects::ALLOC_HEAP.bits()
+                        | crate::ir::Effects::MAY_THROW.bits(),
                 )
             }
             // The iconv family reads string payloads, allocates its results, consults and
@@ -1907,6 +2051,7 @@ impl RuntimeFnId {
             | RuntimeFnId::MbPreferredMimeName
             | RuntimeFnId::Md5
             | RuntimeFnId::Sha1
+            | RuntimeFnId::SodiumBox
             | RuntimeFnId::StreamSocketEnableCrypto => MonitoringPolicy::GenericTiming,
             _ => MonitoringPolicy::Unspecified,
         }
@@ -2021,7 +2166,8 @@ impl RuntimeFnId {
             RuntimeFnId::OpensslCipherIvLength
             | RuntimeFnId::OpensslDecrypt
             | RuntimeFnId::OpensslEncrypt
-            | RuntimeFnId::OpensslGetCipherMethods => {
+            | RuntimeFnId::OpensslGetCipherMethods
+            | RuntimeFnId::SodiumBox => {
                 &[BuiltinRequirement::Bridge("elephc_crypto")]
             }
             RuntimeFnId::Iconv
@@ -2180,8 +2326,19 @@ impl RuntimeFnId {
         matches!(
             self,
             RuntimeFnId::Abs
+                | RuntimeFnId::Chgrp
+                | RuntimeFnId::Chmod
+                | RuntimeFnId::Chown
+                | RuntimeFnId::Fclose
+                | RuntimeFnId::FileGetContents
+                | RuntimeFnId::FilePutContents
+                | RuntimeFnId::Fileperms
+                | RuntimeFnId::Fopen
+                | RuntimeFnId::GetClass
+                | RuntimeFnId::SplObjectId
                 | RuntimeFnId::ArraySum
                 | RuntimeFnId::ArrayProduct
+                | RuntimeFnId::ArrayKeys
                 | RuntimeFnId::CloneWith
                 | RuntimeFnId::Count
                 | RuntimeFnId::Getmypid
@@ -2191,8 +2348,56 @@ impl RuntimeFnId {
                 | RuntimeFnId::MemoryGetUsage
                 | RuntimeFnId::MemoryResetPeakUsage
                 | RuntimeFnId::Gettype
+                // A type probe by run-time name: symfony/dependency-injection's
+                // `CheckTypeDeclarationsPass` calls `sprintf('is_%s', $type)($value)`.
+                | RuntimeFnId::IsNumeric
+                | RuntimeFnId::IsCallable
+                | RuntimeFnId::Lchgrp
+                | RuntimeFnId::Lchown
+                | RuntimeFnId::Link
+                | RuntimeFnId::Mkdir
+                | RuntimeFnId::Rename
+                | RuntimeFnId::Rmdir
+                | RuntimeFnId::Symlink
+                | RuntimeFnId::Tempnam
+                | RuntimeFnId::Touch
                 | RuntimeFnId::InArray
                 | RuntimeFnId::Trim
+                | RuntimeFnId::PregQuote
+                | RuntimeFnId::Unlink
+                | RuntimeFnId::Strcspn
+                | RuntimeFnId::Strspn
+                | RuntimeFnId::FileExists
+                | RuntimeFnId::IsDir
+                | RuntimeFnId::IsExecutable
+                | RuntimeFnId::IsFile
+                | RuntimeFnId::IsLink
+                | RuntimeFnId::IsReadable
+                | RuntimeFnId::IsWritable
+                | RuntimeFnId::IsWriteable
+                // Named as STRINGS by handler registrations: Symfony's `DebugHandlersListener`
+                // probes the active handler with `set_exception_handler('var_dump')` on every
+                // request, and the eager normalization of that string found no case for it.
+                | RuntimeFnId::VarDump
+                | RuntimeFnId::PrintR
+                // `array_map('ord', str_split($input))` is how symfony/polyfill-intl-idn decodes
+                // punycode. Without a case the call fataled at run time, and the empty candidate
+                // set fell back to the whole runtime-name table: 1M instructions at that one site.
+                | RuntimeFnId::Ord
+                | RuntimeFnId::Chr
+                // `array_map('realpath', $paths)` is how FrameworkBundle's translation commands
+                // normalize their paths.
+                | RuntimeFnId::Realpath
+                // Symfony's `ByteString::match()` selects `$match = 'preg_match'` or
+                // `'preg_match_all'` at run time and calls `$match($regexp, $string, $matches)`.
+                | RuntimeFnId::PregMatch
+                | RuntimeFnId::PregMatchAll
+                // `$replace = 'preg_replace'` / `'preg_replace_callback'` in the same class.
+                | RuntimeFnId::PregReplace
+                | RuntimeFnId::PregReplaceCallback
+                // Composer's `ClassLoader::getPrefixes()`:
+                // `call_user_func_array('array_merge', array_values($this->prefixesPsr0))`.
+                | RuntimeFnId::ArrayMerge
         )
     }
 
@@ -2218,6 +2423,28 @@ impl RuntimeFnId {
                         | PhpType::Void
                 )
             }),
+            // `spl_object_id` checks a gradual element at run time the same way (`array_map(
+            // 'spl_object_id', $entities)` is how Doctrine's `PersistentCollection` keys a diff).
+            RuntimeFnId::GetClass | RuntimeFnId::SplObjectId => source.is_none_or(|ty| {
+                matches!(ty, PhpType::Mixed | PhpType::Object(_) | PhpType::Union(_))
+            }),
+            // `chr()` takes an int; a gradual element is cast to it at the call like the string
+            // builtins below cast theirs.
+            RuntimeFnId::Chr => source.is_none_or(|ty| {
+                matches!(ty, PhpType::Int | PhpType::Mixed | PhpType::Union(_))
+            }),
+            // `array_map('array_keys', $mappedClasses)` (Symfony's `AttributeMetadataPass`): the
+            // wrapper's direct call converts a gradual element to a hash, raising php's TypeError
+            // for a non-array, as `array_keys($mixed)` does.
+            RuntimeFnId::ArrayKeys => source.is_none_or(|ty| {
+                matches!(
+                    ty,
+                    PhpType::Array(_)
+                        | PhpType::AssocArray { .. }
+                        | PhpType::Mixed
+                        | PhpType::Union(_)
+                )
+            }),
             RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct | RuntimeFnId::Getmypid
             | RuntimeFnId::Gettype | RuntimeFnId::InArray
             | RuntimeFnId::MemoryGetAllocations
@@ -2226,14 +2453,84 @@ impl RuntimeFnId {
             | RuntimeFnId::MemoryGetUsage
             | RuntimeFnId::MemoryResetPeakUsage
             => true,
-            RuntimeFnId::Trim => source.is_none_or(|ty| matches!(ty, PhpType::Str)),
+            // Both take any value, which is what a handler they are registered as receives.
+            RuntimeFnId::VarDump | RuntimeFnId::PrintR => true,
+            // Type probes take any value (`sprintf('is_%s', $type)($value)`).
+            RuntimeFnId::IsNumeric | RuntimeFnId::IsCallable => true,
+            RuntimeFnId::Chgrp
+            | RuntimeFnId::Chmod
+            | RuntimeFnId::Chown
+            | RuntimeFnId::Fclose
+            | RuntimeFnId::FileGetContents
+            | RuntimeFnId::FilePutContents
+            | RuntimeFnId::Fileperms
+            | RuntimeFnId::Fopen
+            | RuntimeFnId::Lchgrp
+            | RuntimeFnId::Lchown
+            | RuntimeFnId::Link
+            | RuntimeFnId::Mkdir
+            | RuntimeFnId::Rename
+            | RuntimeFnId::Rmdir
+            | RuntimeFnId::Symlink
+            | RuntimeFnId::Tempnam
+            | RuntimeFnId::Touch
+            | RuntimeFnId::Unlink
+            | RuntimeFnId::Strcspn
+            | RuntimeFnId::Strspn
+            | RuntimeFnId::PregMatch
+            | RuntimeFnId::PregMatchAll
+            | RuntimeFnId::PregReplace
+            | RuntimeFnId::PregReplaceCallback
+            | RuntimeFnId::ArrayMerge => source.is_none(),
+            // A GRADUAL element is admitted for the same reason the string builtins admit one:
+            // `coerce_gradual_wrapper_operands` casts it to the declared parameter type before the
+            // lowering sees it, which is what php does at the call.
+            // The one-path filesystem predicates are the usual `array_filter($paths, 'is_file')`
+            // callbacks; their path parameter takes a gradual element the same way.
+            // `array_map('preg_quote', explode(':', $name))` is how Symfony's console builds the
+            // pattern for an abbreviated command name; refusing it fataled every unknown command.
+            RuntimeFnId::Trim
+            | RuntimeFnId::Ord
+            | RuntimeFnId::PregQuote
+            | RuntimeFnId::FileExists
+            | RuntimeFnId::IsDir
+            | RuntimeFnId::IsExecutable
+            | RuntimeFnId::IsFile
+            | RuntimeFnId::IsLink
+            | RuntimeFnId::IsReadable
+            | RuntimeFnId::IsWritable
+            | RuntimeFnId::IsWriteable
+            | RuntimeFnId::Realpath => source.is_none_or(|ty| {
+                matches!(ty, PhpType::Str | PhpType::Mixed | PhpType::Union(_))
+            }),
             _ => false,
         }
     }
 
     /// Accepts a proven callback arity when a builtin's wrapper supports a narrower optional-argument subset.
     pub fn callable_accepts_arity(self, source: Option<&crate::types::PhpType>, arity: Option<usize>) -> bool {
-        if self == Self::Count { return arity == Some(1); }
+        // `count($x, $mode)` takes an optional second argument, so a callback proven to pass two
+        // is refused; an UNKNOWN arity (`array_map("count", ...)`) gets the ordinary answer
+        // instead of a refusal, which fataled every string-named `count` callback at run time.
+        // The one-parameter `array_keys` wrapper cannot serve a caller that passes its search
+        // arguments.
+        if self == Self::ArrayKeys && arity.is_some_and(|n| n != 1) {
+            return false;
+        }
+        if self == Self::Count {
+            if arity.is_some() { return arity == Some(1); }
+            return source.map(crate::types::PhpType::codegen_repr).is_none_or(|ty| {
+                matches!(
+                    ty,
+                    crate::types::PhpType::Array(_)
+                        | crate::types::PhpType::AssocArray { .. }
+                        | crate::types::PhpType::Iterable
+                        | crate::types::PhpType::Mixed
+                        | crate::types::PhpType::Union(_)
+                        | crate::types::PhpType::Object(_)
+                )
+            });
+        }
         self.callable_accepts(source)
     }
 
@@ -2242,6 +2539,9 @@ impl RuntimeFnId {
         matches!(
             self,
             RuntimeFnId::PregMatch
+                | RuntimeFnId::PregGrep
+                | RuntimeFnId::PregLastError
+                | RuntimeFnId::PregLastErrorMsg
                 | RuntimeFnId::PregMatchAll
                 | RuntimeFnId::PregReplace
                 | RuntimeFnId::PregReplaceCallback
@@ -2290,6 +2590,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::Fsockopen
                 | RuntimeFnId::Opendir
                 | RuntimeFnId::Popen
+                | RuntimeFnId::ElephcFdToStream
                 | RuntimeFnId::Tmpfile
         )
     }
@@ -2381,6 +2682,81 @@ impl RuntimeFnId {
         // in the default `MayAliasArguments` bucket would keep an owned subject temporary
         // alive for the integer's whole lifetime, which is the leak shape already documented
         // for `Strpos` and `Strtr` below.
+        // `preg_replace()` and `preg_replace_callback()` build their result in concat scratch on
+        // every path, an unchanged subject included, so their arguments -- the callback's subject
+        // is persisted for the call because callbacks reuse that scratch -- can be released once
+        // the call returns.
+        if matches!(self, RuntimeFnId::PregReplace | RuntimeFnId::PregReplaceCallback) {
+            return BuiltinResultOwnership::Independent;
+        }
+        // `str_repeat()` and `str_pad()` always write a new string (concat scratch or heap; the
+        // no-padding case copies via `__rt_strcopy`, a zero count returns the empty string), so
+        // an owned subject -- a `mixed` cast -- is released after the call instead of being kept
+        // alive by a presumed alias: one leaked block per call before.
+        // `wordwrap()` likewise reserves and writes its whole result, and `ucwords()` edits a
+        // `__rt_strcopy` of its subject.
+        if matches!(
+            self,
+            RuntimeFnId::StrRepeat | RuntimeFnId::StrPad | RuntimeFnId::Wordwrap | RuntimeFnId::Ucwords
+        ) {
+            return BuiltinResultOwnership::Independent;
+        }
+        // `date()`/`gmdate()` format into the concat buffer; the persisted format copy the
+        // argument lowering makes was kept alive by a presumed alias.
+        if matches!(self, RuntimeFnId::Date | RuntimeFnId::Gmdate) {
+            return BuiltinResultOwnership::Independent;
+        }
+        // A digest is always new bytes, hex or raw, never a view of its input: `md5($s, false)`
+        // inside a function kept the source-order lease on `$s` alive as a presumed alias, one
+        // leaked block per call (`md5_file()`'s prelude, and every `sha1($x, true)`).
+        if matches!(
+            self,
+            RuntimeFnId::Md5 | RuntimeFnId::Sha1 | RuntimeFnId::Hash | RuntimeFnId::HashHmac
+                | RuntimeFnId::HashFile
+        ) {
+            return BuiltinResultOwnership::Independent;
+        }
+        // `sprintf()`/`vsprintf()` write every result into concat scratch or an owned heap
+        // block, never handing an argument back, so the `(string)` copy cast from a Mixed
+        // format was kept alive by a presumed alias: one leaked block per call, and Symfony's
+        // `resolveEnvPlaceholders()` formats one per configuration value.
+        if matches!(self, RuntimeFnId::Sprintf | RuntimeFnId::Vsprintf) {
+            return BuiltinResultOwnership::Independent;
+        }
+        // `get_class_methods()` builds a fresh array of static names; nothing in it is the argument.
+        if matches!(self, RuntimeFnId::GetClassMethods) {
+            return BuiltinResultOwnership::Independent;
+        }
+        // The filesystem family answers a fresh boolean, integer, resource or (`tempnam()`) new
+        // path string -- boxed whenever the answer can also be `false` -- and never one of its
+        // arguments. Left in the default `MayAliasArguments` bucket, their runtime-string callable
+        // wrappers could not be built, so `$name(...$args)` forwarding `fileperms`, `touch` or
+        // `rename` through a `mixed ...$args` helper died with "Call to undefined function".
+        if matches!(
+            self,
+            RuntimeFnId::Chgrp
+                | RuntimeFnId::Chmod
+                | RuntimeFnId::Chown
+                | RuntimeFnId::Fclose
+                | RuntimeFnId::FilePutContents
+                | RuntimeFnId::Fileperms
+                | RuntimeFnId::Fopen
+                | RuntimeFnId::Lchgrp
+                | RuntimeFnId::Lchown
+                | RuntimeFnId::Link
+                | RuntimeFnId::Mkdir
+                | RuntimeFnId::Rename
+                | RuntimeFnId::Rmdir
+                | RuntimeFnId::Symlink
+                | RuntimeFnId::Tempnam
+                | RuntimeFnId::Touch
+                | RuntimeFnId::Unlink
+                // `__rt_realpath` answers an owned heap copy (or the failure sentinel), never
+                // its argument.
+                | RuntimeFnId::Realpath
+        ) {
+            return BuiltinResultOwnership::Fresh;
+        }
         if matches!(
             self,
             RuntimeFnId::MemoryGetAllocations
@@ -2398,6 +2774,8 @@ impl RuntimeFnId {
                 | RuntimeFnId::StreamBucketPrepend
                 | RuntimeFnId::ElephcPtrWriteString
                 | RuntimeFnId::TokenizerErrorLocation
+                | RuntimeFnId::ElephcStreamFd
+                | RuntimeFnId::PregLastError
                 // Both array mutators answer the resulting element count. The returned
                 // machine integer cannot keep any variadic value operand alive.
                 | RuntimeFnId::ArrayPush
@@ -2412,6 +2790,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::BufferPtr
                 // The clone override reference guard answers nothing at all: it returns or
                 // throws, so a result temporary would only keep the override array alive.
+                | RuntimeFnId::ElephcCloneApplyOne
                 | RuntimeFnId::ElephcCloneOverrideReferenceGuard
         ) {
             return BuiltinResultOwnership::NonHeap;
@@ -2432,6 +2811,9 @@ impl RuntimeFnId {
                 | RuntimeFnId::IconvStrpos
                 | RuntimeFnId::IconvStrrpos
                 | RuntimeFnId::IconvSubstr
+                // mbstring's case mapping persists a new runtime string for every call.
+                | RuntimeFnId::MbStrtolower
+                | RuntimeFnId::MbStrtoupper
         ) {
             return BuiltinResultOwnership::Fresh;
         }
@@ -2480,6 +2862,7 @@ impl RuntimeFnId {
                 // A pure diagnostic: it returns nothing at all, so there is certainly no
                 // storage for the caller to keep an argument temporary alive for.
                 | RuntimeFnId::CurlSetoptUnsupportedWarning
+                | RuntimeFnId::ElephcInternalWarning
                 | RuntimeFnId::CurlMultiSetoptUnsupportedWarning
                 // Every multi operation below hands back a raw machine integer — a
                 // `CURLMcode`, a ready-descriptor count, a packed (running, code) pair, or
@@ -2551,9 +2934,12 @@ impl RuntimeFnId {
                 // the same call through a named local stayed clean. Its Fresh-owning siblings
                 // `ArrayKeys` / `ArrayValues` were already listed here; this was the gap.
                 | RuntimeFnId::ArrayCountValues
+                // Every filter path allocates a destination array/hash and copies or retains
+                // accepted payloads into it. The result never aliases the source container or
+                // callback, so both argument temporaries must be released after the call.
+                | RuntimeFnId::ArrayFilter
                 | RuntimeFnId::ArrayFlip
                 | RuntimeFnId::ArrayFind
-                | RuntimeFnId::ArrayFilter
                 | RuntimeFnId::ArrayIntersect
                 | RuntimeFnId::ArrayKeys
                 | RuntimeFnId::ArrayMap
@@ -2607,6 +2993,7 @@ impl RuntimeFnId {
                 // brand-new tally hash and modes 3-4 hand back a `__rt_str_persist`-owned
                 // byte list, so nothing returned can alias the subject string.
                 | RuntimeFnId::CountChars
+                | RuntimeFnId::Constant
                 | RuntimeFnId::Bindec
                 | RuntimeFnId::Hexdec
                 | RuntimeFnId::Octdec
@@ -2676,10 +3063,11 @@ impl RuntimeFnId {
                 // 10 live blocks, so a `--web` worker calling it per request grows forever.
                 | RuntimeFnId::Getcwd
                 | RuntimeFnId::GraphemeStrrev
-                // `getenv($name)` boxes `false` or an owned copy made by `__rt_str_persist`
-                // in a fresh Mixed cell. `getenv()` boxes a newly built environment hash.
-                // Neither result can alias an argument, so the default `MayAliasArguments`
-                // bucket would keep an owned name temporary — and skip releasing the hash.
+                // Every form returns independent storage: unnamed lookups allocate a fresh
+                // hash, while named and dynamically nullable lookups box `false` or an owned
+                // copy made by `__rt_str_persist` in a fresh Mixed cell. No returned cell
+                // borrows argument storage, so retaining an owned name temporary would leak
+                // one block per call.
                 | RuntimeFnId::Getenv
                 | RuntimeFnId::GetObjectVars
                 | RuntimeFnId::CloneWith
@@ -2715,12 +3103,19 @@ impl RuntimeFnId {
                 | RuntimeFnId::OpensslDecrypt
                 | RuntimeFnId::OpensslEncrypt
                 | RuntimeFnId::OpensslGetCipherMethods
+                // `file_put_contents()` answers `int|false`, boxed by `__rt_mixed_from_value` from
+                // the helper's byte count: a scalar cell that never aliases the path or the data.
+                | RuntimeFnId::FilePutContents
+                // `__rt_sodium_box` returns the heap buffer it allocated for the bridge output,
+                // on failure too (with length 0), so the string never aliases an argument.
+                | RuntimeFnId::SodiumBox
                 | RuntimeFnId::ParseUrl
                 // `preg_match()` boxes `int|false` through `__rt_mixed_from_value`.
                 // That cell is fresh and does not alias the pattern, subject, or capture array.
                 | RuntimeFnId::PregMatch
                 | RuntimeFnId::PregMatchAll
                 | RuntimeFnId::PregReplace
+                | RuntimeFnId::PregGrep
                 | RuntimeFnId::PregSplit
                 // print_r renders into the `_print_r_buf` capture buffer and `__rt_pr_finish`
                 // copies those bytes out through `__rt_str_persist`, so every mode returns
@@ -2766,6 +3161,8 @@ impl RuntimeFnId {
                 // temporary alive for the boxed result's whole lifetime, which leaked one
                 // block per iteration for `strstr($h, $cond ? "a" : "b")` in a loop.
                 | RuntimeFnId::Strstr
+                | RuntimeFnId::Strrchr
+                | RuntimeFnId::Strpbrk
                 // `tempnam(directory, prefix)` returns the generated path that `mkstemp()`
                 // wrote into a buffer `__rt_tempnam` allocated itself, then copied out with
                 // `__rt_str_persist` — it is neither of its two argument strings. This was the
@@ -2779,6 +3176,9 @@ impl RuntimeFnId {
                 // release of an owned `$replacement` argument, so `array_splice($a, 1, 2, [9])`
                 // leaked the literal replacement array on every call.
                 | RuntimeFnId::ArraySplice
+                // A `__rt_str_persist` copy of the record's message or file.
+                | RuntimeFnId::ElephcLastErrorStr
+                | RuntimeFnId::Unpack
                 | RuntimeFnId::ZvalUnpack
                 | RuntimeFnId::ElephcZvalUnpack
                 // Parsed values own their storage independently of the wire input and options.
@@ -2818,6 +3218,11 @@ impl RuntimeFnId {
                 // temporary alive for the result's whole lifetime, leaking one block per
                 // `chunk_split(build())` call.
                 | RuntimeFnId::ChunkSplit
+                // `preg_quote()` writes into a `__rt_concat_reserve` reservation and publishes
+                // it, exactly like `chunk_split()` above, so the escaped text can never alias
+                // the subject or the delimiter. The default `MayAliasArguments` bucket would
+                // keep an owned subject temporary alive for the whole result lifetime.
+                | RuntimeFnId::PregQuote
                 | RuntimeFnId::Decbin
                 | RuntimeFnId::Dechex
                 | RuntimeFnId::Decoct
@@ -2892,6 +3297,7 @@ impl RuntimeFnId {
             RuntimeFnId::ArraySearch => "array_search",
             RuntimeFnId::ArrayShift => "array_shift",
             RuntimeFnId::ArraySlice => "array_slice",
+            RuntimeFnId::MixedSpreadArray => "mixed_spread_array",
             RuntimeFnId::ArraySplice => "array_splice",
             RuntimeFnId::ArraySum => "array_sum",
             RuntimeFnId::ArrayUdiff => "array_udiff",
@@ -2925,8 +3331,10 @@ impl RuntimeFnId {
             RuntimeFnId::ClassParents => "class_parents",
             RuntimeFnId::ClassUses => "class_uses",
             RuntimeFnId::EnumExists => "enum_exists",
+            RuntimeFnId::GetClassMethods => "get_class_methods",
             RuntimeFnId::FunctionExists => "function_exists",
             RuntimeFnId::GetClass => "get_class",
+            RuntimeFnId::GetDebugType => "get_debug_type",
             RuntimeFnId::GetObjectVars => "get_object_vars",
             RuntimeFnId::GetDeclaredClasses => "get_declared_classes",
             RuntimeFnId::GetDeclaredInterfaces => "get_declared_interfaces",
@@ -3177,6 +3585,8 @@ impl RuntimeFnId {
             RuntimeFnId::Sqrt => "sqrt",
             RuntimeFnId::Tan => "tan",
             RuntimeFnId::Tanh => "tanh",
+            RuntimeFnId::ElephcDiagSuppressed => "__elephc_diag_suppressed",
+            RuntimeFnId::ElephcCloneApplyOne => "__elephc_clone_apply_one",
             RuntimeFnId::ElephcCloneOverrideReferenceGuard => {
                 "__elephc_clone_override_reference_guard"
             }
@@ -3278,6 +3688,7 @@ impl RuntimeFnId {
             RuntimeFnId::CurlMultiSetoptUnsupportedWarning => {
                 "__elephc_curl_multi_setopt_unsupported_warning"
             }
+            RuntimeFnId::ElephcInternalWarning => "__elephc_internal_warning",
             RuntimeFnId::CurlSetoptUnsupportedWarning => {
                 "__elephc_curl_setopt_unsupported_warning"
             }
@@ -3312,6 +3723,8 @@ impl RuntimeFnId {
             RuntimeFnId::HashInit => "__elephc_hash_ctx_init",
             RuntimeFnId::HashUpdate => "__elephc_hash_ctx_update",
             RuntimeFnId::OpensslCipherIvLength => "openssl_cipher_iv_length",
+            RuntimeFnId::SodiumBox => "__elephc_sodium_box",
+            RuntimeFnId::SodiumStatus => "__elephc_sodium_status",
             RuntimeFnId::OpensslDecrypt => "openssl_decrypt",
             RuntimeFnId::OpensslEncrypt => "openssl_encrypt",
             RuntimeFnId::OpensslGetCipherMethods => "openssl_get_cipher_methods",
@@ -3327,6 +3740,8 @@ impl RuntimeFnId {
             RuntimeFnId::IconvSubstr => "iconv_substr",
             RuntimeFnId::Htmlentities => "htmlentities",
             RuntimeFnId::Htmlspecialchars => "htmlspecialchars",
+            RuntimeFnId::HighlightFile => "highlight_file",
+            RuntimeFnId::HighlightString => "highlight_string",
             RuntimeFnId::Implode => "implode",
             RuntimeFnId::InetNtop => "inet_ntop",
             RuntimeFnId::InetPton => "inet_pton",
@@ -3422,6 +3837,7 @@ impl RuntimeFnId {
             RuntimeFnId::StrWordCount => "str_word_count",
             RuntimeFnId::Strcasecmp => "strcasecmp",
             RuntimeFnId::Strcmp => "strcmp",
+            RuntimeFnId::Strcspn => "strcspn",
             RuntimeFnId::Strncasecmp => "strncasecmp",
             RuntimeFnId::Strncmp => "strncmp",
             RuntimeFnId::StripTags => "strip_tags",
@@ -3429,9 +3845,13 @@ impl RuntimeFnId {
             RuntimeFnId::Strpos => "strpos",
             RuntimeFnId::Strripos => "strripos",
             RuntimeFnId::Strrpos => "strrpos",
+            RuntimeFnId::Strpbrk => "strpbrk",
+            RuntimeFnId::Strspn => "strspn",
             RuntimeFnId::Strtr => "strtr",
             RuntimeFnId::Strstr => "strstr",
+            RuntimeFnId::Strrchr => "strrchr",
             RuntimeFnId::Substr => "substr",
+            RuntimeFnId::SubstrCompare => "substr_compare",
             RuntimeFnId::SubstrCount => "substr_count",
             RuntimeFnId::SubstrReplace => "substr_replace",
             RuntimeFnId::Trim => "trim",
@@ -3443,6 +3863,10 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcGmmktimeRaw => "__elephc_gmmktime_raw",
             RuntimeFnId::ElephcMktimeRaw => "__elephc_mktime_raw",
             RuntimeFnId::ElephcStrtotimeRaw => "__elephc_strtotime_raw",
+            RuntimeFnId::ElephcLastErrorInt => "__elephc_last_error_int",
+            RuntimeFnId::ElephcStreamFd => "__elephc_stream_fd",
+            RuntimeFnId::ElephcFdToStream => "__elephc_fd_to_stream",
+            RuntimeFnId::ElephcLastErrorStr => "__elephc_last_error_str",
             RuntimeFnId::Checkdate => "checkdate",
             RuntimeFnId::ClassAttributeArgs => "class_attribute_args",
             RuntimeFnId::ClassAttributeNames => "class_attribute_names",
@@ -3450,9 +3874,12 @@ impl RuntimeFnId {
             RuntimeFnId::Date => "date",
             RuntimeFnId::DateDefaultTimezoneGet => "date_default_timezone_get",
             RuntimeFnId::DateDefaultTimezoneSet => "date_default_timezone_set",
+            RuntimeFnId::Constant => "constant",
             RuntimeFnId::Define => "define",
             RuntimeFnId::Defined => "defined",
+            RuntimeFnId::ErrorLog => "error_log",
             RuntimeFnId::Exec => "exec",
+            RuntimeFnId::Extract => "extract",
             RuntimeFnId::ExtensionLoaded => "extension_loaded",
             RuntimeFnId::Getdate => "getdate",
             RuntimeFnId::Getenv => "getenv",
@@ -3460,6 +3887,9 @@ impl RuntimeFnId {
             RuntimeFnId::Gmdate => "gmdate",
             RuntimeFnId::Gmmktime => "gmmktime",
             RuntimeFnId::Header => "header",
+            RuntimeFnId::HeaderRemove => "header_remove",
+            RuntimeFnId::HeadersList => "headers_list",
+            RuntimeFnId::HeadersSent => "headers_sent",
             RuntimeFnId::Hrtime => "hrtime",
             RuntimeFnId::HttpResponseCode => "http_response_code",
             RuntimeFnId::JsonDecode => "json_decode",
@@ -3478,17 +3908,23 @@ impl RuntimeFnId {
             RuntimeFnId::Passthru => "passthru",
             RuntimeFnId::PhpUname => "php_uname",
             RuntimeFnId::Phpversion => "phpversion",
+            RuntimeFnId::PregGrep => "preg_grep",
+            RuntimeFnId::PregLastError => "preg_last_error",
+            RuntimeFnId::PregLastErrorMsg => "preg_last_error_msg",
             RuntimeFnId::PregMatch => "preg_match",
             RuntimeFnId::PregMatchAll => "preg_match_all",
             RuntimeFnId::PregReplace => "preg_replace",
+            RuntimeFnId::PregQuote => "preg_quote",
             RuntimeFnId::PregSplit => "preg_split",
             RuntimeFnId::Putenv => "putenv",
             RuntimeFnId::Serialize => "serialize",
+            RuntimeFnId::Setlocale => "setlocale",
             RuntimeFnId::ShellExec => "shell_exec",
             RuntimeFnId::Sleep => "sleep",
             RuntimeFnId::Strtotime => "strtotime",
             RuntimeFnId::System => "system",
             RuntimeFnId::Time => "time",
+            RuntimeFnId::Unpack => "unpack",
             RuntimeFnId::Unserialize => "unserialize",
             RuntimeFnId::Usleep => "usleep",
             RuntimeFnId::GetResourceId => "get_resource_id",

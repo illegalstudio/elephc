@@ -54,13 +54,22 @@ pub(super) fn lower_concat(ctx: &mut LoweringContext<'_, '_>, left: &Expr, right
 
 /// Persists scratch-backed concat LHS values before a call-like RHS can reset concat storage.
 /// A heap-owned LHS already survives the call and remains the binary operand's cleanup owner.
-pub(super) fn persist_concat_lhs_if_rhs_can_reset(
+pub(crate) fn persist_concat_lhs_if_rhs_can_reset(
     ctx: &mut LoweringContext<'_, '_>,
     lhs: LoweredValue,
     rhs: &Expr,
     span: Span,
 ) -> LoweredValue {
     if !string_value_needs_persistence(ctx, lhs) || !expr_can_reset_concat_storage(rhs) {
+        return lhs;
+    }
+    // A builtin's FRESH heap result cannot be overwritten by the right operand; copying it left
+    // the original unreleased (`mb_strtoupper($a) . f()` leaked one block per evaluation).
+    if ctx
+        .builder
+        .value_defining_instruction(lhs.value)
+        .is_some_and(runtime_call_string_is_fresh)
+    {
         return lhs;
     }
     persist_pending_string(ctx, lhs, span)
@@ -72,19 +81,80 @@ pub(crate) fn string_value_needs_persistence(ctx: &LoweringContext<'_, '_>, valu
         return false;
     }
     let Some(op) = ctx.builder.value_defining_op(value.value) else { return false; };
+    op == Op::Cast || string_op_uses_scratch_storage(op)
+}
+
+/// Returns whether a string-producing opcode exposes scratch or borrowed string storage.
+pub(crate) fn string_op_uses_scratch_storage(op: Op) -> bool {
     matches!(
         op,
-        Op::Cast
-            | Op::IToStr
+        Op::IToStr
             | Op::FToStr
             | Op::BoolToStr
             | Op::ResourceToStr
             | Op::MixedCastString
             | Op::StrConcat
-            | Op::StrCharAt
+            | Op::StrBitAnd
+            | Op::StrBitOr
+            | Op::StrBitXor
+            | Op::StrSetOffset
             | Op::StrInterpolate
             | Op::RuntimeCall
     )
+    // Not `StrCharAt`: `$s[$i]` is an owned one-byte copy (`lower_str_char_at` persists it), so
+    // persisting it again on a return or a store orphaned the first copy.
+}
+
+/// Returns whether a runtime call hands back a FRESH string the caller owns.
+///
+/// `string_op_uses_scratch_storage` answers by opcode, and `RuntimeCall` covers both builtins that
+/// format into the shared scratch buffer and builtins that allocate (`mb_strtoupper()`,
+/// `iconv()`, ...). Persisting a fresh result again at a return or a wrapper boundary orphaned
+/// the first copy: every `return mb_strtoupper($s);` leaked one block.
+pub(crate) fn runtime_call_string_is_fresh(inst: &crate::ir::Instruction) -> bool {
+    use crate::builtins::semantics::BuiltinResultOwnership;
+    use crate::ir::{Immediate, RuntimeCallTarget};
+    if inst.op != Op::RuntimeCall {
+        return false;
+    }
+    match &inst.immediate {
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target))) => {
+            matches!(target.result_ownership(), BuiltinResultOwnership::Fresh)
+        }
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction { target, .. })) => {
+            matches!(target.result_ownership(), BuiltinResultOwnership::Fresh)
+        }
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::Pcntl(target))) => {
+            matches!(target.result_ownership(), BuiltinResultOwnership::Fresh)
+        }
+        // `UnaryString` targets (`strtoupper`, `trim`, ...) format into the concat arena: scratch,
+        // whatever the release side calls them.
+        _ => false,
+    }
+}
+
+/// Returns whether a string is a `Cast` of a non-string value, whose result is either scratch or
+/// a fresh heap copy depending on the run-time tag.
+///
+/// `__rt_mixed_cast_string` formats an int, float or bool into the shared concat buffer and hands
+/// back a fresh owned copy for a boxed string. Either way the value must be persisted before it
+/// crosses a function boundary, and the source released afterwards: the release frees the owned
+/// copy and ignores scratch (`__rt_heap_free_safe`). `strval($mixed)` returned the arena pointer,
+/// so `array_map('strval', $list)` printed `["[","["]` once json_encode() reused the buffer.
+/// A cast FROM a string may return the source itself and is not included.
+pub(crate) fn cast_string_needs_owned_persist(
+    builder: &crate::ir::Builder<'_>,
+    value: crate::ir::ValueId,
+) -> bool {
+    let Some(inst) = builder.value_defining_instruction(value) else {
+        return false;
+    };
+    if inst.op != Op::Cast || inst.result_php_type.codegen_repr() != crate::types::PhpType::Str {
+        return false;
+    }
+    inst.operands.first().is_some_and(|operand| {
+        builder.value_php_type(*operand).codegen_repr() != crate::types::PhpType::Str
+    })
 }
 
 /// Copies a pending view and retires any detached string owned by its original producer.
@@ -122,6 +192,9 @@ pub(super) fn expr_can_reset_concat_storage(expr: &Expr) -> bool {
         | ExprKind::Pipe { .. }
         | ExprKind::Yield { .. }
         | ExprKind::YieldFrom(_) => true,
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+            expr_can_reset_concat_storage(property)
+        }
         ExprKind::BinaryOp { left, right, .. } => {
             expr_can_reset_concat_storage(left) || expr_can_reset_concat_storage(right)
         }
@@ -130,6 +203,7 @@ pub(super) fn expr_can_reset_concat_storage(expr: &Expr) -> bool {
                 || matches!(target, InstanceOfTarget::Expr(inner) if expr_can_reset_concat_storage(inner))
         }
         ExprKind::Negate(inner)
+        | ExprKind::ArrayReference(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
@@ -221,6 +295,9 @@ pub(super) fn expr_can_reset_concat_storage(expr: &Expr) -> bool {
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. }
         | ExprKind::MagicConstant(_) => false,
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => {
+            expr_can_reset_concat_storage(receiver)
+        }
     }
 }
 

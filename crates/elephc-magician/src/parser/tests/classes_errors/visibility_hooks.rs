@@ -33,7 +33,7 @@ fn parse_fragment_accepts_private_and_protected_class_members() {
     .expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::ClassDecl(EvalClass::new(
+        &[EvalStmt::class_decl(EvalClass::new(
             "DynEvalVisibility",
             vec![EvalClassProperty::with_visibility(
                 "secret",
@@ -67,7 +67,7 @@ fn parse_fragment_accepts_readonly_class_property() {
         .expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::ClassDecl(EvalClass::new(
+        &[EvalStmt::class_decl(EvalClass::new(
             "DynEvalReadonly",
             vec![EvalClassProperty::with_visibility_static_and_readonly(
                 "id",
@@ -94,7 +94,7 @@ fn parse_fragment_accepts_asymmetric_property_visibility() {
     .expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::ClassDecl(EvalClass::new(
+        &[EvalStmt::class_decl(EvalClass::new(
             "DynEvalAsymmetric",
             vec![
                 EvalClassProperty::with_visibility_static_final_and_readonly(
@@ -151,7 +151,7 @@ fn parse_fragment_accepts_readonly_class_modifier() {
     .expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::ClassDecl(EvalClass::with_class_modifiers(
+        &[EvalStmt::class_decl(EvalClass::with_class_modifiers(
             "DynEvalReadonlyClass",
             false,
             true,
@@ -202,7 +202,7 @@ fn parse_fragment_accepts_concrete_class_property_hooks() {
     .expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::ClassDecl(EvalClass::new(
+        &[EvalStmt::class_decl(EvalClass::new(
             "DynEvalHooked",
             vec![EvalClassProperty::with_visibility_static_and_readonly(
                 "value",
@@ -297,7 +297,7 @@ fn parse_fragment_retains_property_set_hook_parameter_type() {
 #[test]
 fn parse_fragment_rejects_untyped_explicit_property_set_hook_parameter_for_typed_property() {
     assert_eq!(
-        parse_fragment(
+        parse_fragment_error(
             br#"class DynEvalUntypedSetParamHooked {
     public string $value {
         set($raw) => $raw;
@@ -328,7 +328,7 @@ fn parse_fragment_accepts_abstract_class_property_hook_contracts() {
     .expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::ClassDecl(EvalClass::with_modifiers(
+        &[EvalStmt::class_decl(EvalClass::with_modifiers(
             "DynEvalAbstractHooked",
             true,
             false,

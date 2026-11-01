@@ -107,10 +107,8 @@ pub(super) fn reflection_class_property_names_for_filter(
     let contract = elephc_builtin_contract::lookup_class(class_name);
     Some(
         class_info
-            .properties
+            .reflection_properties
             .iter()
-            .chain(class_info.static_properties.iter())
-            .map(|(name, _)| name)
             .filter(|name| {
                 contract.is_none_or(|class| !class.property_is_hidden(name))
                     && reflection_property_matches_filter(class_info, name, filter)
@@ -145,19 +143,40 @@ pub(super) fn reflection_class_method_names_for_filter(
         );
     }
     let mut names = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for name in class_info
-        .methods
-        .keys()
-        .chain(class_info.static_methods.keys())
-    {
-        if seen.insert(php_symbol_key(name))
-            && reflection_method_matches_filter(class_info, name, filter)
-        {
-            names.push(name.clone());
+    for name in reflection_class_method_order(class_info) {
+        if reflection_method_matches_filter(class_info, &name, filter) {
+            names.push(name);
         }
     }
     Some(names)
+}
+
+/// Lists a class's methods in `getMethods()` order and declared case.
+///
+/// `ClassInfo::reflection_methods` carries php's order; a method only the signature maps know
+/// (an interface contract an abstract class leaves open) follows it, sorted so the list is stable.
+pub(crate) fn reflection_class_method_order(class_info: &crate::types::ClassInfo) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut names = Vec::new();
+    for name in &class_info.reflection_methods {
+        let key = php_symbol_key(name);
+        let known = class_info.methods.contains_key(&key)
+            || class_info.static_methods.contains_key(&key);
+        if known && seen.insert(key) {
+            names.push(name.clone());
+        }
+    }
+    let mut remaining = class_info
+        .methods
+        .keys()
+        .chain(class_info.static_methods.keys())
+        .filter(|name| !seen.contains(&php_symbol_key(name)))
+        .cloned()
+        .collect::<Vec<_>>();
+    remaining.sort();
+    remaining.dedup();
+    names.extend(remaining);
+    names
 }
 
 /// Returns the optional `ReflectionClass::getProperties()` modifier filter.
@@ -275,7 +294,7 @@ pub(super) fn reflection_method_filter_modifiers(
             visibility,
             false,
             class_info.final_methods.contains(&method_key),
-            !class_info.method_impl_classes.contains_key(&method_key),
+            class_info.abstract_methods.contains(&method_key),
         ));
     }
     if class_info.static_methods.contains_key(&method_key) {
@@ -287,9 +306,7 @@ pub(super) fn reflection_method_filter_modifiers(
             visibility,
             true,
             class_info.final_static_methods.contains(&method_key),
-            !class_info
-                .static_method_impl_classes
-                .contains_key(&method_key),
+            class_info.abstract_static_methods.contains(&method_key),
         ));
     }
     None

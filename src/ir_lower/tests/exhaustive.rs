@@ -87,7 +87,7 @@ fn dummy_check_result() -> CheckResult {
         },
     );
 
-    let mut classes = HashMap::new();
+    let mut classes = crate::fast_hash::FastMap::default();
     classes.insert("C".to_string(), class_info("C"));
 
     let mut extern_functions = HashMap::new();
@@ -129,7 +129,7 @@ fn dummy_check_result() -> CheckResult {
         generic_method_sites: std::collections::HashMap::new(),
         generic_new_sites: Default::default(),
         generic_call_sites: HashMap::new(),
-        global_env: HashMap::new(),
+        global_env: Default::default(),
         functions,
         function_attribute_names: HashMap::new(),
         function_attribute_args: HashMap::new(),
@@ -151,15 +151,27 @@ fn dummy_check_result() -> CheckResult {
         closure_generator_spans: Default::default(),
         array_push_property_plans: HashMap::new(),
         member_receiver_types: HashMap::new(),
+        flow_typed_property_accesses: HashMap::new(),
         boxed_reference_promotion_sites: HashMap::new(),
         buffer_read_sites: Default::default(),
         first_class_builtin_call_types: HashMap::new(),
         loop_storage_types: HashMap::new(),
         string_incdec_locals: Default::default(),
+        by_ref_local_storage_types: HashMap::new(),
+        ref_param_escaping_callees: Default::default(),
+        property_bound_promotion_sites: Default::default(),
+        by_ref_call_result_sites: Default::default(),
+        bcmath_operator_sites: Default::default(),
+        stdclass_by_ref_walk_sites: Default::default(),
+        runtime_define_names: Default::default(),
+        undefined_constant_reads: Default::default(),
+        dynamic_ref_local_types: HashMap::new(),
         local_bind_kill_sites: Default::default(),
         local_ref_detach_sites: Default::default(),
         local_retype_sites: Default::default(),
         mixed_storage_store_sites: Default::default(),
+        user_filters_reachable: true,
+        user_filter_registered: None,
     }
 }
 
@@ -179,13 +191,14 @@ fn class_info(_class_name: &str) -> ClassInfo {
         deprecation: None,
         is_generator: false,
     };
-    let mut methods = HashMap::new();
+    let mut methods = crate::fast_hash::FastMap::default();
     methods.insert("m".to_string(), method_sig.clone());
-    let mut static_methods = HashMap::new();
+    let mut static_methods = crate::fast_hash::FastMap::default();
     static_methods.insert("sm".to_string(), method_sig);
     ClassInfo {
         class_id: 1,
         declaration_span: crate::span::Span::dummy(),
+        doc_comment: None,
         is_internal: false,
         parent: None,
         is_abstract: false,
@@ -222,14 +235,25 @@ fn class_info(_class_name: &str) -> ClassInfo {
         property_declared_slots: Vec::new(),
         final_properties: Default::default(),
         readonly_properties: Default::default(),
+        backed_hooked_properties: Default::default(),
         reference_properties: Default::default(),
         owned_reference_properties: Default::default(),
         promoted_properties: Default::default(),
         property_reference_slots: Vec::new(),
+        property_slot_declaring_classes: Vec::new(),
+        property_owned_reference_slots: Vec::new(),
         abstract_properties: Default::default(),
         abstract_property_hooks: HashMap::new(),
+        reflection_properties: Vec::new(),
+        reflection_methods: Vec::new(),
         property_hooks: HashMap::new(),
-        static_properties: Vec::new(),
+        // `sp` backs the static-property statements below. The checker only lets an element
+        // reference (`C::$sp[0] = &C::$sp[1]`) reach lowering for an array static property, so
+        // the fixture declares one instead of leaving it to the untyped `Mixed` fallback.
+        static_properties: vec![(
+            "sp".to_string(),
+            PhpType::AssocArray { key: Box::new(PhpType::Mixed), value: Box::new(PhpType::Mixed) },
+        )],
         static_defaults: Vec::new(),
         static_property_declaring_classes: HashMap::new(),
         static_property_visibilities: HashMap::new(),
@@ -242,17 +266,17 @@ fn class_info(_class_name: &str) -> ClassInfo {
         late_static_static_method_returns: Default::default(),
         callable_method_return_sigs: HashMap::new(),
         callable_array_method_return_sigs: HashMap::new(),
-        method_visibilities: HashMap::new(),
+        method_visibilities: crate::fast_hash::FastMap::default(),
         final_methods: Default::default(),
-        method_declaring_classes: HashMap::new(),
-        method_impl_classes: HashMap::new(),
+        method_declaring_classes: crate::fast_hash::FastMap::default(),
+        method_impl_classes: crate::fast_hash::FastMap::default(),
         abstract_methods: Default::default(),
         vtable_methods: Vec::new(),
         vtable_slots: HashMap::new(),
-        static_method_visibilities: HashMap::new(),
+        static_method_visibilities: crate::fast_hash::FastMap::default(),
         final_static_methods: Default::default(),
-        static_method_declaring_classes: HashMap::new(),
-        static_method_impl_classes: HashMap::new(),
+        static_method_declaring_classes: crate::fast_hash::FastMap::default(),
+        static_method_impl_classes: crate::fast_hash::FastMap::default(),
         abstract_static_methods: Default::default(),
         static_vtable_methods: Vec::new(),
         static_vtable_slots: HashMap::new(),
@@ -266,7 +290,15 @@ fn class_info(_class_name: &str) -> ClassInfo {
 fn lower_program(program: Program) -> String {
     let target = Target::detect_host();
     let check_result = dummy_check_result();
-    let module = crate::ir_lower::lower_program(&program, &check_result, target, false)
+    let catalog = crate::ir::SourceCatalog::from_units(["inc", "/included.php"].map(|path| {
+        crate::resolver::SourceUnit {
+            canonical_path: path.into(), mode: crate::source::SourceMode::Php,
+            source: "<?php echo 'guard';".into(),
+        }
+    })).unwrap();
+    let module = crate::ir_lower::lower_program_with_source_catalog(
+        &program, &check_result, target, std::path::Path::new("synthetic.php"), false, catalog,
+    )
         .expect("synthetic AST should lower to valid EIR");
     let text = print_module(&module);
     assert!(text.contains("function main"), "expected main function in {text}");
@@ -386,6 +418,7 @@ fn lowers_every_expr_variant_smoke() {
         expr(ExprKind::ClassConstant { receiver: StaticReceiver::Parent }),
         expr(ExprKind::ObjectClassName { object: Box::new(object.clone()) }),
         expr(ExprKind::ScopedConstantAccess { receiver: StaticReceiver::Named(name("C")), name: "K".to_string() }),
+        expr(ExprKind::DynamicScopedConstantAccess { receiver: Box::new(object.clone()), name: "K".to_string() }),
         expr(ExprKind::NewScopedObject { receiver: StaticReceiver::Named(name("C")), args: Vec::new() }),
         expr(ExprKind::MagicConstant(MagicConstant::File)),
         expr(ExprKind::Yield { key: Some(Box::new(int(1))), value: Some(Box::new(str_lit("v"))) }),
@@ -398,6 +431,31 @@ fn lowers_every_expr_variant_smoke() {
         .collect();
     let text = lower_program(program);
     assert!(text.contains("function main"), "unexpected empty EIR: {text}");
+}
+
+/// Verifies canonical-path include markers lower to valid native guard instructions.
+#[test]
+fn lowers_include_source_path_markers() {
+    let text = lower_program(vec![
+        stmt(StmtKind::IncludeOnceMark { source_path: "/included.php".into() }),
+        stmt(StmtKind::IncludeOnceGuard {
+            source_path: "/included.php".into(),
+            required: true,
+            body: vec![stmt(StmtKind::Echo(str_lit("guard")))],
+        }),
+    ]);
+    assert!(text.contains("include_once_mark"), "{text}");
+    assert!(text.contains("include_once_guard"), "{text}");
+    assert!(text.contains("source[0]"), "{text}");
+}
+
+#[test]
+fn include_source_without_catalog_is_a_lowering_error() {
+    let path = std::path::PathBuf::from("/not-catalogued.php");
+    let program = vec![stmt(StmtKind::IncludeOnceMark { source_path: path.clone() })];
+    let result = crate::ir_lower::lower_program(&program, &dummy_check_result(), Target::detect_host(), false);
+    assert!(matches!(result, Err(crate::ir_lower::LoweringError::Validation(
+        crate::ir::ValidationError::UnresolvedSource(found))) if found == path));
 }
 
 /// Verifies statement variants lower without panicking and produce valid EIR.
@@ -475,8 +533,8 @@ fn lowers_every_stmt_variant_smoke() {
             default: Some(vec![stmt(StmtKind::Echo(str_lit("default")))]),
         }),
         stmt(StmtKind::Include { path: str_lit("file.php"), once: false, required: false }),
-        stmt(StmtKind::IncludeOnceMark { label: "inc".to_string() }),
-        stmt(StmtKind::IncludeOnceGuard { label: "inc".to_string(), body: vec![stmt(StmtKind::Echo(str_lit("guard")))] }),
+        stmt(StmtKind::IncludeOnceMark { source_path: "inc".into() }),
+        stmt(StmtKind::IncludeOnceGuard { source_path: "inc".into(), required: true, body: vec![stmt(StmtKind::Echo(str_lit("guard")))] }),
         stmt(StmtKind::Throw(object.clone())),
         stmt(StmtKind::Synthetic(vec![stmt(StmtKind::Echo(str_lit("synthetic")))])),
         stmt(StmtKind::Try {
@@ -512,6 +570,7 @@ fn lowers_every_stmt_variant_smoke() {
         stmt(StmtKind::ClassDecl {
             generics: None,
             name: "C".to_string(),
+            doc_comment: None,
             extends: None,
             implements: Vec::new(),
             is_abstract: false,
@@ -527,9 +586,12 @@ fn lowers_every_stmt_variant_smoke() {
         stmt(StmtKind::InterfaceDecl { generics: None, name: "I".to_string(), extends: Vec::new(), properties: Vec::new(), methods: Vec::new(), constants: Vec::new() }),
         stmt(StmtKind::TraitDecl { name: "T".to_string(), generics: None, trait_uses: Vec::new(), properties: Vec::new(), methods: vec![method], constants: vec![class_const] }),
         stmt(StmtKind::PropertyAssign { object: Box::new(object.clone()), property: "p".to_string(), value: int(1) }),
+        stmt(StmtKind::PropertyRefAssign { object: Box::new(object.clone()), property: "p".to_string(), source: Expr::new(ExprKind::PropertyAccess { object: Box::new(object.clone()), property: "p".to_string() }, sp()) }),
         stmt(StmtKind::StaticPropertyAssign { receiver: StaticReceiver::Named(name("C")), property: "sp".to_string(), value: int(1) }),
         stmt(StmtKind::StaticPropertyArrayPush { receiver: StaticReceiver::Named(name("C")), property: "sp".to_string(), value: int(1) }),
         stmt(StmtKind::StaticPropertyArrayAssign { receiver: StaticReceiver::Named(name("C")), property: "sp".to_string(), index: int(0), value: int(1) }),
+        stmt(StmtKind::StaticPropertyElementRefAssign { receiver: StaticReceiver::Named(name("C")), property: "sp".to_string(), index: int(0), source: Expr::new(ExprKind::ArrayAccess { array: Box::new(Expr::new(ExprKind::StaticPropertyAccess { receiver: StaticReceiver::Named(name("C")), property: "sp".to_string() }, sp())), index: Box::new(int(1)) }, sp()) }),
+        stmt(StmtKind::DynamicStaticPropertyWrite { receiver: StaticReceiver::Named(name("C")), property: Box::new(str_lit("sp")), index: None, append: false, value: int(1) }),
         stmt(StmtKind::PropertyArrayPush { object: Box::new(object.clone()), property: "p".to_string(), value: int(1) }),
         stmt(StmtKind::PropertyArrayAssign { object: Box::new(object), property: "p".to_string(), index: int(0), value: int(1) }),
         stmt(StmtKind::ExternFunctionDecl { name: "ef".to_string(), params: vec![ExternParam { name: "x".to_string(), c_type: CType::Int }], return_type: CType::Int, library: Some("c".to_string()) }),

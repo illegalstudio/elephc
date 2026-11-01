@@ -15,6 +15,10 @@ use super::*;
 /// registry builtins have no prelude functions of their own, so their Magician homes forward
 /// to the hidden prelude helper of the same suffix. Only the 51 public helpers are registered;
 /// the rest of the GMP prelude remains invisible to eval.
+///
+/// A user function whose name merely begins with an underscore (`__()`, `_e()`, Laravel's and
+/// WordPress's translation helpers) is an ordinary PHP-visible function; only the compiler's own
+/// synthetic functions are hidden.
 pub(super) fn function_has_eval_metadata(function: &Function) -> bool {
     if function.flags.is_main {
         return false;
@@ -27,7 +31,19 @@ pub(super) fn function_has_eval_metadata(function: &Function) -> bool {
             .iter()
             .any(|name| name.strip_prefix("gmp_") == Some(helper));
     }
-    !function.name.starts_with('_')
+    !is_compiler_internal_function_name(&function.name)
+}
+
+/// Returns true for the names the compiler gives its own synthetic functions: runtime and prelude
+/// helpers (`__elephc…`), EIR-generated closures (`__eir…`), class property initialisers
+/// (`_class_propinit_N`) and method bodies of the `__Elephc…` helper classes (`Class::method`).
+pub(super) fn is_compiler_internal_function_name(name: &str) -> bool {
+    let key = php_symbol_key(name);
+    key.starts_with('_')
+        && (key.starts_with("__elephc")
+            || key.starts_with("__eir")
+            || key.starts_with("_class_")
+            || key.contains("::"))
 }
 
 /// Returns true when eval can dispatch a native function through the generated bridge.
@@ -147,7 +163,7 @@ pub(super) fn signature_param_is_variadic(signature: &FunctionSig, index: usize,
 }
 
 /// Returns generated type specs for declared native callable parameters.
-pub(super) fn eval_native_callable_param_type_specs(signature: &FunctionSig) -> Vec<Option<String>> {
+pub(crate) fn eval_native_callable_param_type_specs(signature: &FunctionSig) -> Vec<Option<String>> {
     signature
         .params
         .iter()
@@ -253,11 +269,19 @@ pub(super) fn eval_native_php_type_spec(php_type: &PhpType, allow_return_atoms: 
 
 /// Formats union members from checked PHP types for eval native metadata registration.
 pub(super) fn eval_native_php_type_member_specs(members: &[PhpType]) -> Option<String> {
-    members
+    let specs = members
         .iter()
         .map(|member| eval_native_php_type_spec(member, false))
-        .collect::<Option<Vec<_>>>()
-        .map(|members| members.join("|"))
+        .collect::<Option<Vec<_>>>()?;
+    // The packed and keyed members of a declared `array` both spell `array`; PHP names it once,
+    // so `?array` reflected as `array|array|null` and `array|string` counted three members.
+    let mut unique: Vec<String> = Vec::with_capacity(specs.len());
+    for spec in specs {
+        if !unique.contains(&spec) {
+            unique.push(spec);
+        }
+    }
+    Some(unique.join("|"))
 }
 
 /// The explicit PHP signature shape a generated bridge registers alongside its parameter slots.

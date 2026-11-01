@@ -6,7 +6,7 @@
 //! - `crate::interpreter::builtins::registry` re-exports.
 //!
 //! Key details:
-//! - Migrated builtins dispatch through `eval_declared_builtin_values_call`.
+//! - Migrated builtins dispatch through `eval_declared_builtin_values_call_from_scope`.
 //! - Procedural date/time aliases remain a runtime fallback because eval cannot
 //!   run the static name-resolver rewrite before dispatch.
 

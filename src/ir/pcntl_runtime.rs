@@ -34,6 +34,7 @@ pub enum PcntlRuntime {
     GetLastError,
     GetPriority,
     GetQosClass,
+    Kill,
     SetCpuAffinity,
     SetNs,
     SetProcessGroup,
@@ -87,6 +88,7 @@ impl PcntlRuntime {
             Self::GetPriority => (0, Some(2)),
             Self::SetCpuAffinity => (0, Some(2)),
             Self::SetNs => (0, Some(2)),
+            Self::Kill => (2, Some(2)),
             Self::SetProcessGroup => (2, Some(2)),
             Self::SetPriority => (1, Some(3)),
             Self::SetQosClass => (1, Some(1)),
@@ -120,6 +122,7 @@ impl PcntlRuntime {
             Self::GetQosClass => "pcntl.getqos_class",
             Self::SetCpuAffinity => "pcntl.setcpuaffinity",
             Self::SetNs => "pcntl.setns",
+            Self::Kill => "posix.kill",
             Self::SetProcessGroup => "posix.setpgid",
             Self::SetPriority => "pcntl.setpriority",
             Self::SetQosClass => "pcntl.setqos_class",
@@ -227,6 +230,7 @@ impl PcntlRuntime {
             Self::SetCpuAffinity
             | Self::Daemon
             | Self::SetNs
+            | Self::Kill
             | Self::SetProcessGroup
             | Self::SetPriority
             | Self::SignalMask
@@ -316,6 +320,7 @@ mod tests {
             PcntlRuntime::GetLastError,
             PcntlRuntime::GetPriority,
             PcntlRuntime::GetQosClass,
+            PcntlRuntime::Kill,
             PcntlRuntime::SetCpuAffinity,
             PcntlRuntime::SetNs,
             PcntlRuntime::SetProcessGroup,

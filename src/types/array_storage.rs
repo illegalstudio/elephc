@@ -23,6 +23,10 @@ use super::PhpType;
 ///   table, so an op compiled against the packed layout reads the wrong memory entirely and,
 ///   because a hash lookup of a live key simply misses instead of faulting, that one loses data
 ///   silently.
+/// - `AssocArray { V }` -> `AssocArray { Mixed }` (`Op::HashToMixed`): the hash twin of the first
+///   case, every entry payload boxed. `$services = ['aliases' => []]; ... $services['aliases'][$id]
+///   = $alias;` in both arms of an `if` inside a loop converted the hash in each arm, and on every
+///   iteration, instead of once ahead of the statement.
 /// - A concrete array -> PHP `array`: a boxed cell can hold either packed or keyed storage after
 ///   a declared by-reference parameter writes through it.
 ///
@@ -36,6 +40,20 @@ pub(crate) fn array_storage_conversion(
     let previous = previous?;
     if next.is_php_array() && matches!(previous, PhpType::Array(_) | PhpType::AssocArray { .. }) {
         return Some(next.clone());
+    }
+    // `AssocArray { V }` -> `AssocArray { Mixed }` (`Op::HashToMixed`): every entry payload is
+    // replaced by a boxed Mixed cell, the hash twin of `ArrayToMixed`.
+    if let (
+        PhpType::AssocArray { value: previous_value, .. },
+        PhpType::AssocArray { key, value },
+    ) = (previous.codegen_repr(), next.codegen_repr())
+    {
+        return (previous_value.codegen_repr() != PhpType::Mixed
+            && value.codegen_repr() == PhpType::Mixed)
+            .then(|| PhpType::AssocArray {
+                key,
+                value: Box::new(PhpType::Mixed),
+            });
     }
     let PhpType::Array(previous_elem) = previous.codegen_repr() else {
         return None;

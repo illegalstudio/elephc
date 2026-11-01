@@ -31,13 +31,25 @@ impl Drop for PositionGuard {
     }
 }
 
+/// Returns the index of the first token at or after `pos` that is not a doc comment.
+///
+/// A doc comment is not a statement: `/** License */ declare(strict_types=1);` opens many
+/// libraries' files and php accepts it, so the placement allowance belongs to the `declare`
+/// token itself, not to the comment in front of it.
+pub(super) fn skip_doc_comments(tokens: &[SpannedToken], mut pos: usize) -> usize {
+    while matches!(tokens.get(pos), Some((crate::lexer::Token::DocComment(_), _))) {
+        pos += 1;
+    }
+    pos
+}
+
 /// Parses one top-level statement with an allowance for this exact leading declare token.
 pub(super) fn parse_top_level_stmt(
     tokens: &[SpannedToken],
     pos: &mut usize,
     allows_strict_types: bool,
 ) -> Result<Stmt, CompileError> {
-    let allowed = allows_strict_types.then_some(*pos);
+    let allowed = allows_strict_types.then(|| skip_doc_comments(tokens, *pos));
     let _guard = PositionGuard(STRICT_TYPES_POSITION.with(|position| position.replace(allowed)));
     super::stmt::parse_stmt(tokens, pos)
 }
@@ -126,6 +138,20 @@ fn mark_main_stmt_strict_types(stmt: &mut Stmt) {
             mark_main_expr_strict_types(index);
             mark_main_expr_strict_types(value);
         }
+        StmtKind::PropertyRefAssign { object, source, .. } => {
+            mark_main_expr_strict_types(object);
+            mark_main_expr_strict_types(source);
+        }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            mark_main_expr_strict_types(index);
+            mark_main_expr_strict_types(source);
+        }
+        StmtKind::DynamicStaticPropertyWrite { property, index, value, .. } => {
+            mark_main_expr_strict_types(property);
+            if let Some(index) = index { mark_main_expr_strict_types(index); }
+            mark_main_expr_strict_types(value);
+        }
+        StmtKind::ClassLikeActivate { .. } => {}
         StmtKind::Return(None) | StmtKind::IncludeOnceMark { .. } | StmtKind::Break(_)
         | StmtKind::Continue(_) | StmtKind::NamespaceDecl { .. } | StmtKind::UseDecl { .. }
         | StmtKind::FunctionVariantGroup { .. } | StmtKind::FunctionVariantMark { .. }
@@ -166,6 +192,9 @@ fn mark_main_expr_strict_types(expr: &mut Expr) {
         }
         ExprKind::Negate(inner) | ExprKind::Not(inner) | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner) | ExprKind::ErrorSuppress(inner) | ExprKind::Print(inner)
+        | ExprKind::ArrayReference(inner)
+        | ExprKind::DynamicStaticPropertyAccess { property: inner, .. }
+        | ExprKind::DynamicScopedConstantAccess { receiver: inner, .. }
         | ExprKind::Spread(inner) | ExprKind::Clone(inner) | ExprKind::YieldFrom(inner)
         | ExprKind::Cast { expr: inner, .. } | ExprKind::NamedArg { value: inner, .. }
         | ExprKind::IncludeValue { path: inner, .. } | ExprKind::PropertyAccess { object: inner, .. }

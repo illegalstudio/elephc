@@ -72,8 +72,24 @@ fn traversable_object_supported(checker: &Checker, name: &str) -> bool {
     if name == "Traversable" {
         return true;
     }
+    // An interface that merely EXTENDS `Traversable` (Symfony's `FormInterface` is
+    // `ArrayAccess, Traversable, Countable`) is the same open question `Traversable` itself is:
+    // the run-time object is an `Iterator` or an `IteratorAggregate`, and the generic Traversable
+    // lowering asks it.
+    // A class the world does not declare (`symfony/validator` absent, so `RequestPayloadValueResolver`'s
+    // `iterator_to_array(new ConstraintViolationList())` names nothing) never reaches here at run
+    // time: php raises `Class not found` at the `new`. Refusing it refused the whole class file,
+    // which a closed-world binary then could not load at all. It is the same open question
+    // `Traversable` is.
+    if !checker.classes.contains_key(name)
+        && !checker.interfaces.contains_key(name)
+        && !checker.enums.contains_key(name)
+    {
+        return true;
+    }
     checker.object_type_implements_interface(name, "Iterator")
         || checker.object_type_implements_interface(name, "IteratorAggregate")
+        || checker.object_type_implements_interface(name, "Traversable")
 }
 
 /// Checks iterator to array preserve keys and reports a compile error when it is invalid.
@@ -103,7 +119,12 @@ fn preserve_keys_type_supported(ty: &PhpType) -> bool {
         | PhpType::Int
         | PhpType::Float
         | PhpType::Str
-        | PhpType::Void => true,
+        | PhpType::Void
+        // A gradual value is what an UNTYPED parameter carries, and PHP coerces whatever it holds
+        // to bool like any other flag. `emit_preserve_keys_truthiness` already lowers `Mixed`
+        // through `__rt_mixed_cast_bool`; only this predicate refused it, which rejected Twig's
+        // `CoreExtension::toArray($seq, $preserveKeys = true)`.
+        | PhpType::Mixed => true,
         PhpType::Union(members) => members.iter().all(preserve_keys_type_supported),
         _ => false,
     }
@@ -134,10 +155,21 @@ pub(crate) fn iterator_to_array_return_type(
 ) -> PhpType {
     match preserve_keys {
         Some(value) => iterator_to_array_static_return_type(source_ty, value),
-        None => checker.normalize_union_type(vec![
-            iterator_to_array_static_return_type(source_ty, true),
-            iterator_to_array_static_return_type(source_ty, false),
-        ]),
+        None => {
+            let preserved = iterator_to_array_static_return_type(source_ty, true);
+            let renumbered = iterator_to_array_static_return_type(source_ty, false);
+            if preserved == renumbered {
+                return preserved;
+            }
+            // The two shapes are a hash and a dense array, and the backend boxes whichever arm
+            // runs. A UNION of them is the precise answer but it does not survive being stored:
+            // a local holding both array shapes types as `iterable`, and every array builtin
+            // refuses `iterable` because it may be a Traversable. `Mixed` is the same boxed cell
+            // and stays array-acceptable, which is what `shuffle(self::toArray($item, false))` in
+            // twig's `CoreExtension` needs.
+            let _ = checker;
+            PhpType::Mixed
+        }
     }
 }
 

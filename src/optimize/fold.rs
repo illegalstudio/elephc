@@ -11,6 +11,7 @@
 mod array_key;
 mod casts;
 mod compare;
+mod defined;
 mod expr;
 mod inline_closure;
 mod ops;
@@ -18,6 +19,7 @@ mod pipes;
 mod scalar;
 
 pub(super) use compare::loose_eq_values;
+pub(super) use defined::{fold_known_class_constant_defined, with_known_class_constants};
 pub(super) use expr::{fold_enum_case, fold_expr, fold_method, fold_params, fold_property};
 pub(super) use ops::try_fold_array_access;
 pub(super) use scalar::{assigned_array_fact, assigned_scalar_value, scalar_value, ScalarValue};

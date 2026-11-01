@@ -81,6 +81,8 @@ pub enum BuiltinKind {
 pub enum TypeSpec {
     /// PHP `int`.
     Int,
+    /// PHP nullable `?int`.
+    NullableInt,
     /// PHP `float`.
     Float,
     /// PHP `string`.
@@ -175,6 +177,38 @@ pub struct ParamSpec {
     pub by_ref: bool,
 }
 
+/// Neutral metadata for one PHP variadic builtin parameter.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct VariadicSpec {
+    /// PHP-visible named-argument key.
+    pub name: &'static str,
+    /// Whether every collected argument binds a value or writable caller storage.
+    pub passing: PassingMode,
+}
+
+impl VariadicSpec {
+    /// Builds an ordinary by-value variadic parameter.
+    pub const fn value(name: &'static str) -> Self {
+        Self {
+            name,
+            passing: PassingMode::Value,
+        }
+    }
+
+    /// Builds a variadic parameter whose collected arguments bind caller storage.
+    pub const fn by_reference(name: &'static str) -> Self {
+        Self {
+            name,
+            passing: PassingMode::ByReference,
+        }
+    }
+
+    /// Returns whether every collected argument must bind writable caller storage.
+    pub const fn is_by_reference(self) -> bool {
+        matches!(self.passing, PassingMode::ByReference)
+    }
+}
+
 /// Backend-neutral callable signature selected for one catalog consumer.
 ///
 /// Most consumers use the canonical contract fields directly. A small number
@@ -184,8 +218,8 @@ pub struct ParamSpec {
 pub struct BuiltinSignature {
     /// Fixed parameters in PHP source order.
     pub params: &'static [ParamSpec],
-    /// PHP-visible variadic parameter name, when present.
-    pub variadic: Option<&'static str>,
+    /// PHP-visible variadic parameter metadata, when present.
+    pub variadic: Option<VariadicSpec>,
     /// Explicit required-parameter count for non-trailing default shapes.
     pub required_param_count: Option<usize>,
 }
@@ -270,10 +304,8 @@ pub struct BuiltinContract {
     pub kind: BuiltinKind,
     /// Fixed parameters in PHP source order.
     pub params: &'static [ParamSpec],
-    /// PHP-visible variadic parameter name, when present.
-    pub variadic: Option<&'static str>,
-    /// Whether the variadic parameter is declared by reference (`&...$vars`).
-    pub variadic_by_ref: bool,
+    /// PHP-visible variadic parameter metadata, when present.
+    pub variadic: Option<VariadicSpec>,
     /// Optional supported minimum-arity override.
     pub min_args: Option<usize>,
     /// Optional supported maximum-arity override.

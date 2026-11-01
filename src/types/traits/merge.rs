@@ -17,6 +17,35 @@ use crate::span::Span;
 
 use super::validation::validate_direct_method_duplicates;
 
+/// Merges a class's own properties with the ones its traits import, in php's order: the class's
+/// own declarations first, then each imported property it does not declare itself.
+///
+/// php compiles the class body before binding its traits, so a trait's properties take the slots
+/// after the class's own -- `var_dump()`, `json_encode()`, an `(array)` cast and
+/// `ReflectionClass::getProperties()` all list them last. Conflicts are validated exactly as
+/// `merge_properties` does; only the order differs.
+pub(super) fn merge_class_properties(
+    imported: &[ClassProperty],
+    local: &[ClassProperty],
+    span: Span,
+    owner_label: &str,
+) -> Result<Vec<ClassProperty>, CompileError> {
+    let mut merged = merge_properties(imported, local, span, owner_label, true)?;
+    let local_names: HashSet<&str> = local.iter().map(|property| property.name.as_str()).collect();
+    let mut ordered = Vec::with_capacity(merged.len());
+    for property in local {
+        if let Some(index) = merged.iter().position(|existing| existing.name == property.name) {
+            ordered.push(merged.remove(index));
+        }
+    }
+    ordered.extend(
+        merged
+            .into_iter()
+            .filter(|property| !local_names.contains(property.name.as_str())),
+    );
+    Ok(ordered)
+}
+
 /// Merges `imported` trait properties with `local` class/trait properties.
 /// Conflicts (same name, incompatible modifiers) are reported as errors.
 /// If `replace_compatible_existing` is true, a compatible imported property
@@ -104,14 +133,25 @@ pub(super) fn merge_methods(
         local_keys.insert((php_symbol_key(&method.name), method.is_static));
     }
 
-    let mut merged = Vec::new();
-    let mut seen_imported = HashSet::new();
+    let mut merged: Vec<ClassMethod> = Vec::new();
+    let mut seen_imported: std::collections::HashMap<(String, bool), usize> =
+        std::collections::HashMap::new();
     for imported_method in imported {
         let key = (php_symbol_key(&imported_method.name), imported_method.is_static);
         if local_keys.contains(&key) {
             continue;
         }
-        if !seen_imported.insert(key.clone()) {
+        if let Some(&index) = seen_imported.get(&key) {
+            // Two traits may both require a method (`abstract public function getBytes()`), or
+            // one may require what the other implements; php keeps the implementation. Only two
+            // implementations collide.
+            if imported_method.is_abstract {
+                continue;
+            }
+            if merged[index].is_abstract {
+                merged[index] = imported_method;
+                continue;
+            }
             return Err(CompileError::new(
                 span,
                 &format!(
@@ -120,10 +160,30 @@ pub(super) fn merge_methods(
                 ),
             ));
         }
+        seen_imported.insert(key, merged.len());
         merged.push(imported_method);
     }
 
     merged.extend(local.iter().cloned());
+    Ok(merged)
+}
+
+/// Merges a class's (or enum's) trait methods with its own, in the order php's method table
+/// holds them: the class's own declarations first, then what its traits bring in.
+///
+/// `getMethods()` and `get_class_methods()` both read that order, and so does anything a
+/// framework derives from them (Symfony's attribute route loader meets controller methods in
+/// exactly this sequence). Nested trait flattening keeps `merge_methods`' order.
+pub(super) fn merge_class_methods(
+    imported: Vec<ClassMethod>,
+    local: &[ClassMethod],
+    span: Span,
+    owner_label: &str,
+) -> Result<Vec<ClassMethod>, CompileError> {
+    let mut merged = merge_methods(imported, local, span, owner_label)?;
+    let imported_count = merged.len() - local.len();
+    let imported: Vec<ClassMethod> = merged.drain(..imported_count).collect();
+    merged.extend(imported);
     Ok(merged)
 }
 
@@ -137,58 +197,26 @@ pub(super) fn merge_imported_method_set(
     span: Span,
     owner_label: &str,
 ) -> Result<(), CompileError> {
-    let mut seen: HashSet<(String, bool)> = existing
-        .iter()
-        .map(|method| (php_symbol_key(&method.name), method.is_static))
-        .collect();
     for method in incoming {
         let key = (php_symbol_key(&method.name), method.is_static);
-        if !seen.insert(key) {
-            return Err(CompileError::new(
-                span,
-                &format!("{} imports duplicate trait method '{}'", owner_label, method.name),
-            ));
+        let present = existing
+            .iter()
+            .position(|other| (php_symbol_key(&other.name), other.is_static) == key);
+        match present {
+            None => existing.push(method),
+            // Abstract requirements from several traits coexist, and an implementation
+            // satisfies one (php keeps the implementation); two implementations collide.
+            Some(_) if method.is_abstract => {}
+            Some(index) if existing[index].is_abstract => existing[index] = method,
+            Some(_) => {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{} imports duplicate trait method '{}'", owner_label, method.name),
+                ));
+            }
         }
-        existing.push(method);
     }
     Ok(())
-}
-
-/// Merges imported trait constants with constants declared directly by a class or trait.
-///
-/// PHP permits duplicate trait constants only when their complete declarations
-/// are compatible. Values are folded before comparison, so different syntax
-/// producing the same PHP value remains compatible. A differing value,
-/// visibility, final flag, type, or attribute is a composition error;
-/// compatible local declarations replace the imported copy.
-pub(super) fn merge_constants(
-    imported: &[ClassConst],
-    local: &[ClassConst],
-    span: Span,
-    owner_label: &str,
-) -> Result<Vec<ClassConst>, CompileError> {
-    let mut merged = imported.to_vec();
-    for constant in local {
-        merge_constant_into(
-            &mut merged,
-            constant.clone(),
-            span,
-            owner_label,
-            true,
-        )?;
-    }
-    // PHP lists the owner's own constants, in declaration order, before the ones its traits
-    // bring in (`ReflectionClass::getConstants()` on 8.5.10). The merge above appends a new
-    // local after the imported set but replaces a compatible redeclaration IN PLACE, so a
-    // redeclared constant would stay ahead of earlier locals. Sorting by each local's own
-    // position (imported ones after, stably) restores PHP's order without touching the check.
-    merged.sort_by_key(|constant| {
-        local
-            .iter()
-            .position(|own| own.name == constant.name)
-            .map_or((1, 0), |index| (0, index))
-    });
-    Ok(merged)
 }
 
 /// Adds constants imported from another trait, rejecting incompatible duplicate declarations.
@@ -199,37 +227,7 @@ pub(super) fn merge_imported_constant_set(
     owner_label: &str,
 ) -> Result<(), CompileError> {
     for constant in incoming {
-        merge_constant_into(existing, constant, span, owner_label, false)?;
-    }
-    Ok(())
-}
-
-/// Inserts one trait constant or validates it against an existing same-named declaration.
-fn merge_constant_into(
-    merged: &mut Vec<ClassConst>,
-    constant: ClassConst,
-    span: Span,
-    owner_label: &str,
-    replace_compatible_existing: bool,
-) -> Result<(), CompileError> {
-    let Some(index) = merged
-        .iter()
-        .position(|existing| existing.name == constant.name)
-    else {
-        merged.push(constant);
-        return Ok(());
-    };
-    if !constants_compatible(&merged[index], &constant) {
-        return Err(CompileError::new(
-            span,
-            &format!(
-                "{} has incompatible duplicate trait constant '{}'",
-                owner_label, constant.name
-            ),
-        ));
-    }
-    if replace_compatible_existing {
-        merged[index] = constant;
+        merge_constant_into(existing, constant, span, owner_label, false, "trait constant")?;
     }
     Ok(())
 }
@@ -258,4 +256,85 @@ fn properties_compatible(left: &ClassProperty, right: &ClassProperty) -> bool {
         && left.is_abstract == right.is_abstract
         && left.by_ref == right.by_ref
         && left.default == right.default
+}
+
+/// Merges imported trait constants with constants declared directly by the consuming class-like.
+pub(super) fn merge_constants(
+    imported: &[ClassConst],
+    local: &[ClassConst],
+    span: Span,
+    owner_label: &str,
+    replace_compatible_existing: bool,
+) -> Result<Vec<ClassConst>, CompileError> {
+    // php lists a class-like's OWN constants first, in declaration order, and then the ones its
+    // traits add (`zend_do_bind_traits` runs after the class body is compiled), so
+    // `getConstants()` on `class C { use T; const Z = 1; }` starts with `Z`. A constant the
+    // class-like redeclares keeps the class's position; the trait's copy is only validated.
+    let mut local_names = HashSet::new();
+    for constant in local {
+        if !local_names.insert(constant.name.as_str()) {
+            return Err(CompileError::new(
+                constant.span,
+                &format!(
+                    "{} declares duplicate constant '{}'",
+                    owner_label, constant.name
+                ),
+            ));
+        }
+    }
+    let mut merged: Vec<ClassConst> = Vec::with_capacity(imported.len() + local.len());
+    for constant in imported {
+        if let Some(own) = local.iter().find(|own| own.name == constant.name) {
+            if !constants_compatible(constant, own) {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "{} has incompatible duplicate constant '{}'",
+                        owner_label, constant.name
+                    ),
+                ));
+            }
+            continue;
+        }
+        merged.push(constant.clone());
+    }
+    let _ = replace_compatible_existing;
+    let mut ordered = local.to_vec();
+    ordered.extend(merged);
+    Ok(ordered)
+}
+
+/// Inserts one constant or validates it against an existing same-named declaration.
+///
+/// `replace_compatible_existing` lets a class's own declaration take the place of a compatible
+/// imported one. The diagnostic names a trait-to-trait clash a "trait constant" and a class
+/// declaration clashing with an imported one a plain "constant", which is how each reads.
+fn merge_constant_into(
+    merged: &mut Vec<ClassConst>,
+    constant: ClassConst,
+    span: Span,
+    owner_label: &str,
+    replace_compatible_existing: bool,
+    noun: &str,
+) -> Result<(), CompileError> {
+    let Some(index) = merged
+        .iter()
+        .position(|existing| existing.name == constant.name)
+    else {
+        merged.push(constant);
+        return Ok(());
+    };
+    if !constants_compatible(&merged[index], &constant) {
+        return Err(CompileError::new(
+            span,
+            &format!(
+                "{} has incompatible duplicate {} '{}'",
+                owner_label, noun, constant.name
+            ),
+        ));
+    }
+    if replace_compatible_existing {
+        merged[index] = constant;
+    }
+    Ok(())
 }

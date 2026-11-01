@@ -28,8 +28,11 @@ builtin! {
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::None,
         argument_lowering: crate::builtins::semantics::BuiltinArgumentLowering::Standard,
-        callable: BuiltinCallablePolicy::StaticOnly(
-            "runtime-selected is_null requires a statically represented source value",
+        // Reachable by run-time name like the other type predicates (`sprintf('is_%s', $type)`
+        // in symfony/dependency-injection's `CheckTypeDeclarationsPass`): the wrapper passes the
+        // value boxed, and `IsNull` answers for a boxed value as for any other.
+        callable: BuiltinCallablePolicy::Dynamic(
+            crate::builtins::semantics::callable_accepts_any_source,
         ),
         lowering: BuiltinLowering::Eir(lower),
     },

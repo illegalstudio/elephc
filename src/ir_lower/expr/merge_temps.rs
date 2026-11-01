@@ -171,6 +171,13 @@ pub(super) fn branch_merge_result_type(
         return buffer;
     }
     let [(_, then_ty), (_, else_ty)] = &arms;
+    // Two resources merge into a resource, not into the `int` their storage erases to: the stream
+    // builtins accept a resource handle only, so `fwrite($type === 'out' ? STDOUT : STDERR, $line)`
+    // (illuminate/console `Scheduling\Event::execute()`) was refused "fwrite stream argument PHP
+    // type Int".
+    if let (PhpType::Resource(left), PhpType::Resource(right)) = (then_ty, else_ty) {
+        return PhpType::Resource(if left == right { left.clone() } else { None });
+    }
     let branch_ty = nullable_aware_branch_merge_type(then_ty, else_ty);
     // A pointer merge (a `ptr<T>` or packed record address on both sides) is already exact; the
     // syntactic fallback would answer `int` for the ternary and widen the word into `Mixed`.
@@ -179,8 +186,41 @@ pub(super) fn branch_merge_result_type(
     {
         return branch_ty;
     }
+    let then_repr = then_ty.codegen_repr();
+    let else_repr = else_ty.codegen_repr();
+    if then_repr == else_repr {
+        // An element read of a container answers `null` when the key is missing. A packed list
+        // slot carries that as its canonical-null sentinel, but a HASH slot has no null:
+        // `$c ? $rows[5] : ["a" => 1]` merged as a hash and handed the missed read's null
+        // pointer to the next hash operation. Box such a merge instead.
+        if matches!(then_repr, PhpType::AssocArray { .. })
+            && (container_element_read_may_miss(ctx, then_expr)
+                || container_element_read_may_miss(ctx, else_expr))
+        {
+            return PhpType::Mixed;
+        }
+        return then_repr;
+    }
     let fallback_ty = fallback_expr_type(expr).codegen_repr();
     wider_type_for_merge(&fallback_ty, &branch_ty.codegen_repr())
+}
+
+/// Whether `expr` reads an element of an array container, which yields `null` on a missing key.
+fn container_element_read_may_miss(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> bool {
+    let ExprKind::ArrayAccess { array, .. } = &expr.kind else {
+        return false;
+    };
+    let container = match &array.kind {
+        ExprKind::Variable(name) => ctx.local_types.get(name).cloned(),
+        _ => None,
+    };
+    match container.map(|ty| ty.codegen_repr()) {
+        Some(PhpType::Array(_) | PhpType::AssocArray { .. }) => true,
+        // An unknown container shape: only an element read of a nested element is known to be
+        // an array read here.
+        None => matches!(array.kind, ExprKind::ArrayAccess { .. }),
+        Some(_) => false,
+    }
 }
 
 /// Chooses a match hidden-temp type by merging every arm result type, so
@@ -227,6 +267,11 @@ pub(super) fn match_merge_result_type(
 
 /// Chooses a short-ternary hidden-temp type without reintroducing the
 /// scalar-biased syntactic join used by the parser-only fallback inference.
+///
+/// A null default keeps the merge nullable, as the full ternary does: `$cond ?: null` merged as
+/// `bool`, so the null branch stored the null sentinel into a bool temp and the result read back
+/// as `false`-typed garbage -- `sprintf($format ??= ...)` printed `9223372036854775806` for
+/// Symfony's `resolveEnvPlaceholders($config, $resolveEnvs ?: null)`.
 pub(super) fn short_ternary_merge_result_type(
     ctx: &LoweringContext<'_, '_>,
     value: &Expr,
@@ -250,7 +295,16 @@ pub(super) fn short_ternary_merge_result_type(
     {
         return nullable_aware_branch_merge_type(value_ty, default_ty);
     }
-    materialized_merge_type(&value_ty.codegen_repr(), &default_ty.codegen_repr())
+    let merged = nullable_aware_branch_merge_type(value_ty, default_ty);
+    if php_type_allows_null(&merged) {
+        return merged;
+    }
+    let value_repr = value_ty.codegen_repr();
+    let default_repr = default_ty.codegen_repr();
+    if value_repr == default_repr {
+        return value_repr;
+    }
+    materialized_merge_type(&value_repr, &default_repr)
 }
 
 /// Chooses a ternary branch merge type without erasing PHP null branches.
@@ -390,36 +444,115 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         ExprKind::ShortTernary { value, default } => {
             short_ternary_merge_result_type(ctx, value, default)
         }
+        // `??` yields its value or its default, so it merges like a two-arm branch. The syntactic
+        // fallback answered `int`: `$c ? $all[$k] ?? null : null` materialized a `?int` temp, and
+        // the string the coalesce produced was stored through it as "". Symfony's
+        // `ParameterBagUtils::getRequestParameterValue()` reads the login form's CSRF token
+        // exactly this way, so every login on the demo failed "Invalid double-submit CSRF token".
         ExprKind::NullCoalesce { value, default } => {
             null_coalesce_merge_type(ctx, null_coalesce_value_type_for_merge(ctx, value), default)
         }
+        // An assignment yields the value it stored: a typed property's own type (the value is
+        // coerced into it), otherwise the assigned value's. The syntactic fallback answered `int`,
+        // so a `match` whose arms assign an int property in one arm and a string property in
+        // another merged into a `?int` temp the string arm could not be stored in -- Laravel
+        // Prompts' `TypedValue::trackTypedValue()` key handler, which left the whole prompt
+        // family to the runtime autoloader.
         ExprKind::Assignment {
+            target,
             value,
             result_target,
             prelude,
             ..
-        } => materialized_expr_type_for_merge(
-            ctx,
-            assignment_result_expr(value, result_target.as_deref(), prelude),
-        ),
-        ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
-            .unwrap_or_else(|| fallback_expr_type(expr)),
+        } => match &target.kind {
+            ExprKind::PropertyAccess { object, property } => {
+                property_access_expr_type_for_ir(ctx, object, property)
+                    .map(|ty| normalize_value_php_type(ty.codegen_repr()))
+                    .unwrap_or_else(|| {
+                        materialized_expr_type_for_merge(
+                            ctx,
+                            assignment_result_expr(value, result_target.as_deref(), prelude),
+                        )
+                    })
+            }
+            _ => materialized_expr_type_for_merge(
+                ctx,
+                assignment_result_expr(value, result_target.as_deref(), prelude),
+            ),
+        },
+        // An element of a container this cannot type -- a call's result, most often -- merges as
+        // boxed Mixed, like the call arms below. The syntactic fallback answered `int`, so
+        // Laravel's `head($a)` (`empty($a) ? false : array_values($a)[0]`, or `reset()`)
+        // returned `int(0)` for a string element, and `--env=staging` detected environment 0.
+        ExprKind::ArrayAccess { array, .. } => {
+            array_access_expr_value_type_for_ir(ctx, array).unwrap_or(PhpType::Mixed)
+        }
         // Typed the way `lower_buffer_new` stamps the allocation, so `buffer_new<float>(1)[0]`
         // is read as a float element rather than the syntactic `int`.
         ExprKind::BufferNew { element_type, .. } => {
             PhpType::Buffer(Box::new(ctx.type_expr_to_php_type_for_value(element_type)))
         }
+        // A property the receiver's static class cannot type -- an untyped receiver, or a name
+        // only a subclass, a dynamic property or `__get()` supplies -- is read as a boxed Mixed
+        // value. The syntactic fallback answered `int` for it, so `$ok ? $o->items : 0` and
+        // `$o->items ?: 0` materialized an int temp and read an array as its pointer's integer
+        // cast: `gettype()` said "integer" where php says "array".
         ExprKind::PropertyAccess { object, property } => {
             nullable_pointer_property_type(ctx, object, property)
                 .or_else(|| property_access_expr_type_for_ir(ctx, object, property))
-                .unwrap_or_else(|| fallback_expr_type(expr))
+                .unwrap_or(PhpType::Mixed)
+        }
+        ExprKind::NullsafePropertyAccess { object, property } => {
+            super::nullsafe_property_access_expr_type_for_ir(ctx, object, property)
+                .unwrap_or(PhpType::Mixed)
+        }
+        ExprKind::DynamicPropertyAccess { .. } | ExprKind::NullsafeDynamicPropertyAccess { .. } => {
+            PhpType::Mixed
         }
         // A static property holding one raw word is resolved here: a `?ptr<T>` keeps its null
         // member through the merge, and a `buffer<T>` or `ptr<T>` keeps its handle or address
-        // instead of the syntactic `int`. Other static reads keep the syntactic answer.
+        // instead of the syntactic `int`. Other static reads take the property's declared type.
         ExprKind::StaticPropertyAccess { receiver, property } => {
             static_property_word_type(ctx, receiver, property, expr)
-                .unwrap_or_else(|| fallback_expr_type(expr))
+                .unwrap_or_else(|| static_property_result_type(ctx, receiver, property, expr))
+        }
+        // `!` and `instanceof` produce a bool in every PHP program, whatever their operand is.
+        // Without these arms they reached the scalar-biased syntactic fallback, which answers
+        // `int` for an expression it cannot type, and `wider_type_for_merge` then widened a
+        // bool/int pair to `int`, so `$flag ?? !in_array(...)` materialized an INT merge temp and
+        // a `bool` property refused the store. Symfony's `DebugHandlersListener::__construct`
+        // writes exactly that.
+        ExprKind::Not(_) | ExprKind::InstanceOf { .. } => PhpType::Bool,
+        // `STDOUT` / `STDERR` are stream resources; the syntactic fallback answers `int`, which the
+        // stream builtins then refuse (see `branch_merge_result_type`).
+        ExprKind::ConstRef(name)
+            if matches!(
+                ctx.constant_value(name.as_str()),
+                Some((_, PhpType::Resource(_)))
+            ) =>
+        {
+            ctx.constant_value(name.as_str())
+                .map(|(_, ty)| ty)
+                .unwrap_or(PhpType::Mixed)
+        }
+        // A literal with a spread is built with boxed elements whatever it unpacks; the syntactic
+        // fallback answered `array<int>`, so `$c ? [] : [$m, ...$rest]` read every boxed element
+        // back as its pointer: `json_encode()` printed `[4362301248]` for `["s"]`.
+        ExprKind::ArrayLiteral(items)
+            if items.iter().any(|item| matches!(item.kind, ExprKind::Spread(_))) =>
+        {
+            PhpType::Array(Box::new(PhpType::Mixed))
+        }
+        // `C::A` is typed from the constant's value, the way `lower_scoped_constant` lowers it.
+        // The syntactic fallback answers `string` for every scoped constant, so a ternary over two
+        // int constants stored each arm through `i_to_str`: symfony/console's
+        // `$decorated ? OutputInterface::OUTPUT_NORMAL : OutputInterface::OUTPUT_RAW` reached an
+        // `int $options` parameter as 0, and `list --format=json` ran its JSON through the
+        // formatter. An untypeable constant (late-bound `static::`) keeps the boxed Mixed temp.
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            super::scoped_constant_type_for_ir(ctx, receiver, name, 0)
+                .map(|ty| normalize_value_php_type(ty.codegen_repr()))
+                .unwrap_or(PhpType::Mixed)
         }
         // Calls are typed from the return metadata their own lowering uses. The syntactic
         // fallback answers `int` for every call outside its builtin allowlist, and a merge temp
@@ -586,6 +719,18 @@ pub(super) fn coerce_value_for_temp(
     if source_ty == target_ty {
         return value;
     }
+    // A nullable named object uses boxed Mixed storage, while a `??` merge strips the null
+    // arm and therefore chooses the concrete object representation for its result temporary.
+    // Reuse the ownership-aware gradual narrowing path before storing the non-null branch: a
+    // raw object slot must never receive the outer Mixed-cell pointer as its payload.
+    if matches!(target_ty, PhpType::Object(_)) {
+        return crate::ir_lower::gradual_coercions::coerce_gradual_value_to_boundary(
+            ctx,
+            value,
+            &target_ty,
+            Some(span),
+        );
+    }
     match &target_ty {
         PhpType::Mixed => ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span)),
         PhpType::Pointer(_)
@@ -624,7 +769,7 @@ pub(super) fn coerce_value_for_temp(
             release_coerced_source_if_owned(ctx, value, Some(span));
             unboxed
         }
-        _ => coerce_container_to_mixed_payload(ctx, value, &source_ty, &target_ty, span),
+        _ => coerce_container_to_mixed_payload(ctx, value, &source_ty, &target_ty, Some(span)),
     }
 }
 
@@ -641,7 +786,7 @@ pub(in crate::ir_lower) fn coerce_container_to_mixed_payload(
     value: LoweredValue,
     source_ty: &PhpType,
     target_ty: &PhpType,
-    span: crate::span::Span,
+    span: Option<crate::span::Span>,
 ) -> LoweredValue {
     let target_has_mixed_payload = match target_ty {
         PhpType::Array(elem) => elem.codegen_repr() == PhpType::Mixed,
@@ -672,12 +817,12 @@ pub(in crate::ir_lower) fn coerce_container_to_mixed_payload(
                 None,
                 target_ty.clone(),
                 effects_lookup::runtime_effects(),
-                Some(span),
+                span,
             );
             // The unbox takes its own reference to the payload, so an owning cell has no reader
             // left — the same ledger the whole-boxed branch below keeps.
             if cell_is_owning {
-                crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+                crate::ir_lower::ownership::release_if_owned(ctx, value, span);
             }
             return unboxed;
         }
@@ -687,68 +832,99 @@ pub(in crate::ir_lower) fn coerce_container_to_mixed_payload(
         // in a pointer-array temporary unconverted, those cells would reach pointer-word readers,
         // whichever way the merging arm was lowered.
         return super::indexed_array_literals::convert_array_to_pointer_storage(
-            ctx, value, target_ty, span,
+            ctx, value, target_ty, span.unwrap_or_else(crate::span::Span::dummy),
         );
     }
-    let op = match (source_ty, target_ty) {
+    let (op, result_ty) = match (source_ty, target_ty) {
         (PhpType::Array(source_elem), PhpType::Array(_))
             if source_elem.codegen_repr() != PhpType::Mixed =>
         {
-            Op::ArrayToMixed
+            (Op::ArrayToMixed, target_ty.clone())
         }
         (PhpType::AssocArray { value: source_value, .. }, PhpType::AssocArray { .. })
             if source_value.codegen_repr() != PhpType::Mixed =>
         {
-            Op::HashToMixed
+            (Op::HashToMixed, target_ty.clone())
+        }
+        (
+            PhpType::AssocArray {
+                key,
+                value: source_value,
+            },
+            PhpType::Array(target_element),
+        ) if source_value.codegen_repr() != PhpType::Mixed
+            && target_element.codegen_repr() == PhpType::Mixed =>
+        {
+            (
+                Op::HashToMixed,
+                PhpType::AssocArray {
+                    key: key.clone(),
+                    value: Box::new(PhpType::Mixed),
+                },
+            )
+        }
+        (PhpType::Array(source_elem), PhpType::AssocArray { .. }) => {
+            // An INDEXED argument bound to a hash contract. A bare `array` hint resolves to the
+            // hash whenever some call site passes one (`respecialized_param_types_for_call`), so
+            // the packed vector is CONVERTED here -- restamping it would hand the callee a
+            // pointer to the wrong layout. `Op::ArrayToHash` carries the element type across
+            // unchanged, so raw slots are boxed first to reach the contract's Mixed payload.
+            let source = if source_elem.codegen_repr() == PhpType::Mixed {
+                value
+            } else {
+                let borrowed = if ctx.value_is_owning_temporary(value)
+                    && !ctx.value_is_owned_unboxed_local_load(value.value)
+                {
+                    value
+                } else {
+                    crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, span)
+                };
+                ctx.emit_value(
+                    Op::ArrayToMixed,
+                    vec![borrowed.value],
+                    None,
+                    PhpType::Array(Box::new(PhpType::Mixed)),
+                    Op::ArrayToMixed.default_effects(),
+                    span,
+                )
+            };
+            return ctx.emit_value(
+                Op::ArrayToHash,
+                vec![source.value],
+                None,
+                target_ty.clone(),
+                Op::ArrayToHash.default_effects(),
+                span,
+            );
         }
         (PhpType::Mixed | PhpType::Union(_), _)
             if value.ir_type == IrType::Heap(IrHeapKind::Mixed) =>
         {
-            // Whole-boxed sources (a `?array` value flowing through `??`)
-            // unbox the cell payload and convert it with the same
-            // runtime-call coercion declared container returns use. The
-            // conversion borrows the cell and owns a fresh container
-            // reference, so an owning cell must be consumed here.
-            //
-            // The indexed conversion consumes one owned payload reference
-            // and rewrites sole-owner arrays in place, which is only sound
-            // when the cell owns its payload. A borrowed cell (a `?array`
-            // parameter or local) shares its payload with a live caller
-            // array, so it unboxes through the owned-payload coercion —
-            // which retains the payload — and the consuming `ArrayToMixed`
-            // copy-on-write-splits into a private converted copy. The
-            // associative helper returns a fresh hash without consuming the
-            // payload reference, so borrowed hash cells keep the
-            // single-call coercion.
+            // A whole-boxed gradual array can carry either indexed or associative storage at
+            // runtime. Normalize both layouts through the checked sparse-container operation;
+            // selecting the indexed-only runtime conversion from the declared `array<mixed>`
+            // target would reinterpret an associative payload with the wrong layout. The
+            // converted hash owns its payload independently and must keep an associative result
+            // type so typed call boundaries can adapt its values to their concrete ABI storage.
             let cell_is_owning = ctx.value_is_owning_temporary(value);
-            if !cell_is_owning && matches!(target_ty, PhpType::Array(_)) {
-                let unboxed = ctx.emit_value(
-                    Op::RuntimeCall,
-                    vec![value.value],
-                    None,
-                    PhpType::Array(Box::new(PhpType::Never)),
-                    effects_lookup::runtime_effects(),
-                    Some(span),
-                );
-                return ctx.emit_value(
-                    Op::ArrayToMixed,
-                    vec![unboxed.value],
-                    None,
-                    target_ty.clone(),
-                    Op::ArrayToMixed.default_effects(),
-                    Some(span),
-                );
-            }
+            let result_ty = if matches!(target_ty, PhpType::Array(_)) {
+                PhpType::AssocArray {
+                    key: Box::new(PhpType::Mixed),
+                    value: Box::new(PhpType::Mixed),
+                }
+            } else {
+                target_ty.clone()
+            };
             let converted = ctx.emit_value(
-                Op::RuntimeCall,
+                Op::MixedToHash,
                 vec![value.value],
                 None,
-                target_ty.clone(),
-                effects_lookup::runtime_effects(),
-                Some(span),
+                result_ty,
+                Op::MixedToHash.default_effects(),
+                span,
             );
             if cell_is_owning {
-                crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+                crate::ir_lower::ownership::release_if_owned(ctx, value, span);
             }
             return converted;
         }
@@ -764,15 +940,15 @@ pub(in crate::ir_lower) fn coerce_container_to_mixed_payload(
     let source = if source_is_consumable {
         value
     } else {
-        crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, span)
     };
     ctx.emit_value(
         op,
         vec![source.value],
         None,
-        target_ty.clone(),
+        result_ty,
         op.default_effects(),
-        Some(span),
+        span,
     )
 }
 

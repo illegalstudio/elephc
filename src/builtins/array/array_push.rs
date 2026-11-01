@@ -6,9 +6,11 @@
 //!
 //! Key details:
 //! - The golden signature is `first_param_ref(variadic(["array"], "values"))`: `array`
-//!   by-ref plus a variadic `values` param, so `min_args: 1` is the only `check_arity`
-//!   override and the maximum is unbounded. It used to be pinned to `2, 2`, which rejected
-//!   ordinary PHP (`array_push($a, 3, 4)`) with an arity error (issue #677).
+//!   by-ref plus a variadic `values` param, and `min_args: 1, max_args: None` is that shape.
+//!   A legacy CHECK arm used to cap it at exactly 2 arguments, which refused PHP's own
+//!   `array_push($a, $x, $y)`; Twig's `ArrayExpression::addElement` writes exactly that. The
+//!   minimum is ONE: `array_push($a)` appends nothing and answers `count($a)`, and PHP's own
+//!   diagnostic is `expects at least 1 argument`.
 //! - The `ref` marker on `array` is mandatory — it is what makes by-reference mutation
 //!   lower correctly (ir_lower reads `ref_params` from the registry sig).
 //! - `lazy_check: true` lets this builtin admit generator and `Traversable` spreads through
@@ -149,6 +151,15 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     }
     if denied_place || matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) || arr_ty.is_php_array() {
         cx.checker.record_array_push_parent_storage(&cx.args[0], cx.span, cx.env);
+    }
+    // A gradual receiver (`mixed`, or a union carrying an array) is validated at runtime.
+    if denied_place
+        || matches!(
+            arr_ty,
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_)
+        )
+        || arr_ty.is_php_array()
+    {
         Ok(PhpType::Int)
     } else {
         Err(CompileError::new(cx.span, "array_push() first argument must be array"))

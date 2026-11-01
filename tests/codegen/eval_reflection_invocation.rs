@@ -201,3 +201,32 @@ unset($parameter);
 "#);
     assert_eq!(out, r#"argument|argument|a:1:{s:4:"name";s:8:"argument";}"#);
 }
+
+/// Verifies a ReflectionParameter built where a freed ReflectionFunction lived answers with its
+/// own name. The interpreter's reflector registry is keyed by object address and outlives the
+/// reflector; only registered reflector kinds dropped foreign entries, so a parameter (no
+/// registry kind of its own) inherited the dead function's name. Symfony's argument resolver
+/// read a closure's name as a controller argument's name.
+#[test]
+fn test_eval_reflection_parameter_ignores_freed_function_registration() {
+    let out = compile_and_run(
+        r#"<?php
+function eval_param_reuse_target(string $template, ?int $maxAge = null) {}
+eval('
+$seen = [];
+for ($i = 0; $i < 20; $i++) {
+    $c = function ($x) {};
+    $rf = new ReflectionFunction($c);
+    $rf->getName();
+    unset($rf, $c);
+    $rm = new ReflectionFunction("eval_param_reuse_target");
+    $names = [];
+    foreach ($rm->getParameters() as $p) { $names[] = $p->getName(); }
+    $seen[implode(",", $names)] = true;
+}
+echo implode("|", array_keys($seen));
+');
+"#,
+    );
+    assert_eq!(out, "template,maxAge");
+}

@@ -15,6 +15,38 @@ use crate::support::{
     elephc_cli_command_with_eval_catalog_native, fs, make_cli_test_dir, run_binary,
 };
 
+/// Verifies eval uses php-src byte-span and nullable-window semantics.
+#[test]
+fn test_eval_strcspn_and_strspn_php_src_semantics() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('return strcspn("22222222aaaa bbb1111 cccc", "1234", 9, 6)
+    . ":" . strspn("22222222aaaa bbb1111 cccc", "1234", 2, 3)
+    . ":" . strcspn("abc123", "123", 1, null)
+    . ":" . strspn("abc", "")
+    . ":" . call_user_func_array("strcspn", ["abc123", "123"]);');
+"#,
+    );
+    assert_eq!(out, "6:3:2:0:3");
+}
+
+/// Verifies `preg_quote()` gives eval and compiled code the same answer, delimiter included.
+///
+/// The interpreter owns a second copy of the escape table, so a divergence here means the two
+/// tables have drifted apart rather than that either is merely incomplete.
+#[test]
+fn test_eval_preg_quote_matches_compiled() {
+    let out = compile_and_run(
+        r#"<?php
+$subject = "a.b+c/d";
+$compiled = preg_quote($subject) . "|" . preg_quote($subject, "/");
+$evaluated = eval('return preg_quote("a.b+c/d") . "|" . preg_quote("a.b+c/d", "/");');
+echo $compiled === $evaluated ? "same" : "DIFFER", "|", $evaluated;
+"#,
+    );
+    assert_eq!(out, r#"same|a\.b\+c/d|a\.b\+c\/d"#);
+}
+
 /// Compiles and runs an eval fixture with both native regex providers explicitly enabled.
 fn compile_and_run_with_mbstring_and_regex(source: &str) -> String {
     let dir = make_cli_test_dir("elephc_eval_builtin_catalog");
@@ -198,6 +230,54 @@ echo preg_match("/(?<=foo)bar/", "foobar");');
     );
 
     assert_eq!(out, "1:1");
+}
+
+/// Verifies eval's sort family takes php's `$flags` argument. Laravel's `LoadConfiguration` sorts
+/// its config file map with `ksort($files, SORT_NATURAL)`, which eval refused outright.
+#[test]
+fn test_eval_sort_family_honours_sort_flags() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$files = ["view10" => 1, "app" => 2, "view2" => 3, "App" => 4];
+ksort($files, SORT_NATURAL);
+echo implode(",", array_keys($files)), "\n";
+krsort($files, SORT_STRING);
+echo implode(",", array_keys($files)), "\n";
+$v = ["10", "9", "2", "1"];
+sort($v, SORT_STRING);
+echo implode(",", $v), "\n";
+rsort($v, SORT_NUMERIC);
+echo implode(",", $v), "\n";
+$a = ["x" => "b10", "y" => "B2", "z" => "a1"];
+asort($a, SORT_NATURAL | SORT_FLAG_CASE);
+echo json_encode($a), "\n";
+arsort($a, SORT_STRING);
+echo json_encode($a), "\n";');
+"#,
+    );
+    assert_eq!(
+        out,
+        "App,app,view2,view10\nview2,view10,app,App\n1,10,2,9\n10,9,2,1\n{\"z\":\"a1\",\"y\":\"B2\",\"x\":\"b10\"}\n{\"x\":\"b10\",\"z\":\"a1\",\"y\":\"B2\"}\n"
+    );
+}
+
+/// Verifies eval hands a delimited pattern's body to PCRE2 verbatim, as php and compiled code do.
+///
+/// The interpreter used to strip the backslash from every escaped delimiter, which changes what an
+/// escaped METACHARACTER means: `\(` inside a `(...)`-delimited pattern opened a group (the
+/// phpdotenv lexer pattern stopped compiling) and `\+` inside `+...+` became a quantifier.
+#[test]
+fn test_eval_preg_keeps_escaped_delimiters_in_the_pattern() {
+    let out = compile_and_run_with_regex(
+        r#"<?php
+$regex = '(([^(\s)]|\(|\)){1,10})A';
+$plus = '+a\+b+';
+echo preg_match($regex, 'f(x) y', $m), $m[0], ":", preg_match($plus, 'xa+b'), preg_match($plus, 'aab'), "\n";
+eval('echo preg_match($regex, "f(x) y", $m), $m[0], ":", preg_match($plus, "xa+b"), preg_match($plus, "aab"), "\n";');
+"#,
+    );
+
+    assert_eq!(out, "1f(x):10\n1f(x):10\n");
 }
 
 /// Verifies eval named builtin calls can skip optional parameters with defaults.
@@ -719,6 +799,149 @@ try {
         out,
         "ValueError|iconv_strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)"
     );
+}
+
+/// Verifies `headers_sent()` inside eval reports the COMPILED program's flag, not an eval-local one.
+///
+/// The flag lives in generated-runtime storage and is raised by the real-output path, so the only
+/// honest answer comes from the compiled side. Before this it was not joined at all and every
+/// interpreted caller died with "call to undefined function headers_sent()" -- which is what
+/// Composer's own `vendor/composer/platform_check.php` hits the moment its version guard fails.
+///
+/// `php -n` 8.5.6 (`scratchpad/hsent.php`, this session): `clean` / `x` / `sent`.
+#[test]
+fn test_eval_headers_sent_reads_the_compiled_output_flag() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval("return headers_sent() ? \"sent\" : \"clean\";"), "\n";
+echo "x\n";
+echo eval("return headers_sent() ? \"sent\" : \"clean\";"), "\n";
+"#,
+    );
+
+    assert_eq!(out, "clean\nx\nsent\n");
+}
+
+/// Verifies eval's `defined()` answers a `Class::CONST` name, compiled and eval-declared alike,
+/// and says `false` for a missing class or constant instead of failing. Symfony's
+/// `DebugHandlersListener::getSubscribedEvents()` gates a listener on
+/// `defined('Symfony\Component\Console\ConsoleEvents::COMMAND')`.
+#[test]
+fn test_eval_defined_answers_class_constants() {
+    let out = compile_and_run(
+        r#"<?php
+final class Compiled { public const X = 1; }
+eval('final class Interpreted { public const Y = 2; }');
+echo eval('return var_export([defined("Compiled::X"), defined("Interpreted::Y"), defined("Compiled::Z"), defined("Nope::X")], true);');
+"#,
+    );
+
+    assert_eq!(out, "array (\n  0 => true,\n  1 => true,\n  2 => false,\n  3 => false,\n)");
+}
+
+/// Verifies php's builtin `Attribute` class: its constants compiled and interpreted, and an
+/// interpreted attribute class whose `#[\Attribute(...)]` flags combine them stays reflectable.
+/// Symfony's `Routing\Attribute\Route` has that shape and is only ever read by the interpreter.
+#[test]
+fn test_attribute_constants_and_interpreted_attribute_flags() {
+    let out = compile_and_run(
+        r#"<?php
+echo \Attribute::TARGET_CLASS, ' ', \Attribute::TARGET_ALL, ' ', (new \Attribute())->flags, "\n";
+eval('#[\Attribute(\Attribute::IS_REPEATABLE | \Attribute::TARGET_METHOD)] final class Flagged {}');
+echo eval('$a = (new \ReflectionClass("Flagged"))->getAttributes()[0]; return $a->getName() . json_encode($a->getArguments());');
+"#,
+    );
+
+    assert_eq!(out, "1 127 127\nAttribute[132]");
+}
+
+/// Verifies `$closure(...)` in eval hands back the same compiled closure, signature intact.
+/// Symfony's `AttributeAutoconfigurationPass` reflects `new \ReflectionFunction($callable(...))`
+/// and read arity 0 from the re-wrapped closure.
+#[test]
+fn test_eval_first_class_callable_of_a_closure_keeps_its_signature() {
+    let out = compile_and_run(
+        r#"<?php
+$c = static function (int $a, string ...$rest): void {};
+echo eval('$r = new \ReflectionFunction($c(...)); return $r->getNumberOfParameters() . ($c(...) === $c ? "same" : "copy");');
+"#,
+    );
+
+    assert_eq!(out, "2same");
+}
+
+/// Verifies `mb_strtoupper()` / `mb_strtolower()` give eval and compiled code the same bytes.
+///
+/// Both backends call the same `elephc-iconv` engine, so a divergence here means the AOT
+/// staging or the Magician binding changed an argument on its way in (a null encoding cast
+/// to `""`, say) rather than a difference in the case tables.
+#[test]
+fn test_eval_mb_case_mapping_matches_compiled() {
+    let out = compile_and_run(
+        r#"<?php
+$compiled = [
+    mb_strtoupper("abc"),
+    mb_strtoupper("straße éà ǆ ﬁ"),
+    mb_strtolower("İSTANBUL ΣΑΣ"),
+    mb_strtoupper("a\xffb"),
+    mb_strtoupper("héllo", "utf8"),
+    mb_strtoupper("\xe9t\xe9", "ISO-8859-1"),
+    mb_strtolower("ÀB", null),
+];
+$evaluated = eval('return [
+    mb_strtoupper("abc"),
+    mb_strtoupper("straße éà ǆ ﬁ"),
+    mb_strtolower("İSTANBUL ΣΑΣ"),
+    mb_strtoupper("a\xffb"),
+    mb_strtoupper("héllo", "utf8"),
+    mb_strtoupper("\xe9t\xe9", "ISO-8859-1"),
+    mb_strtolower("ÀB", null),
+];');
+foreach ($compiled as $index => $value) {
+    echo $value === $evaluated[$index] ? "=" : "!", bin2hex($evaluated[$index]), "\n";
+}
+echo eval('try { mb_strtoupper("a", "nope"); } catch (ValueError $e) { return get_class($e) . ": " . $e->getMessage(); }'), "\n";
+echo eval('return function_exists("mb_strtoupper") && function_exists("MB_STRTOLOWER") ? "visible" : "hidden";');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "=414243\n\
+=5354524153534520c389c38020c784204649\n\
+=69cc877374616e62756c20cf83ceb1cf82\n\
+=413f42\n\
+=48c3894c4c4f\n\
+=c954c9\n\
+=c3a062\n\
+ValueError: mb_strtoupper(): Argument #2 ($encoding) must be a valid encoding, \"nope\" given\n\
+visible"
+    );
+}
+
+/// Verifies interpreted `preg_*` accepts NUL bytes in the pattern and in the subject.
+///
+/// php hands PCRE2 both with their lengths. The interpreter built C strings from them, so a
+/// pattern holding `"\0"` -- Laravel's `Str::trim()` puts one in its whitespace class -- failed as
+/// an interpreter error, and a subject holding one silently never matched.
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_eval_preg_takes_nul_bytes_in_pattern_and_subject() {
+    let out = compile_and_run_with_regex(
+        r#"<?php
+$code = 'return json_encode([
+    preg_replace("~[\\s\0]+~u", "", " x\0y "),
+    preg_match("~a\0b~", "a\0b"),
+    preg_match("~a\\\\\0b~", "a\0b"),
+    preg_split("~\0~", "a\0b\0c"),
+    preg_match("~c~", "a\0b\0c"),
+]);';
+echo eval($code), "\n";
+echo preg_match("/x/", "x"), "\n";
+"#,
+    );
+    assert_eq!(out, "[\"xy\",1,1,[\"a\",\"b\",\"c\"],1]\n1\n");
 }
 
 /// Builds a program that runs `body` natively, prints `|`, then runs the same `body` through a

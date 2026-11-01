@@ -52,7 +52,13 @@ fn native_debug_ranges_stay_in_their_function_sections_on_all_targets() {
                 }
                 ranges += 1;
             } else if line.ends_with("__cdylib_exception_cleanup:") {
-                assert!(open.is_none(), "{name}: cleanup helpers cannot extend a PHP source range");
+                // A shared helper (`_eir_shared_*`: callable wrappers, invokers) is emitted inline,
+                // jumped over, inside the function that first needs it, and carries its own cleanup
+                // callback there, exactly like its body, which already sat in that range. Only a PHP
+                // function's own callback has to follow its `@endfn`.
+                if !line.starts_with("_eir_shared_") {
+                    assert!(open.is_none(), "{name}: cleanup helpers cannot extend a PHP source range: {open:?} {line}");
+                }
             } else if open.is_some() && line.strip_suffix(':') == open {
                 entry_section = Some(section);
             }

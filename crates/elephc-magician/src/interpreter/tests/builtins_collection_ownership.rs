@@ -27,7 +27,11 @@ fn builtin_throwable_construction_releases_argument_owners() {
             assert_eq!(result, Err(EvalStatus::UncaughtThrowable));
             assert!(thrown.is_some());
         }
-        assert_eq!(values.values.len(), 3, "{class}");
+        // object + message + code, plus the `file` string and `line` int the throw now records via
+        // `initialize_native_throwable_source` (each released like the rest, checked below). A
+        // construction that fails never reaches that step.
+        let expected_cells = if thrown.is_some() { 5 } else { 3 };
+        assert_eq!(values.values.len(), expected_cells, "{class}");
         for id in values.values.keys() {
             let count = values.releases.iter().filter(|cell| cell.as_ptr() as usize == *id).count();
             assert_eq!(count, usize::from(thrown.is_none_or(|cell| cell.as_ptr() as usize != *id)), "{class}");

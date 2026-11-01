@@ -203,6 +203,29 @@ return is_callable("vprintf");"#,
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies a guarded variadic deprecation helper can be declared and invoked at runtime.
+#[test]
+fn execute_program_runs_guarded_variadic_deprecation_helper() {
+    let program = parse_fragment(
+        br#"if (!function_exists('eval_trigger_deprecation')) {
+    function eval_trigger_deprecation(string $package, string $version, string $message, mixed ...$args): void {
+        @trigger_error(($package || $version ? "Since $package $version: " : '').($args ? vsprintf($message, $args) : $message), \E_USER_DEPRECATED);
+    }
+}
+eval_trigger_deprecation('package', '1.0', 'message %s', 'value');
+return true;"#,
+    )
+    .expect("parse guarded deprecation helper");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values)
+        .expect("execute guarded deprecation helper");
+
+    assert_eq!(values.output, "");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
 /// Verifies eval `sscanf()` returns indexed string matches through callable paths.
 #[test]
 fn execute_program_dispatches_sscanf_builtin() {

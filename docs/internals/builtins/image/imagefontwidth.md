@@ -2,7 +2,7 @@
 title: "imagefontwidth() - internals"
 description: "Compiler internals for imagefontwidth(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 518
+  order: 531
 ---
 
 ## `imagefontwidth()` - internals

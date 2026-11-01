@@ -2,7 +2,7 @@
 title: "curl_multi_remove_handle() - internals"
 description: "Compiler internals for curl_multi_remove_handle(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 782
+  order: 816
 ---
 
 ## `curl_multi_remove_handle()` - internals

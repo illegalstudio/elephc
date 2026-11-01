@@ -8,6 +8,7 @@
 //! - The initial value defaults to null and the carry may change PHP type at each step.
 //! - Callback inference receives a dynamic carry before an unannotated closure is checked.
 //! - The backend returns an independently owned Mixed result, including for an empty source.
+//! - The PHP signature accepts two or three arguments, with a `null` initial carry by default.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;

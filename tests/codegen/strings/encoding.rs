@@ -235,6 +235,22 @@ fn test_rawurlencode() {
     assert_eq!(out, "hello%20world");
 }
 
+/// Verifies the compatibility query builder handles nested arrays, custom separators, and RFC3986.
+#[test]
+fn test_http_build_query_nested_rfc3986() {
+    let out = compile_and_run(
+        r#"<?php
+echo http_build_query(
+    ["a" => "hello world", "nested" => ["x" => "a/b"]],
+    "",
+    ";",
+    PHP_QUERY_RFC3986,
+);
+"#,
+    );
+    assert_eq!(out, "a=hello%20world;nested%5Bx%5D=a%2Fb");
+}
+
 /// Verifies `rawurldecode()` decodes `%XX` sequences without touching `+` (leaves it as `+`).
 #[test]
 fn test_rawurldecode() {
@@ -278,6 +294,33 @@ foreach ($inputs as $i) { echo enc($i), "\n"; }"#,
         out,
         "a42-b.c_d%7Ee+f|a42-b.c_d~e%20f\n0123456789|0123456789\nAZaz|AZaz\n-_.%7E+|-_.~%20\n\
 h%C3%A9llo+w%C3%B6rld|h%C3%A9llo%20w%C3%B6rld\n%E2%82%AC%2F%3F%26%3D%2B%25%23|%E2%82%AC%2F%3F%26%3D%2B%25%23\n|\n"
+    );
+}
+
+/// `urlencode()`/`rawurlencode()` pass ASCII digits through, as php does.
+///
+/// Both runtime helpers used to test A-Z first with a "below 'A' -> check punctuation" branch,
+/// and every digit sits below 'A', so the 0-9 test after it was unreachable and `"42"` came back
+/// as `"%34%32"` on every target. The digit range is now tested first. The inputs derive from
+/// `$argc` so the calls reach the runtime helpers: a literal argument is folded at compile time
+/// by Rust code that was always right, which is how this survived the literal-only tests.
+/// Expected output is php 8.5's.
+#[test]
+fn test_urlencode_and_rawurlencode_pass_digits_through() {
+    let out = compile_and_run(
+        r#"<?php
+$n = $argc > 0 ? "42" : "";
+$m = $argc > 0 ? "a1b2 9-_.~Z" : "";
+echo urlencode($n), ":";
+echo urlencode($m), ":";
+echo rawurlencode($n), ":";
+echo rawurlencode($m), ":";
+echo urlencode("42"), ":", rawurlencode("a1b2"), ":";
+echo http_build_query(["page" => $argc > 0 ? 10 : 1, "b" => [2, 3]]);"#,
+    );
+    assert_eq!(
+        out,
+        "42:a1b2+9-_.%7EZ:42:a1b2%209-_.~Z:42:a1b2:page=10&b%5B0%5D=2&b%5B1%5D=3"
     );
 }
 
@@ -683,6 +726,47 @@ fn test_htmlspecialchars_ent_flags() {
     );
 }
 
+/// Verifies `htmlspecialchars()`'s fourth parameter, `$double_encode`, on both backends.
+///
+/// `true` re-encodes every `&`; `false` keeps each character reference the doctype considers
+/// valid: HTML 4.01 names (case-sensitive, no `&apos;`), `&#…;`/`&#x…;` up to U+10FFFF, and under
+/// `ENT_XML1` only the five XML names. Laravel's `e()` passes the flag positionally on every Blade
+/// `{{ }}`, and the four-argument call stopped EIR lowering (and fataled inside `eval()`).
+///
+/// Reference value captured from php 8.5.10.
+#[test]
+fn test_htmlspecialchars_double_encode_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+function e($value, $doubleEncode = true) {
+    return htmlspecialchars($value ?? '', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8', $doubleEncode);
+}
+$s = "&apos; &nbsp; &foo; &#39; &#x27; &#xZZ; &#1114111; &#1114112; &# &#; &amp &AMP; &Eacute; <b>\"q\"</b> 'x' &";
+echo e($s), "\n";
+echo e($s, false), "\n";
+echo htmlspecialchars("&apos; &amp; &nbsp;", ENT_QUOTES | ENT_XML1, 'UTF-8', false), "\n";
+echo htmlspecialchars("&apos; &nbsp;", ENT_QUOTES | ENT_XHTML, 'UTF-8', false), "\n";
+echo eval('return htmlspecialchars("&nbsp; &foo; <i>", ENT_QUOTES, "UTF-8", false);'), "\n";
+echo eval('return htmlspecialchars("&nbsp; <i>", ENT_QUOTES, "UTF-8", true);'), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "&amp;apos; &amp;nbsp; &amp;foo; &amp;#39; &amp;#x27; &amp;#xZZ; &amp;#1114111; ",
+            "&amp;#1114112; &amp;# &amp;#; &amp;amp &amp;AMP; &amp;Eacute; ",
+            "&lt;b&gt;&quot;q&quot;&lt;/b&gt; &#039;x&#039; &amp;\n",
+            "&amp;apos; &nbsp; &amp;foo; &#39; &#x27; &amp;#xZZ; &#1114111; &amp;#1114112; ",
+            "&amp;# &amp;#; &amp;amp &amp;AMP; &Eacute; &lt;b&gt;&quot;q&quot;&lt;/b&gt; ",
+            "&#039;x&#039; &amp;\n",
+            "&apos; &amp; &amp;nbsp;\n",
+            "&apos; &nbsp;\n",
+            "&nbsp; &amp;foo; &lt;i&gt;\n",
+            "&amp;nbsp; &lt;i&gt;\n",
+        )
+    );
+}
+
 /// Regression: an uncoercible (array) subject must be reported against the builtin that was
 /// actually called. `htmlentities()` previously reported "htmlspecialchars string coercion ..."
 /// from the shared `lower_html_escape` emitter; the checker now refuses the array first, in
@@ -793,6 +877,100 @@ echo strlen($u), "|", substr($u, 0, 4), "|", substr($u, -4);
 "#,
     );
     assert_eq!(out, "60000|A A |A A ");
+}
+
+/// Verifies `preg_quote()` escapes exactly php's PCRE metacharacter set.
+///
+/// The expected text is what `php -n` prints for the same input. Note the two bytes that are
+/// deliberately NOT escaped here: `/` is a metacharacter only when it is the delimiter, and `~`
+/// never is.
+#[test]
+fn test_preg_quote() {
+    let out = compile_and_run(
+        r#"<?php echo preg_quote("a.b\\c+d*e?f[g^h]i\$j(k)l{m}n=o!p>q<r|s:t-u#v/w~x");"#,
+    );
+    assert_eq!(
+        out,
+        r#"a\.b\\c\+d\*e\?f\[g\^h\]i\$j\(k\)l\{m\}n\=o\!p\>q\<r\|s\:t\-u\#v/w~x"#
+    );
+}
+
+/// Verifies the optional delimiter is escaped on top of the metacharacter set, and that only its
+/// FIRST byte participates -- php escapes `a` and not `b` when handed the delimiter `"ab"`.
+#[test]
+fn test_preg_quote_delimiter() {
+    let out = compile_and_run(
+        r#"<?php echo preg_quote("a/b", "/"), "|", preg_quote("a~b", "~"), "|",
+             preg_quote("a.b", "ab"), "|", preg_quote("a.b", "."), "|", preg_quote("////", "/");"#,
+    );
+    assert_eq!(out, r#"a\/b|a\~b|\a\.b|a\.b|\/\/\/\/"#);
+}
+
+/// Verifies an omitted, null, and empty delimiter all behave identically, which is why the
+/// runtime carries no separate presence flag.
+#[test]
+fn test_preg_quote_absent_null_and_empty_delimiter_agree() {
+    let out = compile_and_run(
+        r#"<?php echo preg_quote("a.b"), "|", preg_quote("a.b", null), "|", preg_quote("a.b", "");"#,
+    );
+    assert_eq!(out, r#"a\.b|a\.b|a\.b"#);
+}
+
+/// Verifies NUL is spelled as the four-character sequence `\000`, php's one escape that is not
+/// simply a backslash-prefixed byte.
+#[test]
+fn test_preg_quote_nul_becomes_four_characters() {
+    let out = compile_and_run(
+        r#"<?php echo bin2hex(preg_quote("a\0b")), "|", bin2hex(preg_quote("\0"));"#,
+    );
+    assert_eq!(out, "615c30303062|5c303030");
+}
+
+/// Verifies an empty subject and a subject with nothing to escape pass through untouched.
+#[test]
+fn test_preg_quote_empty_and_plain() {
+    let out = compile_and_run(
+        r#"<?php echo "|", preg_quote(""), "|", preg_quote("no specials here"), "|";"#,
+    );
+    assert_eq!(out, "||no specials here|");
+}
+
+/// Verifies `preg_quote()` resolves through case-insensitive and namespaced call forms.
+#[test]
+fn test_preg_quote_case_insensitive_and_namespaced() {
+    let out = compile_and_run(r#"<?php echo Preg_Quote("A.B"), "|", \preg_quote("C*D");"#);
+    assert_eq!(out, "A\\.B|C\\*D");
+}
+
+/// Sweeps every byte `1..=255` and pins the digest `php -n` produces for the same sweep.
+///
+/// A per-character assertion would restate the implementation; a digest of the whole sweep
+/// fails on any single wrong byte and cannot be satisfied by copying the escape table.
+#[test]
+fn test_preg_quote_matches_php_over_every_byte() {
+    let out = compile_and_run(
+        r#"<?php
+$sweep = "";
+for ($i = 1; $i < 256; $i++) {
+    $sweep .= chr($i);
+}
+$quoted = preg_quote($sweep);
+echo strlen($quoted), "|", md5($quoted);"#,
+    );
+    assert_eq!(out, "276|b80e12d7dd7f7bc4f2d22ae99551b95f");
+}
+
+/// Verifies a result whose worst-case 4x expansion exceeds the 64 KiB concat scratch buffer
+/// keeps every escape intact through the bounded heap fallback.
+#[test]
+fn test_preg_quote_result_larger_than_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$big = str_repeat("a.b/", 20000);
+$quoted = preg_quote($big, "/");
+echo strlen($quoted), "|", md5($quoted);"#,
+    );
+    assert_eq!(out, "120000|64aa0923eb317d6813d6f05b097b9187");
 }
 
 /// Verifies `quotemeta()` escapes every php-src metacharacter and leaves other bytes alone.
@@ -1064,6 +1242,18 @@ echo strtr("aXbXc", ["X"=>"","b"=>"BB"]);
 "#,
     );
     assert_eq!(out, "bar baz|hello all, I said hi|Xc|xx|aBBc");
+}
+
+/// Verifies pair values use PHP's runtime string coercion when the hash stores boxed values.
+#[test]
+fn test_strtr_replacement_pairs_coerce_mixed_values() {
+    let out = compile_and_run(
+        r#"<?php
+$pairs = ["int" => 7, "string" => "ok", "null" => null, "bool" => true];
+echo strtr("int|string|null|bool", $pairs);
+"#,
+    );
+    assert_eq!(out, "7|ok||1");
 }
 
 /// Verifies `strtr()` skips keys longer than the subject, matches numeric-string and integer

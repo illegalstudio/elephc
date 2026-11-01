@@ -85,6 +85,26 @@ pub(super) fn emit_entry(emitter: &mut Emitter) {
     emitter.instruction("b __rt_throw_current");                                // resume propagation at the caller's exception handler
 }
 
+/// Records a scalar value's wire position in its reserved `_unser_values` slot as `(pos << 1) | 1`.
+///
+/// A later `R:N` that names the scalar re-decodes it from that position, because scalars are not
+/// kept alive after parsing and a published pointer would dangle. Real pointers are 8-byte aligned,
+/// so the low bit tells the two apart. This yields value semantics: php makes both slots one PHP
+/// reference, elephc gives the `R:` slot an equal copy. Overflow slots stay unregistered.
+fn emit_tag_scalar_position(emitter: &mut Emitter, kind: &str) {
+    let skip = format!("__rt_unser_at_{kind}_untagged");
+    emitter.instruction("ldr x12, [sp, #88]");                                  // this scalar's reserved zero-based registry index
+    emitter.instruction("mov x13, #65536");                                     // materialize the physical reference-registry capacity
+    emitter.instruction("cmp x12, x13");                                        // is the reserved slot inside the fixed registry?
+    emitter.instruction(&format!("b.hs {skip}"));                               // overflow values remain deliberately unregistered
+    emitter.instruction("ldr x14, [sp, #8]");                                   // wire position of the scalar's type byte
+    emitter.instruction("lsl x14, x14, #1");                                    // make room for the scalar marker bit
+    emitter.instruction("orr x14, x14, #1");                                    // tag the slot as a wire position, not a box pointer
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_unser_values");
+    emitter.instruction("str x14, [x10, x12, lsl #3]");                         // publish the position for later R: back-references
+    emitter.label(&skip);
+}
+
 /// Emits the AArch64 recursive decoder for one prevalidated serialized value.
 pub(super) fn emit_parser(emitter: &mut Emitter) {
     // -- __rt_unser_at(base=x0, pos=x1, end=x2) -> x0=boxed Mixed (0 on fail), x1=newpos --
@@ -113,7 +133,8 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_unser_at_fail");                             // nothing left to parse
     emitter.instruction("ldrb w9, [x0, x1]");                                   // load the leading type byte
     // -- back-reference? r:N; (object identity) or R:N; (PHP reference) resolves
-    //    to a previously parsed value and consumes no new index --
+    //    to a previously parsed value. Only R consumes no new index: php pushes
+    //    every value but a PHP reference, so an r takes the next index itself --
     emitter.instruction("cmp w9, #114");                                        // ASCII 'r'?
     emitter.instruction("b.eq __rt_unser_at_ref");                              // resolve an object back-reference
     emitter.instruction("cmp w9, #82");                                         // ASCII 'R'?
@@ -152,6 +173,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
 
     // -- null: "N;" --
     emitter.label("__rt_unser_at_null");
+    emit_tag_scalar_position(emitter, "null");
     emitter.instruction("mov x0, #8");                                          // value tag = null
     emitter.instruction("mov x1, #0");                                          // null payload low word
     emitter.instruction("mov x2, #0");                                          // null payload high word
@@ -162,6 +184,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
 
     // -- bool: "b:0;" / "b:1;" --
     emitter.label("__rt_unser_at_bool");
+    emit_tag_scalar_position(emitter, "bool");
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload base
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload position
     emitter.instruction("add x12, x10, x11");                                   // pointer to the type byte
@@ -177,6 +200,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
 
     // -- int: "i:" + optional '-' + digits + ";" --
     emitter.label("__rt_unser_at_int");
+    emit_tag_scalar_position(emitter, "int");
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload base
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload position
     emitter.instruction("add x10, x10, x11");                                   // pointer to the type byte
@@ -217,6 +241,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
 
     // -- float: "d:" + (INF/-INF/NAN | digits) + ";" --
     emitter.label("__rt_unser_at_float");
+    emit_tag_scalar_position(emitter, "float");
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload base
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload position
     emitter.instruction("add x0, x10, x11");                                    // pointer to the type byte
@@ -251,6 +276,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
 
     // -- string: "s:" + bytelen + ":\"" + raw + "\";" --
     emitter.label("__rt_unser_at_str");
+    emit_tag_scalar_position(emitter, "str");
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload base
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload position
     emitter.instruction("add x10, x10, x11");                                   // pointer to the type byte
@@ -416,6 +442,22 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov x2, x11");                                         // class-name length (new_by_name arg)
     emitter.instruction("bl __rt_new_by_name");                                 // instantiate the class by name (0 on unknown class)
     emitter.instruction("cbnz x0, __rt_unser_obj_allocated");                   // known classes use their declared layout
+    // PHP does not degrade an unknown class on sight: `unserialize_callback_func` gets a turn
+    // first, and its whole purpose is to let the AUTOLOADER declare the class. Symfony points
+    // that ini at its own autoloader, which is what makes its `.meta` files deserialize into
+    // real resources instead of class-less stand-ins. Ask the bridge once, then retry.
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_elephc_eval_class_autoload_fn");
+    emitter.instruction("ldr x9, [x9]");                                        // x9 = optional eval class-autoload callback
+    emitter.instruction("cbz x9, __rt_unser_obj_unknown");                      // no interpreter linked → no autoloader to ask
+    emitter.instruction("ldr x0, [sp, #40]");                                   // class-name pointer
+    emitter.instruction("ldr x1, [sp, #72]");                                   // class-name length
+    emitter.instruction("blr x9");                                              // run the registered autoloaders for this name
+    emitter.instruction("cbz x0, __rt_unser_obj_unknown");                      // still undeclared → the incomplete fallback
+    emitter.instruction("ldr x1, [sp, #40]");                                   // class-name pointer (new_by_name arg)
+    emitter.instruction("ldr x2, [sp, #72]");                                   // class-name length (new_by_name arg)
+    emitter.instruction("bl __rt_new_by_name");                                 // retry now that the class is declared
+    emitter.instruction("cbnz x0, __rt_unser_obj_allocated");                   // the autoloader supplied a declared layout
+    emitter.label("__rt_unser_obj_unknown");
     emitter.instruction("str xzr, [sp, #80]");                                  // unknown classes suppress hooks and use opaque properties
     emitter.instruction("b __rt_unser_obj_incomplete");                         // match PHP's __PHP_Incomplete_Class fallback
     emitter.label("__rt_unser_obj_incomplete");
@@ -573,9 +615,52 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("str x4, [sp, #40]");                                   // persist the property index
     emitter.instruction("b __rt_unser_at_obj_loop");                            // continue with the next property
     emitter.label("__rt_unser_at_obj_close");
+    // -- eval-declared classes: hand the parsed payload to the interpreter --
+    // `__rt_new_by_name` resolves against the AOT class table, so a class the AUTOLOADER
+    // declared at run time has no layout here and the stand-in above is all this decoder can
+    // build. That is not an edge case on a Symfony request: the compiled DI container lives in
+    // `var/cache` behind a computed `require`, so it is interpreted, and every class it names is
+    // eval-declared. The whole property list is already parsed into the stand-in's hash by now,
+    // which is exactly what the interpreter needs to build the real object.
+    emitter.instruction("ldr x9, [sp, #80]");                                   // did this object get a declared layout?
+    emitter.instruction("cbnz x9, __rt_unser_obj_wakeup");                      // a hydrated object keeps the ordinary path
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_elephc_eval_unserialize_object_fn");
+    emitter.instruction("ldr x9, [x9]");                                        // x9 = optional eval hydration callback
+    emitter.instruction("cbz x9, __rt_unser_at_obj_box");                       // no interpreter linked → keep the stand-in
+    emitter.instruction("ldr x10, [sp, #24]");                                  // stand-in object payload
+    emitter.instruction("ldr x11, [x10]");                                      // its class id
+    emitter.instruction("cmn x11, #2");                                         // is it the __PHP_Incomplete_Class sentinel (-2)?
+    emitter.instruction("b.ne __rt_unser_at_obj_box");                          // anything else is not ours to replace
+    // The policy is re-asked rather than remembered: `[sp, #80]` is cleared both for a BLOCKED
+    // class and for one with no layout, and a blocked class must stay incomplete.
+    emitter.instruction("ldr x0, [x10, #8]");                                   // persisted original class-name pointer
+    emitter.instruction("ldr x1, [x10, #16]");                                  // persisted original class-name length
+    emitter.instruction("bl __rt_unserialize_class_allowed");                   // allowed_classes still permits this name?
+    emitter.instruction("cbz x0, __rt_unser_at_obj_box");                       // blocked classes keep the stand-in
+    emitter.instruction("ldr x10, [sp, #24]");                                  // reload the stand-in after the call
+    emitter.instruction("ldr x0, [x10, #8]");                                   // class-name pointer
+    emitter.instruction("ldr x1, [x10, #16]");                                  // class-name length
+    emitter.instruction("ldr x2, [x10, #24]");                                  // parsed opaque property hash (borrowed)
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_elephc_eval_unserialize_object_fn");
+    emitter.instruction("ldr x9, [x9]");                                        // reload the callback after the policy call
+    emitter.instruction("blr x9");                                              // x0 = boxed Mixed object, or 0 when undeclared
+    emitter.instruction("cbz x0, __rt_unser_at_obj_box");                       // interpreter declined → keep the stand-in
+    // The donor box owns the new object. Move the object into the result box this decoder
+    // already published, then neutralise the donor so releasing it frees only its own shell.
+    emitter.instruction("ldr x11, [x0, #8]");                                   // hydrated object payload
+    emitter.instruction("mov x12, #8");                                         // runtime tag 8 = null
+    emitter.instruction("str x12, [x0]");                                       // retag the donor as null
+    emitter.instruction("str xzr, [x0, #8]");                                   // drop the donor's claim on the object
+    emitter.instruction("ldr x13, [sp, #96]");                                  // this object's stable result box
+    emitter.instruction("ldr x14, [x13, #8]");                                  // the stand-in it currently holds
+    emitter.instruction("str x11, [x13, #8]");                                  // publish the hydrated object instead
+    emitter.instruction("str x11, [sp, #24]");                                  // and make it the current object payload
+    emitter.instruction("str x14, [sp, #-16]!");                                // park the stand-in across the donor release
+    emitter.instruction("bl __rt_decref_mixed");                                // free the donor shell only
+    emitter.instruction("ldr x0, [sp], #16");                                   // reclaim the stand-in pointer
+    emitter.instruction("bl __rt_object_free_deep");                            // free its name and its now-copied property hash
+    emitter.instruction("b __rt_unser_at_obj_box");                             // the interpreter already ran the class hooks
     // -- __wakeup magic: after default property injection, call __wakeup($this) --
-    emitter.instruction("ldr x9, [sp, #80]");                                   // blocked classes cannot run __wakeup
-    emitter.instruction("cbz x9, __rt_unser_at_obj_box");                       // incomplete objects never run class hooks
     emitter.label("__rt_unser_obj_wakeup");
     emitter.instruction("ldr x9, [sp, #24]");                                   // object pointer
     emitter.instruction("ldr x9, [x9]");                                        // class id from the object header
@@ -672,6 +757,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_unser_values");
     emitter.instruction("ldr x13, [x9, x12, lsl #3]");                          // the registered value box (0 if none)
     emitter.instruction("cbz x13, __rt_unser_at_ref_fail");                     // reserved but unpublished registry slot → null
+    emitter.instruction("tbnz x13, #0, __rt_unser_at_ref_scalar");              // a tagged slot holds a scalar's wire position
     emitter.label("__rt_unser_at_ref_deref");
     emitter.instruction("ldr x10, [x13]");                                      // inspect the registry cell's boxed tag
     emitter.instruction("cmp x10, #7");                                         // does the slot hold a nested Mixed wrapper?
@@ -686,11 +772,42 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x13]");                                      // inspect the published value tag
     emitter.instruction("cmp x10, #6");                                         // require an object for lowercase r
     emitter.instruction("b.ne __rt_unser_at_ref_fail");                         // reject a non-object identity target
+    // An object back-reference is itself a value php numbers: the next r:/R: index after it
+    // belongs to whatever follows, so the reference reserves one and publishes the SAME object
+    // box there. Skipping it shifted every later index by one, and a Symfony container's
+    // second `BoundArgument` resolved `r:N` to a bool and failed the whole unserialize().
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_unser_count");
+    emitter.instruction("ldr x10, [x9]");                                       // zero-based slot this reference takes
+    emitter.instruction("add x12, x10, #1");                                    // advance the registry counter past it
+    emitter.instruction("str x12, [x9]");                                       // publish the advanced counter
+    emitter.instruction("mov x12, #65536");                                     // materialize the physical reference-registry capacity
+    emitter.instruction("cmp x10, x12");                                        // is the reserved slot inside the fixed registry?
+    emitter.instruction("b.hs __rt_unser_at_ref_clone");                        // overflow values remain deliberately unregistered
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_unser_values");
+    emitter.instruction("str x13, [x9, x10, lsl #3]");                          // alias the target's borrowed box, which outlives this parse
     emitter.label("__rt_unser_at_ref_clone");
     emitter.instruction("mov x0, x13");                                         // supply the borrowed registry cell to the shared clone helper
     emitter.instruction("bl __rt_mixed_clone");                                 // detach a result box and retain its object or array payload
     emitter.instruction("ldr x1, [sp, #8]");                                    // newpos past the ';'
     emitter.instruction("b __rt_unser_at_ret");                                 // return the aliasing box
+    // R: onto a scalar: decode it again from its recorded wire position. The nested decode
+    // reserves one registry index, which is handed back so the R: itself consumes none.
+    emitter.label("__rt_unser_at_ref_scalar");
+    emitter.instruction("ldr x10, [sp, #64]");                                  // recover the original reference marker
+    emitter.instruction("cmp x10, #114");                                       // lowercase r denotes object identity only
+    emitter.instruction("b.eq __rt_unser_at_ref_fail");                         // a scalar is never an object target
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_unser_count");
+    emitter.instruction("ldr x10, [x9]");                                       // registry count before the nested decode
+    emitter.instruction("str x10, [sp, #72]");                                  // keep it to hand the index back
+    emitter.instruction("ldr x0, [sp, #0]");                                    // base
+    emitter.instruction("lsr x1, x13, #1");                                     // recover the scalar's wire position
+    emitter.instruction("ldr x2, [sp, #16]");                                   // end
+    emitter.instruction("bl __rt_unser_at");                                    // decode the scalar into a fresh owned box
+    emitter.instruction("ldr x10, [sp, #72]");                                  // registry count before the nested decode
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_unser_count");
+    emitter.instruction("str x10, [x9]");                                       // the R: does not take an index of its own
+    emitter.instruction("ldr x1, [sp, #8]");                                    // newpos past the ';'
+    emitter.instruction("b __rt_unser_at_ret");                                 // return the copied scalar box
     emitter.label("__rt_unser_at_ref_fail");
     emitter.instruction("mov x0, #0");                                          // unresolved reference → null
     emitter.instruction("ldr x1, [sp, #8]");                                    // newpos past the ';'

@@ -1612,6 +1612,21 @@ fn test_json_encode_string_with_quotes() {
     assert_eq!(out, r#""say \"hi\"""#);
 }
 
+/// Verifies an integer read through a gradual array boundary can supply JSON flags.
+#[test]
+fn test_json_encode_accepts_gradual_integer_flags() {
+    let out = compile_and_run(
+        r#"<?php
+function encode_with_options(array $options): string {
+    $flags = $options['flags'] ?? 0;
+    return json_encode('a/b', $flags);
+}
+echo encode_with_options(['flags' => JSON_UNESCAPED_SLASHES]);
+"#,
+    );
+    assert_eq!(out, r#""a/b""#);
+}
+
 /// Verifies `json_encode(true)` emits the JSON literal `true`.
 #[test]
 fn test_json_encode_bool_true() {
@@ -1848,11 +1863,212 @@ fn test_json_decode_unicode_surrogate_pair() {
 
 // --- Regex functions ---
 
+/// Verifies a named capture group reaches `$matches` under both its name and its number.
+///
+/// PCRE2 numbers capture groups; PHP then writes each declared name immediately BEFORE the
+/// numeric key it aliases, which makes `$matches` an ordered hash rather than a list. Building
+/// that array as an indexed list dropped every string key SILENTLY — `preg_match()` still
+/// returned 1 and the numbered groups still read back — so Symfony's YAML parser saw
+/// `$values['key']` as null and reported every parsed file as empty.
+///
+/// The last two cases pin what must NOT change: a pattern with no declared name still produces a
+/// plain list, and a failed match still produces an empty array.
+#[test]
+fn test_preg_match_populates_named_capture_groups() {
+    let out = compile_and_run(
+        r##"<?php
+preg_match('#^(?P<k>\w+): (?P<v>\d+)$#', 'a: 1', $m);
+echo implode(',', array_keys($m)), '|', $m['k'], $m['v'], $m[1], $m[2], '|', count($m), "\n";
+
+preg_match('#(\w)(?P<mid>\w)(\w)#', 'abc', $m2);
+echo implode(',', array_keys($m2)), '|', $m2['mid'], $m2[1], $m2[3], '|', count($m2), "\n";
+
+preg_match("#(?<q>a)(?'r'b)#", 'ab', $m3);
+echo implode(',', array_keys($m3)), '|', $m3['q'], $m3['r'], "\n";
+
+preg_match('#^(?P<a>x)?(?P<b>y)$#', 'y', $m4);
+echo implode(',', array_keys($m4)), '|[', $m4['a'], ']', $m4['b'], "\n";
+
+preg_match('#^a: (\d+)$#', 'a: 1', $m5);
+echo implode(',', array_keys($m5)), '|', $m5[1], '|', count($m5), "\n";
+
+echo preg_match('#^(?P<k>\w+)$#', '!!', $m6), '|', count($m6), "\n";
+
+foreach ($m as $key => $value) {
+    echo $key, '=', $value, ';';
+}
+"##,
+    );
+    assert_eq!(
+        out,
+        "0,k,1,v,2|a1a1|5\n\
+         0,1,mid,2,3|bac|5\n\
+         0,q,1,r,2|ab\n\
+         0,a,1,b,2|[]y\n\
+         0,1|1|2\n\
+         0|0\n\
+         0=a: 1;k=a;1=a;v=1;2=1;"
+    );
+}
+
+/// Verifies a compiled pattern is reused across calls without sharing any match state.
+///
+/// Compiled patterns are cached for the life of the process, as php's PCRE cache keeps them, so
+/// this pins what the cache must never change: one pattern under two modifier sets is two
+/// patterns; a pattern run again from inside a `preg_replace_callback()` callback on the SAME
+/// pattern leaves the outer match's captures alone; named groups and a MARK read from a cached
+/// pattern are the ones of the current match; and patterns past the cache's capacity still match,
+/// on their first run and on their second.
+#[test]
+fn test_preg_compiled_pattern_is_shared_but_match_state_is_not() {
+    let out = compile_and_run(
+        r##"<?php
+for ($i = 0; $i < 3; $i++) {
+    echo preg_match('/abc/', 'xABCx'), preg_match('/abc/i', 'xABCx'), preg_match('/^b$/m', "a\nb"), preg_match('/^b$/', "a\nb"), "\n";
+}
+echo preg_replace_callback('/(\d+)-(\w+)/', function ($m) {
+    preg_match('/(\d+)-(\w+)/', 'inner 7-zz', $inner);
+    return '[' . $m[2] . ':' . $m[1] . '|' . $inner[1] . $inner[2] . ']';
+}, 'a 12-foo b 34-bar c'), "\n";
+for ($i = 0; $i < 2; $i++) {
+    preg_match('/(?<year>\d{4})-(?<mon>\d\d)/', $i === 0 ? 'on 2024-05 ok' : 'on 1999-12 ok', $m);
+    echo $m['year'], '/', $m['mon'], ' ', count($m), ' ';
+    preg_match('#^/(?|a(*:1)|b(*:2))$#', $i === 0 ? '/b' : '/a', $mm);
+    echo $mm['MARK'], "\n";
+}
+$hits = 0;
+for ($round = 0; $round < 2; $round++) {
+    for ($i = 0; $i < 5000; $i++) {
+        $hits += preg_match('/k' . $i . 'x/', 'zk' . $i . 'xz');
+    }
+}
+echo $hits, "\n";
+$p = '/\s*,\s*/';
+for ($i = 0; $i < 2; $i++) {
+    echo implode('|', preg_split($p, 'a , b,c ,  d')), ' ', preg_replace($p, ';', 'x ,y'), ' ', preg_match_all($p, 'a,b,c'), "\n";
+}
+"##,
+    );
+    assert_eq!(
+        out,
+        "0110\n0110\n0110\na [foo:12|7zz] b [bar:34|7zz] c\n2024/05 5 2\n1999/12 5 1\n10000\na|b|c|d x;y 2\na|b|c|d x;y 2\n"
+    );
+}
+
+/// Verifies `PREG_OFFSET_CAPTURE` turns every `$matches` entry into `[text, byte offset]`.
+///
+/// PHP's `PREG_OFFSET_CAPTURE` (bit 256) does not add a parallel array: it REPLACES each entry of
+/// `$matches` with a two-element array whose key `0` is the captured text and whose key `1` is the
+/// byte offset it starts at — `-1` for a capture that did not participate. Ignoring the flag was
+/// SILENT: `preg_match()` still returned 1 and `$m[0]` still read back as the matched string, so
+/// `$m[0][1]` yielded the string's second BYTE. Symfony's `Inline::parseScalar()` strips a trailing
+/// `# comment` with `substr($output, 0, $match[0][1])`; that byte cast to 0 and truncated every
+/// commented scalar to the empty string, so `autowire: true # ...` parsed as null.
+///
+/// The last case pins what must NOT change: without the flag a capture stays a bare string.
+#[test]
+fn test_preg_match_offset_capture_pairs_text_with_byte_offset() {
+    let out = compile_and_run(
+        r##"<?php
+preg_match('/[ \t]+#/', 'true      # note', $m, PREG_OFFSET_CAPTURE);
+echo var_export($m[0][0], true), '|', $m[0][1], '|', substr('true      # note', 0, $m[0][1]), "\n";
+
+preg_match('/(a)?(b)/', 'zb', $m2, PREG_OFFSET_CAPTURE);
+echo implode(',', array_keys($m2)), '|', $m2[0][0], $m2[0][1], '|[', $m2[1][0], ']', $m2[1][1],
+    '|', $m2[2][0], $m2[2][1], '|', count($m2), "\n";
+
+preg_match('/x(y)?z/', 'axz', $m3, PREG_OFFSET_CAPTURE);
+echo implode(',', array_keys($m3)), '|', $m3[0][0], $m3[0][1], '|', count($m3), "\n";
+
+preg_match('/(?P<k>\w+): (?P<v>\d+)/', 'aa: 12', $m4, PREG_OFFSET_CAPTURE);
+echo implode(',', array_keys($m4)), '|', $m4['k'][0], $m4['k'][1], '|', $m4['v'][0], $m4['v'][1],
+    '|', $m4[2][0], $m4[2][1], '|', count($m4), "\n";
+
+echo preg_match('/nope/', 'abc', $m5, PREG_OFFSET_CAPTURE), '|', count($m5), "\n";
+
+preg_match('/b/', 'aXbXb', $m6, PREG_OFFSET_CAPTURE, 3);
+echo $m6[0][0], $m6[0][1], "\n";
+
+preg_match('/(a)(b)/', 'ab', $m7);
+echo $m7[0], $m7[1], $m7[2], '|', count($m7), "\n";
+"##,
+    );
+    assert_eq!(
+        out,
+        "'      #'|4|true\n\
+         0,1,2|b1|[]-1|b1|3\n\
+         0|xz1|1\n\
+         0,k,1,v,2|aa0|124|124|5\n\
+         0|0\n\
+         b4\n\
+         abab|3\n"
+    );
+}
+
+/// Verifies every PHP regex delimiter is honoured, not just `/`.
+///
+/// PHP accepts any non-alphanumeric, non-backslash, non-whitespace delimiter, and the bracket
+/// forms close with their mate. Hardcoding `/` made every other delimiter fall through as an
+/// UNDELIMITED pattern: PCRE2 then received the delimiters and modifiers as pattern bytes and
+/// simply never matched — a silent zero, not an error. Symfony's Yaml component writes every
+/// pattern as `#...#`, so its whole parser failed on `a: 1`.
+#[test]
+fn test_preg_match_honours_every_delimiter() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (['/^a: (\d+)$/', '#^a: (\d+)$#', '~^a: (\d+)$~', '{^a: (\d+)$}', '!^a: (\d+)$!',
+          '%^a: (\d+)$%', '(^a: (\d+)$)', '[^a: (\d+)$]', '<^a: (\d+)$>'] as $pattern) {
+    echo preg_match($pattern, 'a: 1', $m), ($m[1] ?? '-');
+}
+echo "|", preg_match('#^a: (\d+)$#u', 'a: 1', $u), ($u[1] ?? '-');
+"#,
+    );
+    assert_eq!(out, "111111111111111111|11");
+}
+
+/// Verifies an alphanumeric leading byte still means "undelimited", the behaviour a raw payload
+/// depends on: a pattern that does not open with a delimiter is passed through unchanged.
+#[test]
+fn test_preg_match_leaves_an_undelimited_pattern_alone() {
+    let out = compile_and_run(
+        r#"<?php echo preg_match('/a/', 'a'), preg_match('#a#', 'a');"#,
+    );
+    assert_eq!(out, "11");
+}
+
 /// Verifies `preg_match("/hello/", "hello world")` returns 1 (match found).
 #[test]
 fn test_preg_match_simple() {
     let out = compile_and_run(r#"<?php echo preg_match("/hello/", "hello world");"#);
     assert_eq!(out, "1");
+}
+
+/// Verifies regex subjects beyond the fixed C-string scratch capacity remain intact.
+#[test]
+fn test_preg_match_accepts_subject_larger_than_cstr_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$subject = str_repeat("a", 8192) . "z";
+echo preg_match("/z$/", $subject) . ":" . preg_match_all("/a+/", $subject);
+"#,
+    );
+    assert_eq!(out, "1:1");
+}
+
+/// Verifies regex string arguments accept gradual values while preserving every converted pair.
+#[test]
+fn test_regex_builtins_coerce_mixed_string_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+function regex_values(mixed $pattern, mixed $subject, ?int $limit): void {
+    echo preg_match($pattern, $subject) . "|";
+    echo preg_replace($pattern, "X", $subject, $limit) . "|";
+    echo implode(",", preg_split($pattern, $subject, $limit));
+}
+regex_values("/[0-9]+/", "a1b22c", -1);
+"#,
+    );
+    assert_eq!(out, "1|aXbXc|a,b,c");
 }
 
 /// Verifies literal `call_user_func()` dispatch to `preg_match()` includes regex runtime helpers.
@@ -1886,6 +2102,23 @@ echo $cb("/a/", function($m): string { return strtoupper($m[0]); }, "cat");
     assert_eq!(out, "cAt");
 }
 
+/// Verifies a `/u` pattern fails on a subject that is not valid UTF-8 the way php reports it:
+/// `preg_match` answers false and `preg_replace` null, while valid subjects and patterns without
+/// `u` keep their ordinary results.
+#[test]
+fn test_preg_utf8_modifier_fails_on_invalid_subject() {
+    let out = compile_and_run(
+        r#"<?php
+$bin = $argc > 0 ? "ab\xff\xfecd" : 'x';
+var_dump(preg_match('//u', $bin));
+var_dump(preg_replace('/[\p{Cc}\x7F]++/u', '', $bin));
+var_dump(preg_replace('/b/u', 'B', 'abc'), preg_match('/b/u', 'abc'));
+echo strlen(preg_replace('/b/', 'B', $bin)), "\n";
+"#,
+    );
+    assert_eq!(out, "bool(false)\nNULL\nstring(3) \"aBc\"\nint(1)\n6\n");
+}
+
 /// Verifies `preg_match("/xyz/", "hello world")` returns 0 (no match).
 #[test]
 fn test_preg_match_no_match() {
@@ -1905,6 +2138,27 @@ fn test_preg_match_case_insensitive() {
 fn test_preg_match_pattern() {
     let out = compile_and_run(r#"<?php echo preg_match("/[0-9]+/", "abc123def");"#);
     assert_eq!(out, "1");
+}
+
+/// Exposes representative locale, signal, regex, grapheme, and fileinfo constants.
+#[test]
+fn test_standard_extension_integer_constants() {
+    let out = compile_and_run(
+        r#"<?php
+echo LC_CTYPE . '|';
+echo SIG_DFL . ',' . SIGINT . ',' . SIGQUIT . ',' . SIGALRM . ',' . SIGTERM . ',' . SIGUSR1 . ',' . SIGUSR2 . '|';
+echo PCRE_VERSION_MAJOR . '.' . PCRE_VERSION_MINOR . ',' . GRAPHEME_EXTR_MAXBYTES . ',' . FILEINFO_MIME_TYPE;
+"#,
+    );
+    let locale_category = if cfg!(target_os = "macos") { 2 } else { 0 };
+    let user_signal = if cfg!(target_os = "macos") { 30 } else { 10 };
+    let user_signal_two = if cfg!(target_os = "macos") { 31 } else { 12 };
+    assert_eq!(
+        out,
+        format!(
+            "{locale_category}|0,2,3,14,15,{user_signal},{user_signal_two}|10.47,1,16"
+        )
+    );
 }
 
 /// Verifies PCRE positive lookahead works through the PCRE2-backed regex runtime.
@@ -1928,6 +2182,54 @@ fn test_preg_match_populates_matches_array() {
         r#"<?php
 $ok = preg_match("/(a)(b)/", "zab", $matches);
 echo $ok . "|" . count($matches) . "|" . $matches[0] . "," . $matches[1] . "," . $matches[2];
+"#,
+    );
+    assert_eq!(out, "1|3|ab,a,b");
+}
+
+/// Verifies `preg_match()` honors positive and negative starting offsets without rebasing anchors.
+#[test]
+fn test_preg_match_capture_starting_offset() {
+    let out = compile_and_run(
+        r#"<?php
+$first = preg_match('/a/', 'ab', $firstMatches, 0, 1);
+$second = preg_match('/b/', 'ab', $secondMatches, 0, -1);
+$anchored = preg_match('/^b/', 'ab', $anchoredMatches, 0, 1);
+echo $first . ':' . count($firstMatches) . '|';
+echo $second . ':' . $secondMatches[0] . '|';
+echo $anchored . ':' . count($anchoredMatches);
+"#,
+    );
+    assert_eq!(out, "0:0|1:b|0:0");
+}
+
+/// Verifies the `A` modifier anchors matching at the requested byte offset.
+#[test]
+fn test_preg_match_anchored_modifier() {
+    let out = compile_and_run(
+        r#"<?php
+$lineEnd = preg_match('/[ \t]*+(?:#.*)?$/Am', "dev\n", $lineMatches, 0, 0);
+$atOffset = preg_match('/foo/A', 'xxfoo', $offsetMatches, 0, 2);
+$fromStart = preg_match('/foo/A', 'xxfoo', $startMatches, 0, 0);
+echo $lineEnd . ':' . count($lineMatches) . '|';
+echo $atOffset . ':' . $offsetMatches[0] . '|';
+echo $fromStart . ':' . count($startMatches);
+"#,
+    );
+    assert_eq!(out, "0:0|1:foo|0:0");
+}
+
+/// Verifies a nullable by-reference parameter receives the capture array through its ref-cell.
+#[test]
+fn test_preg_match_capture_writes_through_nullable_ref_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+function wrapped(string $pattern, string $subject, ?array &$matches = null, int $flags = 0, int $offset = 0): int {
+    return preg_match($pattern, $subject, $matches, $flags, $offset);
+}
+$matches = null;
+$ok = wrapped('/(a)(b)/', 'zab', $matches);
+echo $ok . '|' . count($matches) . '|' . $matches[0] . ',' . $matches[1] . ',' . $matches[2];
 "#,
     );
     assert_eq!(out, "1|3|ab,a,b");
@@ -2075,6 +2377,168 @@ fn test_preg_match_negated_unicode_property() {
 fn test_preg_match_all_count() {
     let out = compile_and_run(r#"<?php echo preg_match_all("/[0-9]+/", "a1b2c3");"#);
     assert_eq!(out, "3");
+}
+
+/// Verifies `preg_match_all()` writes its pattern-order full-match list by reference.
+#[test]
+fn test_preg_match_all_with_capture_destination() {
+    let out = compile_and_run(
+        r#"<?php
+$count = preg_match_all('/[0-9]+/', 'a1b22c333', $matches, PREG_PATTERN_ORDER);
+echo $count . ':' . count($matches) . ':' . implode(',', $matches[0]);
+"#,
+    );
+    assert_eq!(out, "3:1:1,22,333");
+}
+
+/// The `$matches` dumper every `preg_match_all()` shape test shares.
+///
+/// It prints keys as well as values, so a hash read back as a renumbered list — the exact way a
+/// wrong storage tag fails — changes the expected string instead of passing silently. Every
+/// expectation below is the measured `php -n` 8.5 output for the same fixture.
+const PREG_MATCHES_DUMPER: &str = r#"
+function dumpv($v) {
+    if (is_array($v)) {
+        $parts = [];
+        foreach ($v as $k => $item) {
+            $parts[] = $k . '=' . dumpv($item);
+        }
+        return '[' . implode(',', $parts) . ']';
+    }
+    return (string)$v;
+}
+"#;
+
+/// Verifies pattern-order `$matches` carries one column per compiled group, named or not.
+///
+/// PHP emits a column for EVERY capture group — including one that never participates, whose
+/// column is filled with empty strings — and writes a declared name immediately before the
+/// numeric key it doubles. The previous runtime built only column zero.
+#[test]
+fn test_preg_match_all_pattern_order_emits_every_capture_group() {
+    let out = compile_and_run(&format!(
+        r#"<?php{PREG_MATCHES_DUMPER}
+$n = preg_match_all('/(a)(b)?(?<z>c)?/', 'ab ac a', $m);
+echo $n, ':', dumpv($m);
+"#
+    ));
+    assert_eq!(
+        out,
+        "3:[0=[0=ab,1=ac,2=a],1=[0=a,1=a,2=a],2=[0=b,1=,2=],z=[0=,1=c,2=],3=[0=,1=c,2=]]"
+    );
+}
+
+/// Verifies `PREG_SET_ORDER` builds one row per match, trimmed after its last live group.
+#[test]
+fn test_preg_match_all_set_order_builds_one_trimmed_row_per_match() {
+    let out = compile_and_run(&format!(
+        r#"<?php{PREG_MATCHES_DUMPER}
+$n = preg_match_all('/(a)(b)?(?<z>c)?/', 'ab ac a', $m, PREG_SET_ORDER);
+echo $n, ':', dumpv($m);
+"#
+    ));
+    assert_eq!(out, "3:[0=[0=ab,1=a,2=b],1=[0=ac,1=a,2=,z=c,3=c],2=[0=a,1=a]]");
+}
+
+/// Verifies numbered groups reach both orders when the pattern declares no name at all.
+#[test]
+fn test_preg_match_all_numbered_groups_reach_both_orders() {
+    let pattern_order = compile_and_run(&format!(
+        r#"<?php{PREG_MATCHES_DUMPER}
+$n = preg_match_all('/([0-9]+)([a-z])/', 'a1b22c333d', $m);
+echo $n, ':', dumpv($m);
+"#
+    ));
+    assert_eq!(
+        pattern_order,
+        "3:[0=[0=1b,1=22c,2=333d],1=[0=1,1=22,2=333],2=[0=b,1=c,2=d]]"
+    );
+
+    let set_order = compile_and_run(&format!(
+        r#"<?php{PREG_MATCHES_DUMPER}
+$n = preg_match_all('/([0-9]+)([a-z])/', 'a1b22c333d', $m, PREG_SET_ORDER);
+echo $n, ':', dumpv($m);
+"#
+    ));
+    assert_eq!(
+        set_order,
+        "3:[0=[0=1b,1=1,2=b],1=[0=22c,1=22,2=c],2=[0=333d,1=333,2=d]]"
+    );
+}
+
+/// Verifies the no-match shapes: pattern order still emits every (empty) column, set order not.
+#[test]
+fn test_preg_match_all_no_match_shapes_differ_by_order() {
+    let pattern_order = compile_and_run(&format!(
+        r#"<?php{PREG_MATCHES_DUMPER}
+$n = preg_match_all('/(a)(b)?/', 'zzz', $m);
+echo $n, ':', dumpv($m);
+"#
+    ));
+    assert_eq!(pattern_order, "0:[0=[],1=[],2=[]]");
+
+    let set_order = compile_and_run(&format!(
+        r#"<?php{PREG_MATCHES_DUMPER}
+$n = preg_match_all('/(a)(b)?/', 'zzz', $m, PREG_SET_ORDER);
+echo $n, ':', dumpv($m);
+"#
+    ));
+    assert_eq!(set_order, "0:[]");
+}
+
+/// Verifies a zero-length match still advances the cursor and produces one row per position.
+///
+/// The position ONE PAST the last byte is a legal search start, and PHP reports a zero-length
+/// match there, so `/x*/` over `axb` matches four times, not three. Both the counting helper and
+/// the capture helper used to stop at the null terminator and lose that last match.
+#[test]
+fn test_preg_match_all_zero_length_matches_advance() {
+    let out = compile_and_run(&format!(
+        r#"<?php{PREG_MATCHES_DUMPER}
+$n = preg_match_all('/x*/', 'axb', $m, PREG_SET_ORDER);
+echo $n, ':', dumpv($m);
+"#
+    ));
+    assert_eq!(out, "4:[0=[0=],1=[0=x],2=[0=],3=[0=]]");
+
+    // The count-only helper takes a different path and had the same off-by-one.
+    let counted = compile_and_run(r#"<?php echo preg_match_all('/x*/', 'axb');"#);
+    assert_eq!(counted, "4");
+}
+
+/// Verifies Symfony's `HeaderUtils::split()` call, the shape that first exposed the gap.
+///
+/// It is the hard case in one fixture: a RUNTIME-BUILT pattern (so nothing static can classify
+/// it), the `/x` extended flag, a named group, and `PREG_SET_ORDER`. Reading only column zero
+/// collapsed all three parts into one row, which is how a `Cache-Control: no-cache, private`
+/// response header came back as `, private`.
+#[test]
+fn test_preg_match_all_set_order_splits_a_header_the_symfony_way() {
+    let out = compile_and_run(&format!(
+        r#"<?php{PREG_MATCHES_DUMPER}
+$separators = ',';
+$quotedSeparators = preg_quote($separators, '/');
+$n = preg_match_all('
+    /
+        (?!\s)
+            (?:
+                # quoted-string
+                "(?:[^"\\\\]|\\\\.)*(?:"|\\\\|$)
+            |
+                # token
+                [^"'.$quotedSeparators.']+
+            )+
+        (?<!\s)
+    |
+        # separator
+        \s*
+        (?<separator>['.$quotedSeparators.'])
+        \s*
+    /x', trim('no-cache, private'), $m, PREG_SET_ORDER);
+echo $n, ':', dumpv($m);
+"#
+    ));
+    assert_eq!(out, "3:[0=[0=no-cache],1=[0=, ,separator=,,1=,],2=[0=private]]");
 }
 
 /// Verifies `preg_match_all` returns 0 when the pattern has no matches in the subject.
@@ -2363,11 +2827,71 @@ fn test_preg_replace_simple() {
     assert_eq!(out, "hello PHP");
 }
 
+/// Verifies weak builtin string binding invokes `__toString()` before regex replacement.
+#[test]
+fn test_preg_replace_accepts_stringable_subject() {
+    let out = compile_and_run(
+        r#"<?php
+class RegexSubject implements Stringable {
+    public function __toString(): string { return 'abc'; }
+}
+echo preg_replace('/b/', 'B', new RegexSubject());
+"#,
+    );
+    assert_eq!(out, "aBc");
+}
+
 /// Verifies `preg_replace` substitutes all non-overlapping matches of a digit pattern.
 #[test]
 fn test_preg_replace_pattern() {
     let out = compile_and_run(r#"<?php echo preg_replace("/[0-9]+/", "X", "a1b2c3");"#);
     assert_eq!(out, "aXbXcX");
+}
+
+/// Verifies the array-pattern form applies each pattern in order and selects array replacements
+/// by position, using an empty string when the replacement array is shorter.
+#[test]
+fn test_preg_replace_array_patterns() {
+    let out = compile_and_run(
+        r#"<?php
+echo preg_replace(['/a/', '/b/'], 'x', 'aba'), '|';
+echo preg_replace(['/a/', '/b/'], ['x', 'y'], 'aba'), '|';
+echo preg_replace(['/a/', '/b/'], ['x'], 'aba');
+"#,
+    );
+    assert_eq!(out, "xxx|xyx|xx");
+}
+
+/// Verifies the optional limit stops replacement after the requested number of matches.
+#[test]
+fn test_preg_replace_limit() {
+    let out = compile_and_run(r#"<?php echo preg_replace("/a/", "x", "aaaa", 2);"#);
+    assert_eq!(out, "xxaa");
+}
+
+/// Verifies an undefined by-reference counter receives the completed replacement count.
+#[test]
+fn test_preg_replace_initializes_count_output() {
+    let out = compile_and_run(
+        r#"<?php
+$result = preg_replace("/a/", "x", "aaaa", 2, $count);
+echo $result . "|" . $count;
+"#,
+    );
+    assert_eq!(out, "xxaa|2");
+}
+
+/// Verifies named arguments retain source evaluation order and bind the counter destination.
+#[test]
+fn test_preg_replace_named_count_output() {
+    let out = compile_and_run(
+        r#"<?php
+$count = 99;
+$result = preg_replace(subject: "aaa", count: $count, replacement: "x", pattern: "/a/");
+echo $result . "|" . $count;
+"#,
+    );
+    assert_eq!(out, "xxx|3");
 }
 
 /// Verifies PCRE lazy quantifiers keep their non-greedy behavior through PCRE2.
@@ -2424,8 +2948,13 @@ var_dump(preg_split("/a/", "a") === false);
 /// Verifies `preg_replace` returns the subject unchanged when the pattern has no matches.
 #[test]
 fn test_preg_replace_no_match() {
-    let out = compile_and_run(r#"<?php echo preg_replace("/xyz/", "ABC", "hello world");"#);
-    assert_eq!(out, "hello world");
+    let out = compile_and_run(
+        r#"<?php
+$count = 99;
+echo preg_replace("/xyz/", "ABC", "hello world", -1, $count) . "|" . $count;
+"#,
+    );
+    assert_eq!(out, "hello world|0");
 }
 
 /// Verifies `preg_replace_callback` invokes the closure for each match and the callback return
@@ -2502,6 +3031,191 @@ echo preg_replace_callback("/x/", $callback, "axb");
 "#,
     );
     assert_eq!(out, "()0|()|empty|a[x]b");
+}
+
+/// Verifies regex callback matches remain an array when the closure captures arrays and strings.
+#[test]
+fn test_preg_replace_callback_match_array_with_captures() {
+    let out = compile_and_run(
+        r#"<?php
+$resolving = ["known" => true];
+$prefix = "value:";
+$result = preg_replace_callback(
+    "/%([^%]+)%/",
+    function (array $match) use ($resolving, $prefix): string {
+        $key = $match[1];
+        return $resolving[$key] ? $prefix . $key : "missing";
+    },
+    "%known%"
+);
+echo $result;
+"#,
+    );
+    assert_eq!(out, "value:known");
+}
+
+/// Verifies regex callbacks preserve their match array when they capture lexical state and `$this`.
+#[test]
+fn test_preg_replace_callback_match_array_with_this_and_captures() {
+    let out = compile_and_run(
+        r#"<?php
+class RegexCallbackState {
+    private array $resolving = ["known" => true];
+    private string $prefix = "value:";
+
+    public function resolve(string $value, array $resolving = []): string {
+        preg_match("/^%([^%\\s]+)%$/", $value, $match);
+
+        return preg_replace_callback(
+            "/%%|%([^%\\s]+)%/",
+            function ($match) use ($resolving, $value) {
+                $key = $match[1];
+                return $resolving[$key] ? $this->prefix . $key : $value;
+            },
+            $value
+        );
+    }
+}
+eval('$state = new RegexCallbackState(); $resolving = []; $resolving["known"] = true; echo $state->resolve("%known%", $resolving);');
+"#,
+    );
+    assert_eq!(out, "value:known");
+}
+
+/// Verifies nested regex replacement callbacks preserve each invocation's match array.
+#[test]
+fn test_preg_replace_callback_nested_match_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+class NestedRegexCallbackState {
+    private array $parameters = ["outer" => "%inner%", "inner" => "done"];
+
+    public function resolve(string $value, array $resolving = []): string {
+        preg_match("/^%([^%\\s]+)%$/", $value, $match);
+
+        return preg_replace_callback(
+            "/%%|%([^%\\s]+)%/",
+            function ($match) use ($resolving, $value) {
+                if (!isset($match[1])) {
+                    return "%%";
+                }
+
+                $key = $match[1];
+                if (isset($resolving[$key])) {
+                    return "circular";
+                }
+
+                $resolving[$key] = true;
+
+                return $this->resolve($this->parameters[$key], $resolving);
+            },
+            $value
+        );
+    }
+}
+eval('$state = new NestedRegexCallbackState(); echo $state->resolve("%outer%", []);');
+"#,
+    );
+    assert_eq!(out, "done");
+}
+
+/// Verifies repeated regex callbacks keep their capture-array pointer across many replacements.
+#[test]
+fn test_preg_replace_callback_many_match_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+$resolving = ["known" => true];
+$prefix = "value:";
+$subject = str_repeat("%known%", 64);
+echo preg_replace_callback(
+    "/%%|%([^%\\s]+)%/",
+    function ($match) use ($resolving, $prefix) {
+        $key = $match[1];
+
+        return $resolving[$key] ? $prefix . $key : "missing";
+    },
+    $subject
+);
+"#,
+    );
+    assert_eq!(out, "value:known".repeat(64));
+}
+
+/// Verifies an instance call preserves an array argument that follows a string argument.
+#[test]
+fn test_interface_method_materializes_omitted_array_after_mixed_argument() {
+    let out = compile_and_run(
+        r#"<?php
+interface ArrayAfterStringForwarderContract {
+    public function outer(mixed $value): string;
+}
+
+class ArrayAfterStringForwarder implements ArrayAfterStringForwarderContract {
+    private array $values = ["value"];
+
+    public function inner(string $value, array $context): string {
+        return $value . ":" . $context["answer"];
+    }
+
+    public function outer(mixed $value, array $context = ["answer" => "done"]): string {
+        return $this->inner($value, $context);
+    }
+
+    public function run(): string {
+        foreach ($this->values as $value) {
+            return $this->outer($value);
+        }
+
+        return "";
+    }
+}
+
+function invokeArrayAfterStringForwarder(ArrayAfterStringForwarderContract $forwarder, mixed $value): string {
+    return $forwarder->outer($value);
+}
+
+echo invokeArrayAfterStringForwarder(new ArrayAfterStringForwarder(), "value");
+"#,
+    );
+    assert_eq!(out, "value:done");
+}
+
+/// Verifies literal pattern arrays apply each callback replacement in source order.
+#[test]
+fn test_preg_replace_callback_literal_pattern_array() {
+    let out = compile_and_run(
+        r#"<?php
+$calls = 0;
+$result = preg_replace_callback(
+    ["/[a-z]+/", "/[0-9]+/"],
+    static function (array $matches) use (&$calls): string {
+        ++$calls;
+        return "[" . strtoupper($matches[0]) . "]";
+    },
+    "ab12"
+);
+echo $result, "|", $calls;
+"#,
+    );
+    assert_eq!(out, "[AB][12]|2");
+}
+
+/// Verifies callback replacement honors the limit and initializes its by-reference counter.
+#[test]
+fn test_preg_replace_callback_limit_and_count() {
+    let out = compile_and_run(
+        r#"<?php
+$result = preg_replace_callback(
+    "/[0-9]+/",
+    function($matches): string { return "[" . $matches[0] . "]"; },
+    "a1 b22 c333",
+    2,
+    $count
+);
+echo $result . "|" . $count;
+"#,
+    );
+    assert_eq!(out, "a[1] b[22] c333|2");
 }
 
 /// Verifies `preg_replace_callback` exposes both complete match `$matches[0]` and numbered
@@ -3681,6 +4395,78 @@ echo count($a), "|",
     assert_eq!(out, "2|1|1|1");
 }
 
+/// Verifies `memory_get_usage()` / `memory_get_peak_usage()` report elephc's OWN allocator, and
+/// report it consistently: a live allocation raises the live figure by at least its own size,
+/// releasing it lowers the live figure again, the peak never falls back, and the `$real_usage`
+/// figure (arena bytes carved out) is never below the live figure it contains.
+///
+/// These are relationships, not magnitudes, because the magnitudes are elephc's and differ from
+/// php's by design -- php's Zend MM reports ~481 KB in use and a 2 MB system chunk for the same
+/// trivial program where elephc honestly reports under a kilobyte of live heap. What a caller
+/// can rely on is the SHAPE, and that is what breaks if the two counters are ever swapped.
+#[test]
+fn test_memory_reporters_track_the_heap_consistently() {
+    let out = compile_and_run(
+        r#"<?php
+$before = memory_get_usage();
+$s = str_repeat("x", 1000000);
+$during = memory_get_usage();
+$peak = memory_get_peak_usage();
+unset($s);
+$after = memory_get_usage();
+echo (is_int($before) && is_int($during) && is_int($peak)) ? "1" : "0", "|",
+     ($during - $before >= 1000000) ? "1" : "0", "|",
+     ($after < $during) ? "1" : "0", "|",
+     ($peak >= $during) ? "1" : "0", "|",
+     (memory_get_peak_usage() >= $peak) ? "1" : "0", "|",
+     (memory_get_usage(true) >= memory_get_usage(false)) ? "1" : "0";
+"#,
+    );
+    assert_eq!(out, "1|1|1|1|1|1");
+}
+
+/// Verifies the COMPILED and the INTERPRETED path answer from the same heap.
+///
+/// This is the property that broke: `memory_get_usage()` existed in neither, and an eval
+/// fragment calling it was an uncatchable fatal that killed a `--web` worker before it could
+/// flush. An eval-local implementation would fix the fatal and still be wrong -- it would
+/// describe a different heap. The assertion is that a large allocation made in COMPILED code is
+/// visible to a reading made INSIDE eval, and that the peak eval sees is at least the peak the
+/// compiled side saw.
+#[test]
+fn test_memory_reporters_agree_across_the_eval_boundary() {
+    let out = compile_and_run(
+        r#"<?php
+$base = memory_get_usage();
+$s = str_repeat("x", 1000000);
+$compiled = memory_get_usage();
+$compiled_peak = memory_get_peak_usage();
+eval('
+$seen = memory_get_usage();
+echo ($seen >= $compiled) ? "1" : "0", "|";
+echo (memory_get_peak_usage() >= $compiled_peak) ? "1" : "0", "|";
+echo is_int($seen) ? "1" : "0", "|";
+echo (memory_get_usage(true) >= memory_get_usage(false) - 4096) ? "1" : "0";
+');
+"#,
+    );
+    assert_eq!(out, "1|1|1|1");
+}
+
+/// Verifies `memory_get_usage(...)` survives as a first-class callable, like its `hrtime`
+/// neighbour, and that the stored callable still honors `$real_usage`.
+#[test]
+fn test_first_class_callable_memory_get_usage() {
+    let out = compile_and_run(
+        r#"<?php
+$m = memory_get_usage(...);
+$p = memory_get_peak_usage(...);
+echo ($m(false) > 0 && $p(false) >= $m(false) - 4096) ? "y" : "n";
+"#,
+    );
+    assert_eq!(out, "y");
+}
+
 /// Verifies `function_exists()` returns `true` for the procedural date/time aliases that the
 /// name resolver rewrites into OOP/built-in expressions (e.g. `date_create`, `idate`,
 /// `gmstrftime`). PHP's introspection must recognize the same surface that the resolver sees.
@@ -3757,4 +4543,361 @@ echo function_exists("mktime") ? "1" : "0", function_exists("gmmktime") ? "1" : 
 "#,
     );
     assert_eq!(out, "2024-06-15 12:30:45|03-15|same-year|h12|11");
+}
+
+/// Verifies POSIX shell quoting wraps the argument and escapes embedded single quotes.
+#[test]
+fn test_escapeshellarg_compatibility_helper() {
+    let out = compile_and_run(r#"<?php echo escapeshellarg("a'b c");"#);
+    assert_eq!(out, "'a'\\''b c'");
+}
+
+/// Verifies unsupported process-title mutation is represented by PHP's boolean failure result.
+#[test]
+fn test_cli_set_process_title_compatibility_helper() {
+    let out = compile_and_run(
+        r#"<?php echo cli_set_process_title("elephc-test") ? "changed" : "unsupported";"#,
+    );
+    assert_eq!(out, "unsupported");
+}
+
+/// The ext/proctitle spelling follows the same unsupported-but-safe compatibility result.
+#[test]
+fn test_setproctitle_compatibility_alias() {
+    let out = compile_and_run(
+        r#"<?php echo setproctitle("elephc-test") ? "changed" : "unsupported";"#,
+    );
+    assert_eq!(out, "unsupported");
+}
+
+/// Verifies `unpack()` accepts a runtime string stored behind a gradual `Mixed` result.
+#[test]
+fn test_unpack_repeated_integer_sequence_from_mixed_string() {
+    let out = compile_and_run(
+        r#"<?php
+function binary_address(mixed $address): mixed {
+    return $address;
+}
+$words = unpack('n*', binary_address("\x00\x01\x00\x02"));
+echo count($words), ':', $words[2];
+"#,
+    );
+    assert_eq!(out, "2:2");
+}
+
+/// Verifies `preg_grep()` preserves original numeric keys while selecting matching strings.
+#[test]
+fn test_preg_grep_preserves_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$values = ["apple", "banana", "apricot"];
+$matches = preg_grep('/^a/', $values);
+foreach ($matches as $key => $value) {
+    echo $key . ':' . $value . ';';
+}
+"#,
+    );
+    assert_eq!(out, "0:apple;2:apricot;");
+}
+
+/// Verifies `PREG_GREP_INVERT` keeps only values that do not match the pattern.
+#[test]
+fn test_preg_grep_invert() {
+    let out = compile_and_run(
+        r#"<?php
+$values = ["apple", "banana", "apricot"];
+$matches = preg_grep('/^a/', $values, PREG_GREP_INVERT);
+foreach ($matches as $key => $value) {
+    echo $key . ':' . $value . ';';
+}
+"#,
+    );
+    assert_eq!(out, "1:banana;");
+}
+
+/// Verifies supported `filter_var()` validation covers boolean, integer, and IP success/failure paths.
+#[test]
+fn test_filter_var_validation_compatibility() {
+    let out = compile_and_run(
+        r#"<?php
+echo filter_var("yes", FILTER_VALIDATE_BOOLEAN) ? "T" : "F";
+echo filter_var("no", FILTER_VALIDATE_BOOLEAN) ? "T" : "F";
+echo "|", filter_var("42", FILTER_VALIDATE_INT);
+echo "|", filter_var("not-an-int", FILTER_VALIDATE_INT) === false ? "invalid" : "valid";
+echo "|", filter_var("127.0.0.1", FILTER_VALIDATE_IP);
+echo "|", filter_var("999.0.0.1", FILTER_VALIDATE_IP) === false ? "invalid" : "valid";
+"#,
+    );
+    assert_eq!(out, "TF|42|invalid|127.0.0.1|invalid");
+}
+
+/// Verifies `filter_var()` with a RUNTIME `$filter`, through both dynamic-helper routes.
+///
+/// A non-constant `$filter` cannot pick a per-filter builtin at compile time, so the lowering
+/// routes the call to a `__elephc_filter_var_dyn*` prelude helper. Both are named only by that
+/// lowering, never by PHP, so declaration pruning erased their bodies while the call survived and
+/// every such call died with `Call to undefined function __elephc_filter_var_dyn()`. The flags
+/// inside an array `$options` are honoured too: reading them through a `mixed` seam used to be
+/// refused with a loud warning, which Symfony logged three times per request.
+#[test]
+fn test_filter_var_runtime_filter_honours_array_options() {
+    let out = compile_and_run(
+        r#"<?php
+function optionsOf(bool $asArray): mixed
+{
+    return $asArray ? ['flags' => FILTER_NULL_ON_FAILURE] : FILTER_NULL_ON_FAILURE;
+}
+
+$filter = FILTER_VALIDATE_INT;
+$ip = FILTER_VALIDATE_IP;
+
+echo var_export(filter_var('abc', $filter, optionsOf(false)), true), '|';
+echo var_export(filter_var('abc', $filter, optionsOf(true)), true), '|';
+echo var_export(filter_var('12', $filter, ['flags' => FILTER_NULL_ON_FAILURE]), true), '|';
+echo var_export(filter_var('abc', $filter, []), true), '|';
+echo var_export(filter_var('10.0.0.1', $ip, ['flags' => FILTER_FLAG_IPV6]), true), '|';
+echo var_export(filter_var('10.0.0.1', $ip, ['flags' => FILTER_FLAG_IPV4]), true);
+"#,
+    );
+    assert_eq!(out, "NULL|NULL|12|false|false|'10.0.0.1'");
+}
+
+/// Verifies `set_time_limit()` answers the `true` php answers for every argument, including the
+/// `0` Symfony's runtime bootstrap passes, a positive limit, a negative one, and both integer
+/// extremes. `php` 8.5.10 CLI returns `bool(true)` for all of these; no argument was found that
+/// makes it return `false`.
+///
+/// The value is DISCARDED on purpose: elephc has no execution-time interrupt to arm, so a
+/// positive limit is a documented no-op (see `src/builtins/system/set_time_limit.rs`). What must
+/// not regress is the return value and the fact that the call compiles at all.
+#[test]
+fn test_set_time_limit_returns_true_for_every_argument() {
+    let out = compile_and_run(
+        r#"<?php
+function stl($s) { return set_time_limit($s); }
+echo var_export(set_time_limit(0), true), "|",
+     var_export(set_time_limit(30), true), "|",
+     var_export(stl(-1), true), "|",
+     var_export(stl(PHP_INT_MAX), true), "|",
+     var_export(stl(PHP_INT_MIN), true), "|",
+     var_export(stl(true), true), "|",
+     var_export(stl("5"), true);
+"#,
+    );
+    assert_eq!(out, "true|true|true|true|true|true|true");
+}
+
+/// Verifies `set_time_limit()` still EVALUATES its argument even though the value is discarded,
+/// that the result is a real `true` (not a truthy placeholder) under `===`, and that the name
+/// resolves case-insensitively, through the root namespace, and by named argument.
+/// `php` 8.5.10 prints `2|yes|true|true|true|true`.
+#[test]
+fn test_set_time_limit_evaluates_its_argument_and_yields_a_strict_true() {
+    let out = compile_and_run(
+        r#"<?php
+function bump(&$n) { $n++; return 0; }
+$hits = 0;
+set_time_limit(bump($hits));
+set_time_limit(bump($hits));
+echo $hits, "|",
+     (set_time_limit(0) ? "yes" : "no"), "|",
+     var_export(set_time_limit(0) === true, true), "|",
+     var_export(SET_TIME_LIMIT(0), true), "|",
+     var_export(\set_time_limit(0), true), "|",
+     var_export(set_time_limit(seconds: 0), true);
+"#,
+    );
+    assert_eq!(out, "2|yes|true|true|true|true");
+}
+
+/// Verifies `strtotime()` accepts a keyword followed by a signed offset (`now - 7200 seconds`,
+/// `tomorrow - 1 hour`) and still refuses trailing junk after a keyword. php 8.5 answers each
+/// offset from the base; the keyword-plus-offset forms returned false, which broke Carbon's
+/// `now - N seconds` (Laravel's session garbage-collection lottery).
+#[test]
+fn test_strtotime_keyword_followed_by_signed_offset_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set('UTC');
+$base = 1767268800;
+foreach (['now - 7200 seconds', 'now -7200 seconds', 'now + 1 day', 'tomorrow - 1 hour', 'yesterday + 2 hours', 'now junk', 'now -'] as $s) {
+    $t = strtotime($s, $base);
+    echo $s, ' => ', $t === false ? 'false' : ($t - $base), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "now - 7200 seconds => -7200\nnow -7200 seconds => -7200\nnow + 1 day => 86400\ntomorrow - 1 hour => 39600\nyesterday + 2 hours => -122400\nnow junk => false\nnow - => false\n"
+    );
+}
+
+/// Verifies `strtotime()` composes the forms php lets a sentence combine: the 12-hour clock
+/// (`9am`, `9:30 pm`, `12am`), a keyword or weekday followed by a time of day (`tomorrow 9am`,
+/// `friday noon`), and two keywords in either order (`noon tomorrow`, `tomorrow noon`), the later
+/// keyword resetting what the earlier one set, with a trailing offset still applied last. Every
+/// expected value is php 8.5's answer from the same base (a Tuesday); out-of-range clock times and
+/// trailing junk are refused. Carbon's `Carbon::parse('tomorrow 9am')` and
+/// `strtotime('noon tomorrow')` were `false` here.
+#[test]
+fn test_strtotime_keyword_time_of_day_and_meridiem_forms_match_php() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set('UTC');
+$base = 1700000000;
+foreach ([
+    '9am',
+    '9:30am',
+    '9 am',
+    '9:30 pm',
+    '12am',
+    '12pm',
+    '12:30 PM',
+    '1PM',
+    '11:59:59 pm',
+    'tomorrow 9am',
+    'tomorrow 14:30:15',
+    'tomorrow 12AM',
+    'Tomorrow NOON',
+    'TODAY 9AM',
+    'noon tomorrow',
+    'tomorrow noon',
+    'midnight tomorrow',
+    'tomorrow midnight',
+    'yesterday noon',
+    'noon yesterday',
+    'midnight yesterday',
+    'yesterday 6pm',
+    'today 5:15pm',
+    'now noon',
+    'noon now',
+    'today noon',
+    'noon today',
+    'noon tomorrow +1 day',
+    'tomorrow noon +1 hour',
+    'noon + 1 hour',
+    'monday noon',
+    'next monday noon',
+    'friday noon',
+    'next friday 6pm',
+    'last friday 3pm',
+    'this friday 9:15am',
+    ' tomorrow  noon ',
+    'noon  tomorrow',
+    '13pm',
+    '0am',
+    '9:61am',
+    '9:30:61pm',
+    'tomorrow 13pm',
+    '9amx',
+    '9 amm',
+    'tomorrow junk',
+    'noon junk',
+    'AM',
+] as $s) {
+    $t = strtotime($s, $base);
+    echo $s, ' => ', $t === false ? 'false' : $t, "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "9am => 1699952400\n9:30am => 1699954200\n9 am => 1699952400\n9:30 pm => 1699997400\n12am => 1699920000\n12pm => 1699963200\n12:30 PM => 1699965000\n1PM => 1699966800\n11:59:59 pm => 1700006399\ntomorrow 9am => 1700038800\ntomorrow 14:30:15 => 1700058615\ntomorrow 12AM => 1700006400\nTomorrow NOON => 1700049600\nTODAY 9AM => 1699952400\nnoon tomorrow => 1700006400\ntomorrow noon => 1700049600\nmidnight tomorrow => 1700006400\ntomorrow midnight => 1700006400\nyesterday noon => 1699876800\nnoon yesterday => 1699833600\nmidnight yesterday => 1699833600\nyesterday 6pm => 1699898400\ntoday 5:15pm => 1699982100\nnow noon => 1699963200\nnoon now => 1699963200\ntoday noon => 1699963200\nnoon today => 1699920000\nnoon tomorrow +1 day => 1700092800\ntomorrow noon +1 hour => 1700053200\nnoon + 1 hour => 1699966800\nmonday noon => 1700481600\nnext monday noon => 1700481600\nfriday noon => 1700222400\nnext friday 6pm => 1700244000\nlast friday 3pm => 1699628400\nthis friday 9:15am => 1700212500\n tomorrow  noon  => 1700049600\nnoon  tomorrow => 1700006400\n13pm => false\n0am => false\n9:61am => false\n9:30:61pm => false\ntomorrow 13pm => false\n9amx => false\n9 amm => false\ntomorrow junk => false\nnoon junk => false\nAM => false\n"
+    );
+}
+
+/// Verifies `strtotime()` composes the longer sentences php accepts: a keyword followed by a second
+/// keyword (`tomorrow tomorrow` is one day, the later relative day replaces the earlier), a time of
+/// day with a trailing signed offset (`tomorrow 14:30 +2 days`, `14:30 +2 days`), the `first/last day
+/// of ...` phrases with `noon`/`midnight`, a weekday after `noon`/`midnight`/`tomorrow`, a keyword
+/// followed by an unsigned offset (`tomorrow 2 days`) or by an absolute date (`tomorrow 1 april`,
+/// where php adds the relative day to the date), and the year-less textual dates `1 april` and
+/// `april 1`, which take the clock's own year. Every expected value is php 8.5's answer from the
+/// same base (a Tuesday); text php refuses (`10:00 11:00`, `14:30 junk`) stays `false`.
+#[test]
+fn test_strtotime_longer_keyword_time_offset_and_date_sentences_match_php() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set('UTC');
+$base = 1700000000;
+foreach ([
+    'tomorrow tomorrow',
+    'yesterday yesterday',
+    'tomorrow yesterday',
+    'tomorrow 14:30 +2 days',
+    'tomorrow 14:30 -1 hour',
+    'yesterday 14:30 +2 days',
+    'today 14:30 +90 minutes',
+    '14:30 +2 days',
+    '14:30:15 +1 hour',
+    'friday 14:30 +1 week',
+    'first day of next month noon',
+    'last day of this month noon',
+    'last day of next month noon',
+    'first day of next month midnight',
+    'first day of next month 10:00',
+    'last monday of next month noon',
+    'noon friday',
+    'midnight friday',
+    'now friday',
+    'tomorrow friday',
+    'yesterday friday',
+    'tomorrow 1 april',
+    'yesterday 1 april',
+    'tomorrow april 1',
+    'tomorrow 1 april 2024',
+    'tomorrow 2023-04-01',
+    'tomorrow 4/1/2023',
+    'tomorrow 2 days',
+    'tomorrow 1 hour',
+    'yesterday 3 weeks',
+    '1 april',
+    'april 1',
+    'april 1 2024',
+    '5 august',
+    'august 5',
+    '1 apr 2024',
+    '14:30 junk',
+    '10:00 11:00',
+    'first day of next month junk',
+    'tomorrow 2 apples',
+    'tomorrow nothing',
+    'noon tomorrow',
+    'tomorrow noon',
+    'tomorrow 9am',
+] as $s) {
+    $t = strtotime($s, $base);
+    echo $s, ' => ', $t === false ? 'false' : $t, "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "tomorrow tomorrow => 1700006400\nyesterday yesterday => 1699833600\ntomorrow yesterday => 1699833600\ntomorrow 14:30 +2 days => 1700231400\ntomorrow 14:30 -1 hour => 1700055000\nyesterday 14:30 +2 days => 1700058600\ntoday 14:30 +90 minutes => 1699977600\n14:30 +2 days => 1700145000\n14:30:15 +1 hour => 1699975815\nfriday 14:30 +1 week => 1700836200\nfirst day of next month noon => 1701432000\nlast day of this month noon => 1701345600\nlast day of next month noon => 1704024000\nfirst day of next month midnight => 1701388800\nfirst day of next month 10:00 => 1701424800\nlast monday of next month noon => 1703505600\nnoon friday => 1700179200\nmidnight friday => 1700179200\nnow friday => 1700179200\ntomorrow friday => 1700265600\nyesterday friday => 1700092800\ntomorrow 1 april => 1680393600\nyesterday 1 april => 1680220800\ntomorrow april 1 => 1680393600\ntomorrow 1 april 2024 => 1712016000\ntomorrow 2023-04-01 => 1680393600\ntomorrow 4/1/2023 => 1680393600\ntomorrow 2 days => 1700179200\ntomorrow 1 hour => 1700010000\nyesterday 3 weeks => 1701648000\n1 april => 1680307200\napril 1 => 1680307200\napril 1 2024 => 1711929600\n5 august => 1691193600\naugust 5 => 1691193600\n1 apr 2024 => 1711929600\n14:30 junk => false\n10:00 11:00 => false\nfirst day of next month junk => false\ntomorrow 2 apples => false\ntomorrow nothing => false\nnoon tomorrow => 1700006400\ntomorrow noon => 1700049600\ntomorrow 9am => 1700038800\n"
+    );
+}
+
+/// intl's `Locale` default follows ICU's POSIX resolution, as php reads it with an empty
+/// `intl.default_locale`: `LC_ALL` first, codeset dropped, modifier appended upper-cased, `C` and
+/// `POSIX` meaning `en_US_POSIX`; `setDefault()` replaces it and `setDefault('')` restores it.
+/// Without the class Symfony took its no-intl branches (`TranslatorTrait::getLocale()` answered
+/// `en`, `bin/console about` printed `n/a`) where php answers `en_US_POSIX`. Host PHP 8.5.
+#[test]
+fn test_locale_default_follows_the_posix_environment() {
+    // The autoloader prints any class it is asked for: the prelude once called `self::` as a class
+    // named "self", which only an application with an autoloader (Symfony's) noticed.
+    let source = r#"<?php
+spl_autoload_register(function (string $class): void { echo "[autoload $class]"; });
+echo class_exists(\Locale::class, false) ? 'class|' : 'none|', Locale::getDefault(), '|';
+var_dump(Locale::setDefault('pt-BR'));
+echo Locale::getDefault(), '|';
+Locale::setDefault('');
+echo Locale::getDefault();
+"#;
+    let run = |lc_all: &str| {
+        compile_and_run_with_env(source, &[("LC_ALL", std::ffi::OsStr::new(lc_all))])
+    };
+    assert_eq!(run("fr_FR.UTF-8"), "class|fr_FR|bool(true)\npt-BR|fr_FR");
+    assert_eq!(run("C.UTF-8"), "class|en_US_POSIX|bool(true)\npt-BR|en_US_POSIX");
+    assert_eq!(run("sr_RS.UTF-8@latin"), "class|sr_RS_LATIN|bool(true)\npt-BR|sr_RS_LATIN");
 }

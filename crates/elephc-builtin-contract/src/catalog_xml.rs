@@ -96,7 +96,6 @@ macro_rules! xml_contract {
             kind: BuiltinKind::$kind,
             params: &[$($param),*],
             variadic: None,
-            variadic_by_ref: false,
             min_args: None,
             max_args: None,
             arity_error: None,

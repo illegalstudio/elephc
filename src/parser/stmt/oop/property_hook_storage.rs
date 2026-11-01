@@ -36,6 +36,16 @@ fn stmt_uses_backing_slot(stmt: &Stmt, property: &str) -> bool {
         StmtKind::ArrayAssign { index, value, .. }
         | StmtKind::StaticPropertyArrayAssign { index, value, .. } => expr(index) || expr(value),
         StmtKind::NestedArrayAssign { target, value } => expr(target) || expr(value),
+        StmtKind::ClassLikeActivate { .. } => false,
+        StmtKind::PropertyRefAssign { object, property: name, source } => {
+            is_backing_property(object, name, property) || expr(object) || expr(source)
+        }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            expr(index) || expr(source)
+        }
+        StmtKind::DynamicStaticPropertyWrite { property: name, index, value, .. } => {
+            expr(name) || index.as_ref().is_some_and(expr) || expr(value)
+        }
         StmtKind::PropertyAssign { object, property: name, value }
         | StmtKind::PropertyArrayPush { object, property: name, value } => {
             is_backing_property(object, name, property) || expr(object) || expr(value)
@@ -100,6 +110,9 @@ fn expr_uses_backing_slot(value: &Expr, property: &str) -> bool {
                 || expr(object) || expr(name)
         }
         ExprKind::BinaryOp { left, right, .. } => expr(left) || expr(right),
+        ExprKind::ArrayReference(inner)
+        | ExprKind::DynamicScopedConstantAccess { receiver: inner, .. } => expr(inner),
+        ExprKind::DynamicStaticPropertyAccess { property: name, .. } => expr(name),
         ExprKind::ArrayAccess { array, index } => expr(array) || expr(index),
         ExprKind::NullCoalesce { value, default }
         | ExprKind::ShortTernary { value, default } => expr(value) || expr(default),

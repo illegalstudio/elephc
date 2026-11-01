@@ -168,6 +168,16 @@ where
     F: Fn(&str, &[Expr]) -> bool,
     M: Fn(&StaticReceiver, &str, &[Expr]) -> bool,
 {
+    // A fragment with an include in VALUE position runs through the bridge. The resolver never
+    // expanded it -- the fragment is parsed here, long after resolution -- and the optimizer
+    // passes the AOT plan runs over it treat an unexpanded value include as unreachable, so
+    // `eval('function f($p) { return include $p; }')` crashed the compiler.
+    if crate::ast_usage::collect(&program).value_include {
+        return EvalAotPlan {
+            fallback_reason: Some(EvalAotFallbackReason::IncludeOrRequire),
+            ..parse_error_plan()
+        };
+    }
     let mut scope_access = collect_scope_accesses(&program);
     scope_access.reads = collect_scope_reads_before_writes(&program);
     let quiet_reads = scope_access
@@ -175,7 +185,10 @@ where
         .difference(&scope_access.warning_reads)
         .cloned()
         .collect();
-    let folded_program = fold_static_builtin_calls_in_program(program.clone(), strict_php);
+    let folded_program = with_implicit_eval_return(fold_static_builtin_calls_in_program(
+        program.clone(),
+        strict_php,
+    ));
     let support = EirStaticCallPredicates {
         function: &static_call_supported,
         static_method: &static_method_supported,
@@ -239,6 +252,23 @@ where
         fallback_reason: (!is_fully_static_no_bridge && !has_scope_eir)
             .then(|| classify_fallback_reason(&program)),
     }
+}
+
+/// Gives an AOT eval fragment PHP's implicit `null` result on every fallthrough path.
+fn with_implicit_eval_return(mut program: Program) -> Program {
+    let span = program
+        .last()
+        .map(|statement| statement.span)
+        .unwrap_or_else(Span::dummy);
+    program.push(Stmt::new(
+        StmtKind::Return(Some(Expr::new(ExprKind::Null, span))),
+        span,
+    ));
+    // The empty span set is the CORRECT value here, not a shortcut: `binding_decision_spans`
+    // protects statements the CHECKER already filed a local-binding decision against, and an
+    // eval fragment is planned straight from its parse — no checker has run over it yet, so
+    // there is no decision for DCE's tail-sinking clone to duplicate.
+    crate::optimize::eliminate_dead_code(program, std::collections::HashSet::new())
 }
 
 #[cfg(test)]

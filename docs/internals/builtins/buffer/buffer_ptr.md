@@ -2,7 +2,7 @@
 title: "buffer_ptr() - internals"
 description: "Compiler internals for buffer_ptr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 76
+  order: 87
 ---
 
 ## `buffer_ptr()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/buffer_ptr.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/buffer_ptr.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

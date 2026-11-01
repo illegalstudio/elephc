@@ -168,11 +168,11 @@ pub(super) fn plan_call_arg_temp_cleanups(
             continue;
         }
         let source_ty = ctx.raw_value_php_type(*value)?;
-        if direct_call_arg_creates_mixed_temp(&source_ty, param_ty) {
+        if let Some(cleanup_ty) = direct_call_arg_temp_cleanup_type(&source_ty, param_ty) {
             cleanups.push(CallArgTempCleanup {
                 param_index: index,
                 offset: cleanups.len() * CALL_ARG_TEMP_CLEANUP_BYTES,
-                ty: PhpType::Mixed,
+                ty: cleanup_ty,
             });
         } else if direct_call_arg_splits_widened_array(&source_ty, param_ty) {
             cleanups.push(CallArgTempCleanup {
@@ -189,6 +189,45 @@ pub(super) fn plan_call_arg_temp_cleanups(
 pub(super) fn direct_call_arg_creates_mixed_temp(source_ty: &PhpType, param_ty: &PhpType) -> bool {
     matches!(param_ty.codegen_repr(), PhpType::Mixed)
         && !matches!(source_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+}
+
+/// Returns the caller-owned temporary type created while adapting one direct-call argument.
+pub(super) fn direct_call_arg_temp_cleanup_type(
+    source_ty: &PhpType,
+    param_ty: &PhpType,
+) -> Option<PhpType> {
+    if direct_call_arg_creates_mixed_temp(source_ty, param_ty) {
+        return Some(PhpType::Mixed);
+    }
+    // A boxed value handed to a `string` parameter is cast into a detached string the caller
+    // owns (`__rt_mixed_cast_string`): a Mixed-receiver call cannot cast it in EIR because the
+    // runtime class decides the signature.
+    if param_ty.codegen_repr() == PhpType::Str
+        && matches!(source_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+    {
+        return Some(PhpType::Str);
+    }
+    if matches!(
+        param_ty.codegen_repr(),
+        PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed
+    ) && matches!(
+        source_ty.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    )
+    {
+        return Some(PhpType::Array(Box::new(PhpType::Mixed)));
+    }
+    // A hash handed to an `array<mixed>` parameter goes through the list-packing helper on a
+    // reference of its own (see `materialize_direct_call_arg_for_param`): either the packed copy
+    // or the retained hash, released through the kind-dispatching `array<mixed>` helper.
+    if matches!(
+        param_ty.codegen_repr(),
+        PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed
+    ) && matches!(source_ty.codegen_repr(), PhpType::AssocArray { .. })
+    {
+        return Some(PhpType::Array(Box::new(PhpType::Mixed)));
+    }
+    None
 }
 
 /// Returns whether widening a typed array for a gradual `array` parameter must COPY it first.
@@ -253,6 +292,15 @@ pub(super) fn save_call_arg_temp_cleanup(
     abi::emit_link_call_operand_owner_at_stack(ctx.emitter, scratch, false, offset + 16);
 }
 
+/// Releases one caller-owned argument temporary; a detached string goes through the kind dispatcher.
+pub(super) fn emit_call_arg_cleanup_release(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
+    if *ty == PhpType::Str {
+        abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+    } else {
+        abi::emit_decref_if_refcounted(ctx.emitter, ty);
+    }
+}
+
 /// Releases caller-owned temporary arguments after the call result has been saved.
 pub(super) fn emit_call_arg_temp_cleanups(
     ctx: &mut FunctionContext<'_>,
@@ -279,7 +327,7 @@ pub(super) fn emit_call_arg_temp_cleanups(
         } else {
             None
         };
-        abi::emit_decref_if_refcounted(ctx.emitter, &cleanup.ty);
+        emit_call_arg_cleanup_release(ctx, &cleanup.ty);
         if let Some(label) = skip_cleanup_label {
             ctx.emitter.label(&label);
         }

@@ -1,6 +1,6 @@
 //! Purpose:
-//! Emits `__rt_iconv_call` and `__rt_iconv_call_bool`, the two entry points every lowered
-//! iconv builtin goes through.
+//! Emits `__rt_iconv_call`, `__rt_iconv_call_bool`, and `__rt_iconv_call_str`, the entry
+//! points every lowered iconv builtin (and mbstring case-mapping builtin) goes through.
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::strings::iconv::emit_iconv()`.
@@ -15,6 +15,10 @@
 //!   operation it cannot complete.
 //! - `iconv_strpos()`'s out-of-range `$offset` arrives as its own result kind and leaves
 //!   through the shared catchable `\ValueError` sequence instead of returning a value.
+//! - `__rt_iconv_call_str` returns a plain owned string in the string result registers
+//!   for builtins declared `: string`. A `KIND_VALUE_ERROR` outcome carries its whole
+//!   message; the helper persists it into a runtime string and throws a `\ValueError`
+//!   that owns it, so the message can quote the caller's argument like php-src does.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -32,6 +36,9 @@ const RESULT_DIAGNOSTIC_LEN: usize = 40;
 
 /// Result kind that asks the runtime to throw `iconv_strpos()`'s `ValueError`.
 const KIND_OFFSET_VALUE_ERROR: usize = 5;
+
+/// Result kind whose byte payload is the message of a `ValueError` to throw.
+const KIND_VALUE_ERROR: usize = 6;
 
 /// Emits both iconv entry points for the active target.
 pub(super) fn emit_iconv_call(emitter: &mut Emitter) {
@@ -98,8 +105,44 @@ fn emit_iconv_call_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #80");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the PHP boolean in the integer result register
 
+    emit_iconv_call_str_aarch64(emitter);
     emit_iconv_invoke_aarch64(emitter);
     emit_iconv_release_aarch64(emitter);
+}
+
+/// Emits the AArch64 `__rt_iconv_call_str` helper.
+///
+/// Input:  x0 = staged argument block pointer.
+/// Output: x1/x2 = owned string result; a `KIND_VALUE_ERROR` outcome throws instead.
+fn emit_iconv_call_str_aarch64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: iconv call (string result) ---");
+    emitter.label_global("__rt_iconv_call_str");
+
+    // -- frame: [sp,#0..48]=result block [sp,#48]=owned string [sp,#64]=kind [sp,#80]=fp/lr --
+    emitter.instruction("sub sp, sp, #96");                                     // allocate the result block, the owned string, the kind, and frame linkage
+    emitter.instruction("stp x29, x30, [sp, #80]");                             // preserve the caller frame pointer and return address
+    emitter.instruction("add x29, sp, #80");                                    // establish a stable helper frame
+    emitter.instruction("add x1, sp, #0");                                      // pass the result block to the shared invoker
+    emitter.instruction("bl __rt_iconv_invoke");                                // run the bridge operation and emit its diagnostic
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", RESULT_KIND));            // load the outcome kind the bridge reported
+    emitter.instruction("str x9, [sp, #64]");                                   // keep the kind, because releasing the block resets it
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", RESULT_BYTES));           // load the bridge-owned payload pointer (result or message)
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", RESULT_LEN));             // load the payload byte length
+    emitter.instruction("bl __rt_str_persist");                                 // copy the payload into a runtime-owned string
+    emitter.instruction("stp x1, x2, [sp, #48]");                               // save the owned string across the bridge release call
+    emitter.instruction("add x0, sp, #0");                                      // pass the result block to the release helper
+    emitter.instruction("bl __rt_iconv_release_block");                         // free the payloads the bridge allocated
+    emitter.instruction("ldp x1, x2, [sp, #48]");                               // restore the owned string for the caller
+    emitter.instruction("ldr x9, [sp, #64]");                                   // restore the outcome kind
+    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore the caller frame pointer and return address
+    emitter.instruction("add sp, sp, #96");                                     // release the helper frame
+    emitter.instruction(&format!("cmp x9, #{}", KIND_VALUE_ERROR));             // did the bridge refuse the call with a ValueError?
+    emitter.instruction("b.eq __rt_iconv_call_str_value_error");                // throw with the owned string as the message
+    emitter.instruction("ret");                                                 // return the owned string result
+
+    emitter.label("__rt_iconv_call_str_value_error");
+    value_error::emit_throw_value_error_owned_message_aarch64(emitter);
 }
 
 /// Emits `__rt_iconv_invoke`, the shared bridge call and diagnostic printer.
@@ -203,8 +246,46 @@ fn emit_iconv_call_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the PHP boolean in the integer result register
 
+    emit_iconv_call_str_x86_64(emitter);
     emit_iconv_invoke_x86_64(emitter);
     emit_iconv_release_x86_64(emitter);
+}
+
+/// Emits the Linux x86_64 `__rt_iconv_call_str` helper.
+///
+/// Input:  rdi = staged argument block pointer.
+/// Output: rax/rdx = owned string result; a `KIND_VALUE_ERROR` outcome throws instead.
+fn emit_iconv_call_str_x86_64(emitter: &mut Emitter) {
+    // -- frame: [rbp-80..rbp-32]=result block [rbp-24]=ptr [rbp-16]=len [rbp-8]=kind --
+    const BLOCK: usize = 80;
+    emitter.blank();
+    emitter.comment("--- runtime: iconv call (string result) ---");
+    emitter.label_global("__rt_iconv_call_str");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the result block
+    emitter.instruction(&format!("sub rsp, {}", BLOCK));                        // reserve the result block, the owned string, and the kind
+    emitter.instruction(&format!("lea rsi, [rbp - {}]", BLOCK));                // address the result block for the shared invoker
+    emitter.instruction("call __rt_iconv_invoke");                              // run the bridge operation and emit its diagnostic
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", BLOCK - RESULT_KIND)); // load the outcome kind the bridge reported
+    emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // keep the kind, because releasing the block resets it
+    emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {}]", BLOCK - RESULT_BYTES)); // load the bridge-owned payload pointer (result or message)
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rbp - {}]", BLOCK - RESULT_LEN)); // load the payload byte length
+    emitter.instruction("call __rt_str_persist");                               // copy the payload into a runtime-owned string
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the owned string pointer across the bridge release call
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the owned string length across the bridge release call
+    emitter.instruction(&format!("lea rdi, [rbp - {}]", BLOCK));                // pass the result block to the release helper
+    emitter.instruction("call __rt_iconv_release_block");                       // free the payloads the bridge allocated
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // restore the owned string pointer for the caller
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // restore the owned string length for the caller
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // restore the outcome kind
+    emitter.instruction("mov rsp, rbp");                                        // release the helper frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction(&format!("cmp r10, {}", KIND_VALUE_ERROR));             // did the bridge refuse the call with a ValueError?
+    emitter.instruction("je __rt_iconv_call_str_value_error_linux_x86_64");     // throw with the owned string as the message
+    emitter.instruction("ret");                                                 // return the owned string result
+
+    emitter.label("__rt_iconv_call_str_value_error_linux_x86_64");
+    value_error::emit_throw_value_error_owned_message_x86_64(emitter);
 }
 
 /// Emits the Linux x86_64 `__rt_iconv_invoke` bridge call and diagnostic printer.

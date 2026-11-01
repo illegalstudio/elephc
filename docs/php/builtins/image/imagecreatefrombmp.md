@@ -2,7 +2,7 @@
 title: "imagecreatefrombmp()"
 description: "Creates an image from a BMP file."
 sidebar:
-  order: 496
+  order: 509
 ---
 
 ## imagecreatefrombmp()

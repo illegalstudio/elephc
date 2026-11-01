@@ -95,6 +95,21 @@ $named2 = [1,2,3]; $r6 = array_splice(array: $named2, offset: 1, length: 1, repl
     );
 }
 
+/// Verifies a by-reference nested element keeps pointer metadata even when the outer array uses
+/// boxed heterogeneous slots and the selected element therefore has gradual PHP metadata.
+#[test]
+fn test_array_splice_mixed_nested_element_reference_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+$rows = [[1, 2, 3], 'unused'];
+$key = 0;
+$removed = array_splice($rows[$key], 1, 1, [9, 10]);
+echo implode(',', $rows[$key]), '|', implode(',', $removed);
+"#,
+    );
+    assert_eq!(out, "1,9,10,3|2");
+}
+
 /// Verifies refcounted element payloads survive the insertion in both directions: strings and
 /// integers spliced into a heterogeneous receiver, and nested arrays spliced into an array of
 /// arrays.
@@ -130,6 +145,38 @@ echo implode(",", $e), "|", count($r4), "\n";
 1,2,3,99|0
 "#
     );
+}
+
+/// Verifies a heterogeneous receiver boxes and retains nested replacement arrays.
+#[test]
+fn test_array_splice_boxes_nested_array_into_mixed_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+$rows = [1, 'marker'];
+$row = [3, 4];
+$removed = array_splice($rows, 1, 0, [$row]);
+unset($row);
+echo $rows[1][0], ':', $rows[1][1], ':', $rows[2], ':', count($removed);
+"#,
+    );
+    assert_eq!(out, "3:4:marker:0");
+}
+
+/// Verifies gradual replacements use PHP's standard array-cast semantics before insertion.
+#[test]
+fn test_array_splice_normalizes_mixed_replacement() {
+    let out = compile_and_run(
+        r#"<?php
+function spliceWithMixed(mixed $replacement): string {
+    $values = [1, 'tail'];
+    $gradual = $replacement;
+    array_splice($values, 1, 0, $gradual);
+    return $values[1][0] . ':' . $values[1][1] . ':' . $values[2];
+}
+echo spliceWithMixed([[7, 8]]);
+"#,
+    );
+    assert_eq!(out, "7:8:tail");
 }
 
 /// Verifies the scalar insertion path leaves no live heap blocks.

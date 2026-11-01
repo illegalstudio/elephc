@@ -318,3 +318,26 @@ fn test_warning_no_deprecation_for_undeprecated_function() {
         "deprecated",
     );
 }
+
+/// The PHP-divergent lints are OPT-IN: a default build of an ordinary dynamic program is silent.
+///
+/// php compiles `$x = 1; $x = 's';`, an unused `$y`, and code after `return` without a word. The
+/// Symfony entries produced 303 warnings from exactly these three families, so `--lint` (and the
+/// test helpers) enable them while the default build matches php's silence.
+#[test]
+fn test_php_divergent_lints_are_opt_in() {
+    let source = "<?php function f($x) { $unused = 1; return 2; echo 'dead'; } echo f(1); $a = 0; $a = 'ciao'; echo $a;";
+    let silent = check_source_full_with(source, elephc::types::CheckOptions::default())
+        .expect("the program must type-check");
+    assert!(
+        silent.warnings.is_empty(),
+        "a default build must not print PHP-divergent lints: {:?}",
+        silent.warnings
+    );
+    let linted = check_source_full(source).expect("the program must type-check");
+    let messages: Vec<&str> = linted.warnings.iter().map(|w| w.message.as_str()).collect();
+    assert!(messages.iter().any(|m| m.contains("Unused variable: $x")), "{messages:?}");
+    assert!(messages.iter().any(|m| m.contains("Unused variable: $unused")), "{messages:?}");
+    assert!(messages.iter().any(|m| m.contains("$a changes type from int to string")), "{messages:?}");
+    assert!(messages.iter().any(|m| m.contains("Unreachable code")), "{messages:?}");
+}

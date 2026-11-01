@@ -2,7 +2,7 @@
 title: "gmp_pow()"
 description: "Raises a GMP number to an integer power."
 sidebar:
-  order: 622
+  order: 635
 ---
 
 ## gmp_pow()

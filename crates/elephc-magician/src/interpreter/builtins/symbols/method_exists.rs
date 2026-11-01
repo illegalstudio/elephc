@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Shared member-existence logic for `property_exists()` lives here.
+//! - A class-string target is resolved through the SPL autoload chain first, the way PHP's
+//!   `zend_lookup_class` does, so both probes see a class that is only ever named as a string.
 
 eval_builtin! {
     contract: "method_exists",
@@ -20,6 +22,7 @@ use super::super::{
     eval_object_class_metadata_name, eval_resolved_class_metadata_name,
     eval_runtime_property_access_metadata, eval_same_class_metadata_name,
 };
+use super::eval_spl_autoload_class;
 use super::get_object_vars::eval_object_public_property_exists;
 
 /// Dispatches direct eval calls for the `method_exists` symbol builtin.
@@ -67,13 +70,43 @@ pub(in crate::interpreter) fn eval_member_exists_result(
     let [target, member] = evaluated_args else {
         return Err(EvalStatus::RuntimeFatal);
     };
+    // A class another context declared (an autoloaded file) is known to this one only after a
+    // sync. Laravel's pipeline closure asked `method_exists($pipe, 'handle')` of a middleware its
+    // container had just autoloaded elsewhere, got false, and called the object as a closure.
+    #[cfg(not(test))]
+    context.sync_global_eval_classes();
     let member = eval_class_metadata_name(*member, values)?;
+    eval_autoload_member_exists_target(*target, context, values)?;
     let exists = match name {
         "method_exists" => eval_method_exists_target(*target, &member, context, values)?,
         "property_exists" => eval_property_exists_target(*target, &member, context, values)?,
         _ => return Err(EvalStatus::RuntimeFatal),
     };
     values.bool_value(exists)
+}
+
+/// Resolves a class-name string target through the autoload chain before the member lookup.
+///
+/// PHP resolves the class-string argument of `method_exists()` and `property_exists()` with
+/// `zend_lookup_class`, the same resolution `new $name` and `class_exists($name)` use, so a
+/// registered autoloader runs and a class the program only ever names as a string becomes
+/// visible to both probes. Without this the probes answer from whatever metadata happens to be
+/// loaded already and report `false` for a class that PHP would have loaded on demand. An object
+/// target carries its own class, so it never reaches the autoloader.
+fn eval_autoload_member_exists_target(
+    target: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if values.type_tag(target)? != EVAL_TAG_STRING {
+        return Ok(());
+    }
+    let class_name = eval_resolved_class_metadata_name(target, context, values)?;
+    if class_name.is_empty() || eval_class_relation_name_exists(&class_name, context, values)? {
+        return Ok(());
+    }
+    let _ = eval_spl_autoload_class(&class_name, context, values)?;
+    Ok(())
 }
 
 /// Resolves a `method_exists()` target and applies PHP object-vs-string lookup rules.
@@ -84,9 +117,28 @@ fn eval_method_exists_target(
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     match values.type_tag(target)? {
+        // A compiled closure or first-class callable crosses the ABI as a descriptor, and an eval
+        // closure is a registered stand-in object; php sees a `Closure` instance either way.
+        super::super::super::runtime_ops::EVAL_TAG_CALLABLE => {
+            Ok(eval_closure_method_exists(method_name))
+        }
+        EVAL_TAG_OBJECT
+            if context
+                .closure_object_target(values.object_identity(target)?)
+                .is_some() =>
+        {
+            Ok(eval_closure_method_exists(method_name))
+        }
         EVAL_TAG_OBJECT => {
             let class_name = eval_object_class_metadata_name(target, context, values)?;
-            eval_method_exists_on_class(&class_name, method_name, true, context, values)
+            let exists = eval_method_exists_on_class(&class_name, method_name, true, context, values);
+            if crate::eval_trace::enabled() {
+                eprintln!(
+                    "[elephc-eval-trace] phase=method_exists class={class_name:?} method={method_name:?} has_class={} result={exists:?}",
+                    context.has_class(&class_name),
+                );
+            }
+            exists
         }
         EVAL_TAG_STRING => {
             let class_name = eval_resolved_class_metadata_name(target, context, values)?;
@@ -117,7 +169,7 @@ fn eval_property_exists_target(
             )? {
                 return Ok(true);
             }
-            eval_object_public_property_exists(target, property_name, values)
+            eval_object_public_property_exists(target, property_name, context, values)
         }
         EVAL_TAG_STRING => {
             let class_name = eval_resolved_class_metadata_name(target, context, values)?;
@@ -368,4 +420,14 @@ fn eval_current_scope_private_property_exists_on_object(
     Ok(visibility == EvalVisibility::Private
         && !is_static
         && eval_same_class_metadata_name(&declaring_class, current_class))
+}
+
+/// Returns whether `Closure` declares `method_name`: `__invoke()` plus its binding API.
+///
+/// `method_exists($closure, '__invoke')` is how callers tell an invocable object from other
+/// callables (Twig's `debug:twig` reflects a first-class callable's parameters this way).
+fn eval_closure_method_exists(method_name: &str) -> bool {
+    ["__invoke", "bind", "bindTo", "call", "fromCallable"]
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case(method_name))
 }

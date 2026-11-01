@@ -314,6 +314,83 @@ fn test_strrpos_not_found_is_strict_false() {
     assert_eq!(out, "miss");
 }
 
+/// Verifies strrchr returns the suffix at the final match, uses only the first needle byte, and
+/// preserves PHP's false result when no match exists.
+#[test]
+fn test_strrchr_suffix_first_needle_byte_and_miss() {
+    let out = compile_and_run(
+        r#"<?php
+echo strrchr('A\\B\\C', '\\'), '|';
+echo strrchr('abc', 'bc'), '|';
+echo strrchr('abc', 'z') === false ? 'F' : 'bad';
+"#,
+    );
+    assert_eq!(out, "\\C|bc|F");
+}
+
+/// Verifies `strpbrk()` selects the first byte from its character set and preserves `false`.
+#[test]
+fn test_strpbrk_suffix_miss_binary_bytes_and_empty_characters_error() {
+    let out = compile_and_run(
+        r#"<?php
+echo strpbrk("abc123", "32"), "|";
+echo \STRPBRK(string: "abc", characters: "z") === false ? "F" : "bad", "|";
+echo strpbrk("a".chr(0)."b", chr(0)), "|";
+try {
+    strpbrk("abc", "");
+} catch (ValueError $error) {
+    echo get_class($error), ":", $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "23|F|\0b|ValueError:strpbrk(): Argument #2 ($characters) must be a non-empty string"
+    );
+}
+
+/// Verifies php-src byte-span semantics, bounds, naming, and namespace fallback.
+#[test]
+fn test_strcspn_and_strspn_php_src_semantics() {
+    let out = compile_and_run(
+        r#"<?php
+namespace SpanFixture;
+
+function spanWithNullableLength(?int $length): int {
+    return strcspn("abc123", "123", 1, $length);
+}
+
+$dynamicCspn = "strcspn";
+$dynamicSpn = \strspn(...);
+
+$subject = "22222222aaaa bbb1111 cccc";
+$characters = "1234";
+
+echo STRCSPN($subject, $characters), "|",
+     strcspn($subject, $characters, 9), "|",
+     \strcspn($subject, $characters, 9, 6), "|",
+     strcspn("abc123", "123", offset: 1, length: -1), "|",
+     strcspn("abc\0def", "\0"), "|",
+     strcspn("abc", ""), "|",
+     strspn($subject, $characters), "|",
+     strspn($subject, $characters, 2), "|",
+     \STRSPN($subject, $characters, 2, 3), "|",
+     strspn(string: "abc123", characters: "abc", offset: -20, length: null), "|",
+     strspn("abc", ""), "|",
+     spanWithNullableLength(null), "|",
+     spanWithNullableLength(-1), "|",
+     $dynamicCspn("abc123", "123"), "|",
+     $dynamicSpn("abc123", "abc"), "|",
+     call_user_func_array("strcspn", ["abc123", "123", 1, 4]), "|",
+     strcspn("abc", "x", PHP_INT_MIN), "|",
+     strcspn("abc", "x", PHP_INT_MAX), "|",
+     strcspn("abc", "x", 0, PHP_INT_MIN), "|",
+     strcspn("abc", "x", 0, PHP_INT_MAX);
+"#,
+    );
+    assert_eq!(out, "0|7|6|2|3|3|8|6|3|3|0|2|2|3|3|2|3|0|0|3");
+}
+
 /// Verifies strstr returns the portion of the string starting from the first needle occurrence.
 /// Fixture: "user@example.com" split on "@" yields "@example.com".
 #[test]
@@ -406,6 +483,21 @@ fn test_substr_replace() {
 fn test_substr_replace_no_length() {
     let out = compile_and_run(r#"<?php echo substr_replace("hello world", "!", 5);"#);
     assert_eq!(out, "hello!");
+}
+
+/// Verifies `substr_replace()` stringifies a nullable integer subject through the TaggedScalar
+/// representation before dispatching to the string runtime helper.
+#[test]
+fn test_substr_replace_tagged_scalar_subject() {
+    let out = compile_and_run(
+        r#"<?php
+function replace_subject(?int $subject): string {
+    return substr_replace($subject, "X", 0, 1);
+}
+echo replace_subject(123);
+"#,
+    );
+    assert_eq!(out, "X23");
 }
 
 /// Verifies `substr_count()` counts non-overlapping occurrences.
@@ -542,6 +634,158 @@ try { strncasecmp("a", "b", -1); } catch (ValueError $e) { echo $e->getMessage()
         "strncmp(): Argument #3 ($length) must be greater than or equal to 0\n\
 strncasecmp(): Argument #3 ($length) must be greater than or equal to 0\n"
     );
+}
+
+/// Verifies `substr_compare()` returns php's own two-part answer: `memcmp()`'s RAW unsigned-byte
+/// difference at the first mismatch, and `ZEND_THREEWAY_COMPARE`'s `-1`/`0`/`1` when one operand
+/// is a prefix of the other. A normalized sign everywhere would break `< 0` callers; a length
+/// DIFFERENCE in the tiebreak would break nothing here but does break `"ab"` vs `"abcdef"`, which
+/// the prefix cases below pin.
+/// `php` 8.5.10 prints `0`, `-1`, `-25`, `25`, `-32`, `-1`, `1`, `3` for these calls.
+#[test]
+fn test_substr_compare_byte_difference_and_threeway_tiebreak() {
+    let out = compile_and_run(
+        r#"<?php
+echo substr_compare("abcde", "abcde", 0), "|",
+     substr_compare("abcde", "abcdf", 0), "|",
+     substr_compare("a", "z", 0), "|",
+     substr_compare("z", "a", 0), "|",
+     substr_compare("A", "a", 0), "|",
+     substr_compare("abc", "abcdef", 0), "|",
+     substr_compare("abcdef", "abc", 0), "|",
+     substr_compare("abcdef", "abc", 3, 3);
+"#,
+    );
+    assert_eq!(out, "0|-1|-25|25|-32|-1|1|3");
+}
+
+/// Verifies a negative `$offset` counts back from the haystack end and CLAMPS to zero when its
+/// magnitude overruns the haystack, instead of raising the way `substr_count()` does for the same
+/// input. `substr_compare("abcdef","def",-100)` is `-3` ('a' minus 'd'), which only holds if the
+/// comparison really restarted at offset zero.
+/// `php` 8.5.10 prints `0`, `0`, `0`, `0`, `-3`, `1`.
+#[test]
+fn test_substr_compare_negative_offset_clamps_instead_of_throwing() {
+    let out = compile_and_run(
+        r#"<?php
+echo substr_compare("abcdef", "def", -3), "|",
+     substr_compare("abcdef", "ef", -2), "|",
+     substr_compare("abcdef", "abcdef", -6), "|",
+     substr_compare("abcdef", "abcdef", -7), "|",
+     substr_compare("abcdef", "def", -100), "|",
+     substr_compare("abc", "a", PHP_INT_MIN);
+"#,
+    );
+    assert_eq!(out, "0|0|0|0|-3|1");
+}
+
+/// Verifies a `null` `$length` compares the LONGER of the two operands (php's
+/// `MAX(strlen($needle), strlen($haystack) - $offset)`), so a prefix answers `-1`/`1` where an
+/// explicit `$length` covering only the prefix answers `0`. The final call proves a run-time
+/// `null` reaching the argument is read as "no length" and not coerced to `0`, which would make
+/// every call compare zero bytes and answer `0`.
+/// `php` 8.5.10 prints `-1`, `0`, `-1`, `0`, `1`, `0`, `1`.
+#[test]
+fn test_substr_compare_length_null_explicit_and_runtime_null() {
+    let out = compile_and_run(
+        r#"<?php
+function f(?int $l) { return substr_compare("abcdef", "abc", 0, $l); }
+$n = null;
+echo substr_compare("abcde", "abcdef", 0, null), "|",
+     substr_compare("abcde", "abcdef", 0, 5), "|",
+     substr_compare("abcde", "abcdef", 0, 100), "|",
+     substr_compare("abcdef", "abc", 0, 3), "|",
+     substr_compare("abcdef", "abc", 0), "|",
+     substr_compare("abcdef", "abc", 0, 0), "|",
+     f($n);
+"#,
+    );
+    assert_eq!(out, "-1|0|-1|0|1|0|1");
+}
+
+/// Verifies `$case_insensitive` folds ASCII letters only. `[`/`{` and `_`/`?` differ by the same
+/// `0x20` bit an ASCII letter pair does, so a fold that tested the bit rather than the `A`-`Z`
+/// range would wrongly answer `0` for them. The UTF-8 pair shows multi-byte input is compared
+/// byte for byte: the lead byte cancels and the continuation byte decides.
+/// `php` 8.5.10 prints `0`, `0`, `-32`, `-32`, `32`, `-32`.
+#[test]
+fn test_substr_compare_case_insensitive_folds_ascii_only() {
+    let out = compile_and_run(
+        r#"<?php
+echo substr_compare("Hello", "hello", 0, 5, true), "|",
+     substr_compare("Hello", "hello", 0, null, true), "|",
+     substr_compare("HELLO", "hello", 0, 5, false), "|",
+     substr_compare("[", "{", 0, 1, true), "|",
+     substr_compare("_", "?", 0, 1, true), "|",
+     substr_compare("\xC3\x89", "\xC3\xA9", 0, 2, true);
+"#,
+    );
+    assert_eq!(out, "0|0|-32|-32|32|-32");
+}
+
+/// Verifies bytes above `0x7F` are compared as UNSIGNED values the way `memcmp` does, and that
+/// every empty-operand pairing is decided by the truncated-length tiebreak. Reading the bytes as
+/// signed `char` would sort `"\xFF"` below `"\x01"` and flip the sign of every non-ASCII compare.
+/// `php` 8.5.10 prints `94`, `-94`, `254`, `-254`, `-1`, `1`, `1`, `0`.
+#[test]
+fn test_substr_compare_unsigned_high_bytes_and_empty_operands() {
+    let out = compile_and_run(
+        r#"<?php
+echo substr_compare("\xC3\xA9", "e", 0, 1), "|",
+     substr_compare("e", "\xC3\xA9", 0, 1), "|",
+     substr_compare("\xFF", "\x01", 0, 1), "|",
+     substr_compare("\x01", "\xFF", 0, 1), "|",
+     substr_compare("", "abc", 0), "|",
+     substr_compare("abc", "", 0), "|",
+     substr_compare("abc", "", 1), "|",
+     substr_compare("", "", 0);
+"#,
+    );
+    assert_eq!(out, "94|-94|254|-254|-1|1|1|0");
+}
+
+/// Verifies `substr_compare()` raises php-src's catchable `ValueError`s, in php's own order:
+/// `$length` is refused first (a negative one is never measured back from the end, unlike
+/// `substr_count()`'s), and only a call whose `$length` is valid reaches the `$offset` bound.
+/// `$offset === strlen($haystack)` stays legal.
+/// Messages are verbatim `php` 8.5.10 output.
+#[test]
+fn test_substr_compare_value_errors() {
+    let out = compile_and_run(
+        r#"<?php
+foreach ([["abcdef", "abc", 0, -1], ["abc", "a", 100, -1], ["abc", "a", 100, 1], ["abc", "a", 3, 1]] as $t) {
+    try {
+        echo substr_compare($t[0], $t[1], $t[2], $t[3]), "\n";
+    } catch (ValueError $e) {
+        echo $e->getMessage(), "\n";
+    }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "substr_compare(): Argument #4 ($length) must be greater than or equal to 0\n\
+substr_compare(): Argument #4 ($length) must be greater than or equal to 0\n\
+substr_compare(): Argument #3 ($offset) must be contained in argument #1 ($haystack)\n\
+-1\n"
+    );
+}
+
+/// Verifies `substr_compare()` resolves case-insensitively, through a root-namespace qualified
+/// call, by named argument, and with a named argument that skips `$length` and leaves it at its
+/// `null` default.
+/// `php` 8.5.10 prints `0` for all four.
+#[test]
+fn test_substr_compare_case_insensitive_namespaced_and_named_args() {
+    let out = compile_and_run(
+        r#"<?php
+echo SUBSTR_COMPARE("abcdef", "def", -3), "|",
+     \substr_compare("abcdef", "def", -3), "|",
+     substr_compare(haystack: "Hello", needle: "hello", offset: 0, length: 5, case_insensitive: true), "|",
+     substr_compare("Hello", "hello", 0, case_insensitive: true);
+"#,
+    );
+    assert_eq!(out, "0|0|0|0");
 }
 
 /// Verifies `join()`, `substr_count()`, `strncmp()`, and `strncasecmp()` keep their PHP
@@ -770,4 +1014,74 @@ var_dump(call_user_func('stripos', 'FooBar', 'BAR'));
 "#,
     );
     assert_eq!(out, "int(6)\nint(7)\nint(3)\n");
+}
+
+/// `strtok()` has no backend implementation of its own: the prelude keeps the string and the offset
+/// in `static` locals. Expected output is `php -n` 8.5's, byte for byte.
+#[test]
+fn test_strtok_tokenizes_like_php() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+$s = "This is\tan example\nstring";
+$t = strtok($s, " \n\t");
+while ($t !== false) {
+    echo "[", $t, "]";
+    $t = strtok(" \n\t");
+}
+echo "\n";
+$t = strtok("//a//b///c/", "/");
+echo $t, strtok("/"), strtok("/"), "|", var_export(strtok("/"), true), "|", var_export(strtok("/"), true), "\n";
+echo var_export(strtok("abc", ""), true), var_export(strtok(""), true), "\n";
+echo var_export(strtok("", "x"), true), var_export(strtok("x"), true), "\n";
+echo strtok("one two three", " "), "-", strtok(" "), "-";
+echo strtok("alpha,beta;gamma", ",;"), "-", strtok(",;"), "-", strtok(",;"), "\n";
+function col(string $type): string { return strtok($type, '(') ?: ''; }
+echo col("varchar(255)"), "|", col("integer"), "|", col("(x)"), "|", col(""), "\n";
+echo var_export(strtok("a\0b\0c", "\0"), true), var_export(strtok("\0"), true), bin2hex((string) strtok("\0")), "\n";
+$parts = [];
+for ($tok = strtok("k1=v1&k2=v2", "&="); $tok !== false; $tok = strtok("&=")) {
+    $parts[] = $tok;
+}
+echo implode(",", $parts), "\n";
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "[This][is][an][example][string]\nabc|false|false\n'abc'false\nfalsefalse\none-two-alpha-beta-gamma\nvarchar|integer|x)|\n'a''b'63\nk1,v1,k2,v2\n");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Interpreted code reaches its own `strtok()` (Laravel's SQLite processor calls it), with the
+/// same semantics and a request-scoped state of its own.
+#[test]
+fn test_eval_strtok_tokenizes_like_php() {
+    let output = compile_and_run(
+        r#"<?php
+eval(<<<'EOT'
+$s = "This is\tan example\nstring";
+$t = strtok($s, " \n\t");
+while ($t !== false) {
+    echo "[", $t, "]";
+    $t = strtok(" \n\t");
+}
+echo "\n";
+$t = strtok("//a//b///c/", "/");
+echo $t, strtok("/"), strtok("/"), "|", var_export(strtok("/"), true), "|", var_export(strtok("/"), true), "\n";
+echo var_export(strtok("abc", ""), true), var_export(strtok(""), true), "\n";
+echo var_export(strtok("", "x"), true), var_export(strtok("x"), true), "\n";
+echo strtok("one two three", " "), "-", strtok(" "), "-";
+echo strtok("alpha,beta;gamma", ",;"), "-", strtok(",;"), "-", strtok(",;"), "\n";
+function col(string $type): string { return strtok($type, '(') ?: ''; }
+echo col("varchar(255)"), "|", col("integer"), "|", col("(x)"), "|", col(""), "\n";
+echo var_export(strtok("a\0b\0c", "\0"), true), var_export(strtok("\0"), true), bin2hex((string) strtok("\0")), "\n";
+$parts = [];
+for ($tok = strtok("k1=v1&k2=v2", "&="); $tok !== false; $tok = strtok("&=")) {
+    $parts[] = $tok;
+}
+echo implode(",", $parts), "\n";
+
+EOT
+);
+"#,
+    );
+    assert_eq!(output, "[This][is][an][example][string]\nabc|false|false\n'abc'false\nfalsefalse\none-two-alpha-beta-gamma\nvarchar|integer|x)|\n'a''b'63\nk1,v1,k2,v2\n");
 }

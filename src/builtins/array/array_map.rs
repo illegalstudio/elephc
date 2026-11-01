@@ -12,7 +12,8 @@
 //! - `check` validates that the second argument is an array — indexed or associative — and
 //!   infers the callback return element type; the result preserves the input array element
 //!   type unless the callback returns Mixed. An associative source keeps its KEY type, which
-//!   is what makes the single-array form key-preserving the way php-src is.
+//!   is what makes the single-array form key-preserving the way php-src is. Gradual sources
+//!   are validated at runtime and keep a gradual result contract.
 //! - Checker and EIR share ONE result type. See `array_map_semantics`.
 
 use crate::builtins::spec::BuiltinCheckCtx;
@@ -122,6 +123,9 @@ fn callback_reaches_eir_as_string(cx: &mut BuiltinCheckCtx) -> Result<bool, Comp
 /// rewritten by the callback. (The reindexing php-src performs from two arrays onward is out
 /// of reach here: `check_arity` already refuses more than two arguments.)
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    if cx.args.len() > 2 {
+        return check_multi_array(cx);
+    }
     let arr_ty = cx.checker.infer_type(&cx.args[1], cx.env)?;
     // `array_map(null, $a)` with one array is the identity: php returns `$a`, keys and elements
     // untouched. Typing it as the mapped `array<mixed>` gave the result a raw-array slot while the
@@ -139,36 +143,70 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let callback_is_string = callback_reaches_eir_as_string(cx)?;
     match arr_ty {
         PhpType::Array(elem_ty) => {
-            if matches!(elem_ty.as_ref(), PhpType::Object(_)) {
-                return Err(CompileError::new(
-                    cx.span,
-                    "array_map() does not yet support object array elements",
-                ));
-            }
             let callback_ret_ty = check_map_callback(cx, elem_ty.as_ref())?;
+            // `array<mixed>` storage can be promoted to a hash by a runtime string key the checker
+            // cannot see, and `array_map()` preserves keys, so the lowering normalizes such a
+            // source to a Mixed-valued hash (`lower_array_map`, `runtime_promotable_mixed_array`)
+            // and answers with a BOXED container. The checker's type must be that storage: an
+            // `array<string>` here made the hash be read as a list of 16-byte string slots, so
+            // `implode(',', array_map(fn($x) => "t" . $x, [1]))` printed `0` instead of `t1`.
+            if elem_ty.codegen_repr() == PhpType::Mixed {
+                return Ok(PhpType::Mixed);
+            }
             Ok(PhpType::Array(Box::new(mapped_element_type(
                 callback_ret_ty,
                 callback_is_string,
             ))))
         }
         PhpType::AssocArray { key, value } => {
-            if matches!(value.as_ref(), PhpType::Object(_)) {
-                return Err(CompileError::new(
-                    cx.span,
-                    "array_map() does not yet support object array elements",
-                ));
-            }
             let callback_ret_ty = check_map_callback(cx, value.as_ref())?;
             Ok(PhpType::AssocArray {
                 key,
                 value: Box::new(mapped_element_type(callback_ret_ty, callback_is_string)),
             })
         }
+        PhpType::Mixed | PhpType::Union(_) => {
+            check_map_callback(cx, &PhpType::Mixed)?;
+            Ok(PhpType::Mixed)
+        }
         _ => Err(CompileError::new(
             cx.span,
             "array_map() second argument must be array",
         )),
     }
+}
+
+/// Checks php's multi-array form: `array_map($callback, $a, $b, ...)`.
+///
+/// `compat_preludes` routes these calls to `crate::array_map_prelude`, whose helper returns a
+/// list: of the callback's results, or of the per-position tuples for a `null` callback. The
+/// callback receives one element of each array, `null` past the end of a shorter one.
+fn check_multi_array(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    let mut element_types = Vec::with_capacity(cx.args.len() - 1);
+    for arg in &cx.args[1..] {
+        match cx.checker.infer_type(arg, cx.env)? {
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_) => {}
+            _ => {
+                return Err(CompileError::new(
+                    cx.span,
+                    "array_map() arguments after the callback must be arrays",
+                ))
+            }
+        }
+        // A shorter array pads its position with `null`, so every slot is gradual.
+        element_types.push(PhpType::Mixed);
+    }
+    if !matches!(cx.args[0].kind, crate::parser::ast::ExprKind::Null) {
+        crate::types::checker::builtins::check_array_callback_builtin_call(
+            cx.checker,
+            &cx.args[0],
+            &element_types,
+            cx.span,
+            cx.env,
+            "array_map() callback",
+        )?;
+    }
+    Ok(PhpType::Array(Box::new(PhpType::Mixed)))
 }
 
 /// Checks the `array_map()` callback against one source element type and returns its return type.
@@ -179,7 +217,16 @@ fn check_map_callback(
     cx: &mut BuiltinCheckCtx,
     element_ty: &PhpType,
 ) -> Result<PhpType, CompileError> {
-    let callback_arg_types = [element_ty.clone()];
+    // A container element reaches the callback as ONE boxed Mixed cell (the descriptor wrapper
+    // boxes it), so an untyped callback parameter is a `mixed` in EIR. Hinting it with the
+    // element's concrete container type typed the callback BODY against storage the parameter
+    // does not have: `fn($r) => array_reverse($r)` over `array<array<int>>` inferred an
+    // `array<int>` return while the body reversed a boxed cell and returned boxed slots, which
+    // the typed-element guard then refused at run time.
+    let callback_arg_types = [match element_ty.codegen_repr() {
+        PhpType::Array(_) | PhpType::AssocArray { .. } => PhpType::Mixed,
+        _ => element_ty.clone(),
+    }];
     crate::types::checker::builtins::check_array_callback_builtin_call(
         cx.checker,
         &cx.args[0],

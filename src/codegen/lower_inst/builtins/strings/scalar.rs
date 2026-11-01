@@ -468,12 +468,23 @@ fn weak_float_type_error_message(context: &str) -> String {
                     .enumerate()
                     .find(|(_, (_, ty))| php_type_accepts_int(ty))
             });
-        if let Some((index, (parameter_name, _))) = parameter {
+        if let Some((index, (parameter_name, parameter_ty))) = parameter {
+            // php names a nullable parameter's type `?int` (`array_slice()`'s `$length`). The
+            // contract spells some of them `mixed` with a `null` default, which is the same fact.
+            let nullable = matches!(
+                parameter_ty,
+                PhpType::Union(members) if members.iter().any(|member| matches!(member, PhpType::Void))
+            ) || def.defaults.get(index).is_some_and(|default| {
+                default
+                    .as_ref()
+                    .is_some_and(|expr| matches!(expr.kind, crate::parser::ast::ExprKind::Null))
+            });
             return format!(
-                "{}(): Argument #{} (${}) must be of type int, float given",
+                "{}(): Argument #{} (${}) must be of type {}int, float given",
                 def.name,
                 index + 1,
-                parameter_name
+                parameter_name,
+                if nullable { "?" } else { "" }
             );
         }
     }

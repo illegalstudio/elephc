@@ -143,9 +143,22 @@ pub(super) fn patch_shared_reflection_owner(class_name: &str, class_info: &mut C
 
 /// Patches the common getAttributes result collection.
 pub(super) fn patch_reflection_attribute_result(class_info: &mut ClassInfo) {
+            let attributes =
+                PhpType::Array(Box::new(PhpType::Object("ReflectionAttribute".to_string())));
+            // The RESULT is boxed: the filter in `builtin_reflection_owner_get_attributes_method`
+            // builds it in a local that this unchecked body lowers as `array<mixed>`, and a
+            // declared `array<ReflectionAttribute>` made every caller read those cells as object
+            // pointers. The unfiltered return converts the property's objects at the boundary.
             if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getAttributes")) {
-                sig.return_type =
-                    PhpType::Array(Box::new(PhpType::Object("ReflectionAttribute".to_string())));
+                sig.return_type = PhpType::Array(Box::new(PhpType::Mixed));
+            }
+            // The backing property holds the attribute OBJECTS, which is what codegen fills it
+            // with. Declared as a bare `array`, the filter's loop read each object pointer as a
+            // boxed Mixed cell.
+            if let Some(slot) = class_info.visible_property_index("__attrs") {
+                if let Some(property) = class_info.properties.get_mut(slot) {
+                    property.1 = attributes;
+                }
             }
 }
 

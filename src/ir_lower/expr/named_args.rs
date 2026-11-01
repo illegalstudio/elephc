@@ -74,6 +74,20 @@ pub(super) fn lower_named_args_with_signature_options(
         if let Some(operands) = lower_dynamic_named_spread_variadic_args(ctx, sig, &plan, capture_values) {
             return operands;
         }
+        // The normalized form reads each spread parameter through an expression over the spread
+        // SOURCE, so a call or other effectful source would be evaluated once per parameter slot --
+        // and, with only the first named read left, bound the wrong element. Evaluate every such
+        // source ONCE, in source order, into a hidden temp and plan the call over the temps.
+        if let Some(hoisted) = hoist_named_call_spread_sources(ctx, args) {
+            return lower_named_args_with_signature_options(
+                ctx,
+                sig,
+                &hoisted,
+                trim_trailing_defaults,
+                capture_values,
+                capture_output_index,
+            );
+        }
         let normalized = plan.normalized_args();
         return lower_normalized_args(ctx, sig, &plan, &normalized);
     }
@@ -142,6 +156,62 @@ fn lower_normalized_args(
             }
         })
         .collect()
+}
+
+/// Replaces every non-trivial spread source of a call with a hidden temp holding its value.
+///
+/// Returns `None` when there is nothing to hoist (every spread source is already a plain variable
+/// or a literal), or when an argument evaluated BEFORE a spread could observe the reordering: PHP
+/// evaluates the positional arguments first, and only literals, variables and constants are safe
+/// to run after a hoisted source. The hoisted value keeps the source's own type, so the per-slot
+/// reads see exactly the array a variable source would give them.
+pub(super) fn hoist_named_call_spread_sources(
+    ctx: &mut LoweringContext<'_, '_>,
+    args: &[Expr],
+) -> Option<Vec<Expr>> {
+    let needs_hoist = |arg: &Expr| match &arg.kind {
+        ExprKind::Spread(inner) => !matches!(
+            inner.kind,
+            ExprKind::Variable(_) | ExprKind::ArrayLiteral(_)
+        ),
+        _ => false,
+    };
+    let first_spread = args.iter().position(needs_hoist)?;
+    let trivial = |arg: &Expr| {
+        matches!(
+            arg.kind,
+            ExprKind::Variable(_)
+                | ExprKind::IntLiteral(_)
+                | ExprKind::FloatLiteral(_)
+                | ExprKind::StringLiteral(_)
+                | ExprKind::BoolLiteral(_)
+                | ExprKind::Null
+        )
+    };
+    if !args[..first_spread].iter().all(|arg| match &arg.kind {
+        ExprKind::NamedArg { value, .. } => trivial(value),
+        _ => trivial(arg),
+    }) {
+        return None;
+    }
+    let mut hoisted = Vec::with_capacity(args.len());
+    for arg in args {
+        if needs_hoist(arg) {
+            let ExprKind::Spread(inner) = &arg.kind else { unreachable!() };
+            let value = lower_expr(ctx, inner);
+            let value = root_evaluated_call_argument(ctx, value, inner.span);
+            let value_type = ctx.builder.value_php_type(value.value);
+            let temp_name = ctx.declare_hidden_temp(value_type.clone());
+            store_value_into_temp(ctx, &temp_name, value_type, value, arg.span);
+            hoisted.push(Expr::new(
+                ExprKind::Spread(Box::new(Expr::new(ExprKind::Variable(temp_name), inner.span))),
+                arg.span,
+            ));
+        } else {
+            hoisted.push(arg.clone());
+        }
+    }
+    Some(hoisted)
 }
 
 /// Preserves a regular reference argument's place while consuming the shared source-order plan.
@@ -372,14 +442,35 @@ pub(super) fn emit_dynamic_named_prefix_duplicate_guard(
     });
 
     ctx.builder.position_at_end(fatal);
-    let message = format!(
-        "Fatal error: Named parameter ${} overwrites previous argument\n",
-        param_name
-    );
-    let message = ctx.intern_string(&message);
-    ctx.builder.terminate(Terminator::Fatal { message });
+    throw_named_parameter_overwrite(ctx, param_name, span);
 
     ctx.builder.position_at_end(ok);
+}
+
+/// Terminates the current block with php's catchable
+/// `Named parameter $<name> overwrites previous argument` `Error`.
+///
+/// A fatal here would kill a program php lets `catch` the Error, so the guards throw it through
+/// the ordinary object construction path.
+pub(super) fn throw_named_parameter_overwrite(
+    ctx: &mut LoweringContext<'_, '_>,
+    param_name: &str,
+    span: crate::span::Span,
+) {
+    let exception = Expr::new(
+        ExprKind::NewObject {
+            class_name: Name::unqualified("Error"),
+            args: vec![Expr::new(
+                ExprKind::StringLiteral(format!(
+                    "Named parameter ${param_name} overwrites previous argument"
+                )),
+                span,
+            )],
+        },
+        span,
+    );
+    let exception = lower_expr(ctx, &exception);
+    ctx.builder.terminate(Terminator::Throw { value: exception.value });
 }
 
 /// Lowers named/spread argument plans without re-evaluating dynamic spread expressions.
@@ -446,7 +537,14 @@ fn lower_named_args_with_spread_plan_impl(
     let prefix_type = ctx.builder.value_php_type(prefix.value);
     let prefix_temp_name = ctx.declare_hidden_temp(prefix_type.clone());
     store_value_into_temp(ctx, &prefix_temp_name, prefix_type, prefix, prefix_expr.span);
-    let single_prefix_spread = !matches!(prefix_expr.kind, ExprKind::ArrayLiteral(_));
+    // `positional_prefix_expr` hands back the spread's own source expression for a lone spread,
+    // which for `...[1, 2]` is itself an array literal: judge by the call's shape, not by the
+    // prefix expression's kind, or the bounds guard (and php's `Named parameter $x overwrites
+    // previous argument` Error) is skipped for a literal source.
+    let single_prefix_spread = matches!(
+        plan.source_args[..first_named_pos].as_ref(),
+        [only] if matches!(only.kind, ExprKind::Spread(_))
+    );
     let prefix_temp = Expr::new(ExprKind::Variable(prefix_temp_name), prefix_expr.span);
 
     let mut source_values = vec![None; plan.source_args.len()];

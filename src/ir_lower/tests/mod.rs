@@ -86,6 +86,8 @@ mod guarded_interface_mutations;
 mod iter_start_origin;
 mod iterator_cleanup;
 mod iterator_aggregate_owners;
+mod lowering_complexity;
+mod frame_density;
 mod boxed_array_predicates;
 mod boxed_array_set_comparators;
 mod reference_loop_cleanup;
@@ -138,6 +140,9 @@ pub(crate) fn lower_source_at_for_target(
         .unwrap_or_else(|error| panic!("EIR lowering failed for {display}: {error:?}"))
 }
 
+/// Prelude-inventory group naming the fixture source's own declarations, forced reachable.
+const FIXTURE_DECLARATIONS_GROUP: &str = "ir-lower-test-fixture";
+
 /// Runs the same frontend and lowering but hands back the lowering `Result`.
 ///
 /// Refusal tests need the error rather than a panic: `lower_program` reports a shape EIR
@@ -165,11 +170,16 @@ fn try_lower_source_at_for_target(
     )
     .expect("physical-source finalization failed");
     let (autoload_registry, parsed) = crate::autoload::Registry::build(parent, parsed);
-    let (ast, _) =
-        crate::resolver::resolve_collecting_includes_with_defines(parsed, parent, &defines)
+    let (ast, _, included_sources) =
+        crate::resolver::resolve_collecting_includes_with_defines_and_sources(parsed, parent, &defines)
             .expect("resolver failed");
     let ast = crate::autoload::collect_aliases(ast).expect("alias collection failed");
     let mut prelude_inventory = crate::optimize::reachability::PreludeInventory::new();
+    // The fixture's own declarations stay lowered whether or not its top level calls them: these
+    // tests inspect a named function or method's EIR, and most declare helpers only to lower
+    // them. Compiler preludes are still pruned exactly as `pipeline::compile` prunes them.
+    prelude_inventory.record_program(FIXTURE_DECLARATIONS_GROUP, &ast);
+    let ast = crate::dom_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::pdo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     // Same injection order as `pipeline::compile`: mysqli after PDO, so the
     // shared `elephc_pdo` externs are merged in exactly once.
@@ -199,26 +209,60 @@ fn try_lower_source_at_for_target(
     let ast = crate::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::random_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::testing_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    // The array compatibility preludes `pipeline::compile` injects at the same point.
+    let ast = crate::array_edge_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::array_gradual_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::array_ucompare_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::fileinfo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::tokenizer_prelude::inject_if_used(ast, false, &mut prelude_inventory);
-    let ast = crate::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::dom_html_prelude::inject_if_used(
+        ast,
+        crate::php_version::PhpVersion::default(),
+        false,
+        &mut prelude_inventory,
+    );
     let ast = crate::version_prelude::inject_if_used(
         ast,
         crate::php_version::PhpVersion::default(),
         &mut prelude_inventory,
     );
     let ast = crate::name_resolver::resolve(ast).expect("name resolution failed");
-    let (ast, _) = crate::autoload::run_collecting_included_with_defines(
+    let (ast, _, autoload_sources) = crate::autoload::run_collecting_included_with_defines_and_sources(
         ast,
         parent,
         &autoload_registry,
         &defines,
     )
     .expect("autoload failed");
-    let ast = crate::dom_html_prelude::inject_after_autoload(ast, &mut prelude_inventory)
-        .expect("autoload DOM prelude injection failed");
+    // The compatibility preludes `pipeline::compile` injects once the autoloaded classes are
+    // spliced in (`compat-preludes` phase): the lowering routes `array_merge`, `array_walk`,
+    // `min`/`max`, `filter_var` and friends to these helpers, so a fixture lowered without them
+    // takes the bare native path and no longer matches what a real build emits.
+    let mut forced_groups = HashSet::from([FIXTURE_DECLARATIONS_GROUP.to_string()]);
+    let ast = crate::array_edge_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::array_gradual_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::array_ucompare_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::array_merge_prelude::inject_if_used(ast, &mut prelude_inventory);
+    if prelude_inventory.groups.contains_key("array_merge") {
+        forced_groups.insert("array_merge".to_string());
+    }
+    let ast = crate::filter_var_prelude::inject_if_used(ast, &mut prelude_inventory);
+    if prelude_inventory.groups.contains_key(crate::filter_var_prelude::FILTER_VAR_GROUP) {
+        forced_groups.insert(crate::filter_var_prelude::FILTER_VAR_GROUP.to_string());
+    }
+    let ast = crate::backend_gap_prelude::inject_if_used(ast, &mut prelude_inventory);
+    for group in [
+        crate::array_gradual_prelude::GROUP,
+        crate::backend_gap_prelude::BACKEND_GAP_GROUP,
+    ] {
+        if prelude_inventory.groups.contains_key(group) {
+            forced_groups.insert(group.to_string());
+        }
+    }
+    let ast = crate::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory)
+        .expect("object-cast prelude failed");
     // Mirrors `pipeline::compile`, which desugars the `func_get_args()` family between
     // `autoload::run` and constant folding. Without it an example using those functions
     // reaches the checker as an undefined call, so the corpus would fail on valid PHP.
@@ -228,7 +272,7 @@ fn try_lower_source_at_for_target(
     // CLASS is instantiated by that driver rather than by the checker, so a plain
     // `check_with_target` here hands the checker a template and reports `Unknown type: T` on an
     // example that compiles perfectly well through the CLI.
-    let (ast, check_result) = crate::generics::monomorphize(ast, |program, bounds| {
+    let (ast, mut check_result) = crate::generics::monomorphize(ast, |program, bounds| {
         crate::types::check_with_target_and_bounds(program, target, bounds)
     })
     .expect("type check failed");
@@ -243,7 +287,92 @@ fn try_lower_source_at_for_target(
     );
     let ast =
         crate::optimize::eliminate_dead_code(ast, check_result.local_binding_decision_spans());
-    crate::ir_lower::lower_program(&ast, &check_result, target, false)
+    let empty_roots = HashSet::new();
+    let fixture_roots = forced_groups;
+    let ast = crate::optimize::prune_unreachable_declarations(
+        ast,
+        &mut check_result,
+        crate::optimize::reachability::PruneOptions {
+            inventory: &prelude_inventory,
+            forced_groups: &fixture_roots,
+            exported_functions: &empty_roots,
+            eval_forced: false,
+        },
+    );
+    let catalog = crate::ir::SourceCatalog::from_units(std::iter::once(crate::resolver::SourceUnit {
+        canonical_path: main_file_path.canonicalize().unwrap_or_else(|_| main_file_path.clone()),
+        mode: source_mode,
+        source: std::sync::Arc::from(source),
+    }).chain(included_sources.source_units.into_values())
+      .chain(autoload_sources.source_units.into_values()))
+        .expect("source catalog construction failed");
+    let mut module = crate::ir_lower::lower_program_with_source_catalog(
+        &ast, &check_result, target, &main_file_path, false, catalog,
+    )?;
+    module.declared_class_source_files = autoload_sources.class_likes;
+    module.declared_class_source_files.extend(included_sources.class_likes);
+    module.declared_function_source_files = autoload_sources.functions;
+    module.declared_function_source_files.extend(included_sources.functions);
+    Ok(module)
+}
+
+#[test]
+fn lowering_source_catalog_preserves_original_entry() {
+    let source = "<?php echo __FILE__;";
+    let module = lower_source(source);
+    let catalog = module.source_catalog().expect("lowering must retain source inputs");
+    let entries: Vec<_> = catalog.iter().collect();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(&*entries[0].1.source, source);
+    assert_eq!(entries[0].1.mode, crate::source::SourceMode::Php);
+}
+
+/// Verifies lowering the same program twice gives the same EIR.
+///
+/// Every std hash map draws its own seed, including two built by the same process, so a pass
+/// that emits code in a map's order gives a different body each time. The loop storage contract
+/// here holds eight locals, so two runs agreeing by chance is unlikely; it was the order in which
+/// `apply_loop_storage_contracts` boxed them, and it made Symfony's assembly differ between builds.
+#[test]
+fn lowering_is_deterministic_across_runs() {
+    let source = r#"<?php
+function more(): bool
+{
+    static $left = 3;
+    return --$left > 0;
+}
+
+function consume(string $line, int &$cursor): bool
+{
+    $a = 0;
+    $b = 0;
+    $c = 0;
+    $d = 0;
+    $e = 0;
+    $g = 0;
+    do {
+        $n = strspn($line, " ", $cursor);
+        $a += $n;
+        $b += $n;
+        $c += $n;
+        $d += $n;
+        $e += $n;
+        $g += $n;
+        $cursor += $n;
+        if (isset($line[$cursor])) {
+            return 0 < $a + $b + $c + $d + $e + $g;
+        }
+    } while (more());
+    return false;
+}
+
+$c = 0;
+var_dump(consume("   x", $c), $c);
+"#;
+    let first = print_module(&lower_source(source));
+    for _ in 0..3 {
+        assert_eq!(print_module(&lower_source(source)), first);
+    }
 }
 
 /// Verifies lowering emits valid EIR for functions, arrays, foreach, and loops.
@@ -354,6 +483,76 @@ fn plain_program_omits_unreferenced_builtin_reflection_methods() {
             .all(|function| !function.name.starts_with("Reflection")),
         "plain EIR unexpectedly contains builtin Reflection methods"
     );
+}
+
+/// A `mixed` receiver's Reflection method resolves only through the Reflection family: the builtin
+/// classes and a user class inheriting their bodies. An unrelated class never joins it, which is
+/// what lets every mixed call site scan the family instead of the whole class table.
+#[test]
+fn reflection_family_holds_only_classes_reaching_a_reflection_body() {
+    let module = lower_source(
+        r#"<?php
+class MyReflection extends ReflectionClass {}
+class Plain { public function getName(): string { return 'p'; } }
+function name(mixed $object): string { return $object->getName(); }
+echo name(new MyReflection('Plain')), name(new Plain());
+"#,
+    );
+    let family = super::reflection::reflection_family(&module);
+    assert!(family.iter().any(|name| name == "MyReflection"), "{family:?}");
+    assert!(family.iter().any(|name| name == "ReflectionClass"), "{family:?}");
+    assert!(!family.iter().any(|name| name == "Plain"), "{family:?}");
+    assert!(
+        module.class_methods.iter().any(|function| function.name.eq_ignore_ascii_case("ReflectionClass::getName")),
+        "a mixed getName() call must still lower the Reflection body"
+    );
+}
+
+/// Signature questions that scan the whole class table run once per program, however many call
+/// sites ask: the interface-narrowed and the Mixed-receiver ones used to rescan every class per
+/// call site, about half of a Symfony build's lowering phase.
+#[test]
+fn whole_class_table_signature_questions_scan_once() {
+    lower_source(
+        r#"<?php
+interface Shape { public function area(int $scale = 1); }
+class Square implements Shape { public function area(int $scale = 1) { return 4 * $scale; } }
+class Circle implements Shape { public function area(int $scale = 1) { return 3 * $scale; } }
+function total(Shape $shape): int { return $shape->area() + $shape->area(2) + $shape->area(); }
+function any(mixed $shape): int { return $shape->area() + $shape->area(3); }
+echo total(new Square()), total(new Circle()), any(new Square());
+"#,
+    );
+    let (scans, answers, narrowed) = super::expr::memoized_signature_stats();
+    assert_eq!(scans, answers, "each question scans the class table once");
+    assert!(narrowed.iter().any(|(scope, method)| scope == "Shape" && method == "area"), "{narrowed:?}");
+}
+
+/// The module's folded-name index finds the same function or closure the linear scan codegen
+/// used per direct call found: the first one, functions before closures.
+#[test]
+fn function_or_closure_index_matches_the_linear_scan() {
+    let module = lower_source(
+        r#"<?php
+function Greet(string $who): string { return "hi $who"; }
+function twice(callable $f): string { return $f('a') . $f('b'); }
+echo Greet('x'), twice(fn ($v) => strtoupper($v)), twice(function ($v) { return $v; });
+"#,
+    );
+    assert!(!module.closures.is_empty());
+    for function in module.functions.iter().chain(module.closures.iter()) {
+        let key = crate::names::php_symbol_key(function.name.trim_start_matches('\\'));
+        let expected = module
+            .functions
+            .iter()
+            .chain(module.closures.iter())
+            .find(|candidate| crate::names::php_symbol_key(candidate.name.trim_start_matches('\\')) == key)
+            .map(|candidate| candidate as *const _);
+        let found = module.function_or_closure_by_key(&key).map(|candidate| candidate as *const _);
+        assert_eq!(found, expected, "{}", function.name);
+    }
+    assert!(module.function_or_closure_by_key("greet").is_some());
+    assert!(module.function_or_closure_by_key("missing").is_none());
 }
 
 /// Verifies a native ReflectionClass use retains its constructor and called method body.

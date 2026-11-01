@@ -9,31 +9,62 @@
 
 use super::*;
 
+/// Returns class constant names in PHP declaration order, with a deterministic fallback for
+/// compiler-generated metadata that predates an explicit order vector.
+fn ordered_class_constant_names(info: &crate::types::ClassInfo) -> Vec<&String> {
+    let mut names = Vec::with_capacity(info.constants.len());
+    let mut seen = std::collections::HashSet::new();
+    for name in &info.constant_order {
+        if info.constants.contains_key(name) && seen.insert(name.as_str()) {
+            names.push(name);
+        }
+    }
+    let mut remaining = info
+        .constants
+        .keys()
+        .filter(|name| !seen.contains(name.as_str()))
+        .collect::<Vec<_>>();
+    remaining.sort();
+    names.extend(remaining);
+    names
+}
+
 /// Returns PHP case-insensitive method names visible to `ReflectionClass::hasMethod()`.
 pub(super) fn reflection_class_method_names(ctx: &FunctionContext<'_>, class_name: &str) -> Vec<String> {
     let mut names = Vec::new();
     let mut seen = std::collections::HashSet::new();
+    // The reflected class's own list comes first and in php's order: `getMethods()` walks these
+    // names. The ancestor walk below only adds names `hasMethod()` also answers for.
+    if let Some((_, info)) = resolve_reflection_class(ctx, class_name) {
+        push_unique_method_names(
+            info.reflection_methods.iter().filter(|name| {
+                let key = php_symbol_key(name);
+                info.methods.contains_key(&key) || info.static_methods.contains_key(&key)
+            }),
+            &mut names,
+            &mut seen,
+        );
+    }
     let mut current = Some(class_name.to_string());
     while let Some(current_name) = current {
         let Some((resolved_name, info)) = resolve_reflection_class(ctx, &current_name) else {
             break;
         };
-        push_unique_method_names(
-            info.methods.keys().filter(|method| {
-                elephc_builtin_contract::lookup_class(&resolved_name)
-                    .is_none_or(|class| class.method_is_php_visible(method))
-            }),
-            &mut names,
-            &mut seen,
-        );
-        push_unique_method_names(
-            info.static_methods.keys().filter(|method| {
-                elephc_builtin_contract::lookup_class(&resolved_name)
-                    .is_none_or(|class| class.method_is_php_visible(method))
-            }),
-            &mut names,
-            &mut seen,
-        );
+        // Sorted: the maps' own order changes from run to run, and these names are interned as
+        // data strings in this order, so an unsorted walk made two builds of one program differ
+        // and defeated the assembler's slice cache. A built-in class's internal methods stay hidden.
+        let mut instance: Vec<&String> = info.methods.keys().filter(|method| {
+            elephc_builtin_contract::lookup_class(&resolved_name)
+                .is_none_or(|class| class.method_is_php_visible(method))
+        }).collect();
+        instance.sort();
+        push_unique_method_names(instance.into_iter(), &mut names, &mut seen);
+        let mut statics: Vec<&String> = info.static_methods.keys().filter(|method| {
+            elephc_builtin_contract::lookup_class(&resolved_name)
+                .is_none_or(|class| class.method_is_php_visible(method))
+        }).collect();
+        statics.sort();
+        push_unique_method_names(statics.into_iter(), &mut names, &mut seen);
         current = info.parent.clone();
         if current.as_deref() == Some(resolved_name) {
             break;
@@ -56,7 +87,8 @@ pub(super) fn reflection_class_method_names(ctx: &FunctionContext<'_>, class_nam
     names
 }
 
-/// Returns PHP case-sensitive property names visible to `ReflectionClass::hasProperty()`.
+/// Returns the PHP case-sensitive property names `ReflectionClass::hasProperty()` accepts and
+/// `getProperties()` lists, in php's order (`ClassInfo::reflection_properties`).
 pub(super) fn reflection_class_property_names(
     ctx: &FunctionContext<'_>,
     class_name: &str,
@@ -67,25 +99,13 @@ pub(super) fn reflection_class_property_names(
     if is_reflection_enum(ctx, class_name) {
         push_unique_property_name("name", &mut names, &mut seen);
     }
-    for (name, _) in &info.properties {
+    for name in &info.reflection_properties {
         if elephc_builtin_contract::lookup_class(class_name)
             .is_some_and(|class| class.property_is_hidden(name))
         {
             continue;
         }
-        if reflection_property_visible_from_class(info, class_name, name, false) {
-            push_unique_property_name(name, &mut names, &mut seen);
-        }
-    }
-    for (name, _) in &info.static_properties {
-        if elephc_builtin_contract::lookup_class(class_name)
-            .is_some_and(|class| class.property_is_hidden(name))
-        {
-            continue;
-        }
-        if reflection_property_visible_from_class(info, class_name, name, true) {
-            push_unique_property_name(name, &mut names, &mut seen);
-        }
+        push_unique_property_name(name, &mut names, &mut seen);
     }
     names
 }
@@ -147,6 +167,12 @@ fn push_class_constant_names_in_php_order(
         return;
     };
     for constant in declared_then_remaining(&info.constant_order, info.constants.keys()) {
+        // An ancestor's private constant is not the descendant's.
+        if depth > 0
+            && matches!(info.constant_visibilities.get(constant), Some(Visibility::Private))
+        {
+            continue;
+        }
         push_unique_constant_name(constant, names, seen);
     }
     if let Some(parent) = info.parent.as_deref() {
@@ -199,10 +225,20 @@ pub(super) fn reflection_class_constant_members(
         else {
             break;
         };
-        for (constant_name, value_expr) in &current_info.constants {
+        for constant_name in ordered_class_constant_names(current_info) {
             if seen.contains(constant_name) {
                 continue;
             }
+            // An ancestor's private constant is not the descendant's.
+            if resolved_name != class_name
+                && matches!(
+                    current_info.constant_visibilities.get(constant_name),
+                    Some(Visibility::Private)
+                )
+            {
+                continue;
+            }
+            let value_expr = &current_info.constants[constant_name];
             let value =
                 reflection_constant_value(ctx, resolved_name, Some(current_info), value_expr, 0)?;
             push_unique_constant_member(constant_name, value, &mut members, &mut seen);
@@ -230,8 +266,16 @@ pub(super) fn reflection_class_default_property_members(
     info: &crate::types::ClassInfo,
     property_names: &[String],
 ) -> Vec<ReflectionDefaultPropertyMember> {
+    // php lists the static defaults first, then the instance ones, each in reflection order.
+    let is_static = |name: &String| {
+        info.static_properties
+            .iter()
+            .any(|(static_name, _)| static_name == name)
+    };
     property_names
         .iter()
+        .filter(|name| is_static(name))
+        .chain(property_names.iter().filter(|name| !is_static(name)))
         .filter_map(|property_name| {
             reflection_property_default_value(ctx, info, property_name).map(|value| {
                 ReflectionDefaultPropertyMember {
@@ -356,10 +400,20 @@ pub(super) fn reflection_class_constant_reflection_members(
         else {
             break;
         };
-        for (constant_name, value_expr) in &current_info.constants {
+        for constant_name in ordered_class_constant_names(current_info) {
             if seen.contains(constant_name) {
                 continue;
             }
+            // An ancestor's private constant is not the descendant's.
+            if resolved_name != class_name
+                && matches!(
+                    current_info.constant_visibilities.get(constant_name),
+                    Some(Visibility::Private)
+                )
+            {
+                continue;
+            }
+            let value_expr = &current_info.constants[constant_name];
             let value =
                 reflection_constant_value(ctx, resolved_name, Some(current_info), value_expr, 0)?;
             push_unique_constant_reflection_member(
@@ -593,4 +647,3 @@ pub(super) fn push_unique_listed_constant_member(
         members.push(member);
     }
 }
-

@@ -2,7 +2,7 @@
 title: "gmp_cmp()"
 description: "Compares two GMP numbers."
 sidebar:
-  order: 594
+  order: 607
 ---
 
 ## gmp_cmp()

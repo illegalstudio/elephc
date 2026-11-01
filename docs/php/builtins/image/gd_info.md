@@ -2,7 +2,7 @@
 title: "gd_info()"
 description: "Returns the GD version and which image formats this build supports."
 sidebar:
-  order: 460
+  order: 473
 ---
 
 ## gd_info()

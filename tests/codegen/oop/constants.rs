@@ -62,6 +62,30 @@ echo Greet::HELLO;
     assert_eq!(out, "hi");
 }
 
+/// Verifies `isset()` distinguishes present and missing keys in a class constant hash.
+#[test]
+fn test_isset_class_constant_hash_key_presence() {
+    let out = compile_and_run(
+        r#"<?php
+class ClassConstantIssetRegistry {
+    private const INTERNAL_TYPES = [
+        "int" => true,
+        "string" => true,
+    ];
+
+    public static function has(string $name): bool {
+        return isset(self::INTERNAL_TYPES[$name]);
+    }
+}
+
+echo ClassConstantIssetRegistry::has("int") ? "hit" : "miss";
+echo ":";
+echo ClassConstantIssetRegistry::has("Symfony\\Component\\HttpFoundation\\Request") ? "hit" : "miss";
+"#,
+    );
+    assert_eq!(out, "hit:miss");
+}
+
 /// Verifies class constant inherited from parent.
 #[test]
 fn test_class_constant_inherited_from_parent() {
@@ -76,6 +100,125 @@ echo Child::VERSION;
 "#,
     );
     assert_eq!(out, "7");
+}
+
+/// Verifies a missing class constant makes a literal `defined()` guard select its fallback
+/// before the unreachable access is type-checked.
+#[test]
+fn test_defined_missing_class_constant_prunes_unreachable_access() {
+    let out = compile_and_run(
+        r#"<?php
+class FeatureFlags {
+    const PRESENT = 7;
+}
+if (!defined('FeatureFlags::MISSING')) {
+    echo 'fallback';
+} else {
+    echo FeatureFlags::MISSING;
+}
+"#,
+    );
+    assert_eq!(out, "fallback");
+}
+
+/// Verifies a declared class constant makes a literal `defined()` guard select the branch that
+/// reads it while discarding an invalid fallback branch.
+#[test]
+fn test_defined_present_class_constant_prunes_unreachable_fallback() {
+    let out = compile_and_run(
+        r#"<?php
+class FeatureFlags {
+    const PRESENT = 7;
+}
+if (!defined('FeatureFlags::PRESENT')) {
+    echo FeatureFlags::MISSING;
+} else {
+    echo FeatureFlags::PRESENT;
+}
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+/// Verifies literal `defined()` probes follow closed-world class inheritance for both present
+/// and absent constants.
+#[test]
+fn test_defined_class_constant_follows_declared_parent() {
+    let out = compile_and_run(
+        r#"<?php
+class ParentFlags {
+    const PRESENT = 9;
+}
+class ChildFlags extends ParentFlags {}
+echo defined('ChildFlags::PRESENT') ? 'Y' : 'N';
+echo defined('ChildFlags::MISSING') ? 'Y' : 'N';
+"#,
+    );
+    assert_eq!(out, "YN");
+}
+
+/// Verifies a certain right-hand boolean still evaluates the left operand before pruning the
+/// unreachable branch of a class-constant guard.
+#[test]
+fn test_defined_class_constant_guard_preserves_left_evaluation() {
+    let out = compile_and_run(
+        r#"<?php
+class FeatureFlags {
+    const PRESENT = 7;
+}
+function probe(): bool {
+    echo 'P';
+    return false;
+}
+if (probe() || !defined('FeatureFlags::MISSING')) {
+    echo 'Y';
+} else {
+    echo FeatureFlags::MISSING;
+}
+"#,
+    );
+    assert_eq!(out, "PY");
+}
+
+/// Verifies a scoped constant on an unavailable class remains legal in a runtime-skipped branch,
+/// matching PHP's lazy class resolution instead of rejecting the whole source during checking.
+#[test]
+fn test_unknown_class_constant_in_skipped_branch_compiles() {
+    let out = compile_and_run(
+        r#"<?php
+if ($argc < 0) {
+    echo OptionalConstantProvider::VALUE;
+}
+echo "ok";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies executing the same unresolved scoped constant terminates through a class-not-found
+/// runtime fatal rather than producing an undefined backend feature diagnostic.
+#[test]
+fn test_unknown_class_constant_access_fails_at_runtime() {
+    let err = compile_and_run_expect_failure("<?php echo OptionalConstantProvider::VALUE;");
+    assert!(
+        err.contains("Class \"OptionalConstantProvider\" not found"),
+        "unexpected stderr: {err:?}",
+    );
+}
+
+/// Verifies a runtime class-string resolves a declared class constant through the name registry.
+#[test]
+fn test_dynamic_class_string_constant_access() {
+    let out = compile_and_run(
+        r#"<?php
+class DynamicFlags {
+    const VALUE = 'dynamic';
+}
+$class = DynamicFlags::class;
+echo $class::VALUE;
+"#,
+    );
+    assert_eq!(out, "dynamic");
 }
 
 /// Verifies class constant expression can reference self constant.
@@ -164,6 +307,45 @@ echo $b->describe();
     assert_eq!(out, "42");
 }
 
+/// Verifies an object-typed receiver resolves its class constant without runtime string dispatch.
+#[test]
+fn test_class_constant_access_through_typed_object() {
+    let out = compile_and_run(
+        r#"<?php
+class Container {
+    public const IGNORE = 7;
+}
+function read(Container $container): int {
+    return $container::IGNORE;
+}
+echo read(new Container());
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+/// Verifies a `mixed` receiver holding an object reads its own class's constant, and that the
+/// read leaves the local's reference alone while a method call on the same local is in flight.
+#[test]
+fn test_class_constant_through_a_mixed_object_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+final class Meta {
+    public const K = 2;
+    public function __construct(private string $n) {}
+    public function getName(): string { return $this->n; }
+}
+function items(): mixed { return $GLOBALS['argc'] > 0 ? [new Meta('x'), new Meta('y')] : null; }
+$names = [];
+foreach (items() as $m) {
+    $names[] = $m->getName() . ':' . $m::K;
+}
+echo implode(',', $names);
+"#,
+    );
+    assert_eq!(out, "x:2,y:2");
+}
+
 /// Verifies interface constant.
 #[test]
 fn test_interface_constant() {
@@ -181,6 +363,60 @@ echo $b->get();
 "#,
     );
     assert_eq!(out, "100");
+}
+
+/// Verifies nested trait composition imports constants and binds `__CLASS__` to the consumer.
+#[test]
+fn test_trait_constants_are_flattened_into_consuming_class() {
+    let out = compile_and_run(
+        r#"<?php
+trait InnerConstants {
+    private const VALUES = ['ready'];
+    protected const OWNER = __CLASS__;
+}
+trait OuterConstants { use InnerConstants; }
+class ConstantReader {
+    use OuterConstants;
+    public static function render(): string {
+        return self::VALUES[0].':'.self::OWNER;
+    }
+}
+echo ConstantReader::render();
+"#,
+    );
+    assert_eq!(out, "ready:ConstantReader");
+}
+
+/// Verifies identical trait and class constant declarations compose without a conflict.
+#[test]
+fn test_compatible_trait_constant_declarations_compose() {
+    let out = compile_and_run(
+        r#"<?php
+trait FirstConstants { public const VALUE = 9; }
+trait SecondConstants { public const VALUE = 9; }
+class CompatibleConstants {
+    use FirstConstants, SecondConstants;
+    public const VALUE = 9;
+}
+echo CompatibleConstants::VALUE;
+"#,
+    );
+    assert_eq!(out, "9");
+}
+
+/// Verifies an incompatible class declaration cannot replace an imported trait constant.
+#[test]
+fn test_incompatible_trait_constant_declaration_fails() {
+    let err = compile_expect_type_error(
+        r#"<?php
+trait ImportedConstants { public const VALUE = 9; }
+class IncompatibleConstants {
+    use ImportedConstants;
+    public const VALUE = 10;
+}
+"#,
+    );
+    assert!(err.contains("incompatible duplicate constant 'VALUE'"), "{err}");
 }
 
 /// Verifies final class constants cannot be redeclared by subclasses.
@@ -337,6 +573,138 @@ echo read_limit();
 "#,
     );
     assert_eq!(out, "2");
+}
+
+/// Verifies an object-valued conditional receiver keeps its checked class for `::CONST`.
+#[test]
+fn test_dynamic_scoped_constant_uses_lowered_receiver_type() {
+    let out = compile_and_run(
+        r#"<?php
+class ConditionalConstantReceiver {
+    public const VALUE = 'ready';
+}
+
+$left = new ConditionalConstantReceiver();
+$right = new ConditionalConstantReceiver();
+echo ($argc > 0 ? $left : $right)::VALUE;
+"#,
+    );
+    assert_eq!(out, "ready");
+}
+
+/// Verifies a mixed local narrowed by `instanceof` retains its nominal type for `::CONST`.
+#[test]
+fn test_dynamic_scoped_constant_uses_instanceof_narrowed_local() {
+    let out = compile_and_run(
+        r#"<?php
+class NarrowedConstantReceiver {
+    public const VALUE = 'ready';
+
+    public static function read(mixed $value): string {
+        if ($value instanceof self) {
+            return $value::VALUE;
+        }
+        return 'other';
+    }
+
+    public static function readTernary(mixed $value): string {
+        return $value instanceof self ? $value::VALUE : 'other';
+    }
+}
+
+class NarrowedConstantChild extends NarrowedConstantReceiver {
+    public const VALUE = 'child';
+}
+
+echo NarrowedConstantReceiver::read(new NarrowedConstantChild()), ':';
+echo NarrowedConstantReceiver::readTernary(new NarrowedConstantChild());
+"#,
+    );
+    assert_eq!(out, "child:child");
+}
+
+/// Property defaults that are constant EXPRESSIONS or ENUM CASES initialize a `new` object.
+///
+/// `self::A | self::B` (`symfony/validator`'s `NoSuspiciousCharacters::$checks`), a class
+/// constant built from global flags (`monolog`'s `Utils::DEFAULT_JSON_FLAGS`), `~self::A`, and an
+/// enum case (`doctrine/dbal`'s `QueryBuilder::$type = QueryType::SELECT`) all failed the backend
+/// with "object_new for default value of property". The enum case must also be the very same
+/// singleton `QueryType::SELECT` reads. Expected output is php 8.5's.
+#[test]
+fn test_constant_expression_and_enum_case_property_defaults() {
+    let out = compile_and_run(
+        r#"<?php
+enum QueryType { case SELECT; case DELETE; }
+enum Level: int { case Debug = 100; case Info = 200; }
+class Utils { const FLAGS = JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE; }
+class Q {
+    const A = 1; const B = 4;
+    private QueryType $type = QueryType::SELECT;
+    public int $flags = self::A | self::B | 16;
+    protected Level $level = Level::Debug;
+    public int $json = Utils::FLAGS;
+    public int $neg = ~self::A;
+    public function show() { var_dump($this->type === QueryType::SELECT, $this->flags, $this->level->value, $this->json, $this->neg); }
+}
+$q = new Q; $q->show(); $r = new Q; var_dump($r == $q, QueryType::SELECT === (fn() => $this->type)->call($r));
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nint(21)\nint(100)\nint(320)\nint(-2)\nbool(true)\nbool(true)\n"
+    );
+}
+
+/// A property default with no literal form — an array whose values are enum cases, keyed by
+/// interface constants (`symfony/monolog-bridge`'s `ConsoleHandler::$verbosityLevelMap`) — is
+/// assigned by the class's property-initializer thunk after allocation, on the static `new`, the
+/// dynamic `new $c` and the constructor-less paths alike. The backend used to refuse every body
+/// that could allocate such a class, including the generated `ReflectionClass::newLazyGhost`, so
+/// the whole build failed. Expected output is php 8.5's.
+#[test]
+fn test_non_literal_property_default_is_assigned_by_the_init_thunk() {
+    let out = compile_and_run(
+        r#"<?php
+enum Level: int { case Error = 400; case Debug = 100; }
+interface Out { const VERBOSITY_QUIET = 16; const VERBOSITY_NORMAL = 32; }
+class Handler {
+    private array $map = [Out::VERBOSITY_QUIET => Level::Error, Out::VERBOSITY_NORMAL => Level::Debug];
+    public $label = "h";
+    public function show() { foreach ($this->map as $k => $v) { echo $k, "=", $v->name, ";"; } echo $this->label, "\n"; }
+}
+(new Handler)->show();
+$c = $argc > 0 ? "Handler" : "X"; $h = new $c(); $h->show();
+$r = (new ReflectionClass("Handler"))->newInstanceWithoutConstructor(); $r->show();
+"#,
+    );
+    assert_eq!(out, "16=Error;32=Debug;h\n16=Error;32=Debug;h\n16=Error;32=Debug;h\n");
+}
+
+/// Verifies `Enum::Case->value` inside an array literal keeps the enum's backing type.
+///
+/// The element type was guessed syntactically as int, so a string-backed value was stored as
+/// its string POINTER: Symfony's `ReflectionExtractor::MAP_TYPES = ['integer' =>
+/// TypeIdentifier::INT->value, ...]` printed `4321534512`. Expected output is php 8.5.10's.
+#[test]
+fn test_enum_case_value_in_an_array_constant_keeps_its_backing_type() {
+    let out = compile_and_run(
+        r#"<?php
+enum Kind: string { case Int = 'int'; case Bool = 'bool'; }
+enum Num: int { case One = 1; }
+class Map {
+    const TYPES = ['integer' => Kind::Int->value, 'one' => Num::One->value];
+    const LIST = [Kind::Int->value, Kind::Bool->name];
+}
+var_dump(Map::TYPES, Map::LIST);
+$x = [Kind::Bool->value, 'k' => Num::One->value];
+echo $x[0], $x['k'], Map::TYPES['integer'], "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(2) {\n  [\"integer\"]=>\n  string(3) \"int\"\n  [\"one\"]=>\n  int(1)\n}\n\
+         array(2) {\n  [0]=>\n  string(3) \"int\"\n  [1]=>\n  string(4) \"Bool\"\n}\nbool1int\n"
+    );
 }
 
 /// Issue #752: `defined('C::K')` must return true for a declared class constant.

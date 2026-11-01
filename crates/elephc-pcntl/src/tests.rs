@@ -326,6 +326,45 @@ fn signal_handler_queues_a_stable_record() {
     assert_ne!(info.present & SIGINFO_SIGNO, 0);
 }
 
+/// The pending flag the generated async safe point reads: raised by the handler when it queues
+/// a record, kept while records remain, lowered by the drain that finds the queue empty. Without
+/// it every safe point paid two `sigprocmask` calls and a pipe read (Symfony's `debug:config`
+/// took 2.5 s instead of 0.3 s).
+#[test]
+fn signal_pending_flag_follows_the_queue() {
+    use std::sync::atomic::Ordering;
+    let _guard = PROCESS_TEST_LOCK.lock().expect("process test lock poisoned");
+    let mut original = unsafe { std::mem::zeroed::<libc::sigset_t>() };
+    let mut selected = unsafe { std::mem::zeroed::<libc::sigset_t>() };
+    unsafe {
+        libc::sigemptyset(&mut selected);
+        libc::sigaddset(&mut selected, libc::SIGUSR1);
+        assert_eq!(libc::sigprocmask(libc::SIG_UNBLOCK, &selected, &mut original), 0);
+    }
+    let mut info = ElephcPcntlSigInfo::default();
+    while unsafe { elephc_pcntl_signal_next(&mut info, PCNTL_SIGNAL_OWNER_AOT) } == 1 {}
+    let drained = crate::signals::elephc_pcntl_aot_signal_pending.load(Ordering::Acquire);
+    assert_eq!(elephc_pcntl_signal(libc::SIGUSR1, 2, 1, PCNTL_SIGNAL_OWNER_AOT), 1);
+    let raise_result = unsafe { libc::raise(libc::SIGUSR1) };
+    let raised = crate::signals::elephc_pcntl_aot_signal_pending.load(Ordering::Acquire);
+    let first = unsafe { elephc_pcntl_signal_next(&mut info, PCNTL_SIGNAL_OWNER_AOT) };
+    let kept = crate::signals::elephc_pcntl_aot_signal_pending.load(Ordering::Acquire);
+    let empty = unsafe { elephc_pcntl_signal_next(&mut info, PCNTL_SIGNAL_OWNER_AOT) };
+    let lowered = crate::signals::elephc_pcntl_aot_signal_pending.load(Ordering::Acquire);
+    let restore_handler = elephc_pcntl_signal(libc::SIGUSR1, 0, 1, PCNTL_SIGNAL_OWNER_AOT);
+    unsafe {
+        assert_eq!(libc::sigprocmask(libc::SIG_SETMASK, &original, std::ptr::null_mut()), 0);
+    }
+    assert_eq!(drained, 0, "an empty queue leaves the flag down");
+    assert_eq!(raise_result, 0);
+    assert_eq!(raised, 1, "queueing a record raises the flag");
+    assert_eq!(first, 1);
+    assert_eq!(kept, 1, "the flag stays up until a drain finds the queue empty");
+    assert_eq!(empty, 0);
+    assert_eq!(lowered, 0, "the drain that empties the queue lowers the flag");
+    assert_eq!(restore_handler, 1);
+}
+
 /// Pins the PHP/POSIX limit: standard signals coalesce before the queued handler runs.
 #[test]
 fn standard_non_realtime_signals_coalesce_before_php_style_handler_runs() {

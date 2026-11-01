@@ -23,6 +23,14 @@ pub(super) fn eval_array_set_var_stmt(
     name: &str, index: &EvalExpr, value: &EvalExpr, context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    if name == "GLOBALS" {
+        let target = EvalExpr::ArrayGet {
+            array: Box::new(EvalExpr::LoadVar(name.to_string())),
+            index: Box::new(index.clone()),
+        };
+        let result = eval_assign(&target, value, context, scope, values)?;
+        return eval_release_value(context, values, result);
+    }
     eval_local_offset_write(name, Some(index), value, context, scope, values)
 }
 
@@ -98,6 +106,27 @@ fn eval_local_offset_write(
         } else {
             eval_array_append_owned_value_with_type(array, value, &declared, context, values)?
         };
+        // `$r = &$a['k']; $r['x'] = 1;` must change `$a['k']`, and `$r` names that element only
+        // through its recorded reference target: the scope cell is a copy of the element's value,
+        // so writing it alone left the array untouched (dflydev's `Data::set()` walks its key
+        // path with `$cv = &$cv[$k]; ... $cv[$k] = $value;` and lost every key). The target takes
+        // the updated array and the local entry becomes a borrowed view of what it now holds.
+        if let Some(target) = scope.reference_target(name).cloned() {
+            write_back_method_ref_target(&target, replacement, context, values)?;
+            if visible_scope_cell(context, scope, name) != Some(replacement) {
+                for replaced in set_scope_cell(
+                    context,
+                    scope,
+                    name.to_string(),
+                    replacement,
+                    ScopeCellOwnership::Borrowed,
+                    values,
+                )? {
+                    eval_release_value(context, values, replaced)?;
+                }
+            }
+            return Ok(());
+        }
         if visible_scope_cell(context, scope, name) == Some(replacement) { return Ok(()); }
         write_back_owned_variable_ref_target(scope, name, replacement, context, values)
     })();

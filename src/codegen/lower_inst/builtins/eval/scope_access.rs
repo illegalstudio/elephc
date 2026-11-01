@@ -20,8 +20,20 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_scope_get(
     abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     load_eval_scope_operand_to_arg(ctx, scope, 0)?;
     emit_eval_scope_get_for_loaded_scope(ctx, &name, 0, 8);
+    let native_ref = ctx.next_label("eval_scope_get_native_ref");
+    let native_global = ctx.next_label("eval_scope_get_native_global");
+    let done = ctx.next_label("eval_scope_get_done");
+    branch_scope_binding(ctx, NATIVE_REF, &native_ref);
+    branch_scope_binding(ctx, NATIVE_GLOBAL, &native_global);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&native_ref);
+    load_native_scope_reference(ctx);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&native_global);
+    load_global_to_result(ctx, &EvalSyncGlobal { name, ty: PhpType::Mixed });
+    ctx.emitter.label(&done);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     store_if_result(ctx, inst)
 }
@@ -36,6 +48,8 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_scope_set(
     let value = expect_operand(inst, 1)?;
     let name = eval_scope_instruction_name(ctx, inst)?;
     abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    load_eval_scope_operand_to_arg(ctx, scope, 0)?;
+    emit_eval_scope_get_for_loaded_scope(ctx, &name, 0, 8);
     let value_ty = ctx.load_value_to_result(value)?.codegen_repr();
     let flags = if matches!(value_ty, PhpType::Mixed | PhpType::Union(_)) {
         abi::emit_call_label(ctx.emitter, "__rt_incref");
@@ -46,8 +60,27 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_scope_set(
     };
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
+    let native_ref = ctx.next_label("eval_scope_set_native_ref");
+    let native_global = ctx.next_label("eval_scope_set_native_global");
+    let done = ctx.next_label("eval_scope_set_done");
+    branch_scope_binding(ctx, NATIVE_REF, &native_ref);
+    branch_scope_binding(ctx, NATIVE_GLOBAL, &native_global);
     load_eval_scope_operand_to_arg(ctx, scope, 0)?;
     emit_eval_scope_set_for_loaded_scope(ctx, &name, flags);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&native_ref);
+    store_native_scope_reference(ctx);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&native_global);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
+    let symbol = ir_global_symbol(&name);
+    ctx.data.add_comm(symbol.clone(), 8);
+    if ctx.shared.uses_shared_ref_cell(ctx.module, &name) {
+        super::super::super::globals_constants::lower_store_shared_global(ctx, &symbol, &PhpType::Mixed)?;
+    } else {
+        abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Mixed, true);
+    }
+    ctx.emitter.label(&done);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     Ok(())
 }
@@ -152,9 +185,10 @@ pub(super) fn emit_eval_literal_aot_marker(ctx: &mut FunctionContext<'_>, inst: 
     let Some(fragment) = eval_literal_fragment(ctx, inst)? else {
         return Ok(());
     };
+    let source_path = super::eval_source_path_for_function(ctx.module, ctx.function);
     let plan = crate::eval_aot::plan_literal_fragment_with_source_path_and_static_and_method_calls(
         &fragment,
-        ctx.module.source_path.as_deref(),
+        source_path,
         super::super::instruction_strict_php_profile(inst),
         |name, args| eval_literal_static_function_supported_by_codegen(ctx, name, args),
         |receiver, method, args| {
@@ -175,7 +209,7 @@ pub(super) fn emit_eval_literal_aot_marker(ctx: &mut FunctionContext<'_>, inst: 
 
 /// Updates eval context source metadata for file, directory, and call-site line magic constants.
 pub(super) fn set_eval_call_site(ctx: &mut FunctionContext<'_>, inst: &Instruction) {
-    let Some(source_path) = ctx.module.source_path.as_deref() else {
+    let Some(source_path) = super::eval_source_path_for_function(ctx.module, ctx.function) else {
         return;
     };
     load_eval_context_to_arg(ctx, 0);
@@ -201,7 +235,7 @@ pub(super) fn set_eval_call_site(ctx: &mut FunctionContext<'_>, inst: &Instructi
     );
     let line = inst
         .span
-        .and_then(|span| i64::try_from(span.line).ok())
+        .and_then(|span| i64::try_from(span.source_line()).ok())
         .unwrap_or(0);
     abi::emit_load_int_immediate(
         ctx.emitter,
@@ -214,4 +248,30 @@ pub(super) fn set_eval_call_site(ctx: &mut FunctionContext<'_>, inst: &Instructi
         .extern_symbol("__elephc_eval_context_set_call_site");
     abi::emit_call_label(ctx.emitter, &symbol);
     emit_eval_status_check(ctx);
+}
+
+/// Writes the five-word ElephcEvalConstructionSite borrowed by the native-new ABI.
+///
+/// `spread_container` marks a single argument that is the array a `...$args` spread produced;
+/// the bridge unpacks it, binding string keys as named arguments.
+pub(super) fn emit_eval_construction_site(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    arg_count: usize,
+    offset: usize,
+    spread_container: bool,
+) {
+    let reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, reg, i64::from(spread_container));
+    abi::emit_store_to_sp(ctx.emitter, reg, offset + 32);
+    abi::emit_load_int_immediate(ctx.emitter, reg, arg_count as i64);
+    abi::emit_store_to_sp(ctx.emitter, reg, offset);
+    let source = super::eval_source_path_for_function(ctx.module, ctx.function).unwrap_or("");
+    let (file_label, file_len) = ctx.data.add_string(source.as_bytes());
+    abi::emit_symbol_address(ctx.emitter, reg, &file_label);
+    abi::emit_store_to_sp(ctx.emitter, reg, offset + 8);
+    abi::emit_load_int_immediate(ctx.emitter, reg, file_len as i64);
+    abi::emit_store_to_sp(ctx.emitter, reg, offset + 16);
+    abi::emit_load_int_immediate(ctx.emitter, reg, inst.span.map_or(0, |span| i64::from(span.source_line())));
+    abi::emit_store_to_sp(ctx.emitter, reg, offset + 24);
 }

@@ -31,6 +31,8 @@ impl NativeReader {
         emit(&mut emitter);
         arrays::emit_mixed_unbox(&mut emitter);
         arrays::emit_hash_iter(&mut emitter);
+        emitter.label_global("__rt_incref");
+        emitter.instruction("ret");                                             // the reader fixture walks immortal C storage and takes no ownership
         if target.platform == Platform::Linux { emitter.raw(".section .note.GNU-stack,\"\",@progbits"); }
         std::fs::write(directory.join("reader.s"), emitter.output()).unwrap();
         std::fs::write(directory.join("reader.c"), include_str!("native_reader.c")).unwrap();

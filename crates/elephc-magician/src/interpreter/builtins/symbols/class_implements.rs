@@ -83,6 +83,13 @@ pub(in crate::interpreter) fn eval_class_relation_target_result(
     if !matches!(name, "class_implements" | "class_parents" | "class_uses") {
         return Err(EvalStatus::RuntimeFatal);
     }
+    // A class another context declared (an autoloaded file) is known to this one only after a
+    // sync, as for `method_exists()`. A compiled caller hands the bridge the context it just
+    // created for the call: Symfony's `ControllerAttributesListener::getAttributeEventNames()`
+    // asked `class_parents()` of an autoloaded attribute class, got false, and `[...] + false`
+    // threw "Value must be of type array, false given" on every controller.
+    #[cfg(not(test))]
+    context.sync_global_eval_classes();
     let Some(target) = eval_class_relation_target_name(target, context, values)? else {
         return values.bool_value(false);
     };
@@ -182,12 +189,25 @@ fn eval_runtime_class_parent_names(
     names
 }
 
-/// Returns eval class interfaces plus interfaces inherited from generated/AOT parents.
-fn eval_class_relation_eval_class_interface_names(
+/// Returns eval class interfaces plus interfaces inherited from generated/AOT parents, in the
+/// order php-src stores them (`class_implements()` and `ReflectionClass::getInterfaceNames()`).
+pub(in crate::interpreter) fn eval_class_relation_eval_class_interface_names(
     class_name: &str,
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<String>, EvalStatus> {
+    if let Some(parent) = eval_class_relation_interface_less_parent(class_name, context) {
+        // php-src links a class that names no interface of its own through
+        // `zend_do_inherit_interfaces`, which copies the parent's list from the END: `class D
+        // extends P {}` reports P's interfaces reversed (and a grandchild reverses them back).
+        let mut names = if context.class(&parent).is_some() {
+            eval_class_relation_eval_class_interface_names(&parent, context, values)?
+        } else {
+            eval_runtime_class_interface_names(&parent, values)?
+        };
+        names.reverse();
+        return Ok(names);
+    }
     let mut names = Vec::new();
     let mut seen = std::collections::HashSet::new();
     if let Some(parent) = context.class_native_parent_name(class_name) {
@@ -204,6 +224,28 @@ fn eval_class_relation_eval_class_interface_names(
         }
     }
     Ok(names)
+}
+
+/// Returns the parent of an eval class that names no interface of its own, or `None`.
+///
+/// Declaring `__toString` counts as naming `Stringable`, and an enum always names its markers.
+fn eval_class_relation_interface_less_parent(
+    class_name: &str,
+    context: &ElephcEvalContext,
+) -> Option<String> {
+    let class = context.class(class_name)?;
+    if !class.interfaces().is_empty()
+        || class.method("__toString").is_some()
+        || context.enum_decl(class_name).is_some()
+    {
+        return None;
+    }
+    let parent = class.parent()?.trim_start_matches('\\');
+    Some(
+        context
+            .resolve_class_name(parent)
+            .unwrap_or_else(|| parent.to_string()),
+    )
 }
 
 /// Returns eval interface parents plus inherited generated/AOT interface parents.

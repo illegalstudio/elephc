@@ -6,7 +6,8 @@
 //!
 //! Key details:
 //! - Dispatch is by enum identity, never by PHP function-name strings.
-//! - This group owns the iconv and curl extension families.
+//! - This group owns the iconv and curl extension families, plus mbstring's case
+//!   mapping, which shares the iconv bridge.
 
 use crate::codegen::context::FunctionContext;
 use crate::codegen::Result;
@@ -48,6 +49,12 @@ pub(super) fn lower(
         }),
         RuntimeFnId::IconvSubstr => Some({
             crate::codegen::lower_inst::builtins::iconv::lower_iconv_substr(ctx, inst)
+        }),
+        RuntimeFnId::MbStrtolower => Some({
+            crate::codegen::lower_inst::builtins::iconv::lower_mb_strtolower(ctx, inst)
+        }),
+        RuntimeFnId::MbStrtoupper => Some({
+            crate::codegen::lower_inst::builtins::iconv::lower_mb_strtoupper(ctx, inst)
         }),
         RuntimeFnId::CurlEasyBody => Some({
             crate::codegen::lower_inst::builtins::curl::lower_curl_easy_body(ctx, inst)
@@ -105,6 +112,9 @@ pub(super) fn lower(
         }),
         RuntimeFnId::CurlOptionKind => Some({
             crate::codegen::lower_inst::builtins::curl::lower_curl_option_kind(ctx, inst)
+        }),
+        RuntimeFnId::ElephcInternalWarning => Some({
+            crate::codegen::lower_inst::builtins::internal_warning::lower_elephc_internal_warning(ctx, inst)
         }),
         RuntimeFnId::CurlSetoptUnsupportedWarning => Some({
             crate::codegen::lower_inst::builtins::curl::lower_curl_setopt_unsupported_warning(

@@ -136,21 +136,25 @@ fn emit_validate_signal_number(ctx: &mut FunctionContext<'_>) {
 
 /// Installs bridge function pointers into fixed runtime slots without coupling the runtime cache.
 fn emit_initialize_signal_bridge_slots(ctx: &mut FunctionContext<'_>) {
-    let (signal_symbol, next_symbol, begin_symbol, end_symbol) = match ctx.emitter.target.platform {
-        Platform::MacOS => (
-            "_elephc_pcntl_signal",
-            "_elephc_pcntl_signal_next",
-            "_elephc_pcntl_dispatch_begin",
-            "_elephc_pcntl_dispatch_end",
-        ),
-        Platform::Linux => (
-            "elephc_pcntl_signal",
-            "elephc_pcntl_signal_next",
-            "elephc_pcntl_dispatch_begin",
-            "elephc_pcntl_dispatch_end",
-        ),
-        Platform::Windows => return,
-    };
+    let (signal_symbol, next_symbol, begin_symbol, end_symbol, pending_symbol) =
+        match ctx.emitter.target.platform {
+            Platform::MacOS => (
+                "_elephc_pcntl_signal",
+                "_elephc_pcntl_signal_next",
+                "_elephc_pcntl_dispatch_begin",
+                "_elephc_pcntl_dispatch_end",
+                "_elephc_pcntl_aot_signal_pending",
+            ),
+            Platform::Linux => (
+                "elephc_pcntl_signal",
+                "elephc_pcntl_signal_next",
+                "elephc_pcntl_dispatch_begin",
+                "elephc_pcntl_dispatch_end",
+                "elephc_pcntl_aot_signal_pending",
+            ),
+            Platform::Windows => return,
+        };
+    let pending_slot = crate::codegen_support::runtime::PCNTL_PENDING_FLAG_SLOT;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_extern_symbol_address(ctx.emitter, "x9", signal_symbol);
@@ -165,6 +169,9 @@ fn emit_initialize_signal_bridge_slots(ctx: &mut FunctionContext<'_>) {
             abi::emit_extern_symbol_address(ctx.emitter, "x9", end_symbol);
             abi::emit_symbol_address(ctx.emitter, "x10", "__rt_pcntl_dispatch_end_fn");
             ctx.emitter.instruction("str x9, [x10]");                           // publish the dispatch-end bridge
+            abi::emit_extern_symbol_address(ctx.emitter, "x9", pending_symbol);
+            abi::emit_symbol_address(ctx.emitter, "x10", pending_slot);
+            ctx.emitter.instruction("str x9, [x10]");                           // publish the pending-signal flag the safe point reads
         }
         Arch::X86_64 => {
             abi::emit_extern_symbol_address(ctx.emitter, "r9", signal_symbol);
@@ -179,6 +186,9 @@ fn emit_initialize_signal_bridge_slots(ctx: &mut FunctionContext<'_>) {
             abi::emit_extern_symbol_address(ctx.emitter, "r9", end_symbol);
             abi::emit_symbol_address(ctx.emitter, "r10", "__rt_pcntl_dispatch_end_fn");
             ctx.emitter.instruction("mov QWORD PTR [r10], r9");                 // publish the dispatch-end bridge
+            abi::emit_extern_symbol_address(ctx.emitter, "r9", pending_symbol);
+            abi::emit_symbol_address(ctx.emitter, "r10", pending_slot);
+            ctx.emitter.instruction("mov QWORD PTR [r10], r9");                 // publish the pending-signal flag the safe point reads
         }
     }
 }

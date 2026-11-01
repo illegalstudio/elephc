@@ -135,12 +135,17 @@ echo "done";
 "#, "aggregate|aggregate|done");
 }
 
-/// Same-frame catches retire temporary sources first without consuming a separately owned source.
+/// Same-frame catches retire temporary sources without consuming a separately owned source.
+///
+/// The destructor only COUNTS: php keeps a throwing frame's arguments alive in the exception's
+/// trace, so the instant a source is destroyed (before the catch body or on `unset($error)`) is
+/// not an observable contract. What is: every source dies exactly once and none leaks.
 #[test]
 fn test_core_boxed_array_aggregates_throwing_warning_source_lifetimes() {
     assert_clean_aggregate(r#"<?php
 class AggregateSourceOwner {
-    public function __destruct() { echo "drop|"; }
+    public static int $drops = 0;
+    public function __destruct() { self::$drops++; }
 }
 function aggregateOwnedSource(): array {
     return [str_repeat("bad", 8), new AggregateSourceOwner()];
@@ -168,8 +173,8 @@ catch (RuntimeException $error) { echo count($source), "|"; unset($error); }
 echo "before|";
 unset($source, $callback);
 restore_error_handler();
-echo "done";
-"#, "drop|sum|drop|product|drop|sum|drop|product|drop|fcc|drop|dynamic|2|before|drop|done");
+echo "done|", AggregateSourceOwner::$drops;
+"#, "sum|product|sum|product|fcc|dynamic|2|before|done|7");
 }
 
 /// Discarded sums and products keep warning effects and reject non-array Mixed arguments.

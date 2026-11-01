@@ -2,7 +2,7 @@
 title: "date_create_immutable_from_format() - internals"
 description: "Compiler internals for date_create_immutable_from_format(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 197
+  order: 208
 ---
 
 ## `date_create_immutable_from_format()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:862](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L862) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:975](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L975) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

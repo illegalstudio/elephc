@@ -17,7 +17,6 @@ use crate::types::{callable_wrapper_sig, FunctionSig, PhpType};
 
 #[derive(Clone)]
 pub(crate) struct RuntimeCallableCase {
-    pub(crate) label: String,
     pub(crate) descriptor_label: String,
     pub(crate) php_name: Option<String>,
 }
@@ -66,7 +65,21 @@ pub(crate) fn runtime_builtin_wrapper_supported_at_arity(
         }
         crate::builtins::semantics::BuiltinCallablePolicy::DynamicRuntime(target) => {
             (!target.uses_mbstring_runtime() || features.mbstring || features.eval_bridge)
+                && (!target.uses_regex_runtime() || features.regex || features.eval_bridge)
                 && target.callable_accepts_arity(source_arg_ty, arity)
+        }
+        // The internal-array-pointer builtins are static-only for their first-class form (a
+        // persistent cursor needs the caller's local), but a descriptor call passes a fresh
+        // value with no cursor to keep: `array_map('current', $rows)` (Doctrine's Paginator)
+        // reads each row from its first slot. The wrapper supplies the zero cursor itself
+        // (`build_runtime_call_wrapper_function`).
+        crate::builtins::semantics::BuiltinCallablePolicy::StaticOnly(_)
+            if matches!(
+                def.spec.semantics.argument_lowering,
+                crate::builtins::semantics::BuiltinArgumentLowering::ArrayInternalPointer(_)
+            ) =>
+        {
+            arity.is_none_or(|count| count == 1)
         }
         crate::builtins::semantics::BuiltinCallablePolicy::DirectOnly(_)
         | crate::builtins::semantics::BuiltinCallablePolicy::StaticOnly(_) => false,

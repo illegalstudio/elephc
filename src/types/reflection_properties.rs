@@ -8,13 +8,12 @@
 //! - User redeclarations retain the builtin ancestor's handler.
 //! - Internal-origin metadata prevents same-named user classes from acquiring it.
 
-use std::collections::HashMap;
 
 use super::ClassInfo;
 
 /// Returns whether this class inherits Reflection's direct public mirror write handler.
 pub(crate) fn class_has_public_mirror_write_handler(
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
     class_name: &str,
     property: &str,
 ) -> bool {

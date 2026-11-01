@@ -246,10 +246,10 @@ fn test_eval_barrier_does_not_hide_prior_undefined_variable() {
     );
 }
 
-/// Verifies that referencing an undefined constant produces the expected "Undefined constant" error.
+/// Verifies a read of an undefined constant compiles with a warning (php throws at runtime).
 #[test]
-fn test_error_undefined_constant() {
-    expect_error("<?php echo UNDEFINED_CONST;", "Undefined constant");
+fn test_warning_undefined_constant() {
+    expect_warning("<?php echo UNDEFINED_CONST;", "Undefined constant: UNDEFINED_CONST");
 }
 
 /// Verifies that `define()` with a single argument (missing value) yields a wrong-args diagnostic.
@@ -258,27 +258,18 @@ fn test_error_define_wrong_args() {
     expect_error("<?php define(\"X\");", "define() takes exactly 2 arguments");
 }
 
-/// Verifies that `define()` with a non-string first argument (int name) yields a non-string-name error.
-#[test]
-fn test_error_define_non_string_name() {
-    expect_error(
-        "<?php define(42, 100);",
-        "define() first argument must be a string literal",
-    );
-}
-
 /// Verifies that `defined()` requires exactly one argument.
 #[test]
 fn test_error_defined_wrong_args() {
     expect_error("<?php defined();", "defined() takes exactly 1 argument");
 }
 
-/// Verifies that `defined()` requires a string literal in AOT mode.
+/// `defined()` accepts a runtime name as its first argument, as php does; elephc now compiles it and
+/// the program output matches php.
 #[test]
-fn test_error_defined_non_literal_name() {
-    expect_error(
+fn test_defined_accepts_runtime_name() {
+    expect_no_error(
         "<?php $name = \"PHP_OS\"; defined($name);",
-        "defined() first argument must be a string literal in AOT mode",
     );
 }
 
@@ -393,10 +384,11 @@ fn test_error_php_uname_wrong_type() {
     expect_error("<?php php_uname(1);", "php_uname() argument must be string");
 }
 
-/// Verifies that `exec()` with no arguments yields a wrong-args diagnostic.
+/// Verifies that `exec()` with no arguments yields a wrong-args diagnostic (php declares 1 to 3
+/// parameters).
 #[test]
 fn test_error_exec_wrong_args() {
-    expect_error("<?php exec();", "exec() takes exactly 1 argument");
+    expect_error("<?php exec();", "exec() takes 1 to 3 arguments");
 }
 
 /// Verifies that `shell_exec()` with no arguments yields a wrong-args diagnostic.
@@ -417,7 +409,7 @@ fn test_error_system_wrong_args() {
 /// Verifies that `passthru()` with no arguments yields a wrong-args diagnostic.
 #[test]
 fn test_error_passthru_wrong_args() {
-    expect_error("<?php passthru();", "passthru() takes exactly 1 argument");
+    expect_error("<?php passthru();", "passthru() takes 1 or 2 arguments");
 }
 
 // -- Global/Static parse errors --
@@ -642,7 +634,7 @@ fn test_error_json_last_error_msg_with_args() {
 fn test_error_preg_match_no_args() {
     expect_error(
         "<?php preg_match();",
-        "preg_match() takes 2 or 3 arguments",
+        "preg_match() takes 2 to 5 arguments",
     );
 }
 
@@ -651,7 +643,7 @@ fn test_error_preg_match_no_args() {
 fn test_error_preg_match_one_arg() {
     expect_error(
         r#"<?php preg_match("/test/");"#,
-        "preg_match() takes 2 or 3 arguments",
+        "preg_match() takes 2 to 5 arguments",
     );
 }
 
@@ -664,12 +656,12 @@ fn test_error_preg_match_matches_must_be_variable() {
     );
 }
 
-/// Verifies that `preg_match()` rejects arguments beyond the supported `$matches` parameter.
+/// Verifies that `preg_match()` rejects arguments beyond its public five-parameter signature.
 #[test]
-fn test_error_preg_match_four_args() {
+fn test_error_preg_match_six_args() {
     expect_error(
-        r#"<?php preg_match("/test/", "test", $matches, 0);"#,
-        "preg_match() takes 2 or 3 arguments",
+        r#"<?php preg_match("/test/", "test", $matches, 0, 0, 0);"#,
+        "preg_match() takes 2 to 5 arguments",
     );
 }
 
@@ -678,7 +670,7 @@ fn test_error_preg_match_four_args() {
 fn test_error_preg_match_all_no_args() {
     expect_error(
         "<?php preg_match_all();",
-        "preg_match_all() takes 2 to 4 arguments",
+        "preg_match_all() takes 2 to 5 arguments",
     );
 }
 
@@ -709,7 +701,16 @@ fn test_error_preg_match_all_nonlocal_captures() {
 fn test_error_preg_replace_wrong_args() {
     expect_error(
         r#"<?php preg_replace("/a/", "b");"#,
-        "preg_replace() takes exactly 3 arguments",
+        "preg_replace() takes 3 to 5 arguments",
+    );
+}
+
+/// Verifies that the optional replacement counter requires writable caller storage.
+#[test]
+fn test_error_preg_replace_count_requires_variable() {
+    expect_error(
+        r#"<?php preg_replace("/a/", "b", "a", -1, 0);"#,
+        "preg_replace(): Argument #5 ($count) could not be passed by reference",
     );
 }
 
@@ -718,7 +719,16 @@ fn test_error_preg_replace_wrong_args() {
 fn test_error_preg_replace_callback_wrong_args() {
     expect_error(
         r#"<?php preg_replace_callback("/a/", function($matches) { return $matches[0]; });"#,
-        "preg_replace_callback() takes exactly 3 arguments",
+        "preg_replace_callback() takes 3 to 6 arguments",
+    );
+}
+
+/// Verifies that the callback replacement counter requires writable caller storage.
+#[test]
+fn test_error_preg_replace_callback_count_requires_variable() {
+    expect_error(
+        r#"<?php preg_replace_callback("/a/", function($matches) { return "b"; }, "a", -1, 0);"#,
+        "preg_replace_callback(): Argument #5 ($count) could not be passed by reference",
     );
 }
 
@@ -766,31 +776,19 @@ fn test_error_unserialize_non_string_data() {
     );
 }
 
-/// Verifies `constant()` rejects an unknown constant at compile time.
-///
-/// Reference PHP raises `Error: Undefined constant "NOPE"` at runtime; an AOT binary has no
-/// constant table to look the name up in, so the diagnostic moves to compile time.
+/// Verifies `constant()` on a literal name nothing defines compiles with a warning; the lookup
+/// throws php's `Error: Undefined constant "NOPE"` at runtime.
 #[test]
-fn test_error_constant_undefined_name() {
-    expect_error("<?php echo constant(\"NOPE\");", "Undefined constant: NOPE");
+fn test_warning_constant_undefined_name() {
+    expect_warning("<?php echo constant(\"NOPE\");", "Undefined constant: NOPE");
 }
 
-/// Verifies `constant()` rejects a runtime-computed name in AOT mode.
+/// Verifies `constant()` accepts a class-constant name, which `__rt_constant` resolves at run
+/// time (`codegen::misc::test_constant_reads_class_constants_and_enum_cases_by_name`).
 #[test]
-fn test_error_constant_dynamic_name() {
-    expect_error(
-        "<?php define(\"FOO\", 1); $n = \"FOO\"; echo constant($n);",
-        "constant() first argument must be a string literal in AOT mode",
-    );
-}
-
-/// Verifies `constant()` rejects a class-constant name.
-#[test]
-fn test_error_constant_class_constant_name() {
-    expect_error(
-        "<?php class K { const A = 1; } echo constant(\"K::A\");",
-        "constant() class constants are not supported",
-    );
+fn test_constant_class_constant_name_type_checks() {
+    check_source_full("<?php class K { const A = 1; } echo constant(\"K::A\");")
+        .expect("constant('K::A') must type-check");
 }
 
 /// Verifies `constant()` rejects a missing argument.
@@ -805,6 +803,20 @@ fn test_error_constant_too_many_args() {
     expect_error(
         "<?php echo constant(\"PHP_EOL\", \"x\");",
         "constant() takes exactly 1 argument",
+    );
+}
+
+/// Preserves a shared by-reference output contract across literal callable alternatives.
+#[test]
+fn test_dynamic_literal_regex_callable_defines_matches_output() {
+    expect_no_error(
+        r#"<?php
+$matcher = $argc > 1 ? 'preg_match_all' : 'preg_match';
+if (false === $matcher('/([A-Z]+)/', 'abcXYZ', $matches)) {
+    throw new RuntimeException('failed');
+}
+echo $matches[1];
+"#,
     );
 }
 
@@ -928,10 +940,8 @@ fn test_error_core_parity_builtin_arity_contracts() {
             "<?php trigger_error();",
             "trigger_error() takes 1 or 2 arguments",
         ),
-        (
-            "<?php user_error();",
-            "user_error() takes 1 or 2 arguments",
-        ),
+        // The alias is diagnosed under its canonical name, so only the arity wording is asserted.
+        ("<?php user_error();", "takes 1 or 2 arguments"),
     ];
     for (source, expected) in cases {
         expect_error(source, expected);

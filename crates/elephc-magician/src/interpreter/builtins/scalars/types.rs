@@ -18,7 +18,10 @@ pub(in crate::interpreter) fn eval_gettype_name(tag: u64) -> &'static str {
         EVAL_TAG_STRING => "string",
         EVAL_TAG_BOOL => "boolean",
         EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => "array",
-        EVAL_TAG_OBJECT => "object",
+        // A closure built by compiled code crosses as a callable descriptor rather than an object
+        // cell, but PHP has no such type: `gettype()` of any Closure is `object`, and answering
+        // `NULL` through the `_` arm made a compiled closure look like a missing value.
+        EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE => "object",
         EVAL_TAG_RESOURCE => "resource",
         EVAL_TAG_NULL => "NULL",
         _ => "NULL",

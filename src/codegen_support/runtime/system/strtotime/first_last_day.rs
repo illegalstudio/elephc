@@ -136,8 +136,7 @@ fn emit_first_last_day_arm64(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_strtotime_fail");                            // malformed phrase → fail
     emitter.instruction("add x3, x3, x10");                                     // advance past "month"
     emitter.instruction("bl __rt_strtotime_skip_ws");                           // skip any trailing whitespace
-    emitter.instruction("cmp x3, x4");                                          // must be fully consumed now
-    emitter.instruction("b.lt __rt_strtotime_fail");                            // trailing junk → fail
+    super::first_last_time::emit_fl_trailing_time_arm64(emitter);
     emitter.instruction("ldr x10, [sp, #80]");                                  // wd sentinel
     emitter.instruction("cmp x10, #0");                                         // wd < 0 → day-of-month mode
     emitter.instruction("b.lt __rt_strtotime_fl_day_compute");                  // → day-of-month compute
@@ -146,6 +145,7 @@ fn emit_first_last_day_arm64(emitter: &mut Emitter) {
     // -- day-of-month compute (preserves the base time of day) --
     emitter.label("__rt_strtotime_fl_day_compute");
     emitter.instruction("bl __rt_strtotime_now_tm");                            // fill [sp+0..36] from the clock
+    super::first_last_time::emit_fl_apply_time_arm64(emitter, "day");
     emitter.instruction("ldr x6, [sp, #104]");                                  // reload month delta
     emitter.instruction("ldr w9, [sp, #16]");                                   // base tm_mon
     emitter.instruction("add w9, w9, w6");                                      // apply the month delta
@@ -174,6 +174,7 @@ fn emit_first_last_day_arm64(emitter: &mut Emitter) {
     emitter.instruction("str wzr, [sp, #0]");                                   // tm_sec = 0 (midnight)
     emitter.instruction("str wzr, [sp, #4]");                                   // tm_min = 0
     emitter.instruction("str wzr, [sp, #8]");                                   // tm_hour = 0
+    super::first_last_time::emit_fl_apply_time_arm64(emitter, "weekday");
     emitter.instruction("ldr x11, [sp, #88]");                                  // ordinal n
     emitter.instruction("cbz x11, __rt_strtotime_fl_nthwd_last");               // n = 0 → "last <weekday>"
     // -- first..fifth: reference weekday is day 1 of the target month --
@@ -384,8 +385,7 @@ fn emit_first_last_day_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rsp + 48]");                       // recompute end = base ...
     emitter.instruction("add r10, QWORD PTR [rsp + 56]");                       // ... + length
     emitter.instruction("call __rt_strtotime_skip_ws_linux_x86_64");            // skip any trailing whitespace
-    emitter.instruction("cmp rdi, r10");                                        // must be fully consumed now
-    emitter.instruction("jb __rt_strtotime_fail_linux_x86_64");                 // trailing junk → fail
+    super::first_last_time::emit_fl_trailing_time_x86_64(emitter);
     emitter.instruction("mov r10d, DWORD PTR [rsp + 80]");                      // wd sentinel
     emitter.instruction("cmp r10d, 0");                                         // wd < 0 → day-of-month mode
     emitter.instruction("jl __rt_strtotime_fl_day_compute_linux_x86_64");       // → day-of-month compute
@@ -398,6 +398,9 @@ fn emit_first_last_day_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov DWORD PTR [rsp + 0], 0");                          // tm_sec = 0 (midnight)
     emitter.instruction("mov DWORD PTR [rsp + 4], 0");                          // tm_min = 0
     emitter.instruction("mov DWORD PTR [rsp + 8], 0");                          // tm_hour = 0
+    super::first_last_time::emit_fl_apply_time_x86_64(emitter, "weekday");
+    emitter.instruction("mov eax, DWORD PTR [rsp + 16]");                       // reload base tm_mon (the time override used eax)
+    emitter.instruction("add eax, r8d");                                        // target tm_mon again
     emitter.instruction("mov r11d, DWORD PTR [rsp + 88]");                      // ordinal n
     emitter.instruction("test r11d, r11d");                                     // n = 0 → "last <weekday>"
     emitter.instruction("jz __rt_strtotime_fl_nthwd_last_linux_x86_64");        // → last-weekday path
@@ -450,6 +453,7 @@ fn emit_first_last_day_linux_x86_64(emitter: &mut Emitter) {
     // -- day-of-month compute (preserves the base time of day) --
     emitter.label("__rt_strtotime_fl_day_compute_linux_x86_64");
     emitter.instruction("call __rt_strtotime_now_tm_linux_x86_64");             // fill [rsp+0..36] from the clock
+    super::first_last_time::emit_fl_apply_time_x86_64(emitter, "day");
     emitter.instruction("mov r8d, DWORD PTR [rsp + 104]");                      // reload month delta
     emitter.instruction("mov eax, DWORD PTR [rsp + 16]");                       // base tm_mon
     emitter.instruction("add eax, r8d");                                        // apply the month delta

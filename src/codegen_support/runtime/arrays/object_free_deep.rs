@@ -168,6 +168,23 @@ pub fn emit_object_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     // is a no-op. Keeping the guard here makes stale lowered objects harmless.
     let user_arg_max_off = crate::codegen_support::runtime::FIBER_USER_ARG_MAX_OFFSET;
     let start_args_off = crate::codegen_support::runtime::FIBER_START_ARGS_OFFSET;
+    // -- release the start() arguments: the Fiber owns one reference to each boxed value it was
+    // started with (`lower_fiber_start`), which the entry wrapper copies or borrows. Nothing
+    // released them, so every `$fiber->start($x)` leaked its boxed argument. --
+    let start_arg_count_off = crate::codegen_support::runtime::FIBER_START_ARG_COUNT_OFFSET;
+    for i in 0..crate::codegen_support::runtime::FIBER_START_ARGS_MAX {
+        let skip_label = format!("__rt_object_free_deep_fiber_start_arg_skip_{}", i);
+        emitter.instruction("ldr x0, [sp, #0]");                                // reload the saved Fiber object pointer
+        emitter.instruction(&format!("ldr x9, [x0, #{}]", start_arg_count_off)); // x9 = how many start() arguments the Fiber holds
+        emitter.instruction(&format!("cmp x9, #{}", i));                        // was start_args[i] supplied?
+        emitter.instruction(&format!("b.le {}", skip_label));                   // no: nothing to release in this slot
+        emitter.instruction(&format!("ldr x0, [x0, #{}]", start_args_off + i * 8)); // x0 = boxed start() argument owned by the Fiber
+        super::deep_cleanup::invoke(emitter, "__rt_decref_any", "x0");
+        emitter.instruction("ldr x0, [sp, #0]");                                // reload the Fiber pointer after the release
+        emitter.instruction(&format!("str xzr, [x0, #{}]", start_args_off + i * 8)); // clear the released start() argument slot
+        emitter.label(&skip_label);
+    }
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the Fiber pointer for the legacy capture boundary
     emitter.instruction(&format!("ldr x9, [x0, #{}]", user_arg_max_off));       // x9 = legacy user_arg_max capture boundary
     emitter.instruction("str x9, [sp, #24]");                                   // park user_arg_max in the spare loop-index slot of the cleanup frame
     for i in 0..crate::codegen_support::runtime::FIBER_START_ARGS_MAX {
@@ -455,6 +472,21 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFe
 
     let user_arg_max_off = crate::codegen_support::runtime::FIBER_USER_ARG_MAX_OFFSET;
     let start_args_off = crate::codegen_support::runtime::FIBER_START_ARGS_OFFSET;
+    // -- release the start() arguments the Fiber owns (see the AArch64 arm) --
+    let start_arg_count_off = crate::codegen_support::runtime::FIBER_START_ARG_COUNT_OFFSET;
+    for i in 0..crate::codegen_support::runtime::FIBER_START_ARGS_MAX {
+        let skip_label = format!("__rt_object_free_deep_fiber_start_arg_skip_{}", i);
+        emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                    // reload the saved Fiber object pointer
+        emitter.instruction(&format!("mov r10, QWORD PTR [rax + {}]", start_arg_count_off)); // r10 = how many start() arguments the Fiber holds
+        emitter.instruction(&format!("cmp r10, {}", i));                        // was start_args[i] supplied?
+        emitter.instruction(&format!("jle {}", skip_label));                    // no: nothing to release in this slot
+        emitter.instruction(&format!("mov rax, QWORD PTR [rax + {}]", start_args_off + i * 8)); // rax = boxed start() argument owned by the Fiber
+        super::deep_cleanup::invoke(emitter, "__rt_decref_any", "rax");
+        emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                    // reload the Fiber pointer after the release
+        emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", start_args_off + i * 8)); // clear the released start() argument slot
+        emitter.label(&skip_label);
+    }
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the Fiber pointer for the legacy capture boundary
     emitter.instruction(&format!("mov r10, QWORD PTR [rax + {}]", user_arg_max_off)); // r10 = legacy user_arg_max capture boundary
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // park user_arg_max in the existing loop-index slot
     for i in 0..crate::codegen_support::runtime::FIBER_START_ARGS_MAX {
@@ -649,7 +681,6 @@ fn emit_generator_coroutine_release_aarch64(emitter: &mut Emitter) {
     let stack_size = crate::codegen_support::runtime::FIBER_STACK_SIZE_OFFSET;
     let transfer = crate::codegen_support::runtime::FIBER_TRANSFER_VALUE_OFFSET;
     let pending = crate::codegen_support::runtime::FIBER_PENDING_THROW_OFFSET;
-    let start_args = crate::codegen_support::runtime::FIBER_START_ARGS_OFFSET as usize;
 
     // -- return the coroutine stack to the kernel --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the Generator pointer for stack release
@@ -676,10 +707,10 @@ fn emit_generator_coroutine_release_aarch64(emitter: &mut Emitter) {
     emitter.instruction(&format!("str xzr, [x0, #{}]", pending));               // clear pending_throw after releasing it
 
     // -- release the owned boxed start arguments forwarded into the body --
-    for i in 0..crate::codegen_support::runtime::FIBER_START_ARGS_MAX as usize {
+    for i in 0..crate::codegen_support::runtime::GENERATOR_START_ARGS_MAX as usize {
         emit_generator_mixed_field_release_aarch64(
             emitter,
-            start_args + i * 8,
+            crate::codegen_support::runtime::generator_start_arg_offset(i),
             &format!("start_args[{}]", i),
         );
     }
@@ -698,7 +729,6 @@ fn emit_generator_coroutine_release_x86_64(emitter: &mut Emitter) {
     let stack_size = crate::codegen_support::runtime::FIBER_STACK_SIZE_OFFSET;
     let transfer = crate::codegen_support::runtime::FIBER_TRANSFER_VALUE_OFFSET;
     let pending = crate::codegen_support::runtime::FIBER_PENDING_THROW_OFFSET;
-    let start_args = crate::codegen_support::runtime::FIBER_START_ARGS_OFFSET as usize;
 
     // -- return the coroutine stack to the kernel --
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the Generator pointer for stack release
@@ -724,10 +754,10 @@ fn emit_generator_coroutine_release_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", pending));      // clear pending_throw after releasing it
 
     // -- release the owned boxed start arguments forwarded into the body --
-    for i in 0..crate::codegen_support::runtime::FIBER_START_ARGS_MAX as usize {
+    for i in 0..crate::codegen_support::runtime::GENERATOR_START_ARGS_MAX as usize {
         emit_generator_mixed_field_release_x86_64(
             emitter,
-            start_args + i * 8,
+            crate::codegen_support::runtime::generator_start_arg_offset(i),
             &format!("start_args[{}]", i),
         );
     }

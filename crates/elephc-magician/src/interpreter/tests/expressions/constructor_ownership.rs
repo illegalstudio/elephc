@@ -33,6 +33,11 @@ fn constructor_ownership_releases_literal_arguments() {
 }
 
 /// Keeps a caller variable alive while releasing defaults on success and both native failure paths.
+///
+/// The binding failure is a type rejection of the CALLER's argument, with the defaults already
+/// materialized. A rejected default cannot be the trigger: php never type-checks a default at
+/// call time (a mismatched one is a compile error, and `= null` widens the type), so binding
+/// leaves defaulted positions alone.
 #[test]
 fn constructor_ownership_releases_defaults_without_releasing_borrowed_arguments() {
     for (class, reject_type) in [("KnownClass", false), ("KnownFailingConstructor", false), ("KnownClass", true)] {
@@ -48,7 +53,7 @@ fn constructor_ownership_releases_defaults_without_releasing_borrowed_arguments(
         assert!(signature.set_param_default(1, NativeCallableDefault::Int(731)));
         assert!(signature.set_param_default(2, NativeCallableDefault::Int(732)));
         if reject_type {
-            assert!(signature.set_param_type(2, EvalParameterType::new(
+            assert!(signature.set_param_type(0, EvalParameterType::new(
                 vec![EvalParameterTypeVariant::Class("ExpectedObject".to_string())], false,
             )));
         }

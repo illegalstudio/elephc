@@ -226,6 +226,110 @@ fn test_parse_reference_assignment() {
     }
 }
 
+/// Verifies that binding one declared property to another retains both lvalue expressions.
+#[test]
+fn test_parse_property_to_property_reference_assignment() {
+    let stmts = parse_source("<?php $parser->refs = &$this->refs;");
+    match &stmts[0].kind {
+        StmtKind::PropertyRefAssign {
+            object,
+            property,
+            source,
+        } => {
+            assert!(matches!(&object.kind, ExprKind::Variable(name) if name == "parser"));
+            assert_eq!(property, "refs");
+            assert!(matches!(
+                &source.kind,
+                ExprKind::PropertyAccess { object, property }
+                    if matches!(&object.kind, ExprKind::This) && property == "refs"
+            ));
+        }
+        other => panic!("expected PropertyRefAssign, got {:?}", other),
+    }
+}
+
+/// Verifies that a reference bind used inside a comparison remains an assignment expression.
+#[test]
+fn test_parse_reference_assignment_expression() {
+    let stmts = parse_source(
+        "<?php if (null !== $exists = &self::$cache[$key]) {}",
+    );
+    let StmtKind::If { condition, .. } = &stmts[0].kind else {
+        panic!("expected If statement");
+    };
+    let ExprKind::BinaryOp { right, .. } = &condition.kind else {
+        panic!("expected comparison condition");
+    };
+    let ExprKind::Assignment {
+        target,
+        value,
+        prelude,
+        ..
+    } = &right.kind
+    else {
+        panic!("expected reference assignment expression");
+    };
+    assert!(matches!(&target.kind, ExprKind::Variable(name) if name == "exists"));
+    assert!(matches!(&value.kind, ExprKind::Variable(name) if name == "exists"));
+    assert!(matches!(
+        prelude.as_slice(),
+        [Stmt {
+            kind: StmtKind::RefAssign { target, source },
+            ..
+        }] if target == "exists" && matches!(source.kind, ExprKind::ArrayAccess { .. })
+    ));
+}
+
+/// Verifies that postfix increment on a static property preserves the old value as its result.
+#[test]
+fn test_parse_static_property_post_increment_expression() {
+    let stmts = parse_source("<?php if (!self::$level++) {}");
+    let StmtKind::If { condition, .. } = &stmts[0].kind else {
+        panic!("expected If statement");
+    };
+    let ExprKind::Not(inner) = &condition.kind else {
+        panic!("expected logical negation");
+    };
+    let ExprKind::Assignment {
+        target,
+        result_target,
+        prelude,
+        ..
+    } = &inner.kind
+    else {
+        panic!("expected postfix assignment expression");
+    };
+    assert!(matches!(target.kind, ExprKind::StaticPropertyAccess { .. }));
+    assert!(result_target.is_some());
+    assert!(matches!(
+        prelude.as_slice(),
+        [Stmt {
+            kind: StmtKind::Assign { .. },
+            ..
+        }]
+    ));
+}
+
+/// Verifies that a static-property element alias preserves both lvalue indexes in its AST node.
+#[test]
+fn test_parse_static_property_element_reference_assignment() {
+    let stmts = parse_source("<?php C::$a[$target] = &C::$a[$source];");
+    match &stmts[0].kind {
+        StmtKind::StaticPropertyElementRefAssign {
+            receiver,
+            property,
+            index,
+            source,
+        } => {
+            assert!(matches!(receiver, StaticReceiver::Named(name) if name.as_str() == "C"));
+            assert_eq!(property, "a");
+            assert!(matches!(&index.kind, ExprKind::Variable(name) if name == "target"));
+            assert!(matches!(&source.kind, ExprKind::ArrayAccess { .. }));
+        }
+        other => panic!("expected StaticPropertyElementRefAssign, got {:?}", other),
+    }
+}
+
 /// Verifies that `<?php $items[0] += 3;` parses to an `ArrayAssign` (not a generic `Assign`).
 /// Compound assignment on an array element must produce the correct AST shape.
 #[test]
@@ -330,6 +434,57 @@ fn test_parse_nested_array_assignment_target() {
         }
         other => panic!("Expected NestedArrayAssign, got {:?}", other),
     }
+}
+
+/// Verifies that a nested array element bound by reference retains the complete target chain and
+/// marks the local source for reference-cell lowering.
+#[test]
+fn test_parse_nested_array_reference_assignment_target() {
+    let stmts = parse_source("<?php $data[$prefix.'use']['$'.$key] = &$value;");
+    match &stmts[0].kind {
+        StmtKind::NestedArrayAssign { target, value } => {
+            assert!(matches!(target.kind, ExprKind::ArrayAccess { .. }));
+            assert!(matches!(
+                value.kind,
+                ExprKind::ArrayReference(ref source)
+                    if matches!(source.kind, ExprKind::Variable(ref name) if name == "value")
+            ));
+        }
+        other => panic!("Expected NestedArrayAssign, got {:?}", other),
+    }
+}
+
+/// Verifies a reference to a fresh nested array slot lowers through one shared cell.
+#[test]
+fn test_parse_reference_to_nested_array_append_slot() {
+    let stmts = parse_source("<?php $closure = &$this->optimized[$eventName][];");
+    let StmtKind::Synthetic(body) = &stmts[0].kind else {
+        panic!("expected synthetic reference append lowering");
+    };
+    assert_eq!(body.len(), 4);
+    let temp = match &body[0].kind {
+        StmtKind::Assign { name, value } => {
+            assert!(matches!(value.kind, ExprKind::Null));
+            name.clone()
+        }
+        other => panic!("expected temporary initialization, got {:?}", other),
+    };
+    assert!(matches!(body[1].kind, StmtKind::Synthetic(_)));
+    assert!(matches!(
+        &body[2].kind,
+        StmtKind::RefAssign { target, source }
+            if target == "closure"
+                && matches!(&source.kind, ExprKind::Variable(name) if name == &temp)
+    ));
+    // The temporary is unbound LAST, so the next execution of the same statement (a loop over
+    // listeners) promotes a fresh cell instead of writing through the previous one.
+    assert!(matches!(
+        &body[3].kind,
+        StmtKind::ExprStmt(call)
+            if matches!(&call.kind, ExprKind::FunctionCall { name, args }
+                if name.as_str() == "unset"
+                    && matches!(args.as_slice(), [arg] if matches!(&arg.kind, ExprKind::Variable(n) if n == &temp)))
+    ));
 }
 
 /// Verifies that nested append (`$items[0][] = 2`) lowers to a synthetic

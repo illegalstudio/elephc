@@ -26,6 +26,10 @@
 //! - Tail recursion lowering follows that fixed point and reruns scalar passes on its loops.
 //!   Ownership finalizers run only after these phases. Their rewrites must
 //!   not expose new integer sinks to the earlier representation-changing passes.
+//! - The per-pass validation is additionally gated on `ELEPHC_IR_VALIDATE`, which
+//!   defaults to on. It is 67.5 % of the whole EIR optimization phase in a DEBUG
+//!   build of a Symfony-scale program (2026-09-03 profile), and that cost is paid
+//!   only by the debug iteration loop — a release build never compiles the call.
 
 use crate::ir::{DataPool, Function, Module};
 
@@ -59,6 +63,40 @@ const MAX_PASS_ITERATIONS: usize = 64;
 /// inline chains need one round per call-graph level); the cap is a generous
 /// backstop, after which the current IR is kept as-is.
 const MAX_MODULE_ITERATIONS: usize = 10;
+
+/// Returns whether the debug-build per-pass IR validation runs, memoized for the process.
+///
+/// `validate_function` runs after EVERY applicable pass on EVERY function, so its
+/// cost scales with (functions x passes x fixed-point sweeps) rather than with the
+/// program: it is 67.5 % of the EIR optimization phase in a debug build of the
+/// Symfony `--web` entry point. Turning it off costs the safety net that names the
+/// pass which produced malformed IR, so it stays ON unless the developer asks —
+/// this exists for the edit/compile loop, not for CI.
+///
+/// The value is read once. Reading the environment on every pass would replace one
+/// linear walk of the function with a lock and an allocation per pass, which is
+/// the wrong trade in exactly the build this gate is for.
+///
+/// This gate does NOT reach `validate_lowered_module` (src/ir_lower/program.rs):
+/// that one runs in release as well, on lowered output rather than after a pass,
+/// and is a different guarantee.
+#[cfg(debug_assertions)]
+fn per_pass_validation_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        per_pass_validation_from_env(std::env::var("ELEPHC_IR_VALIDATE").ok().as_deref())
+    })
+}
+
+/// Maps an `ELEPHC_IR_VALIDATE` value to whether per-pass validation runs.
+///
+/// Unset keeps today's behaviour. Only `0` and `off` disable it: anything else
+/// stays on, so a typo cannot silently retire the check that catches a pass
+/// emitting malformed IR.
+#[cfg(debug_assertions)]
+fn per_pass_validation_from_env(value: Option<&str>) -> bool {
+    !matches!(value, Some("0") | Some("off"))
+}
 
 /// A mutating EIR transformation pass over a single function.
 pub trait IrPass {
@@ -288,13 +326,15 @@ pub fn run_function_passes(
             }
             let pass_changed = pass.run(function, data);
             #[cfg(debug_assertions)]
-            if let Err(error) = crate::ir::validate_function(function) {
-                panic!(
-                    "EIR pass '{}' produced invalid IR in function '{}': {:?}",
-                    pass.name(),
-                    function.name,
-                    error
-                );
+            if per_pass_validation_enabled() {
+                if let Err(error) = crate::ir::validate_function(function) {
+                    panic!(
+                        "EIR pass '{}' produced invalid IR in function '{}': {:?}",
+                        pass.name(),
+                        function.name,
+                        error
+                    );
+                }
             }
             changed |= pass_changed;
         }
@@ -313,5 +353,72 @@ pub fn run_function_passes(
     #[cfg(not(debug_assertions))]
     {
         modified
+    }
+}
+
+#[cfg(all(test, debug_assertions))]
+mod validation_gate_tests {
+    //! Purpose:
+    //! Unit tests for the `ELEPHC_IR_VALIDATE` gate on per-pass IR validation.
+    //!
+    //! Called from:
+    //! - `cargo test` through Rust's test harness.
+    //!
+    //! Key details:
+    //! - The gate must default to ON: a performance knob that silently disabled
+    //!   the malformed-IR check would turn a loud panic into a miscompile.
+    //! - The environment half runs in a CHILD PROCESS, the convention this repo
+    //!   already uses for environment-sensitive tests (src/runtime_cache/tests.rs:116).
+    //!   Setting the variable in-process would race: another test thread reaching
+    //!   `per_pass_validation_enabled()` first would memoize `false` and quietly
+    //!   retire the validation for every remaining test in the binary.
+
+    use super::{per_pass_validation_enabled, per_pass_validation_from_env};
+
+    /// Only an explicit `0`/`off` may disable the check; everything else keeps it.
+    #[test]
+    fn only_an_explicit_off_disables_per_pass_validation() {
+        assert!(per_pass_validation_from_env(None), "unset must keep validation on");
+        assert!(!per_pass_validation_from_env(Some("0")));
+        assert!(!per_pass_validation_from_env(Some("off")));
+        assert!(per_pass_validation_from_env(Some("1")));
+        assert!(
+            per_pass_validation_from_env(Some("no")),
+            "an unrecognised value must not silently retire the check"
+        );
+        assert!(per_pass_validation_from_env(Some("")));
+    }
+
+    /// The memoized gate must actually read `ELEPHC_IR_VALIDATE`.
+    ///
+    /// The parent asserts the default (no variable in the environment, validation
+    /// on) and then re-runs itself with `ELEPHC_IR_VALIDATE=0`; the child asserts
+    /// the gate came back false. A gate wired to the wrong name, or to nothing,
+    /// fails the child half.
+    #[test]
+    fn the_gate_reads_its_environment_variable() {
+        const TEST_NAME: &str = "the_gate_reads_its_environment_variable";
+        if std::env::var("ELEPHC_IR_VALIDATE_PROBE").as_deref() != Ok(TEST_NAME) {
+            assert!(
+                per_pass_validation_enabled(),
+                "per-pass validation must be on when ELEPHC_IR_VALIDATE is unset"
+            );
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([TEST_NAME, "--nocapture", "--test-threads=1"])
+                .env("ELEPHC_IR_VALIDATE_PROBE", TEST_NAME)
+                .env("ELEPHC_IR_VALIDATE", "0")
+                .output()
+                .expect("spawn isolated IR-validation gate probe");
+            assert!(
+                output.status.success(),
+                "isolated IR-validation gate probe failed:\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        assert!(
+            !per_pass_validation_enabled(),
+            "ELEPHC_IR_VALIDATE=0 must skip the per-pass validation"
+        );
     }
 }

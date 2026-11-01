@@ -10,6 +10,7 @@
 //! - Exits immediately on invalid CLI state so later stages receive normalized options.
 
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::process;
 
 pub(crate) use crate::codegen::Emit;
@@ -131,8 +132,10 @@ Modes:
   --web                   Compile as a prefork HTTP server
   --web-isolation MODE    worker (default) | pool | request; requires --web
   --web-lifecycle MODE    request (default) | application; application requires worker isolation
+  --closed-world          Link no interpreter; fail the build if anything still needs it (or ELEPHC_CLOSED_WORLD=1)
   --strict-php            Reject elephc extensions in tagged PHP source; .lfc remains extension-enabled
   --strict-locals         Make an incompatible local retype (e.g. int then string) a compile error instead of a warning
+  --lint                  Report PHP-divergent lints: unused variables, unreachable code, and permissive local retypes
 
 Output modes:
   --check                 Type-check only, no codegen (mutually exclusive with --emit-ir/--emit-asm)
@@ -141,6 +144,7 @@ Output modes:
   --emit KIND             Output kind: executable (default) | cdylib | staticlib | phpext
                           Aliases: exe/bin | dylib/shared | static/lib (`lib` is staticlib)
   --export-constant NAME  Export a declared constant in phpext output (repeatable)
+  --output-dir DIR        Write all generated artifacts beneath DIR
 
 Target:
   --target TARGET         macos-aarch64 | ios-arm64 | ios-sim-arm64 |
@@ -148,7 +152,7 @@ Target:
   --php-version VERSION   8.0 through 8.6 (detected; fallback: 8.5)
 
 Codegen:
-  --heap-size=BYTES       Fixed heap size in bytes (default: 134217728)
+  --heap-size=BYTES       Fixed heap size in bytes (default: 134217728, php's memory_limit)
   --null-repr=MODE        tagged (default) | sentinel
   --regalloc=MODE         linear (default) | stack
   --ir-opt=on|off         EIR optimization passes (default: on; --no-ir-opt is an alias for --ir-opt=off)
@@ -214,6 +218,8 @@ pub(crate) struct CliConfig {
     /// RELIES on invalidation fails loudly rather than silently running stale code.
     pub(crate) strict_opcache: bool,
     pub(crate) emit_ir: bool,
+    /// Optional directory receiving every generated compiler artifact.
+    pub(crate) output_dir: Option<PathBuf>,
     pub(crate) null_repr: crate::codegen::NullRepr,
     pub(crate) emit_asm: bool,
     pub(crate) emit: Emit,
@@ -246,7 +252,13 @@ pub(crate) struct CliConfig {
     /// Make an incompatible local retype (e.g. a variable assigned `int` then
     /// later `string`) a compile error instead of a warning.
     pub(crate) strict_locals: bool,
+    /// Report PHP-divergent lints (unused variables, unreachable code, permissive local retypes).
+    /// Off by default so an ordinary PHP program compiles with the same silence as under php.
+    pub(crate) lint: bool,
     pub(crate) web: bool,
+    /// Link no interpreter (eval bridge): any construct that still needs it fails the build
+    /// with the list of reasons. Also requested by `ELEPHC_CLOSED_WORLD=1`.
+    pub(crate) closed_world: bool,
     /// Process-isolation architecture baked into a `--web` executable.
     pub(crate) web_isolation: WebIsolation,
     /// Retain a typed application between requests in worker isolation.
@@ -363,13 +375,17 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
         process::exit(0);
     }
 
-    let mut heap_size: usize = 134_217_728; // 128 MB, PHP's default memory_limit
+    // php's own `memory_limit` default. The heap is reserved (zero-fill, touched only as it is
+    // used), not committed, so the size costs neither binary bytes nor resident memory; 8 MB was
+    // not enough for a Symfony console rebuilding its container (`lint:container`).
+    let mut heap_size: usize = 134_217_728;
     let mut gc_stats = false;
     let mut counters = false;
     let mut instrument = crate::codegen::Instrumentation::Off;
     let mut heap_debug = false;
     let mut strict_opcache = false;
     let mut emit_ir = false;
+    let mut output_dir: Option<PathBuf> = None;
     let mut emit_asm = false;
     let mut emit = Emit::Executable;
     let mut export_constants = Vec::new();
@@ -389,7 +405,9 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut defines: HashSet<String> = HashSet::new();
     let mut strict_php = false;
     let mut strict_locals = false;
+    let mut lint = false;
     let mut web = false;
+    let mut closed_world = crate::closed_world::requested_by_environment();
     let mut web_isolation = WebIsolation::default();
     let mut web_isolation_explicit = false;
     let mut web_application = false;
@@ -471,6 +489,18 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
             strict_opcache = true;
         } else if arg == "--emit-ir" {
             emit_ir = true;
+        } else if arg == "--output-dir" {
+            i += 1;
+            let value = required_value(args, i, "Missing directory after --output-dir");
+            if value.is_empty() {
+                fail("Invalid --output-dir: directory cannot be empty");
+            }
+            output_dir = Some(PathBuf::from(value));
+        } else if let Some(value) = arg.strip_prefix("--output-dir=") {
+            if value.is_empty() {
+                fail("Invalid --output-dir: directory cannot be empty");
+            }
+            output_dir = Some(PathBuf::from(value));
         } else if arg == "--emit-asm" {
             emit_asm = true;
         } else if arg == "--emit" {
@@ -561,6 +591,10 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
             strict_php = true;
         } else if arg == "--strict-locals" {
             strict_locals = true;
+        } else if arg == "--lint" {
+            lint = true;
+        } else if arg == "--closed-world" {
+            closed_world = true;
         } else if arg == "--web" {
             web = true;
         } else if arg == "--web-lifecycle" {
@@ -690,6 +724,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
         heap_debug,
         strict_opcache,
         emit_ir,
+        output_dir,
         null_repr,
         emit_asm,
         emit,
@@ -711,7 +746,9 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
         defines,
         strict_php,
         strict_locals,
+        lint,
         web,
+        closed_world,
         web_isolation,
         web_application,
         with_crates,
@@ -821,6 +858,20 @@ fn parse_required_php_version(
 
 /// Parses a supported PHP compatibility version or exits with a focused diagnostic.
 fn parse_php_version(value: &str) -> crate::web_prelude::PhpVersion {
+    // `8.5.10`: the `8.5` profile, reporting patch release 10 to the program.
+    let mut parts = value.splitn(3, '.');
+    let (major, minor, patch) = (parts.next(), parts.next(), parts.next());
+    if let (Some(major), Some(minor), Some(patch)) = (major, minor, patch) {
+        if let (Some(profile), Ok(patch)) = (
+            crate::web_prelude::PhpVersion::parse(&format!("{major}.{minor}")),
+            patch.parse::<u32>(),
+        ) {
+            if patch < 100 {
+                crate::web_prelude::PhpVersion::set_reported_release(patch);
+                return profile;
+            }
+        }
+    }
     crate::web_prelude::PhpVersion::parse(value).unwrap_or_else(|| {
         fail(&format!(
             "Unsupported PHP version '{}': expected one of: {}",
@@ -1431,6 +1482,14 @@ mod tests {
         assert!(config.defines.contains("FEATURE"));
     }
 
+    /// Verifies `--lint` sets the lint flag on the parsed config.
+    #[test]
+    fn lint_flag_sets_lint() {
+        let args = vec!["elephc".into(), "--lint".into(), "app.php".into()];
+        let config = compile_config(&args);
+        assert!(config.lint);
+    }
+
     /// Verifies `--strict-locals` sets the strict_locals flag on the parsed config.
     #[test]
     fn strict_locals_flag_sets_strict_locals() {
@@ -1445,6 +1504,14 @@ mod tests {
         let args = vec!["elephc".into(), "app.php".into()];
         let config = compile_config(&args);
         assert!(!config.strict_locals);
+    }
+
+    /// Verifies the absence of `--lint` keeps the PHP-divergent lints off.
+    #[test]
+    fn no_lint_flag_defaults_off() {
+        let args = vec!["elephc".into(), "app.php".into()];
+        let config = compile_config(&args);
+        assert!(!config.lint);
     }
 
     /// Verifies `--quiet` sets the quiet flag.
@@ -1632,5 +1699,30 @@ mod tests {
             panic!("explicit source path must remain a compile command");
         };
         assert_eq!(config.filename, "./native");
+    }
+
+    /// Verifies the split output-directory form stores the requested path.
+    #[test]
+    fn output_dir_split_form_stores_value() {
+        let args = vec![
+            "elephc".into(),
+            "--output-dir".into(),
+            "target/out".into(),
+            "app.php".into(),
+        ];
+        let config = compile_config(&args);
+        assert_eq!(config.output_dir.as_deref(), Some(std::path::Path::new("target/out")));
+    }
+
+    /// Verifies the inline output-directory form parses identically.
+    #[test]
+    fn output_dir_inline_form_stores_value() {
+        let args = vec![
+            "elephc".into(),
+            "--output-dir=build".into(),
+            "app.php".into(),
+        ];
+        let config = compile_config(&args);
+        assert_eq!(config.output_dir.as_deref(), Some(std::path::Path::new("build")));
     }
 }

@@ -11,6 +11,7 @@
 
 use super::super::super::*;
 use super::super::support::*;
+use crate::errors::EvalParseError;
 
 /// Verifies get-only property hooks throw Error on writes outside a set accessor.
 #[test]
@@ -344,7 +345,7 @@ fn parse_fragment_rejects_final_abstract_property_hook_contract() {
     )
     .expect_err("final abstract property should fail");
 
-    assert_eq!(err, EvalParseError::UnsupportedConstruct);
+    assert_eq!(err.error(), EvalParseError::UnsupportedConstruct);
 }
 
 /// Verifies readonly properties cannot satisfy abstract writable hook contracts.

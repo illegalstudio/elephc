@@ -98,6 +98,28 @@ fn execute_program_propagates_throw_as_uncaught_outcome() {
         EvalOutcome::Value(value) => panic!("expected Throwable, got {:?}", values.get(value)),
     }
 }
+/// Verifies a throw expression in a match arm reaches the ordinary catch channel.
+#[test]
+fn execute_program_catches_throw_expression_from_match() {
+    let program = parse_fragment(
+        br#"try {
+    return match (1) {
+        2 => 0,
+        default => throw new Exception("missing"),
+    };
+} catch (Throwable) {
+    return 42;
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values)
+        .expect("catch should handle the throw expression");
+
+    assert_eq!(values.get(result), FakeValue::Int(42));
+}
 /// Verifies eval `try/catch` catches a thrown object and binds the catch variable.
 #[test]
 fn execute_program_catches_throwable_inside_eval() {
@@ -150,8 +172,14 @@ fn execute_program_catches_throwable_without_variable_inside_eval() {
         .map(|cell| values.type_tag(cell)).collect::<Vec<_>>();
 
     assert_eq!(scope.visible_cell("caught"), None);
-    assert_eq!(released_tags, vec![Ok(EVAL_TAG_STRING), Ok(EVAL_TAG_OBJECT)],
-        "the constructor operand and unbound exception each release their own cell");
+    // The first two are the `file` string and `line` int the Throwable captures at allocation
+    // (`initialize_native_throwable_source`): each is a temporary the property write retains,
+    // so it is released once written. Then the constructor operand, then the exception.
+    assert_eq!(
+        released_tags,
+        vec![Ok(EVAL_TAG_STRING), Ok(EVAL_TAG_INT), Ok(EVAL_TAG_STRING), Ok(EVAL_TAG_OBJECT)],
+        "the source temporaries, the constructor operand and the unbound exception each release their own cell"
+    );
     assert_eq!(values.get(result), FakeValue::Int(9));
 }
 /// Verifies eval `catch (Exception)` matches thrown exception objects.
@@ -304,8 +332,12 @@ fn execute_program_finally_return_overrides_uncaught_throw() {
         .map(|cell| values.type_tag(cell)).collect::<Vec<_>>();
 
     assert_eq!(values.get(result), FakeValue::Int(2));
-    assert_eq!(released_tags, vec![Ok(EVAL_TAG_STRING), Ok(EVAL_TAG_OBJECT)],
-        "finally releases the overridden exception after its constructor operand");
+    // `file` and `line` are the temporaries the Throwable's source capture writes and releases.
+    assert_eq!(
+        released_tags,
+        vec![Ok(EVAL_TAG_STRING), Ok(EVAL_TAG_INT), Ok(EVAL_TAG_STRING), Ok(EVAL_TAG_OBJECT)],
+        "finally releases the overridden exception after its constructor operand"
+    );
 }
 /// Verifies eval `finally` runs before an uncaught throw leaves the fragment.
 #[test]
@@ -456,12 +488,17 @@ fn execute_program_include_uses_call_site_and_returns_file_result() {
     let path = dir.join("piece.php");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create include fixture directory");
+    // PHP resolves the included file's path, so `__DIR__`/`__FILE__` carry the canonical form.
+    // `std::env::temp_dir()` on macOS spells the same directory through the `/var` symlink, so the
+    // fixture must compare against the resolved paths or it asserts a spelling PHP never reports.
+    let canonical_dir = std::fs::canonicalize(&dir).expect("resolve fixture directory");
+    let canonical_path = canonical_dir.join("piece.php");
     std::fs::write(
             &path,
             format!(
                 r#"<?php echo (__DIR__ === "{}" ? "D" : "d"); echo (__FILE__ === "{}" ? "F" : "f"); $x = $x + 1; return $x;"#,
-                dir.to_string_lossy(),
-                path.to_string_lossy()
+                canonical_dir.to_string_lossy(),
+                canonical_path.to_string_lossy()
             ),
         )
         .expect("write include fixture");
@@ -488,6 +525,49 @@ fn execute_program_include_uses_call_site_and_returns_file_result() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Verifies ReflectionClass sees an inherited method after runtime includes declare each class.
+#[test]
+fn execute_program_reflection_has_method_follows_runtime_include_parent() {
+    let dir = std::env::temp_dir().join(format!(
+        "elephc-magician-reflection-inherited-include-{}",
+        std::process::id()
+    ));
+    let parent_path = dir.join("parent.php");
+    let child_path = dir.join("child.php");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create inherited include fixture directory");
+    std::fs::write(
+        &parent_path,
+        r#"<?php class EvalIncludedParent { public function inherited(): void {} }"#,
+    )
+    .expect("write dynamic parent fixture");
+    std::fs::write(
+        &child_path,
+        r#"<?php include "parent.php"; class EvalIncludedChild extends EvalIncludedParent {}"#,
+    )
+    .expect("write dynamic child fixture");
+    let program = parse_fragment(
+        br#"include "child.php"; $ref = new ReflectionClass("EvalIncludedChild"); echo $ref->hasMethod("inherited") ? "yes" : "no"; return true;"#,
+    )
+    .expect("parse inherited reflection include fragment");
+    let mut context = ElephcEvalContext::new();
+    context.set_call_site(
+        dir.join("main.php").to_string_lossy().into_owned(),
+        dir.to_string_lossy().into_owned(),
+        1,
+    );
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("execute inherited reflection include fragment");
+
+    assert_eq!(values.output, "yes");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Verifies regular include marks a file so later include_once skips it and returns true.
 #[test]
 fn execute_program_include_once_skips_regularly_included_file() {
@@ -532,6 +612,37 @@ fn execute_program_missing_include_warns_and_returns_false() {
     assert_eq!(values.get(result), FakeValue::Bool(false));
     assert_eq!(values.warnings.len(), 2);
 }
+/// Verifies an expression used as a statement does not release storage it only read.
+///
+/// `php -n` 8.5.6 prints `xy` for this fragment. An expression STATEMENT discards its value, but
+/// a variable read hands back the scope's own cell and an assignment hands back the very cell it
+/// just stored — releasing either gave back a reference the statement never took, which in a
+/// counting runtime destroys the object the variable still points at. The fixture counts here,
+/// so the over-release fails the test instead of passing silently.
+#[test]
+fn execute_program_expression_statements_do_not_release_borrowed_values() {
+    let program = parse_fragment(
+        br#"$a = "x";
+$a;
+$a .= "y";
+$c = 1;
+$c ??= 2;
+$d = new stdClass();
+$d->k = 3;
+echo $a; echo $c; echo $d->k;
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "xy13");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+    assert!(values.over_releases().is_empty());
+}
+
 /// Verifies missing require emits warnings and aborts the eval program.
 #[test]
 fn execute_program_missing_require_is_runtime_fatal() {

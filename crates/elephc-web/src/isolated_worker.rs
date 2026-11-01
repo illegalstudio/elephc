@@ -182,7 +182,12 @@ impl Body for WebBody {
 /// Serves HTTP on `listen` (host:port) in this worker process. Builds a
 /// current-thread tokio runtime and loops accepting connections, serving each
 /// with the PHP handler per `WorkerConfig`.
-pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
+pub fn serve(
+    listen: &str,
+    handler: extern "C" fn(),
+    cfg: WorkerConfig,
+    inherited_listener: Option<std::os::fd::RawFd>,
+) {
     let WorkerConfig {
         max_body,
         body_read_secs,
@@ -221,12 +226,24 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
             std::process::exit(1);
         }
     };
-    let std_listener = match reuseport_listener(addr) {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("elephc-web: failed to bind {}: {}", addr, e);
-            std::process::exit(1);
-        }
+    // A descriptor handed down by the master is already bound and listening: adopting it is
+    // what makes every worker accept from ONE queue on platforms where SO_REUSEPORT does not
+    // distribute. Without one, each worker binds its own SO_REUSEPORT socket as before.
+    let std_listener = match inherited_listener {
+        Some(fd) => match unsafe { crate::shared_listener::adopt(fd) } {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("elephc-web: failed to adopt the inherited listener: {}", e);
+                std::process::exit(1);
+            }
+        },
+        None => match reuseport_listener(addr) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("elephc-web: failed to bind {}: {}", addr, e);
+                std::process::exit(1);
+            }
+        },
     };
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()

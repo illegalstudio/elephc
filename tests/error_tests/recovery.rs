@@ -77,12 +77,13 @@ fn test_type_checker_recovery_collects_multiple_early_errors() {
 }
 
 /// Verifies the type checker collects multiple method return type mismatch errors from
-/// two methods in the same class that return an integer where string is expected. Uses
-/// `check_source_full` to confirm at least 2 errors are reported with their messages.
+/// two methods in the same class that return an integer where string is expected under
+/// `declare(strict_types=1)` (weak mode coerces them like php). Uses `check_source_full` to
+/// confirm at least 2 errors are reported with their messages.
 #[test]
 fn test_type_checker_recovery_collects_multiple_method_return_errors() {
     let error = check_source_full(
-        "<?php class Demo { public function one(): string { return 1; } public function two(): string { return 2; } }",
+        "<?php declare(strict_types=1); class Demo { public function one(): string { return 1; } public function two(): string { return 2; } }",
     )
     .unwrap_err();
     let all = error.flatten();

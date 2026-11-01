@@ -146,6 +146,17 @@ fn callable_receiver_error_is_lazy(scope: ParentScope<'_>, error: &CompileError)
             | "Cannot access \"parent\" when no class scope is active"))
 }
 
+/// Interface counterpart of [`resolve_lexical_class_constant_value`]: an interface has no
+/// parent class, so only `self::` names it. Carbon's `TranslationOptions::TRANSLATE_ALL =
+/// self::TRANSLATE_MONTHS | …` is read from a trait parameter default of `CarbonInterval`, which
+/// does not implement the interface: a raw `self::` resolved there was undefined.
+pub(in crate::types::checker::schema) fn resolve_lexical_interface_constant_value(
+    value: &Expr,
+    interface_name: &str,
+) -> Result<Expr, CompileError> {
+    rewrite_expr(value, interface_name, ParentScope::Missing)
+}
+
 /// Recursively rewrites all expressions in a class-constant value, resolving lexical
 /// constant receivers found in `ClassConstant` and `ScopedConstantAccess` nodes.
 fn rewrite_expr(
@@ -171,6 +182,11 @@ fn rewrite_expr(
         ExprKind::Negate(inner) => {
             ExprKind::Negate(Box::new(rewrite_expr(inner, class_name, parent_name)?))
         }
+        ExprKind::ArrayReference(inner) => ExprKind::ArrayReference(Box::new(rewrite_expr(
+            inner,
+            class_name,
+            parent_name,
+        )?)),
         ExprKind::Not(inner) => {
             ExprKind::Not(Box::new(rewrite_expr(inner, class_name, parent_name)?))
         }
@@ -458,6 +474,18 @@ fn rewrite_expr(
             ExprKind::ScopedConstantAccess {
                 receiver,
                 name: name.clone(),
+            }
+        }
+        ExprKind::DynamicScopedConstantAccess { receiver, name } => {
+            ExprKind::DynamicScopedConstantAccess {
+                receiver: Box::new(rewrite_expr(receiver, class_name, parent_name)?),
+                name: name.clone(),
+            }
+        }
+        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+            ExprKind::DynamicStaticPropertyAccess {
+                receiver: rewrite_constant_receiver(receiver, class_name, parent_name, expr.span, false)?,
+                property: Box::new(rewrite_expr(property, class_name, parent_name)?),
             }
         }
         ExprKind::NewScopedObject { receiver, args } => {

@@ -11,11 +11,94 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
-/// Parses the input string according to the format string, returning matched substrings as a string array.
+/// Concrete PHP scalar produced by one supported scanner conversion.
+#[derive(Clone, Copy)]
+enum SscanfValueKind {
+    Int,
+    Float,
+    String,
+}
+
+/// Boxes and appends the current ARM64 match held in `x5`/`x6`.
+fn emit_append_aarch64(emitter: &mut Emitter, kind: SscanfValueKind) {
+    match kind {
+        SscanfValueKind::Int => {
+            emitter.instruction("mov x1, x5");                                  // pass the matched integer-slice pointer to the decimal parser
+            emitter.instruction("mov x2, x6");                                  // pass the matched integer-slice length to the decimal parser
+            emitter.instruction("mov x3, #10");                                 // parse scanner integers in decimal
+            emitter.instruction("bl __rt_str_to_int_base");                     // convert the matched byte slice into a PHP integer
+            emitter.instruction("mov x1, x0");                                  // move the parsed integer into the Mixed low payload word
+            emitter.instruction("mov x2, xzr");                                 // integer Mixed values do not use the high payload word
+            emitter.instruction("mov x0, #0");                                  // runtime tag 0 = integer
+        }
+        SscanfValueKind::Float => {
+            emitter.instruction("mov x1, x5");                                  // pass the matched float-slice pointer to C-string conversion
+            emitter.instruction("mov x2, x6");                                  // pass the matched float-slice length to C-string conversion
+            emitter.instruction("bl __rt_cstr");                                // materialize the null-terminated float token expected by libc
+            emitter.bl_c("atof");                                               // parse the matched token into d0
+            emitter.instruction("fmov x1, d0");                                 // move the parsed double bits into the Mixed low payload word
+            emitter.instruction("mov x2, xzr");                                 // float Mixed values do not use the high payload word
+            emitter.instruction("mov x0, #2");                                  // runtime tag 2 = float
+        }
+        SscanfValueKind::String => {
+            emitter.instruction("mov x1, x5");                                  // pass the matched string-slice pointer to Mixed boxing
+            emitter.instruction("mov x2, x6");                                  // pass the matched string-slice length to Mixed boxing
+            emitter.instruction("mov x0, #1");                                  // runtime tag 1 = string
+        }
+    }
+    emitter.instruction("bl __rt_mixed_from_value");                            // allocate an owned typed Mixed cell for the scan result
+    emitter.instruction("str x0, [sp, #40]");                                   // preserve the temporary Mixed box across the array append
+    emitter.instruction("mov x1, x0");                                          // pass the borrowed Mixed cell to the refcounted append helper
+    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the current result-array pointer
+    emitter.instruction("bl __rt_array_push_refcounted");                       // retain and append the typed Mixed cell
+    emitter.instruction("str x0, [sp, #32]");                                   // preserve the possibly relocated result-array pointer
+    emitter.instruction("ldr x0, [sp, #40]");                                   // reload the helper-owned Mixed cell
+    emitter.instruction("bl __rt_decref_mixed");                                // drop helper ownership after the array retained the cell
+}
+
+/// Boxes and appends the current x86_64 match held in `r10`/`r11`.
+fn emit_append_x86_64(emitter: &mut Emitter, kind: SscanfValueKind) {
+    match kind {
+        SscanfValueKind::Int => {
+            emitter.instruction("mov rdi, r10");                                // pass the matched integer-slice pointer to the decimal parser
+            emitter.instruction("mov rsi, r11");                                // pass the matched integer-slice length to the decimal parser
+            emitter.instruction("mov rdx, 10");                                 // parse scanner integers in decimal
+            emitter.instruction("call __rt_str_to_int_base");                   // convert the matched byte slice into a PHP integer
+            emitter.instruction("mov rdi, rax");                                // move the parsed integer into the Mixed low payload word
+            emitter.instruction("xor esi, esi");                                // integer Mixed values do not use the high payload word
+            emitter.instruction("xor eax, eax");                                // runtime tag 0 = integer
+        }
+        SscanfValueKind::Float => {
+            emitter.instruction("mov rax, r10");                                // pass the matched float-slice pointer to C-string conversion
+            emitter.instruction("mov rdx, r11");                                // pass the matched float-slice length to C-string conversion
+            emitter.instruction("call __rt_cstr");                              // materialize the null-terminated float token expected by libc
+            emitter.instruction("mov rdi, rax");                                // pass the scratch C string as libc's first argument
+            emitter.bl_c("atof");                                               // parse the matched token into xmm0
+            emitter.instruction("movq rdi, xmm0");                              // move the parsed double bits into the Mixed low payload word
+            emitter.instruction("xor esi, esi");                                // float Mixed values do not use the high payload word
+            emitter.instruction("mov eax, 2");                                  // runtime tag 2 = float
+        }
+        SscanfValueKind::String => {
+            emitter.instruction("mov rdi, r10");                                // pass the matched string-slice pointer to Mixed boxing
+            emitter.instruction("mov rsi, r11");                                // pass the matched string-slice length to Mixed boxing
+            emitter.instruction("mov eax, 1");                                  // runtime tag 1 = string
+        }
+    }
+    emitter.instruction("call __rt_mixed_from_value");                          // allocate an owned typed Mixed cell for the scan result
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                      // preserve the temporary Mixed box across the array append
+    emitter.instruction("mov rsi, rax");                                        // pass the borrowed Mixed cell to the refcounted append helper
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                      // reload the current result-array pointer
+    emitter.instruction("call __rt_array_push_refcounted");                     // retain and append the typed Mixed cell
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                      // preserve the possibly relocated result-array pointer
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                      // reload the helper-owned Mixed cell
+    emitter.instruction("call __rt_decref_mixed");                              // drop helper ownership after the array retained the cell
+}
+
+/// Parses the input string according to the format string, returning typed values in a Mixed array.
 ///
 /// dispatches to the x86_64 Linux variant; for ARM64 emits the scan loop inline.
 /// Input: x1/x2 = input string (ptr, len), x3/x4 = format string (ptr, len)
-/// Output: x0 = array pointer containing matched string slices
+/// Output: x0 = array pointer containing boxed Mixed values
 /// Supports: %d (optional sign + digits), %f (sign, int digits, '.', fraction, exponent), %s (non-whitespace word), %% (literal percent)
 /// Literal characters in the format must match the input exactly; mismatches terminate parsing early.
 pub fn emit_sscanf(emitter: &mut Emitter) {
@@ -27,15 +110,15 @@ pub fn emit_sscanf(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: sscanf ---");
     emitter.label_global("__rt_sscanf");
-    emitter.instruction("sub sp, sp, #80");                                     // allocate stack frame
-    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #64");                                    // set frame pointer
+    emitter.instruction("sub sp, sp, #96");                                     // allocate stack frame
+    emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #80");                                    // set frame pointer
     emitter.instruction("stp x1, x2, [sp]");                                    // save input ptr/len
     emitter.instruction("stp x3, x4, [sp, #16]");                               // save format ptr/len
 
     // -- create result array --
     emitter.instruction("mov x0, #8");                                          // initial capacity
-    emitter.instruction("mov x1, #16");                                         // elem_size = 16 (string ptr + len)
+    emitter.instruction("mov x1, #8");                                          // elem_size = 8 (boxed Mixed cell pointer)
     emitter.instruction("bl __rt_array_new");                                   // allocate array
     emitter.instruction("str x0, [sp, #32]");                                   // save array pointer
 
@@ -102,13 +185,9 @@ pub fn emit_sscanf(emitter: &mut Emitter) {
     emitter.instruction("add x6, x6, #1");                                      // count
     emitter.instruction("b __rt_sscanf_d_loop");                                // continue
     emitter.label("__rt_sscanf_d_end");
-    // Push matched string (x5=start, x6=len) into array
+    // Push the parsed integer into the Mixed result array.
     emitter.instruction("stp x1, x2, [sp]");                                    // save input state
-    emitter.instruction("ldr x0, [sp, #32]");                                   // array ptr
-    emitter.instruction("mov x1, x5");                                          // matched start
-    emitter.instruction("mov x2, x6");                                          // matched length
-    emitter.instruction("bl __rt_array_push_str");                              // push to array
-    emitter.instruction("str x0, [sp, #32]");                                   // update array pointer after possible realloc
+    emit_append_aarch64(emitter, SscanfValueKind::Int);
     emitter.instruction("ldp x1, x2, [sp]");                                    // restore input state
     emitter.instruction("ldp x3, x4, [sp, #16]");                               // restore format state
     emitter.instruction("b __rt_sscanf_loop");                                  // continue
@@ -194,11 +273,7 @@ pub fn emit_sscanf(emitter: &mut Emitter) {
     emitter.instruction("b __rt_sscanf_f_exp_digits");                          // scan more exponent digits
     emitter.label("__rt_sscanf_f_end");
     emitter.instruction("stp x1, x2, [sp]");                                    // save input state
-    emitter.instruction("ldr x0, [sp, #32]");                                   // array ptr
-    emitter.instruction("mov x1, x5");                                          // matched start
-    emitter.instruction("mov x2, x6");                                          // matched length
-    emitter.instruction("bl __rt_array_push_str");                              // push the matched float slice
-    emitter.instruction("str x0, [sp, #32]");                                   // update array pointer after possible realloc
+    emit_append_aarch64(emitter, SscanfValueKind::Float);
     emitter.instruction("ldp x1, x2, [sp]");                                    // restore input state
     emitter.instruction("ldp x3, x4, [sp, #16]");                               // restore format state
     emitter.instruction("b __rt_sscanf_loop");                                  // continue
@@ -225,11 +300,7 @@ pub fn emit_sscanf(emitter: &mut Emitter) {
     emitter.instruction("b __rt_sscanf_s_loop");                                // continue
     emitter.label("__rt_sscanf_s_end");
     emitter.instruction("stp x1, x2, [sp]");                                    // save input state
-    emitter.instruction("ldr x0, [sp, #32]");                                   // array ptr
-    emitter.instruction("mov x1, x5");                                          // matched start
-    emitter.instruction("mov x2, x6");                                          // matched length
-    emitter.instruction("bl __rt_array_push_str");                              // push to array
-    emitter.instruction("str x0, [sp, #32]");                                   // update array pointer after possible realloc
+    emit_append_aarch64(emitter, SscanfValueKind::String);
     emitter.instruction("ldp x1, x2, [sp]");                                    // restore input state
     emitter.instruction("ldp x3, x4, [sp, #16]");                               // restore format state
     emitter.instruction("b __rt_sscanf_loop");                                  // continue
@@ -237,15 +308,15 @@ pub fn emit_sscanf(emitter: &mut Emitter) {
     // -- done --
     emitter.label("__rt_sscanf_done");
     emitter.instruction("ldr x0, [sp, #32]");                                   // return array pointer
-    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame
-    emitter.instruction("add sp, sp, #80");                                     // deallocate
+    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame
+    emitter.instruction("add sp, sp, #96");                                     // deallocate
     emitter.instruction("ret");                                                 // return
 }
 
-/// x86_64 Linux sscanf implementation: parses input according to format, pushes matched slices to a result array.
+/// x86_64 Linux scanner implementation that appends typed Mixed values.
 ///
 /// Uses System V AMD64 ABI: input (rdi, rsi), format (rdx, rcx), result array pointer returned in rax.
-/// Frame spill slots at [rbp-8..rbp-40] preserve pointer/length state across helper calls.
+/// Frame spill slots at [rbp-8..rbp-48] preserve pointer/length, array, and box state.
 /// Supports: %d (optional leading minus + ASCII digit run), %f (sign, int digits, '.', fraction, exponent), %s (non-whitespace byte run), %% (literal percent).
 /// Unknown specifiers are skipped without aborting; literal mismatches terminate the scan loop early.
 fn emit_sscanf_linux_x86_64(emitter: &mut Emitter) {
@@ -254,14 +325,14 @@ fn emit_sscanf_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_sscanf");
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving sscanf() spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the input, format, and result-array state
-    emitter.instruction("sub rsp, 48");                                         // reserve aligned spill slots for the input string, format string, and result array pointer
+    emitter.instruction("sub rsp, 64");                                         // reserve aligned spill slots for scanner state, result array, and temporary Mixed box
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the current input-string pointer across array-allocation and append helper calls
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // preserve the current input-string length across array-allocation and append helper calls
     emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // preserve the current format-string pointer across array-allocation and append helper calls
     emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // preserve the current format-string length across array-allocation and append helper calls
     emitter.instruction("mov rdi, 8");                                          // request the default sscanf() result-array capacity from the shared x86_64 array constructor
-    emitter.instruction("mov rsi, 16");                                         // request 16-byte string slots so the result array can hold ptr+len pairs
-    emitter.instruction("call __rt_array_new");                                 // allocate the result indexed array that will collect matched string slices
+    emitter.instruction("mov rsi, 8");                                          // request pointer-sized slots for boxed Mixed values
+    emitter.instruction("call __rt_array_new");                                 // allocate the result indexed array that will collect typed values
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the result indexed-array pointer across the main scanf loop
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the input-string pointer into the active x86_64 string register
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the input-string length into the active x86_64 string register
@@ -331,11 +402,7 @@ fn emit_sscanf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // preserve the current input-string length before appending the matched integer slice
     emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // preserve the current format-string pointer before appending the matched integer slice
     emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // preserve the current format-string length before appending the matched integer slice
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // reload the result indexed-array pointer into the x86_64 array-append receiver register
-    emitter.instruction("mov rsi, r10");                                        // pass the matched integer-slice pointer to the shared string-array append helper
-    emitter.instruction("mov rdx, r11");                                        // pass the matched integer-slice length to the shared string-array append helper
-    emitter.instruction("call __rt_array_push_str");                            // persist and append the matched integer slice into the result indexed array
-    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the possibly-grown result indexed-array pointer returned by the append helper
+    emit_append_x86_64(emitter, SscanfValueKind::Int);
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // restore the current input-string pointer after appending the matched integer slice
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // restore the current input-string length after appending the matched integer slice
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // restore the current format-string pointer after appending the matched integer slice
@@ -432,11 +499,7 @@ fn emit_sscanf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // preserve the input-string length before appending the float slice
     emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // preserve the format-string pointer before appending the float slice
     emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // preserve the format-string length before appending the float slice
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // reload the result indexed-array pointer
-    emitter.instruction("mov rsi, r10");                                        // pass the matched float-slice pointer to the append helper
-    emitter.instruction("mov rdx, r11");                                        // pass the matched float-slice length to the append helper
-    emitter.instruction("call __rt_array_push_str");                            // append the matched float slice into the result array
-    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the possibly-grown result-array pointer
+    emit_append_x86_64(emitter, SscanfValueKind::Float);
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // restore the input-string pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // restore the input-string length
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // restore the format-string pointer
@@ -469,11 +532,7 @@ fn emit_sscanf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // preserve the current input-string length before appending the matched word slice
     emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // preserve the current format-string pointer before appending the matched word slice
     emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // preserve the current format-string length before appending the matched word slice
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // reload the result indexed-array pointer into the x86_64 array-append receiver register
-    emitter.instruction("mov rsi, r10");                                        // pass the matched word-slice pointer to the shared string-array append helper
-    emitter.instruction("mov rdx, r11");                                        // pass the matched word-slice length to the shared string-array append helper
-    emitter.instruction("call __rt_array_push_str");                            // persist and append the matched word slice into the result indexed array
-    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the possibly-grown result indexed-array pointer returned by the append helper
+    emit_append_x86_64(emitter, SscanfValueKind::String);
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // restore the current input-string pointer after appending the matched word slice
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // restore the current input-string length after appending the matched word slice
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // restore the current format-string pointer after appending the matched word slice
@@ -482,7 +541,7 @@ fn emit_sscanf_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_sscanf_done_linux_x86_64");
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // return the result indexed-array pointer in the primary x86_64 integer result register
-    emitter.instruction("add rsp, 48");                                         // release the sscanf() spill slots before returning
+    emitter.instruction("add rsp, 64");                                         // release the scanner spill slots before returning
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to the caller
     emitter.instruction("ret");                                                 // return the result indexed array in rax
 }

@@ -5,7 +5,7 @@
 //! - `cargo test --test codegen_tests` through Rust's test harness.
 //!
 //! Key details:
-//! - Multi-file fixtures exercise composer.json autoload sections and compile-time SPL rule extraction.
+//! - Multi-file fixtures exercise manifest autoload sections and compile-time SPL rule extraction.
 
 use crate::support::*;
 
@@ -16,7 +16,7 @@ fn test_psr4_single_namespace_autoload() {
     let out = compile_and_run_files(
         &[
             (
-                "composer.json",
+                "module.json",
                 r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#,
             ),
             (
@@ -31,6 +31,205 @@ fn test_psr4_single_namespace_autoload() {
         "main.php",
     );
     assert_eq!(out, "hi");
+}
+
+/// Verifies a definite class-string fallback seeds PSR-4 for a later dynamic `new` target.
+#[test]
+fn test_psr4_dynamic_new_from_literal_array_default() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "public/composer.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#,
+            ),
+            (
+                "public/src/Runtime.php",
+                "<?php\nnamespace App;\nclass Runtime { public function run(): string { return \"dynamic\"; } }\n",
+            ),
+            ("public/autoload.php", "<?php\nreturn 1;\n"),
+            (
+                "public/bootstrap.php",
+                "<?php\nif ((require_once __DIR__ . '/autoload.php') !== 1) {\n    return;\n}\n$options = [];\n$options['runtime'] ??= 'App\\\\Runtime';\n$runtime = new $options['runtime']();\necho $runtime->run();\n",
+            ),
+            (
+                "public/main.php",
+                "<?php\nrequire_once dirname(__DIR__) . '/public/bootstrap.php';\n",
+            ),
+        ],
+        "public/main.php",
+    );
+    assert_eq!(out, "dynamic");
+}
+
+/// Verifies a guarded dynamic factory evaluates its inherited class-string method without loading
+/// unrelated implementations that merely share the factory return contract.
+#[test]
+fn test_psr4_guarded_dynamic_factory_evaluates_concrete_class_string_only() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "module.json",
+                r#"{"autoload":{"psr-4":{"Demo\\":"src/"}}}"#,
+            ),
+            (
+                "src/Base.php",
+                r#"<?php
+namespace Demo;
+interface Contract { public function value(): string; }
+abstract class Base {
+    public function create(): ?Contract {
+        return class_exists($class = $this->extensionClass()) ? new $class() : null;
+    }
+    protected function extensionClass(): string {
+        $name = static::class;
+        $end = strrpos($name, '\\');
+        $namespace = substr($name, 0, $end + 1);
+        $short = substr($name, $end + 1);
+        return $namespace . 'DependencyInjection\\' . preg_replace('/Bundle$/', '', $short) . 'Extension';
+    }
+}
+"#,
+            ),
+            (
+                "src/AppBundle.php",
+                "<?php\nnamespace Demo;\nclass AppBundle extends Base {}\n",
+            ),
+            (
+                "src/DependencyInjection/AppExtension.php",
+                "<?php\nnamespace Demo\\DependencyInjection;\nclass AppExtension implements \\Demo\\Contract { public function value(): string { return 'ok'; } }\n",
+            ),
+            (
+                "src/UnusedExtension.php",
+                "<?php\nnamespace Demo;\necho 'unexpected';\nclass UnusedExtension implements Contract { public function value(): string { return 'wrong'; } }\n",
+            ),
+            (
+                "main.php",
+                "<?php\n$bundle = new Demo\\AppBundle();\necho $bundle->create()->value();\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies a directly constructed factory can discover literal class strings stored in a
+/// constructor property map before a later `new $class` resolves one map entry at runtime.
+#[test]
+fn test_psr4_dynamic_new_from_constructor_class_string_map() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "module.json",
+                r#"{"autoload":{"psr-4":{"Demo\\":"src/"}}}"#,
+            ),
+            (
+                "src/Factory.php",
+                r#"<?php
+namespace Demo;
+class Factory {
+    private array $classes;
+    public function __construct() {
+        $this->classes = ['worker' => Worker::class];
+    }
+    public function run(): string {
+        $class = $this->classes['worker'];
+        return (new $class())->value();
+    }
+}
+"#,
+            ),
+            (
+                "src/Worker.php",
+                "<?php\nnamespace Demo;\nclass Worker { public function value(): string { return 'mapped'; } }\n",
+            ),
+            (
+                "main.php",
+                "<?php\necho (new Demo\\Factory())->run();\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "mapped");
+}
+
+/// Verifies an assignment-expression class default seeds a later dynamic static call.
+#[test]
+fn test_psr4_dynamic_static_call_from_assignment_expression_default() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "module.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#,
+            ),
+            (
+                "src/Handler.php",
+                "<?php\nnamespace App;\nclass Handler { public static function register(bool $enabled): void { echo $enabled ? 'ok' : 'bad'; } }\n",
+            ),
+            (
+                "main.php",
+                "<?php\n$options = [];\nif (false !== $handler = ($options['handler'] ?? App\\Handler::class)) {\n    $handler::register(true);\n}\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies a class-string default assigned by a subclass reaches a dynamic static call in its
+/// parent even when autoload dependency insertion places the parent declaration first.
+#[test]
+fn test_psr4_dynamic_static_call_from_subclass_array_default_reaches_parent() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "module.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#,
+            ),
+            (
+                "src/Handler.php",
+                "<?php\nnamespace App;\nclass Handler { public static function register(bool $enabled): void { echo $enabled ? 'ok' : 'bad'; } }\n",
+            ),
+            (
+                "src/BaseRuntime.php",
+                "<?php\nnamespace App;\nclass BaseRuntime { public function __construct(array $options) { $handler = $options['handler']; $handler::register(true); } }\n",
+            ),
+            (
+                "src/Runtime.php",
+                "<?php\nnamespace App;\nclass Runtime extends BaseRuntime { public function __construct(array $options = []) { $options['handler'] ??= Handler::class; parent::__construct($options); } }\n",
+            ),
+            ("main.php", "<?php\nnew App\\Runtime();\n"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies a front controller below the manifest root discovers the parent autoload index and
+/// uses a class-string default from an included runtime bootstrap to seed dynamic `new`.
+#[test]
+fn test_psr4_dynamic_runtime_from_parent_manifest_root() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#,
+            ),
+            (
+                "src/Runtime.php",
+                "<?php\nnamespace App;\nclass Runtime { public function run(): string { return \"parent-root\"; } }\n",
+            ),
+            (
+                "vendor/autoload_runtime.php",
+                "<?php\n$_SERVER = [];\n$_ENV = [];\n$_SERVER['APP_RUNTIME'] ??= $_ENV['APP_RUNTIME'] ?? 'App\\\\Runtime';\n$runtime = new $_SERVER['APP_RUNTIME']();\necho $runtime->run();\n",
+            ),
+            (
+                "public/index.php",
+                "<?php\nrequire_once dirname(__DIR__) . '/vendor/autoload_runtime.php';\n",
+            ),
+        ],
+        "public/index.php",
+    );
+    assert_eq!(out, "parent-root");
 }
 
 /// Verifies PSR-4 nested namespace autoload.
@@ -83,6 +282,296 @@ fn test_psr4_transitive_autoload() {
         "main.php",
     );
     assert_eq!(out, "hi Ada");
+}
+
+/// Verifies a class a just-autoloaded file declared through `class_alias()` is not autoloaded
+/// again from its own PSR-4 file in the same walker pass.
+///
+/// This is `nikic/php-parser`'s deprecation shape: `Int_.php` ends with
+/// `class_alias(Int_::class, LNumber::class)`, and `LNumber.php` exists only for classmap tools —
+/// it `require`s `Int_.php` (plainly, not `_once`) and declares `LNumber` under `if (false)`.
+/// php never loads `LNumber.php` once `Int_` is loaded, because the alias already answers.
+/// The walker compared each reference against the set of classes declared BEFORE the pass, so it
+/// loaded `LNumber.php` too, its `require` spliced `Int_.php` a second time, and the build failed
+/// with "Duplicate class declaration: P\Item" — which is what refused Laravel's closed world.
+///
+/// Reference value captured from php 8.5.10.
+#[test]
+fn test_psr4_alias_declared_by_an_autoloaded_file_is_not_autoloaded_again() {
+    let out = compile_and_run_files(
+        &[
+            ("composer.json", r#"{"autoload":{"psr-4":{"P\\":"src/"}}}"#),
+            (
+                "src/Item.php",
+                "<?php\nnamespace P;\nclass Item {\n    public function hi(): string { return \"item\"; }\n}\nclass_alias(Item::class, Old::class);\n",
+            ),
+            (
+                "src/Old.php",
+                "<?php\nnamespace P;\nrequire __DIR__ . '/Item.php';\nif (false) {\n    class Old extends Item {}\n}\n",
+            ),
+            (
+                "main.php",
+                "<?php\n$item = new \\P\\Item();\necho $item->hi(), \"|\";\necho class_exists(\\P\\Old::class) ? \"alias\" : \"missing\";\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "item|alias");
+}
+
+/// Verifies a class file that `require`s the file declaring its own dependency does not load
+/// that file a second time as a dependency of its bundle.
+///
+/// The same `nikic/php-parser` shape reached the other way round: here the ALIAS is referenced
+/// first, so `Sub/Old.php` loads, its `require __DIR__.'/../Item.php'` splices `Item` in, and its
+/// `if (false) { class Old extends Item {} }` names `Item` as a dependency. The bundle walked that
+/// dependency against the classes declared before the file, loaded `Item.php` again, and the build
+/// failed "Duplicate class declaration: P\Item" (`Stmt/UseUse.php` and `UseItem.php` in Laravel's
+/// closed world).
+///
+/// Reference value captured from php 8.5.10.
+#[test]
+fn test_psr4_dependency_a_file_requires_itself_is_not_autoloaded_again() {
+    let out = compile_and_run_files(
+        &[
+            ("composer.json", r#"{"autoload":{"psr-4":{"P\\":"src/"}}}"#),
+            (
+                "src/Item.php",
+                "<?php\nnamespace P;\nclass Base {}\nclass Item extends Base {\n    public function hi(): string { return \"item\"; }\n}\nclass_alias(Item::class, Sub\\Old::class);\n",
+            ),
+            (
+                "src/Sub/Old.php",
+                "<?php\nnamespace P\\Sub;\nuse P\\Item;\nrequire __DIR__ . '/../Item.php';\nif (false) {\n    class Old extends Item {}\n}\n",
+            ),
+            (
+                "main.php",
+                "<?php\necho class_exists(\\P\\Sub\\Old::class) ? \"alias\" : \"missing\", \"|\";\n$item = new \\P\\Item();\necho $item->hi();\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "alias|item");
+}
+
+/// Verifies an autoloaded trait retains its own class imports when composed into a class.
+#[test]
+fn test_psr4_autoloaded_trait_method_resolves_imported_constructor() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "module.json",
+                r#"{"autoload":{"psr-4":{"Demo\\":"src/"}}}"#,
+            ),
+            (
+                "src/Product.php",
+                "<?php\nnamespace Demo;\nclass Product { public function name(): string { return 'ok'; } }\n",
+            ),
+            (
+                "src/Traits/FactoryTrait.php",
+                "<?php\nnamespace Demo\\Traits;\nuse Demo\\Product as ImportedProduct;\ntrait FactoryTrait {\n    public function make(): iterable { yield new ImportedProduct(); }\n    public function makeFrom(): iterable { yield from [new ImportedProduct()]; }\n}\n",
+            ),
+            (
+                "src/Factory.php",
+                "<?php\nnamespace Demo;\nuse Demo\\Traits\\FactoryTrait;\nclass Factory { use FactoryTrait; }\n",
+            ),
+            (
+                "main.php",
+                "<?php\n$factory = new Demo\\Factory();\nforeach ($factory->make() as $product) { echo $product->name(); }\nforeach ($factory->makeFrom() as $product) { echo $product->name(); }\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "okok");
+}
+
+/// Verifies transitive class discovery reaches a fixpoint beyond an arbitrary depth cap.
+#[test]
+fn test_autoload_transitive_fixpoint_has_no_depth_cap() {
+    const DEPTH: usize = 70;
+    let mut owned_files = vec![(
+        "composer.json".to_string(),
+        r#"{"autoload":{"psr-4":{"Chain\\":"src/"}}}"#.to_string(),
+    )];
+    for index in 0..DEPTH {
+        let next = if index + 1 == DEPTH {
+            "public function value(): string { return 'done'; }".to_string()
+        } else {
+            format!(
+                "public function value(): string {{ return (new Node{}())->value(); }}",
+                index + 1
+            )
+        };
+        owned_files.push((
+            format!("src/Node{index}.php"),
+            format!("<?php\nnamespace Chain;\nclass Node{index} {{ {next} }}\n"),
+        ));
+    }
+    owned_files.push((
+        "main.php".to_string(),
+        "<?php\necho (new Chain\\Node0())->value();\n".to_string(),
+    ));
+    let files = owned_files
+        .iter()
+        .map(|(path, source)| (path.as_str(), source.as_str()))
+        .collect::<Vec<_>>();
+
+    let out = compile_and_run_files(&files, "main.php");
+    assert_eq!(out, "done");
+}
+
+/// Verifies dormant object annotations do not demand or execute an autoloaded source.
+#[test]
+fn test_object_type_declarations_do_not_trigger_autoload() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"psr-4":{"Optional\\":"src/"}}}"#,
+            ),
+            (
+                "src/Dependency.php",
+                "<?php\nnamespace Optional;\necho 'loaded';\nclass Dependency {}\n",
+            ),
+            (
+                "main.php",
+                "<?php\nfunction accept(Optional\\Dependency $value): Optional\\Dependency { return $value; }\nclass Holder { public Optional\\Dependency $value; }\necho 'done';\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "done");
+}
+
+/// Verifies an optional class named only by a dormant closure remains a runtime concern even
+/// when the closure body accesses one of its properties.
+#[test]
+fn test_dormant_closure_property_access_on_absent_declared_class_is_gradual() {
+    let out = compile_and_run(
+        r#"<?php
+function register_optional_callback(): void {
+    $callback = static function (UnavailableExtension $extension): void {
+        echo $extension->option;
+    };
+}
+echo 'ok';
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies a constructed class can retain a dormant closure whose absent nominal parameter is
+/// accessed, without requiring a static property layout for that optional class.
+#[test]
+fn test_constructed_class_dormant_closure_property_access_on_absent_class_is_gradual() {
+    let out = compile_and_run(
+        r#"<?php
+class Registrar {
+    public function register(): void {
+        $callback = static function (UnavailableExtension $extension): void {
+            echo $extension->option;
+        };
+    }
+}
+new Registrar();
+echo 'ok';
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies an autoload candidate with an unavailable direct parent stays absent instead of
+/// poisoning the closed-world class schema when the requested class is only probed.
+#[test]
+fn test_autoload_candidate_with_missing_parent_remains_absent() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "module.json",
+                r#"{"autoload":{"psr-4":{"Optional\\":"src/"}}}"#,
+            ),
+            (
+                "src/Feature.php",
+                "<?php\nnamespace Optional;\nclass Feature extends MissingParent {}\n",
+            ),
+            (
+                "main.php",
+                "<?php\necho class_exists(Optional\\Feature::class) ? 'loaded' : 'absent';\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "absent");
+}
+
+/// Verifies a candidate extending a supported built-in class is retained and loaded normally.
+#[test]
+fn test_autoload_candidate_with_builtin_parent_loads() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "module.json",
+                r#"{"autoload":{"psr-4":{"Local\\":"src/"}}}"#,
+            ),
+            (
+                "src/File.php",
+                "<?php\nnamespace Local;\nclass File extends \\SplFileInfo {}\n",
+            ),
+            (
+                "main.php",
+                "<?php\n$file = new Local\\File(__FILE__);\necho 'loaded';\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "loaded");
+}
+
+/// Verifies a missing-parent candidate referenced only from a dormant function body remains a
+/// runtime concern and does not make an otherwise reachable program fail schema construction.
+#[test]
+fn test_dormant_function_can_reference_unbindable_autoload_candidate() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "module.json",
+                r#"{"autoload":{"psr-4":{"Optional\\":"src/"}}}"#,
+            ),
+            (
+                "src/Feature.php",
+                "<?php\nnamespace Optional;\nclass Feature extends MissingParent {}\n",
+            ),
+            (
+                "main.php",
+                "<?php\nfunction dormant() { return new Optional\\Feature(); }\necho 'ok';\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies that incremental-hash usage found only after PSR-4 expansion receives the late hash
+/// prelude and that bare namespaced `hash_*` calls fall back to its global declarations.
+#[test]
+fn test_psr4_autoloaded_hash_context_usage_injects_late_prelude() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#,
+            ),
+            (
+                "src/Digester.php",
+                "<?php\nnamespace App;\nclass Digester {\n    public static function md5(string $value): string {\n        $context = hash_init('md5');\n        hash_update($context, $value);\n        return hash_final($context);\n    }\n}\n",
+            ),
+            (
+                "main.php",
+                "<?php\necho App\\Digester::md5('abc');\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "900150983cd24fb0d6963f7d28e17f72");
 }
 
 /// Verifies PSR-4 static property assignment triggers autoload.
@@ -182,10 +671,10 @@ fn test_psr4_vendor_autoload() {
     assert_eq!(out, "WIDGET");
 }
 
-/// Verifies no composer JSON compiles normally.
+/// Verifies a project without an autoload manifest compiles normally.
 #[test]
-fn test_no_composer_json_compiles_normally() {
-    // Program without composer.json must still compile; autoload index is empty and class loads via include path.
+fn test_no_autoload_manifest_compiles_normally() {
+    // A manifest-free program must still compile; the autoload index is empty and the class loads via include path.
     let out = compile_and_run_files(
         &[(
             "main.php",
@@ -209,17 +698,44 @@ echo $ok ? "true" : "false";
     assert_eq!(out, "true");
 }
 
-/// Verifies SPL autoload unregister returns true.
+/// Verifies SPL autoload unregister answers like php: true only for a registered loader.
 #[test]
 fn test_spl_autoload_unregister_returns_true() {
-    // spl_autoload_unregister returns true after removing a registered autoloader.
+    // php 8.5: true when the loader was registered, false once it is gone, false for a loader
+    // that was never registered (the old expectation of `true` there was a stub's answer).
     let out = compile_and_run(
         r#"<?php
-$ok = spl_autoload_unregister(function($name) {});
-echo $ok ? "true" : "false";
+$loader = function($name) {};
+spl_autoload_register($loader);
+$ok = spl_autoload_unregister($loader);
+$again = spl_autoload_unregister($loader);
+$never = spl_autoload_unregister(function($name) {});
+echo $ok ? "true" : "false", ",", $again ? "true" : "false", ",", $never ? "true" : "false";
 "#,
     );
-    assert_eq!(out, "true");
+    assert_eq!(out, "true,false,false");
+}
+
+/// Verifies registering one array loader twice, from compiled code, keeps ONE registration.
+///
+/// PHP deduplicates by value. Each compiled `spl_autoload_register()` reaches the bridge with a
+/// context of its own, so the check that only looked in that context never found the earlier
+/// registration: the loader ran three times per miss and survived its own unregistration.
+#[test]
+fn test_spl_autoload_register_dedupes_an_array_loader_across_calls() {
+    let out = compile_and_run(
+        r#"<?php
+class K { static function load($c) { echo "load $c\n"; } }
+$a = ['K', 'load'];
+spl_autoload_register($a);
+spl_autoload_register($a);
+spl_autoload_register(['K', 'load']);
+var_dump(class_exists('Nope1'));
+var_dump(spl_autoload_unregister($a));
+var_dump(class_exists('Nope2'));
+"#,
+    );
+    assert_eq!(out, "load Nope1\nbool(false)\nbool(true)\nbool(false)\n");
 }
 
 /// Verifies SPL autoload functions returns empty array.
@@ -373,6 +889,205 @@ fn test_register_with_str_replace_closure() {
     assert_eq!(out, "Ada");
 }
 
+/// Verifies the canonical hand-written PSR-4 leaf expression resolves a namespaced class.
+#[test]
+fn test_register_with_substr_strrpos_leaf_closure() {
+    // `substr($class, strrpos($class, '\\') + 1)` is the ordinary way to take a class's leaf
+    // name; both builtins and the integer `+` between them must fold.
+    let out = compile_and_run_files(
+        &[
+            (
+                "src/Probe.php",
+                "<?php\nnamespace App;\nclass Probe { public function run(): string { return \"reached\"; } }\n",
+            ),
+            (
+                "main.php",
+                r#"<?php
+spl_autoload_register(function (string $class): void {
+    $leaf = substr($class, strrpos($class, '\\') + 1);
+    require __DIR__ . '/src/' . $leaf . '.php';
+});
+$p = new App\Probe();
+echo $p->run();
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "reached");
+}
+
+/// Verifies the leaf expression takes the LAST segment of a nested namespace.
+#[test]
+fn test_register_substr_strrpos_leaf_takes_last_namespace_segment() {
+    // `App\Sub\Thing` has two separators; `strrpos` must find the rightmost one.
+    let out = compile_and_run_files(
+        &[
+            (
+                "src/Thing.php",
+                "<?php\nnamespace App\\Sub;\nclass Thing { public function run(): string { return \"nested\"; } }\n",
+            ),
+            (
+                "main.php",
+                r#"<?php
+spl_autoload_register(function (string $class): void {
+    $leaf = substr($class, strrpos($class, '\\') + 1);
+    require __DIR__ . '/src/' . $leaf . '.php';
+});
+$t = new App\Sub\Thing();
+echo $t->run();
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "nested");
+}
+
+/// Verifies a global-namespace class reproduces PHP's `false + 1`, not a "sensible" 0.
+#[test]
+fn test_register_substr_strrpos_global_class_drops_first_character_like_php() {
+    // php 8.5.10:
+    //   php -r '$c="Gadget"; var_dump(strrpos($c,"\\")+1, substr($c, strrpos($c,"\\")+1));'
+    //   int(1)  string(5) "adget"
+    // `strrpos` misses, `false + 1` is `1`, and the loader therefore looks for the class
+    // MINUS its first character. The fixture file is named accordingly: making the
+    // compiler "fix" this would silently resolve a global class to the wrong file.
+    let out = compile_and_run_files(
+        &[
+            (
+                "src/adget.php",
+                "<?php\nclass Gadget { public function run(): string { return \"chopped\"; } }\n",
+            ),
+            (
+                "main.php",
+                r#"<?php
+spl_autoload_register(function (string $class): void {
+    $leaf = substr($class, strrpos($class, '\\') + 1);
+    require __DIR__ . '/src/' . $leaf . '.php';
+});
+$g = new Gadget();
+echo $g->run();
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "chopped");
+}
+
+/// Verifies `strrpos` yields `false` (not `0`) when the needle is absent.
+#[test]
+fn test_register_substr_strrpos_miss_is_false_not_zero() {
+    // The defensive form of the same loader branches on `$pos === false`. If a miss folded
+    // to `0` instead, the global-namespace class would take the `else` branch and look for
+    // `src/olo.php`; the class would not be found and this test would fail.
+    let out = compile_and_run_files(
+        &[
+            (
+                "src/Solo.php",
+                "<?php\nclass Solo { public function run(): string { return \"solo\"; } }\n",
+            ),
+            (
+                "src/Leaf.php",
+                "<?php\nnamespace App\\Nested;\nclass Leaf { public function run(): string { return \"leaf\"; } }\n",
+            ),
+            (
+                "main.php",
+                r#"<?php
+spl_autoload_register(function (string $class): void {
+    $pos = strrpos($class, '\\');
+    if ($pos === false) {
+        require __DIR__ . '/src/' . $class . '.php';
+    } else {
+        require __DIR__ . '/src/' . substr($class, $pos + 1) . '.php';
+    }
+});
+$s = new Solo();
+echo $s->run();
+$l = new App\Nested\Leaf();
+echo $l->run();
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "sololeaf");
+}
+
+/// Verifies the three-argument `substr` form, including an explicit and a negative length.
+#[test]
+fn test_register_substr_with_explicit_and_negative_length() {
+    // `substr($class, 0, $pos)` takes the namespace prefix and `substr($leaf, 0, -6)` strips
+    // a fixed suffix — both are ordinary PHP and exercise `substr`'s length clamping.
+    let out = compile_and_run_files(
+        &[
+            (
+                "src/App/Sub/Thing.php",
+                "<?php\nnamespace App\\Sub;\nclass ThingBundle { public function run(): string { return \"sliced\"; } }\n",
+            ),
+            (
+                "main.php",
+                r#"<?php
+spl_autoload_register(function (string $class): void {
+    $pos = strrpos($class, '\\');
+    $prefix = substr($class, 0, $pos);
+    $leaf = substr($class, $pos + 1);
+    $stem = substr($leaf, 0, -6);
+    require __DIR__ . '/src/' . str_replace('\\', '/', $prefix) . '/' . $stem . '.php';
+});
+$t = new App\Sub\ThingBundle();
+echo $t->run();
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "sliced");
+}
+
+/// Verifies a body outside the supported subset is still rejected and falls through.
+#[test]
+fn test_register_expression_outside_subset_is_rejected_and_falls_through() {
+    // The first rule computes its leaf with a ternary and `strrev` — neither is in the
+    // subset, so the rule must yield nothing rather than being evaluated approximately.
+    // Resolution falls through to the second, supported rule. `src/eborP.php` exists but
+    // declares something else, so if the first rule ever started folding it would be
+    // selected, `App\Probe` would stay undeclared, and this test would fail loudly.
+    // php agrees on the output: it requires the decoy, gets no `App\Probe` from it, and
+    // goes on to the second loader.
+    let out = compile_and_run_files(
+        &[
+            (
+                "src/Probe.php",
+                "<?php\nnamespace App;\nclass Probe { public function run(): string { return \"fellthrough\"; } }\n",
+            ),
+            (
+                "src/eborP.php",
+                "<?php\nnamespace App;\nclass Decoy { public function run(): string { return \"wrong\"; } }\n",
+            ),
+            (
+                "main.php",
+                r#"<?php
+spl_autoload_register(function (string $class): void {
+    $pos = strrpos($class, '\\');
+    $leaf = $pos === false ? $class : substr($class, $pos + 1);
+    require __DIR__ . '/src/' . strrev($leaf) . '.php';
+});
+spl_autoload_register(function (string $class): void {
+    $leaf = substr($class, strrpos($class, '\\') + 1);
+    require __DIR__ . '/src/' . $leaf . '.php';
+});
+$p = new App\Probe();
+echo $p->run();
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "fellthrough");
+}
+
 /// Verifies register with intermediate variable.
 #[test]
 fn test_register_with_intermediate_variable() {
@@ -496,7 +1211,7 @@ fn test_register_unregister_round_trip() {
 /// Verifies register with use capture falls back to PSR-4.
 #[test]
 fn test_register_with_use_capture_falls_back_to_psr4() {
-    // Closure with `use ($base)` capture is rejected by collector; PSR-4 from composer.json takes over.
+    // Closure capture is rejected by the collector; the manifest PSR-4 mapping takes over.
     let out = compile_and_run_files(
         &[
             (
@@ -612,7 +1327,7 @@ echo $b->tag();
     assert_eq!(out, "1b");
 }
 
-// --- composer.json autoload sections ---
+// --- supported manifest autoload sections ---
 
 /// Verifies autoload files section always inlines.
 #[test]
@@ -638,10 +1353,10 @@ fn test_autoload_files_section_always_inlines() {
     assert_eq!(out, "HELLO");
 }
 
-/// Verifies autoload files section executes before main in composer order.
+/// Verifies the eager-file section executes before main in declaration order.
 #[test]
-fn test_autoload_files_section_executes_before_main_in_composer_order() {
-    // Files autoload sections execute in composer.json order before main.php.
+fn test_autoload_files_section_executes_before_main_in_declaration_order() {
+    // Eager-file entries execute in manifest order before main.php.
     let out = compile_and_run_files(
         &[
             (
@@ -679,6 +1394,35 @@ fn test_class_triggered_autoload_executes_before_first_use() {
         "main.php",
     );
     assert_eq!(out, "loadmain");
+}
+
+/// Verifies a referenced attribute class is available to reflection-backed instantiation.
+#[test]
+fn test_attribute_class_triggers_autoload() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "module.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#,
+            ),
+            (
+                "src/Marker.php",
+                "<?php\nnamespace App;\n#[\\Attribute]\nclass Marker { public function __construct(public string $label) {} }\n",
+            ),
+            (
+                "main.php",
+                r#"<?php
+namespace App;
+#[Marker("loaded")]
+class Target {}
+$attribute = (new \ReflectionClass(Target::class))->getAttributes()[0]->newInstance();
+echo $attribute->label;
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "loaded");
 }
 
 /// Verifies autoload classmap explicit file.
@@ -931,6 +1675,264 @@ echo class_exists("App\\DynamicFlag", $autoload) ? "exists" : "missing";
         "main.php",
     );
     assert_eq!(out, "missing");
+}
+
+/// Verifies a literal eval result preserves an indexed class-string for autoload discovery.
+///
+/// The class name reaches `class_exists()` through `$classes[0]`, so the autoload walk must
+/// preserve the literal eval return shape rather than treating the dynamic lookup as opaque.
+#[test]
+fn test_class_exists_autoloads_literal_eval_class_array_element() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "library/Deferred.php",
+                "<?php\nnamespace Fixture;\nclass Deferred {}\n",
+            ),
+            (
+                "main.php",
+                r#"<?php
+spl_autoload_register(function (string $class): void {
+    if ($class === 'Fixture\\Deferred') {
+        require_once __DIR__ . '/library/Deferred.php';
+    }
+});
+
+$source = 'return ["Fixture\\Deferred"];';
+$classes = eval($source);
+echo class_exists($classes[0]) ? 'exists' : 'missing';
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "exists");
+}
+
+/// Verifies a literal class probe after eval invokes registered autoload callbacks.
+///
+/// The class name is intentionally absent from the AOT declaration set: the callback creates it
+/// through `eval`, so this exercises the post-eval `class_exists()` bridge rather than static
+/// project discovery or any framework-specific loader convention.
+#[test]
+fn test_class_exists_after_eval_triggers_registered_autoload() {
+    let out = compile_and_run(
+        r#"<?php
+class DeferredProbeLoader {
+    public function load(string $class): void {
+        if ($class === 'Fixture\AbsentProbe') {
+            echo 'called';
+        }
+    }
+}
+
+function classExistsFromAotFunction(bool $autoload): bool {
+    return class_exists('Fixture\\AbsentProbe', $autoload);
+}
+
+$loader = new DeferredProbeLoader();
+spl_autoload_register([$loader, 'load']);
+eval('$barrier = true;');
+echo classExistsFromAotFunction(false) ? 'unexpected' : 'missing';
+echo classExistsFromAotFunction(true) ? 'loaded' : 'missing';
+"#,
+    );
+    assert_eq!(out, "missingcalledmissing");
+}
+
+/// Verifies nominal construction invokes registered autoload after an eval barrier.
+///
+/// The source names the class directly, while the callback creates its declaration only at
+/// runtime.  This prevents the test from relying on a project layout or a framework-specific
+/// autoloader and exercises the bridge's normal `new ClassName` resolution semantics.
+#[test]
+fn test_nominal_new_after_eval_triggers_registered_autoload() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "library/RuntimeConstructed.php",
+                "<?php\nclass RuntimeConstructed { public function label(): void { echo 'loaded'; } }\n",
+            ),
+            (
+                "main.php",
+                r#"<?php
+spl_autoload_register(function (string $class): void {
+    if ($class === 'RuntimeConstructed') {
+        require_once __DIR__ . '/library/RuntimeConstructed.php';
+    }
+});
+
+eval('$barrier = true;');
+$instance = new RuntimeConstructed();
+$instance->label();
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "loaded");
+}
+
+/// Verifies autoloaded nominal construction materializes a separately loaded trait.
+///
+/// The class body is intentionally unavailable to AOT lowering.  Its trait is resolved only
+/// while the runtime include executes, matching ordinary library autoload without assuming a
+/// loader implementation or a framework directory layout.
+#[test]
+fn test_nominal_new_after_eval_autoloads_class_trait_dependencies() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "library/RuntimeConstructedContract.php",
+                "<?php\ninterface RuntimeConstructedContract {}\n",
+            ),
+            (
+                "library/RuntimeConstructionTrait.php",
+                "<?php\ntrait RuntimeConstructionTrait { public function label(): void { echo 'trait-loaded'; } }\n",
+            ),
+            (
+                "library/RuntimeConstructed.php",
+                "<?php\nfinal class RuntimeConstructed implements RuntimeConstructedContract { use RuntimeConstructionTrait; }\n",
+            ),
+            (
+                "main.php",
+                r#"<?php
+spl_autoload_register(function (string $class): void {
+    if ($class === 'RuntimeConstructed') {
+        require_once __DIR__ . '/library/RuntimeConstructed.php';
+    }
+    if ($class === 'RuntimeConstructedContract') {
+        require_once __DIR__ . '/library/RuntimeConstructedContract.php';
+    }
+    if ($class === 'RuntimeConstructionTrait') {
+        require_once __DIR__ . '/library/RuntimeConstructionTrait.php';
+    }
+});
+
+eval('$barrier = true;');
+$instance = new RuntimeConstructed();
+$instance->label();
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "trait-loaded");
+}
+
+/// Verifies an AOT function resolves `new $class` through request-global autoload state.
+///
+/// The function itself contains no eval expression and therefore has no persistent eval local.
+/// Its dynamic class probe and construction must still use the callback-owning context registered
+/// by an earlier frame, as PHP's process-wide SPL table requires.
+#[test]
+fn test_aot_dynamic_new_after_eval_uses_global_autoload_context() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "library/RuntimeConstructed.php",
+                "<?php\nclass RuntimeConstructed implements RuntimeConstructedContract { use RuntimeConstructedTrait; }\n",
+            ),
+            (
+                "library/RuntimeConstructedTrait.php",
+                "<?php\ntrait RuntimeConstructedTrait { public function label(): void { echo 'global-loaded'; } }\n",
+            ),
+            (
+                "main.php",
+                r#"<?php
+function createLoadedClass(string $class): mixed {
+    return class_exists($class) ? new $class() : null;
+}
+
+interface RuntimeConstructedContract {
+    public function label(): void;
+}
+
+function useLoadedClass(RuntimeConstructedContract $instance): void {
+    echo 'global-loaded';
+}
+
+class RuntimeAutoloadLoader {
+    public function load(string $class): void {
+        if ($class === 'RuntimeConstructed') {
+            $path = str_replace('/library/', '/library/', __DIR__ . '/library/' . $class . '.php');
+            require_once $path;
+        }
+        if ($class === 'RuntimeConstructedTrait') {
+            $path = str_replace('/library/', '/library/', __DIR__ . '/library/' . $class . '.php');
+            require_once $path;
+        }
+    }
+}
+
+$loader = new RuntimeAutoloadLoader();
+spl_autoload_register([$loader, 'load']);
+eval('$barrier = true;');
+$instance = createLoadedClass('RuntimeConstructed');
+useLoadedClass($instance);
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "global-loaded");
+}
+
+/// Verifies a dynamic child can pass an inline native-parent result by value and a PHP local by reference.
+///
+/// The child is loaded only at runtime, so both calls cross the eval bridge. The first argument is
+/// a one-shot EIR merge temporary and must not be represented as a writable local cell after its
+/// source slot has been moved. The second remains a user variable and must preserve PHP by-reference
+/// mutation through the same bridge.
+#[test]
+fn test_dynamic_child_bridge_preserves_inline_values_and_php_references() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "library/NativeParent.php",
+                r#"<?php
+class NativeParent {
+    public function all(): array {
+        return ['answer' => 42];
+    }
+
+    public function resolveValue(mixed $value): mixed {
+        return $value;
+    }
+}
+"#,
+            ),
+            (
+                "library/RuntimeChild.php",
+                r#"<?php
+class RuntimeChild extends NativeParent {
+    public function overwrite(mixed &$value): void {
+        $value = 'updated';
+    }
+}
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+require __DIR__ . '/library/NativeParent.php';
+
+$path = str_replace('/library/', '/library/', __DIR__ . '/library/RuntimeChild.php');
+require_once $path;
+$class = 'RuntimeChild';
+$child = new $class();
+
+$resolved = $child->resolveValue($child->all());
+echo $resolved['answer'] . ':';
+$value = 'before';
+$child->overwrite($value);
+echo $value;
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "42:updated");
 }
 
 /// Verifies interface exists literal triggers autoload.
@@ -1461,6 +2463,187 @@ echo ($a instanceof Alias) ? "yes" : "no";
     assert_eq!(out, "orig:yes:yes");
 }
 
+/// Verifies an eval static call resolves an AOT method through a runtime class alias.
+#[test]
+fn test_eval_static_method_call_through_class_alias() {
+    let out = compile_and_run(
+        r#"<?php
+class OriginalReference {
+    public static function config(array $config): array { return $config; }
+}
+class_alias(OriginalReference::class, AliasReference::class);
+echo eval('return AliasReference::config(["result" => "ok"])["result"];');
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies a runtime-included alias keeps an otherwise unreachable AOT static method callable.
+#[test]
+fn test_dynamic_include_static_method_call_through_class_alias() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+class OriginalReference {
+    public static function config(array $config): array { return $config; }
+}
+function loadRuntimeFile(string $path): void { include $path; }
+loadRuntimeFile("runtime.php");
+"#,
+            ),
+            (
+                "runtime.php",
+                r#"<?php
+class_alias(OriginalReference::class, AliasReference::class);
+echo AliasReference::config(["result" => "ok"])["result"];
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies a runtime-included class keeps static methods visible through its class alias.
+#[test]
+fn test_dynamic_include_declared_class_static_method_call_through_class_alias() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+function loadRuntimeFile(string $path): void { include $path; }
+loadRuntimeFile("runtime.php");
+"#,
+            ),
+            (
+                "runtime.php",
+                r#"<?php
+class OriginalReference {
+    public static function config(array $config): array { return $config; }
+}
+class_alias(OriginalReference::class, AliasReference::class);
+echo AliasReference::config(["result" => "ok"])["result"];
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies class_alias autoloads a PSR-4 target named only through `::class`.
+#[test]
+fn test_class_alias_autoloads_psr4_target_static_method() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "module.json",
+                r#"{"autoload":{"psr-4":{"Bridge\\Alias\\":"src/"}}}"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+class_alias(\Bridge\Alias\OriginalReference::class, \Bridge\Alias\AliasReference::class);
+echo \Bridge\Alias\AliasReference::config(["result" => "ok"])["result"];
+"#,
+            ),
+            (
+                "src/OriginalReference.php",
+                r#"<?php
+namespace Bridge\Alias;
+
+class OriginalReference
+{
+    public static function config(array $config): array { return $config; }
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies a conditional method-local class alias autoloads its PSR-4 target.
+#[test]
+fn test_method_local_class_alias_autoloads_psr4_target_static_method() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "module.json",
+                r#"{"autoload":{"psr-4":{"Bridge\\Alias\\":"src/"}}}"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+use Bridge\Alias\OriginalReference;
+
+class RuntimeLoader {
+    public function load(): void {
+        if (!class_exists(\Bridge\Alias\AliasReference::class)) {
+            class_alias(OriginalReference::class, \Bridge\Alias\AliasReference::class);
+        }
+    }
+}
+
+(new RuntimeLoader())->load();
+echo \Bridge\Alias\AliasReference::config(["result" => "ok"])["result"];
+"#,
+            ),
+            (
+                "src/OriginalReference.php",
+                r#"<?php
+namespace Bridge\Alias;
+
+class OriginalReference
+{
+    public static function config(array $config): array { return $config; }
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies ReflectionClass autoloads a PSR-4 class named only by a class constant.
+#[test]
+fn test_reflection_class_autoloads_psr4_class_constant_target() {
+    let out = compile_cli_files_and_run(
+        &[
+            (
+                "module.json",
+                r#"{"autoload":{"psr-4":{"Bridge\\Reflect\\":"src/"}}}"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+$reflection = new ReflectionClass(\Bridge\Reflect\OriginalReference::class);
+echo $reflection->getMethod("config")->getName();
+"#,
+            ),
+            (
+                "src/OriginalReference.php",
+                r#"<?php
+namespace Bridge\Reflect;
+
+/** Reflection metadata must retain static methods. */
+class OriginalReference
+{
+    public static function config(array $config): array { return $config; }
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "config");
+}
+
 /// Verifies class alias with namespace.
 #[test]
 fn test_class_alias_with_namespace() {
@@ -1494,6 +2677,30 @@ echo $a->tag();
 "#,
     );
     assert_eq!(out, "alias-case");
+}
+
+/// Verifies resolved class constants create aliases from a nested method body.
+#[test]
+fn test_class_alias_from_resolved_class_constants_in_method() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Model;
+class Original {
+    public function tag(): string { return "resolved"; }
+}
+class Bootstrap {
+    public static function register(): void {
+        if (!class_exists(AliasName::class)) {
+            class_alias(Original::class, AliasName::class);
+        }
+    }
+}
+Bootstrap::register();
+$value = new AliasName();
+echo $value->tag();
+"#,
+    );
+    assert_eq!(out, "resolved");
 }
 
 /// Verifies `class_alias()` accepts a `Name::class` constant as the original class (issue #849).
@@ -1716,4 +2923,287 @@ fn test_spl_autoload_call_with_literal_loads_class() {
         "main.php",
     );
     assert_eq!(out, "forced");
+}
+
+/// Verifies member probes resolve a class-string through a runtime autoloader.
+///
+/// An autoloader registered from inside a class method is not one of the shapes the compile-time
+/// rule collector consumes, so it survives into the binary and the class exists only once the
+/// chain has run. PHP resolves the class-string argument of `method_exists()` with
+/// `zend_lookup_class`, which runs that chain, so the probe sees the class and its inherited
+/// methods; a name nothing can load still answers `false`, and reflecting on it still throws.
+/// Value-checked against `php -n`, which prints the same line.
+#[test]
+fn test_member_probes_autoload_a_runtime_registered_class_string() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "loader.php",
+                "<?php\nclass RuntimeLoader {\n    private string $dir;\n    public function __construct(string $dir) { $this->dir = $dir; }\n    public function loadClass(string $class): void {\n        $path = $this->dir . \"/\" . $class . \".php\";\n        if (file_exists($path)) {\n            require $path;\n        }\n    }\n    public static function register(string $dir): void {\n        $loader = new RuntimeLoader($dir);\n        spl_autoload_register([$loader, \"loadClass\"], true, true);\n    }\n}\n",
+            ),
+            (
+                "lib/RuntimeBase.php",
+                "<?php\nclass RuntimeBase {\n    public function BaseWork(): string { return \"base\"; }\n}\n",
+            ),
+            (
+                "lib/RuntimeChild.php",
+                "<?php\nclass RuntimeChild extends RuntimeBase {\n    public function ChildWork(): string { return \"child\"; }\n}\n",
+            ),
+            (
+                "main.php",
+                "<?php\nrequire __DIR__ . \"/loader.php\";\nRuntimeLoader::register(__DIR__ . \"/lib\");\n\n$cls = implode(\"\", [\"Runtime\", \"Child\"]);\necho (method_exists($cls, \"ChildWork\") ? \"C\" : \"c\");\necho (method_exists($cls, \"BaseWork\") ? \"B\" : \"b\");\necho (method_exists($cls, \"basework\") ? \"I\" : \"i\");\necho (method_exists($cls, \"missing\") ? \"M\" : \"m\");\necho \":\";\n$unknown = implode(\"\", [\"Runtime\", \"Absent\"]);\necho (method_exists($unknown, \"any\") ? \"U\" : \"u\");\necho \":\";\n$class = new ReflectionClass($cls);\necho $class->getName() . \":\";\necho ($class->hasMethod(\"basework\") ? \"H\" : \"h\") . \":\";\necho $class->getMethod(\"childwork\")->getName() . \":\";\ntry {\n    new ReflectionClass($unknown);\n    echo \"noexception\";\n} catch (ReflectionException $e) {\n    echo \"ReflectionException\";\n}\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "CBIm:u:RuntimeChild:H:ChildWork:ReflectionException");
+}
+
+/// Verifies an autoloaded class file whose FILE-SCOPE guard asks `interface_exists()` for the
+/// interface it implements sees that interface declared.
+///
+/// `symfony/string`'s `AsciiSlugger.php` is written exactly this way, and the compiled Symfony
+/// binary threw its "the symfony/translation-contracts package is not installed" LogicException
+/// before the entry file's first statement ran. Two things were wrong. The autoload pass appended
+/// each discovered file at its own first reference point, which is breadth-first, so the interface
+/// landed AFTER the class file that demanded it; PHP's loader is depth-first and would have run it
+/// first. And an autoloaded interface never emitted the activation event that `interface_exists()`
+/// reads, so its overlay cell stayed zero no matter where the declaration sat.
+///
+/// Value-checked against `php -n`, which prints the same line.
+#[test]
+fn test_an_autoloaded_file_scope_guard_sees_the_interface_it_implements() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"psr-4":{"Guarded\\":"src/"}}}"#,
+            ),
+            (
+                "src/Marker.php",
+                "<?php\nnamespace Guarded;\ninterface Marker { public function name(): string; }\n",
+            ),
+            (
+                "src/Widget.php",
+                "<?php\nnamespace Guarded;\n\nif (!interface_exists(Marker::class)) {\n    throw new \\LogicException('Marker is missing');\n}\n\nclass Widget implements Marker {\n    public function name(): string { return \"widget\"; }\n}\n",
+            ),
+            (
+                "main.php",
+                "<?php\n$w = new Guarded\\Widget();\necho $w->name(), \":\", (int) interface_exists('Guarded\\\\Marker');\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "widget:1");
+}
+
+/// Verifies an autoloaded class file that declares its class twice under
+/// `if (method_exists(Base::class, 'm')) { ... } else { ... }` is compiled with the branch php
+/// takes, the method being found on an ancestor interface or missing altogether.
+///
+/// Symfony's `TwigExtraBundle` asks `method_exists(KernelInterface::class, 'getShareDir')`; left
+/// undecided, the file went to the runtime autoloader with a "declares it inside a run-time
+/// condition" warning. Value-checked against `php -n`, which prints `share|old`.
+#[test]
+fn test_an_autoloaded_method_exists_guard_picks_the_declaration_php_takes() {
+    let guarded = |class: &str, probe: &str| {
+        format!(
+            "<?php\nnamespace App;\n\nif (method_exists(Kernel::class, '{probe}')) {{\n    class {class} {{ public function v(): string {{ return 'share'; }} }}\n}} else {{\n    class {class} {{ public function v(): string {{ return 'old'; }} }}\n}}\n"
+        )
+    };
+    let (stderr, out) = compile_cli_files_and_run_with_compile_stderr(
+        &[
+            ("composer.json", r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#),
+            (
+                "src/BaseKernel.php",
+                "<?php\nnamespace App;\ninterface BaseKernel { public function getShareDir(): string; }\n",
+            ),
+            ("src/Kernel.php", "<?php\nnamespace App;\ninterface Kernel extends BaseKernel {}\n"),
+            ("src/Bundle.php", &guarded("Bundle", "getShareDir")),
+            ("src/Legacy.php", &guarded("Legacy", "getNothing")),
+            (
+                "main.php",
+                "<?php\necho (new App\\Bundle())->v(), '|', (new App\\Legacy())->v(), \"\\n\";\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "share|old\n");
+    assert!(!stderr.contains("run-time condition"), "{stderr}");
+}
+
+/// Verifies Symfony's `OrderedHashMap` shape stays compiled and keeps php's references: the map
+/// builds its iterator with `new It($this->elements, $this->keys, $this->cursors)` for
+/// by-reference promoted parameters, and the iterator shares a typed `int` property with an
+/// element (`$this->cursors[$id] = &$this->cursor`). Both files used to be handed to the runtime
+/// autoloader ("a native call cannot keep linked"), which a closed world cannot do.
+/// Value-checked against `php -n`.
+#[test]
+fn test_by_ref_promoted_constructor_over_properties_stays_compiled() {
+    let iterator = "<?php\nnamespace Map;\nclass It implements \\Iterator {\n    private int $cursor = 0;\n    private int $id;\n    public function __construct(private array &$elements, private array &$keys, private array &$cursors) {\n        $this->id = \\count($cursors);\n        $this->cursors[$this->id] = &$this->cursor;\n    }\n    public function __destruct() { array_splice($this->cursors, $this->id, 1); }\n    public function current(): mixed { return $this->elements[$this->keys[$this->cursor]]; }\n    public function key(): mixed { return $this->keys[$this->cursor]; }\n    public function next(): void { ++$this->cursor; }\n    public function rewind(): void { $this->cursor = 0; }\n    public function valid(): bool { return isset($this->keys[$this->cursor]); }\n}\n";
+    let map = "<?php\nnamespace Map;\nclass Ordered implements \\IteratorAggregate {\n    private array $elements = [];\n    private array $keys = [];\n    private array $cursors = [];\n    public function set(string $k, int $v): void { if (!isset($this->elements[$k])) { $this->keys[] = $k; } $this->elements[$k] = $v; }\n    public function remove(string $k): void {\n        $pos = array_search($k, $this->keys, true);\n        unset($this->elements[$k]);\n        array_splice($this->keys, $pos, 1);\n        foreach ($this->cursors as $i => $cursor) { if ($cursor >= $pos) { --$this->cursors[$i]; } }\n    }\n    public function getIterator(): \\Traversable { return new It($this->elements, $this->keys, $this->cursors); }\n}\n";
+    let (stderr, out) = compile_cli_files_and_run_with_compile_stderr(
+        &[
+            ("composer.json", r#"{"autoload":{"psr-4":{"Map\\":"src/"}}}"#),
+            ("src/It.php", iterator),
+            ("src/Ordered.php", map),
+            (
+                "main.php",
+                "<?php\n$m = new Map\\Ordered();\n$m->set('a', 1); $m->set('b', 2); $m->set('c', 3);\nforeach ($m as $k => $v) { echo \"$k=$v,\"; if ($k === 'a') { $m->set('d', 4); $m->remove('b'); } }\necho \"\\n\";\nforeach ($m as $k => $v) { foreach ($m as $k2 => $v2) { echo $k, $k2, ' '; } }\necho \"\\n\";\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "a=1,c=3,d=4,\naa ac ad ca cc cd da dc dd \n");
+    assert!(!stderr.contains("is not compiled"), "{stderr}");
+}
+
+/// Verifies PDO reached only from an autoloaded class (Doctrine DBAL's `PDO::connect()` under
+/// symfony/demo) gets the PDO classes: the early prelude gate sees the entry program alone, and
+/// the static factory became a call to a class the closed world does not define.
+/// Value-checked against `php`, which prints `Pdo\Sqlite|2`.
+#[test]
+fn test_pdo_named_only_by_an_autoloaded_class_is_declared() {
+    let (stderr, out) = compile_cli_files_and_run_with_compile_stderr(
+        &[
+            ("composer.json", r#"{"autoload":{"psr-4":{"Db\\":"src/"}}}"#),
+            (
+                "src/Driver.php",
+                "<?php\nnamespace Db;\nfinal class Driver {\n    public static function connect(): \\PDO { return \\PDO::connect('sqlite::memory:'); }\n}\n",
+            ),
+            (
+                "main.php",
+                "<?php\n$pdo = Db\\Driver::connect();\necho get_class($pdo), '|', $pdo->query('select 1+1')->fetchColumn(), \"\\n\";\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "Pdo\\Sqlite|2\n", "{stderr}");
+}
+
+/// Verifies a PSR-4 autoloaded class keeps its PHP attributes and its file's `strict_types`.
+///
+/// The autoload pass rebuilt every statement of a loaded file and the rebuild dropped the
+/// statement's metadata: a class's `#[...]` attributes live on its declaring statement, so
+/// `ReflectionClass::getAttributes()` answered nothing for every Composer-loaded class (every
+/// Symfony console command lost its `#[AsCommand]` name), and the file's `declare(strict_types=1)`
+/// was replaced by the entry file's mode. Expected output from php 8.5.
+#[test]
+fn test_psr4_autoloaded_class_keeps_attributes_and_strict_types() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "module.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#,
+            ),
+            (
+                "src/AsCommand.php",
+                "<?php\nnamespace App;\n#[\\Attribute(\\Attribute::TARGET_CLASS)]\nclass AsCommand { public function __construct(public string $name = '') {} }\n",
+            ),
+            (
+                "src/AboutCommand.php",
+                "<?php\ndeclare(strict_types=1);\nnamespace App;\n/** Doc. */\n#[AsCommand(name: 'about')]\nclass AboutCommand {\n    public static function half(int $n): int { return intdiv($n, 2); }\n    public static function strict(): string { try { return (string) self::half(\"8\"); } catch (\\TypeError $e) { return 'TypeError'; } }\n}\n",
+            ),
+            (
+                "main.php",
+                "<?php\n$r = new ReflectionClass(App\\AboutCommand::class);\n$a = $r->getAttributes(App\\AsCommand::class);\necho count($a), ':', $a[0]->newInstance()->name, ':', App\\AboutCommand::strict();\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "1:about:TypeError");
+}
+
+
+/// Files of the two file-scope-effect fixtures below: `Window.php` echoes when it is loaded,
+/// `Plain.php` only aliases, and `autoload.php` is the runtime loader a Composer project
+/// registers through `vendor/autoload.php`.
+fn file_scope_effect_fixture(main: &'static str) -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("composer.json", r#"{"autoload":{"psr-4":{"P\\":"src/"}}}"#),
+        (
+            "src/Window.php",
+            "<?php\nnamespace P;\nclass Window {\n    public static function size(): int { return 3; }\n}\necho \"window-init|\";\n",
+        ),
+        (
+            "src/Plain.php",
+            "<?php\nnamespace P;\nclass Plain {\n    public function name(): string { return 'plain'; }\n}\nif (!\\class_exists(Legacy::class, false)) {\n    \\class_alias(Plain::class, Legacy::class);\n}\n",
+        ),
+        (
+            "autoload.php",
+            "<?php\nspl_autoload_register(function (string $class): void {\n    if (str_starts_with($class, 'P\\\\')) {\n        require __DIR__ . '/src/' . substr($class, 2) . '.php';\n    }\n});\n",
+        ),
+        ("main.php", main),
+    ]
+}
+
+/// A class file whose file-scope code has an effect, reached only from a function body, runs
+/// that code when the class is first used -- here after `start|plain|` -- and not at boot.
+///
+/// Spliced among the declarations, `Window.php`'s echo ran before the entry's first statement;
+/// psysh's `Hoa/ConsoleWindow.php` (`Console::advancedInteraction();`, which shells out to `stty`)
+/// killed every Laravel artisan command that way. Reference values captured from php 8.5.10.
+#[test]
+fn test_effectful_class_file_reached_from_a_body_runs_its_file_scope_code_on_first_use() {
+    let files = file_scope_effect_fixture(
+        "<?php\nrequire __DIR__ . '/autoload.php';\nfunction size(): int { return P\\Window::size(); }\necho \"start|\";\necho (new P\\Plain())->name(), \"|\";\necho size(), size();\necho \"end\";\n",
+    );
+    let out = compile_cli_files_and_run(&files, "main.php");
+    assert_eq!(out, "start|plain|window-init|33end");
+}
+
+/// The same file named by executable file-scope code keeps its compiled splice point, which is
+/// where php's autoloader would run it.
+#[test]
+fn test_effectful_class_file_named_at_file_scope_stays_compiled_in_place() {
+    let files = file_scope_effect_fixture(
+        "<?php\nrequire __DIR__ . '/autoload.php';\necho \"start|\";\necho (new P\\Plain())->name(), \"|\";\necho P\\Window::size();\necho \"|end\";\n",
+    );
+    let out = compile_cli_files_and_run(&files, "main.php");
+    assert_eq!(out, "start|plain|window-init|3|end");
+}
+
+/// A function declared after the class in a file an `spl_autoload_register` callback requires is
+/// callable once the class is used: statically, through a string callable named by the class,
+/// and from eval'd code. The resolver leaves the function's binding inside the callback, which
+/// the compiled program never runs for a class it already declared.
+#[test]
+fn test_function_declared_in_an_autoloaded_class_file_is_callable() {
+    let files = [
+        (
+            "src/Ext.php",
+            "<?php\nnamespace Lib\\Ext;\nfinal class Ext {\n    public function tests(): array { return ['root' => 'Lib\\Ext\\is_root']; }\n}\nfunction is_root(int $x): bool { return $x === 0; }\n",
+        ),
+        (
+            "main.php",
+            "<?php\nspl_autoload_register(function ($c) {\n    if ($c === 'Lib\\Ext\\Ext') { require __DIR__ . '/src/Ext.php'; }\n});\n$t = (new Lib\\Ext\\Ext())->tests();\necho \\Lib\\Ext\\is_root(0) ? 'yes' : 'no', \"|\";\necho call_user_func($t['root'], 1) ? 'yes' : 'no', \"|\";\n$code = 'return \\Lib\\Ext\\is_root(0) ? \"yes\" : \"no\";';\necho eval($argc > 0 ? $code : 'return \"\";');\n",
+        ),
+    ];
+    let out = compile_cli_files_and_run(&files, "main.php");
+    assert_eq!(out, "yes|no|yes");
+}
+
+/// Verifies `spl_autoload_functions()` reports the request's runtime registrations.
+///
+/// PHP keeps ONE autoload queue per request. A compiled registration goes through the shared
+/// bridge and an interpreted one through the interpreter's context, so the compiled call must ask
+/// the interpreter instead of answering a static placeholder list: Symfony's `PhpDumper`
+/// `getAutoloadFile()` walks `spl_autoload_functions()` looking for the Composer loader, and an
+/// empty answer suppressed the generated `App_KernelProdContainer.preload.php` on every
+/// `cache:warmup`.
+#[test]
+fn test_spl_autoload_functions_reports_runtime_registrations() {
+    let out = compile_and_run(
+        r#"<?php
+final class ProbeLoader { public function load(string $class): void {} }
+$loader = new ProbeLoader();
+var_export(spl_autoload_register([$loader, 'load']));
+echo "|", count(spl_autoload_functions()), "|";
+$fns = spl_autoload_functions();
+echo get_debug_type($fns[0]), "|", $fns[0][1], "|";
+$code = 'spl_autoload_register(function (string $c): void {}); echo count(spl_autoload_functions());';
+echo eval($argc > 0 ? $code : 'echo 0;');
+"#,
+    );
+    assert_eq!(out, "true|1|array|load|2");
 }

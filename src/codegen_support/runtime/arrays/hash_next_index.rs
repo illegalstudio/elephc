@@ -41,33 +41,37 @@ pub(super) fn record_insert(emitter: &mut Emitter, hash: &str, entry: &str, pref
     emitter.label(&done);
 }
 
-/// Rewinds the append counter only when pop removes its integer predecessor.
-/// Preserves the hash/key/length argument registers; ARM uses x9/x10, x86 uses r10/r11.
+/// Gives a popped integer key back to automatic indexing, as php's `array_pop()` does.
+///
+/// php decrements `nNextFreeElement` when the removed key is an integer one below it, so
+/// `$a[] = x` after `array_pop($a)` reuses the popped key instead of leaving a hole (the `Dom\`
+/// prelude's open-elements stack read null out of one). `key_lo`/`key_hi` hold the removed key's
+/// words (`key_hi` is -1 for an integer key). ARM uses x14 as scratch, x86 r11. The caller
+/// supplies a unique branch-label prefix.
 pub(super) fn rewind_after_pop(
-    emitter: &mut Emitter, hash: &str, key: &str, key_len: &str, prefix: &str,
+    emitter: &mut Emitter,
+    hash: &str,
+    key_lo: &str,
+    key_hi: &str,
+    prefix: &str,
 ) {
-    let done = format!("{prefix}_next_index_done");
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            // -- rewind the next key only when the popped integer is its immediate predecessor --
-            emitter.instruction(&format!("cmn {key_len}, #1"));                 // only integer tail keys can rewind automatic indexing
-            emitter.instruction(&format!("b.ne {done}"));                       // popping a string key preserves numeric insertion history
-            emitter.instruction(&format!("ldr x9, [{hash}, #{NEXT_INDEX_OFFSET}]")); // read the current next automatic integer key
-            emitter.instruction("sub x10, x9, #1");                             // match PHP's immediate predecessor rule, including saturation
-            emitter.instruction(&format!("cmp {key}, x10"));                    // older numeric tail entries do not rewind a higher counter
-            emitter.instruction(&format!("b.ne {done}"));                       // retain history unless this is the counter's predecessor
-            emitter.instruction(&format!("str {key}, [{hash}, #{NEXT_INDEX_OFFSET}]")); // let the next append reuse the popped numeric slot
-        }
-        Arch::X86_64 => {
-            // -- preserve append history unless the popped integer directly precedes it --
-            emitter.instruction(&format!("cmp {key_len}, -1"));                 // only integer tail keys can rewind automatic indexing
-            emitter.instruction(&format!("jne {done}"));                        // popping a string key preserves numeric insertion history
-            emitter.instruction(&format!("mov r10, QWORD PTR [{hash} + {NEXT_INDEX_OFFSET}]")); // read the persistent next automatic integer key
-            emitter.instruction("lea r11, [r10 - 1]");                          // match PHP's immediate predecessor rule, including saturation
-            emitter.instruction(&format!("cmp {key}, r11"));                    // lower numeric tail entries preserve a higher insertion history
-            emitter.instruction(&format!("jne {done}"));                        // rewind only when this key directly precedes the counter
-            emitter.instruction(&format!("mov QWORD PTR [{hash} + {NEXT_INDEX_OFFSET}], {key}")); // let the next append reuse the popped numeric slot
-        }
+    let done = format!("{prefix}_pop_rewind_done");
+    if emitter.target.arch == Arch::AArch64 {
+        emitter.instruction(&format!("cmn {key_hi}, #1"));                      // integer keys carry the negative-one length sentinel
+        emitter.instruction(&format!("b.ne {done}"));                           // a popped string key leaves automatic indexing alone
+        emitter.instruction(&format!("ldr x14, [{hash}, #{NEXT_INDEX_OFFSET}]")); // read the next automatic index
+        emitter.instruction("sub x14, x14, #1");                                // the key the latest automatic index stands for
+        emitter.instruction(&format!("cmp {key_lo}, x14"));                     // did the pop remove exactly that key?
+        emitter.instruction(&format!("b.ne {done}"));                           // any other key keeps the insertion history
+        emitter.instruction(&format!("str {key_lo}, [{hash}, #{NEXT_INDEX_OFFSET}]")); // the next append reuses the popped key
+    } else {
+        emitter.instruction(&format!("cmp {key_hi}, -1"));                      // distinguish integer keys from string keys
+        emitter.instruction(&format!("jne {done}"));                            // a popped string key leaves automatic indexing alone
+        emitter.instruction(&format!("mov r11, QWORD PTR [{hash} + {NEXT_INDEX_OFFSET}]")); // read the next automatic index
+        emitter.instruction("sub r11, 1");                                      // the key the latest automatic index stands for
+        emitter.instruction(&format!("cmp {key_lo}, r11"));                     // did the pop remove exactly that key?
+        emitter.instruction(&format!("jne {done}"));                            // any other key keeps the insertion history
+        emitter.instruction(&format!("mov QWORD PTR [{hash} + {NEXT_INDEX_OFFSET}], {key_lo}")); // the next append reuses the popped key
     }
     emitter.label(&done);
 }

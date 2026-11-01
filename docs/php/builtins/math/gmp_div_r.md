@@ -2,7 +2,7 @@
 title: "gmp_div_r()"
 description: "Returns the remainder of a GMP division."
 sidebar:
-  order: 599
+  order: 612
 ---
 
 ## gmp_div_r()

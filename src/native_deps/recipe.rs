@@ -58,7 +58,7 @@ enum BuiltInRecipe {
 fn built_in_recipe(package: &str, revision: u32) -> Option<BuiltInRecipe> {
     match (package, revision) {
         ("oniguruma", 3) => Some(BuiltInRecipe::Oniguruma),
-        ("pcre2", 7) => Some(BuiltInRecipe::Pcre2),
+        ("pcre2", 12) => Some(BuiltInRecipe::Pcre2),
         ("zlib", 1) => Some(BuiltInRecipe::Zlib),
         ("openssl", 1) => Some(BuiltInRecipe::Openssl),
         ("nghttp2", 2) => Some(BuiltInRecipe::Nghttp2),
@@ -115,16 +115,34 @@ mod tests {
         }
     }
 
-    /// Verifies the revised PCRE2 shim is not reused under its previous recipe identity.
+    /// Verifies the revised PCRE2 shim is not reused under any previous recipe identity.
+    ///
+    /// Revision 4 added the name-table accessors the named-capture matches array is built from.
+    /// Revision 5 rewrote `elephc_pcre2_v1_compile` to call `pcre2_compile()` directly instead of
+    /// delegating to `pcre2_regcomp()`, so it can request PCRE2_EXTENDED, PCRE2_DOLLAR_ENDONLY,
+    /// PCRE2_DUPNAMES, and PCRE2_NO_AUTO_CAPTURE — none of which pcre2posix.h's fixed REG_* cflag
+    /// set can express. Revision 6 did the same to `elephc_pcre2_v1_exec`: `pcre2_regexec()`
+    /// implements REG_STARTEND by ADVANCING the subject pointer, so `^` under the `m` modifier
+    /// matched at every continuation of a global match instead of at line starts. The catalog's
+    /// cache key is `(package, version, recipe_revision, source_sha256, target)`, which does NOT
+    /// hash the embedded shim source, so reusing an older revision's identity after editing
+    /// `pcre2_shim.c` silently links the STALE object: no error, just a shim that still lacks
+    /// whatever the edit added. Revision 7 added `elephc_pcre2_v1_last_mark`, which is what
+    /// `$matches['MARK']` is built from and what Symfony's dumped dynamic-route matcher reads.
+    /// Revision 8 added `elephc_pcre2_v1_last_error`, php's `preg_last_error()` code, which a
+    /// `/u` call reads to return false or null for a subject that is not valid UTF-8.
+    /// Revision 9 caches compiled patterns for the life of the process, as php's PCRE cache does,
+    /// so `elephc_pcre2_v1_free` no longer frees a pattern the cache holds.
+    /// Revision 10 records why the last compile failed (`elephc_pcre2_v1_compile_warning`, php's
+    /// `Compilation failed: ... at offset N`) and adds `elephc_pcre2_v1_last_error_msg`.
+    /// Revision 12 merges the main-line and Symfony-branch shim edits (PCRE2_EXTENDED ordering,
+    /// global-match progression, capture write-back) under one identity.
     #[test]
-    fn previous_pcre2_recipe_revision_is_not_dispatched() {
-        assert!(built_in_recipe("pcre2", 1).is_none());
-        assert!(built_in_recipe("pcre2", 2).is_none());
-        assert!(built_in_recipe("pcre2", 3).is_none());
-        assert!(built_in_recipe("pcre2", 4).is_none());
-        assert!(built_in_recipe("pcre2", 5).is_none());
-        assert!(built_in_recipe("pcre2", 6).is_none());
-        assert!(matches!(built_in_recipe("pcre2", 7), Some(BuiltInRecipe::Pcre2)));
+    fn previous_pcre2_recipe_revisions_are_not_dispatched() {
+        for revision in 1..=11 {
+            assert!(built_in_recipe("pcre2", revision).is_none(), "revision {revision}");
+        }
+        assert!(matches!(built_in_recipe("pcre2", 12), Some(BuiltInRecipe::Pcre2)));
     }
 
     /// Verifies the dispatcher recognizes curl and every library it links by exact catalog

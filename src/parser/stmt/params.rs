@@ -11,11 +11,13 @@
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
 use crate::names::Name;
-use crate::parser::ast::{AttributeGroup, Expr, Stmt, StmtKind, TypeExpr, TypeParam, Variance};
+use crate::parser::ast::{
+    AttributeGroup, Expr, ExprKind, Stmt, StmtKind, TypeExpr, TypeParam, Variance,
+};
 use crate::parser::expr::parse_expr;
 use crate::span::Span;
 
-use super::{expect_token, name_starts_at, parse_block, parse_name};
+use super::{expect_token, name_starts_at, parse_name};
 
 /// Parses a `function` declaration: name, parameters, optional return type, and body.
 /// Consumes the `function` keyword at `*pos` and advances past the closing `}` of the body.
@@ -59,7 +61,18 @@ pub(super) fn parse_function_decl(
         None
     };
 
-    let body = parse_block(tokens, pos)?;
+    let body = super::blocks::parse_executable_block(tokens, pos)?;
+    // The declaration's extent ends at the closing `}` just consumed: php's
+    // `ReflectionFunction::getEndLine()` names that line, and it answered the start line.
+    let span = match pos.checked_sub(1).and_then(|index| tokens.get(index)) {
+        Some(close) => Span {
+            line: span.line,
+            col: span.col,
+            end_line: close.1.span.end_line.max(span.line),
+            end_col: close.1.span.end_col,
+        },
+        None => span,
+    };
 
     Ok(Stmt::new(
         StmtKind::FunctionDecl {
@@ -297,6 +310,7 @@ pub(crate) fn parse_type_param_list(
             bound,
             default,
             variance,
+            doc_annotated: false,
         });
         if *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
             *pos += 1;
@@ -334,10 +348,9 @@ pub(crate) fn looks_like_typed_param(tokens: &[SpannedToken], pos: usize) -> boo
     }
 }
 
-/// Parses a type expression: atomic type, nullable shorthand, or union of pipe-separated types.
-/// Advances `*pos` past the consumed type tokens. Returns `TypeExpr::Atomic`, `Nullable`,
-/// `Union`, `Ptr`, or `Buffer`. Does not resolve names — emits `TypeExpr::Named` with a
-/// `Name` for class/interface/enum types.
+/// Parses a type expression: atomic type, nullable shorthand, intersection, union, or DNF type.
+/// Advances `*pos` past the consumed type tokens. Parenthesized intersections are retained as
+/// union members, as required by PHP's `(A&B)|C` syntax. Does not resolve class-like names.
 pub(crate) fn parse_type_expr(
     tokens: &[SpannedToken],
     pos: &mut usize,
@@ -365,12 +378,16 @@ fn parse_type_expr_nested(
     span: Span,
     closes: &mut AngleCloses,
 ) -> Result<TypeExpr, CompileError> {
-    let ty = if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Question)) {
-        *pos += 1;
-        TypeExpr::Nullable(Box::new(parse_atomic_type_expr(tokens, pos, span, closes)?))
-    } else {
-        parse_atomic_type_expr(tokens, pos, span, closes)?
-    };
+    let (ty, grouped_intersection) =
+        if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Question)) {
+            *pos += 1;
+            (
+                TypeExpr::Nullable(Box::new(parse_atomic_type_expr(tokens, pos, span, closes)?)),
+                false,
+            )
+        } else {
+            parse_union_member(tokens, pos, span, closes)?
+        };
 
     if matches!(ty, TypeExpr::Nullable(_))
         && matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Pipe))
@@ -396,7 +413,8 @@ fn parse_type_expr_nested(
     // Intersection type `A&B`: an `&` immediately followed by another type. A bare `&` followed
     // by a `$variable`/`...` is the by-reference marker, handled by the parameter parser, so it is
     // left in place here.
-    if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Ampersand))
+    if !grouped_intersection
+        && matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Ampersand))
         && type_starts_at(tokens, *pos + 1)
     {
         let mut members = vec![ty];
@@ -406,16 +424,71 @@ fn parse_type_expr_nested(
             *pos += 1; // consume '&'
             members.push(parse_atomic_type_expr(tokens, pos, span, closes)?);
         }
+        if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Pipe)) {
+            return Err(CompileError::new(
+                span,
+                "Intersection members of a union must be parenthesized",
+            ));
+        }
         return Ok(TypeExpr::Intersection(members));
     }
 
     let mut members = vec![ty];
     while matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Pipe)) {
         *pos += 1;
-        members.push(parse_atomic_type_expr(tokens, pos, span, closes)?);
+        let (member, _) = parse_union_member(tokens, pos, span, closes)?;
+        members.push(member);
+    }
+
+    if grouped_intersection && members.len() == 1 {
+        return Err(CompileError::new(
+            span,
+            "A parenthesized intersection must be part of a union type",
+        ));
     }
 
     Ok(normalize_union_members(members))
+}
+
+/// Parses one union member, including PHP's parenthesized intersection form `(A&B)`.
+/// The boolean result records whether parentheses were consumed so the caller can reject a
+/// standalone parenthesized intersection while accepting it inside a DNF union.
+fn parse_union_member(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+    closes: &mut AngleCloses,
+) -> Result<(TypeExpr, bool), CompileError> {
+    if !matches!(
+        tokens.get(*pos).map(|(token, _)| token),
+        Some(Token::LParen)
+    ) {
+        return Ok((parse_atomic_type_expr(tokens, pos, span, closes)?, false));
+    }
+
+    *pos += 1;
+    let mut members = vec![parse_atomic_type_expr(tokens, pos, span, closes)?];
+    if !matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Ampersand))
+        || !type_starts_at(tokens, *pos + 1)
+    {
+        return Err(CompileError::new(
+            span,
+            "Expected an intersection type inside parentheses",
+        ));
+    }
+    while matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Ampersand))
+        && type_starts_at(tokens, *pos + 1)
+    {
+        *pos += 1;
+        members.push(parse_atomic_type_expr(tokens, pos, span, closes)?);
+    }
+    expect_token(
+        tokens,
+        pos,
+        &Token::RParen,
+        "Expected ')' after parenthesized intersection type",
+    )?;
+    Ok((TypeExpr::Intersection(members), true))
 }
 
 /// Returns true if the token at `index` can begin a (non-nullable) type — used to tell an
@@ -431,6 +504,28 @@ fn type_starts_at(tokens: &[SpannedToken], index: usize) -> bool {
                 | Token::Parent
         )
     ) || crate::parser::relative_name_starts_at(tokens, index)
+}
+
+/// Widens a declared parameter type to accept `null`, for a parameter whose default is `null`.
+///
+/// A type that already admits null (`?T`, a union with a `null` member, `mixed`) is returned
+/// unchanged; a union gains its null sentinel through [`normalize_union_members`] so `A|B = null`
+/// reads exactly like `A|B|null`; every other type becomes `?T`.
+pub(crate) fn implicitly_nullable_type(ty: TypeExpr) -> TypeExpr {
+    match ty {
+        TypeExpr::Nullable(_) | TypeExpr::Void | TypeExpr::Never => ty,
+        TypeExpr::Named(ref name) if name.as_str().eq_ignore_ascii_case("mixed") => ty,
+        TypeExpr::Union(mut members) => {
+            if members.iter().any(|member| matches!(member, TypeExpr::Void)) {
+                return TypeExpr::Union(members);
+            }
+            members.push(TypeExpr::Void);
+            normalize_union_members(members)
+        }
+        // `A&B $x = null` is a php compile error; leave it to the checker.
+        TypeExpr::Intersection(_) => ty,
+        other => TypeExpr::Nullable(Box::new(other)),
+    }
 }
 
 /// Collapses a parsed union member list into its canonical `TypeExpr`.
@@ -450,7 +545,7 @@ fn normalize_union_members(members: Vec<TypeExpr>) -> TypeExpr {
             .into_iter()
             .filter(|member| !matches!(member, TypeExpr::Void))
             .collect();
-        if non_null.len() == 1 {
+        if non_null.len() == 1 && !matches!(non_null.first(), Some(TypeExpr::Intersection(_))) {
             return TypeExpr::Nullable(Box::new(
                 non_null.pop().expect("non-null member exists"),
             ));
@@ -773,6 +868,16 @@ pub(super) fn parse_params(
                     Some(parse_expr(tokens, pos)?)
                 } else {
                     None
+                };
+                // `T $x = null` is implicitly `?T`: php lets a null default widen the declared
+                // type (deprecated since 8.4, still the rule), so `f(null)` binds. Without the
+                // widening the checker typed the parameter `T` and refused every explicit null
+                // argument -- `callable $handler = null` is how Guzzle spells an optional handler.
+                let type_ann = match (type_ann, &default) {
+                    (Some(ty), Some(default)) if matches!(default.kind, ExprKind::Null) => {
+                        Some(implicitly_nullable_type(ty))
+                    }
+                    (ty, _) => ty,
                 };
                 param_attributes.push(attributes);
                 params.push((n, type_ann, default, is_ref));

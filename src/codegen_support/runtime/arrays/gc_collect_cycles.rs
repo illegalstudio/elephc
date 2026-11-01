@@ -103,6 +103,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("ldr w11, [x9]");                                       // load this block payload size from the heap header
     emitter.instruction("ldr w12, [x9, #4]");                                   // load this block refcount from the heap header
     emitter.instruction("cbz w12, __rt_gc_collect_cycles_clear_next");          // free-list blocks keep kind=0 and need no reset
+    emit_skip_parked_block(emitter, "w12", "__rt_gc_collect_cycles_clear_next");
     emitter.instruction("ldr x13, [x9, #8]");                                   // load the full kind word with any stale GC metadata
     emitter.instruction("mov x14, #0xffff");                                    // preserve kind and indexed element storage
     emitter.instruction("movk x14, #0x8006, lsl #16");                          // preserve destructor completion and snapshot pins while clearing marks
@@ -130,6 +131,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("add x12, x9, #16");                                    // compute the user pointer for this heap block
     emitter.instruction("ldr w13, [x9, #4]");                                   // load this block refcount from the heap header
     emitter.instruction("cbz w13, __rt_gc_collect_cycles_count_next");          // free blocks contribute no outgoing graph edges
+    emit_skip_parked_block(emitter, "w13", "__rt_gc_collect_cycles_count_next");
     emitter.instruction("ldr x14, [x9, #8]");                                   // load the full kind word for this heap block
     emitter.instruction("and x15, x14, #0xff");                                 // isolate the low-byte heap kind tag
     emitter.instruction("cmp x15, #2");                                         // is this at least an indexed array?
@@ -346,6 +348,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("ldr w11, [x9]");                                       // load this block payload size from the heap header
     emitter.instruction("ldr w12, [x9, #4]");                                   // load this block refcount from the heap header
     emitter.instruction("cbz w12, __rt_gc_collect_cycles_root_next");           // free blocks are not GC roots
+    emit_skip_parked_block(emitter, "w12", "__rt_gc_collect_cycles_root_next");
     emitter.instruction("ldr x13, [x9, #8]");                                   // load the full kind word with incoming-edge counts
     emitter.instruction("and x14, x13, #0xff");                                 // isolate the low-byte heap kind tag
     emitter.instruction("cmp x14, #2");                                         // is this at least an indexed array?
@@ -421,6 +424,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("ldr w11, [x9]");                                       // load this block payload size from the heap header
     emitter.instruction("ldr w12, [x9, #4]");                                   // load this block refcount from the heap header
     emitter.instruction("cbz w12, __rt_gc_collect_cycles_free_next");           // free-list blocks are already reclaimed
+    emit_skip_parked_block(emitter, "w12", "__rt_gc_collect_cycles_free_next");
     emitter.instruction("ldr x13, [x9, #8]");                                   // load the full kind word with reachable marks
     emitter.instruction("and x14, x13, #0xff");                                 // isolate the low-byte heap kind tag
     emitter.instruction("cmp x14, #2");                                         // is this at least an indexed array?
@@ -594,4 +598,26 @@ mod tests {
             assert!(output.contains("add sp, sp, #128"), "{name}");
         }
     }
+}
+
+/// Branches to `label` when the refcount word in `refcount` marks a block parked on the free list.
+///
+/// A freed block's refcount word holds `HEAP_FREE_REFCOUNT_MARK`, not zero, and its kind word is
+/// zero. Taking it for a live candidate stamped the candidate bit into that kind word, which the
+/// heap-debug free-list validator then reported as corruption on the next allocation (every
+/// `unset()` inside `eval()` followed by a collection). `w16` is free across these scans.
+pub(crate) fn emit_skip_parked_block(emitter: &mut Emitter, refcount: &str, label: &str) {
+    let mark = crate::codegen_support::sentinels::HEAP_FREE_REFCOUNT_MARK;
+    emitter.instruction(&format!("mov w16, #{:#x}", mark & 0xffff));             // materialize the parked-block refcount marker
+    emitter.instruction(&format!("movk w16, #{:#x}, lsl #16", mark >> 16));     // complete the 32-bit parked-block marker
+    emitter.instruction(&format!("cmp {refcount}, w16"));                        // is this block parked on the free list?
+    emitter.instruction(&format!("b.eq {label}"));                               // parked blocks are not live collector nodes
+}
+
+/// x86_64 twin of [`emit_skip_parked_block`]: `operand` is the 32-bit refcount (a register or a
+/// `DWORD PTR` header operand).
+pub(crate) fn emit_skip_parked_block_x86(emitter: &mut Emitter, operand: &str, label: &str) {
+    let mark = crate::codegen_support::sentinels::HEAP_FREE_REFCOUNT_MARK;
+    emitter.instruction(&format!("cmp {operand}, {mark:#x}"));                   // is this block parked on the free list?
+    emitter.instruction(&format!("je {label}"));                                 // parked blocks are not live collector nodes
 }

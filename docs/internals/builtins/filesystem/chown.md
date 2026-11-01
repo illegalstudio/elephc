@@ -2,7 +2,7 @@
 title: "chown() - internals"
 description: "Compiler internals for chown(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 261
+  order: 272
 ---
 
 ## `chown()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/chown.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/chown.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -25,10 +25,10 @@ sidebar:
 - **Target strategy**: `runtime_call`
 - **Validation**: `checker_hook`
 - **Result type source**: `checked`
-- **Result ownership**: `may_alias_arguments`
+- **Result ownership**: `fresh`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
-- **Callable policy**: `static_only`
+- **Callable policy**: `dynamic_target`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function chown(string $filename, string $user): bool
+function chown(string $filename, string|int $user): bool
 ```
 
 ## What the type checker enforces

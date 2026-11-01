@@ -348,6 +348,36 @@ fn test_dunder_dir_inside_include_uses_included_files_dir() {
     );
 }
 
+/// Verifies an included class method retains the physical directory of its declaration file.
+///
+/// This mirrors an autoload entry file delegating to a class in a nested `vendor/composer/`
+/// directory: `__DIR__` inside the class method must not inherit the caller's directory.
+#[test]
+fn test_dunder_dir_inside_included_class_method_uses_declaration_dir() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php\necho require 'vendor/autoload.php';\n",
+            ),
+            (
+                "vendor/autoload.php",
+                "<?php\nrequire __DIR__ . '/composer/autoload_real.php';\nreturn AutoInit::dir();\n",
+            ),
+            (
+                "vendor/composer/autoload_real.php",
+                "<?php\nclass AutoInit { public static function dir(): string { return __DIR__; } }\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert!(
+        out.ends_with("/vendor/composer"),
+        "expected declaration directory, got {:?}",
+        out
+    );
+}
+
 /// Verifies `__NAMESPACE__` inside an included file is independent of the
 /// caller's namespace. Main file has `namespace App` but included file has
 /// no namespace, so the included file's `__NAMESPACE__` is empty.

@@ -359,20 +359,15 @@ echo "done";
     assert_eq!(out, "isset:boom zz;empty:boom zz;done");
 }
 
-/// Verifies a class that declares a magic accessor gets php's answer withheld, never its storage.
+/// Verifies a class that declares a magic accessor answers through it, never through its storage.
 ///
 /// php consults `__get` and `__isset` BEFORE it reports anything: on a class that declares them a
 /// private property reached from an unrelated scope answers the accessor, never
 /// `Cannot access private property`, and a name php resolves to a dynamic property answers the
-/// accessor rather than warning `Undefined property`. This compiler cannot dispatch an accessor
-/// for a RUNTIME property name yet, so a read of such a name has three wrong answers available and
-/// exactly one safe one:
-///   - raising or warning would invent a diagnostic php never reports;
-///   - reading the declared slot would hand an unrelated scope the private storage php is hiding;
-///   - php `null` is wrong in VALUE only, and exposes nothing.
-/// `PropertyNameArm::MagicDeferred` takes the third. The php-correct value (`magic:secret` and
-/// `inherited:n`, measured on php 8.5.10) arrives with the dedicated runtime-name magic dispatch
-/// phase, which is when this test's expectations change.
+/// accessor rather than warning `Undefined property`. Runtime property names now dispatch the
+/// accessor too (`emit_runtime_name_magic_get_arm` from the `MagicDeferred` arm), so the answers
+/// are php's own (`magic:secret`, `true`, `inherited:n`, php 8.5.10); before, they were withheld
+/// as `null`, the one answer that exposed nothing.
 ///
 /// The two declaring scopes below prove the storage is intact and still readable from inside.
 #[test]
@@ -401,9 +396,9 @@ echo "inside:" . $m->readSecret() . ":" . $b->readA();
     // The private payloads are 5 and 1. Neither may appear in an out-of-scope runtime-name read.
     assert_eq!(
         out.stdout,
-        "NULL\nbool(false)\nNULL\ninside:5:1",
-        "out-of-scope runtime reads must answer NULL and the declaring methods must still read \
-         their own slots"
+        "string(12) \"magic:secret\"\nbool(true)\nstring(11) \"inherited:n\"\ninside:5:1",
+        "out-of-scope runtime reads must answer the accessors and the declaring methods must still \
+         read their own slots"
     );
     assert!(
         !out.stdout.contains("int(5)") && !out.stdout.contains("int(1)"),
@@ -1523,12 +1518,15 @@ echo $o->q, "\n";
 /// candidate set had quietly OMITTED, by loading the immediate zero and publishing it through
 /// `store_ref_cell_pointer_result`. Everything downstream treats that as a live alias and
 /// dereferences it on the next read or write. A class this scope resolves dynamically is exactly
-/// such an omitted class, so the safe answer is to refuse the whole lowering: php binds the
-/// reference to a distinct dynamic property in the per-instance hash, which this compiler cannot
-/// alias for any class yet.
+/// such an omitted class: php binds the reference to a distinct dynamic property in the
+/// per-instance hash, which this compiler cannot alias for any class yet.
+///
+/// Such a class gets no arm, so a receiver of it reaches the no-cell `Error` AT RUN TIME. Refusing
+/// the whole function at compile time instead refused every Symfony closure binding
+/// `&$this->instanceof` on an unrelated loader class. Either way no zero cell is ever published.
 #[test]
 fn test_mixed_receiver_reference_binding_never_publishes_a_null_cell() {
-    let failure = compile_source_expect_backend_error(
+    let failure = compile_and_run_expect_failure(
         r#"<?php
 class MRefAnc {
     private $p = 'anc-p';
@@ -1544,14 +1542,10 @@ echo $o->readP(), "\n";
     );
     assert!(
         failure.contains(
-            "for a Mixed receiver whose class MRefKid resolves $p to a dynamic property"
+            "Cannot take a reference to a property the receiver's runtime class does not store \
+             in a shared reference cell"
         ),
-        "expected the exact Mixed reference refusal naming MRefKid::$p, got: {}",
-        failure
-    );
-    assert!(
-        failure.contains("load_prop_ref_cell"),
-        "the refusal must name the reference-cell opcode, got: {}",
+        "expected the catchable no-cell Error, got: {}",
         failure
     );
 }
@@ -1978,4 +1972,60 @@ var_dump($runtime->p);
         out.stdout,
         "int(5)\nCannot assign string to property TypedSlot::$p of type int\nint(1)\nint(7)\n"
     );
+}
+
+/// `isset()`, `empty()` and `??` over a property the scope cannot reach, or that does not exist,
+/// ask the class's accessors the way php does: `isset()` asks `__isset` alone, `empty()` and `??`
+/// ask `__isset` and then `__get`; a class without `__isset` answers "not set" in silence. Each
+/// form is exercised through a static name, a runtime name and a `mixed` receiver. Before, the
+/// `mixed` and runtime-name forms never asked `__isset` (Twig's `getAttribute()` probes
+/// `isset($object->$item)` on every object it renders), `$entity->private ?? 'd'` read the
+/// private value, and `empty($o->private)` was refused at compile time. Host PHP 8.5.
+#[test]
+fn test_silent_probes_ask_the_magic_accessors_php_asks() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Ent {
+    private int $secret = 1;
+    public int $open = 2;
+    public ?int $nul = null;
+    public function __isset(string $n): bool { echo "[isset $n]"; return $n === 'secret' || $n === 'virtual' || $n === 'zero'; }
+    public function __get(string $n): mixed { echo "[get $n]"; return $n === 'zero' ? 0 : 42; }
+}
+class Plain { private int $p = 1; }
+function probe(mixed $o, string $item): string {
+    return (isset($o->$item) ? 'T' : 'F') . (empty($o->$item) ? 'E' : 'N') . (($o->$item ?? 'd') === 'd' ? 'd' : 'v');
+}
+function fixed(mixed $o): string {
+    return (isset($o->secret) ? 'T' : 'F') . (isset($o->virtual) ? 'T' : 'F') . (empty($o->zero) ? 'E' : 'N')
+        . ($o->virtual ?? 'd') . (isset($o->open) ? 'T' : 'F') . (isset($o->nul) ? 'T' : 'F');
+}
+$e = $argc > 5 ? null : new Ent();
+foreach (['secret', 'open', 'virtual', 'zero', 'none', 'nul'] as $item) { echo $item, '=', probe($e, $item), "\n"; }
+echo fixed($e), "\n";
+$p = $argc > 5 ? null : new Plain();
+echo isset($p->p) ? 'T' : 'F', empty($p->p) ? 'E' : 'N', "\n";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "secret=[isset secret][isset secret][get secret][isset secret][get secret]TNv
+open=TNv
+virtual=[isset virtual][isset virtual][get virtual][isset virtual][get virtual]TNv
+zero=[isset zero][isset zero][get zero][isset zero][get zero]TEv
+none=[isset none][isset none][isset none]FEd
+nul=FEd
+[isset secret][isset virtual][isset zero][get zero][isset virtual][get virtual]TTE42TF
+FE
+");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Plain { private int $p = 1; }
+$p = $argc > 5 ? null : new Plain();
+echo isset($p->p) ? "T" : "F", empty($p->p) ? "E" : "N", "\n";
+$q = new Plain();
+echo isset($q->p) ? "T" : "F", empty($q->p) ? "E" : "N", "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "FE\nFE\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

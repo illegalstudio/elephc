@@ -112,6 +112,46 @@ fn test_function_no_args() {
     assert_eq!(out, "42");
 }
 
+/// Verifies the true outcome of an `&&` chain retains a right-hand assignment and narrows away
+/// the false alternative before the guarded body uses the value.
+#[test]
+fn test_truthy_and_chain_retains_assignment_and_narrowing() {
+    let out = compile_and_run(
+        r#"<?php
+final class ProducedValue {
+    public function text(): string { return 'ok'; }
+}
+function produceValue(): ProducedValue|false { return new ProducedValue(); }
+if (true && ($value = produceValue())) {
+    echo $value->text();
+}
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies falling through a terminal `if` whose `||` condition is false retains every
+/// right-hand assignment and its false-outcome narrowing.
+#[test]
+fn test_falsy_or_chain_after_terminal_branch_retains_assignment_and_narrowing() {
+    let out = compile_and_run(
+        r#"<?php
+final class ProducedValue {
+    public function text(): string { return 'ok'; }
+}
+function produceValue(): ProducedValue|false { return new ProducedValue(); }
+function render(): string {
+    if (false || !($value = produceValue())) {
+        return 'bad';
+    }
+    return $value->text();
+}
+echo render();
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
 /// A bare PHP `array` parameter keeps object elements dynamically typed across sibling
 /// call sites, allowing the query-builder use case without pinning the callee to one class.
 #[test]
@@ -310,6 +350,27 @@ fn test_foreach_key_over_unknown_element_array() {
         "<?php final class H { private array $headers = []; public function setHeader(string $name, string $value): void { $this->headers[$name] = $value; } public function all(array $headers): string { $out = ''; foreach ($headers as $name => $value) { $this->setHeader($name, $value); $out .= $name . '=' . $value . ';'; } return $out; } } function main(): void { echo (new H())->all(['a' => '1', 'b' => '2']); } main();",
     );
     assert_eq!(out, "a=1;b=2;");
+}
+
+/// Verifies a declared array reference invalidates an empty caller's pre-call element shape.
+#[test]
+fn test_array_reference_mutation_widens_caller_shape() {
+    let out = compile_and_run(
+        r#"<?php
+function populate(array &$result): void {
+    $result['Example'] = ['dev' => true];
+}
+function definitions(): array {
+    $result = [];
+    populate($result);
+    return $result;
+}
+foreach (definitions() as $environments) {
+    echo ($environments['dev'] ?? false) ? 'dev' : 'none';
+}
+"#,
+    );
+    assert_eq!(out, "dev");
 }
 
 /// A LOOP CONDITION THAT READS A BY-REFERENCE OUT-PARAMETER MUST BE RE-EVALUATED EVERY

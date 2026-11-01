@@ -66,7 +66,7 @@ impl ManifestBakeSites {
 /// # The mechanism, and why it is sound
 ///
 /// `inject_if_used` renders each function with the manifest it can see at that point (entry +
-/// includes + Composer `autoload.files`) — a valid, parseable, self-consistent placeholder.
+/// includes plus eager autoload files) — a valid, parseable, self-consistent placeholder.
 /// This pass then re-renders the same functions from the same templates with the full manifest,
 /// parses them, and swaps the whole top-level `FunctionDecl` statement in by name.
 ///

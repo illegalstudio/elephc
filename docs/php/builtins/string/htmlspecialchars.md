@@ -2,13 +2,13 @@
 title: "htmlspecialchars()"
 description: "Converts the HTML special characters in a string into their entities."
 sidebar:
-  order: 885
+  order: 923
 ---
 
 ## htmlspecialchars()
 
 ```php
-function htmlspecialchars(string $string, int $flags = 11, string $encoding = 'UTF-8'): string
+function htmlspecialchars(string $string, int $flags = 11, string $encoding = 'UTF-8', bool $double_encode = true): string
 ```
 
 Converts the HTML special characters in a string into their entities.
@@ -17,6 +17,7 @@ Converts the HTML special characters in a string into their entities.
 - `$string` (`string`)
 - `$flags` (`int`), default `11`, optional
 - `$encoding` (`string`), default `'UTF-8'`, optional
+- `$double_encode` (`bool`), default `true`, optional
 
 **Returns**: `string`
 

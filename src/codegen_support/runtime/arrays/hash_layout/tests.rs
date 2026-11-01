@@ -11,6 +11,31 @@
 use crate::codegen_support::{emit::Emitter, platform::{Arch, Platform, Target}, runtime::arrays};
 use std::process::Command;
 
+/// Defines the runtime state and diagnostic entry points `__rt_hash_new` and the reference-slot
+/// helpers now touch, for the fixtures that link a subset of the runtime against C allocators.
+///
+/// The state words stay zero (heap debugging off); the entry points trap, because a fixture that
+/// reaches one of them left the path it was written to exercise.
+pub(crate) fn runtime_state_stubs(emitter: &mut Emitter) {
+    emitter.raw(".data");
+    emitter.raw(".p2align 3");
+    for symbol in [
+        "_heap_debug_enabled", "_heap_stats_hash_origin", "_heap_dbg_overlap_msg",
+        "_script_source_file", "_script_source_file_len",
+    ] {
+        emitter.raw(&format!(".globl {symbol}"));
+        emitter.raw(&format!("{symbol}:"));
+        emitter.raw(".quad 0");
+    }
+    emitter.raw(".text");
+    for symbol in [
+        "__rt_hash_debug_validate_chain", "__rt_heap_debug_fail", "__rt_ref_marker_store",
+    ] {
+        emitter.label_global(symbol);
+        emitter.instruction(if emitter.target.arch == Arch::X86_64 { "ud2" } else { "brk #0" }); // reject debug and reference-slot paths outside this fixture
+    }
+}
+
 /// Proves stable growth, persistent indices, append exhaustion cleanup, and logical COW ownership.
 #[test]
 fn native_hash_owned_growth_preserves_identity_and_entries() {
@@ -31,7 +56,7 @@ fn native_hash_owned_growth_preserves_identity_and_entries() {
     arrays::emit_hash_get(&mut emitter);
     arrays::emit_hash_key_hash(&mut emitter);
     arrays::emit_hash_key_eq(&mut emitter);
-    arrays::emit_hash_fnv1a(&mut emitter);
+    arrays::emit_hash_bytes(&mut emitter);
     arrays::emit_hash_append(&mut emitter);
     arrays::emit_hash_set(&mut emitter);
     arrays::emit_hash_unset(&mut emitter);
@@ -52,13 +77,14 @@ fn native_hash_owned_growth_preserves_identity_and_entries() {
     for symbol in [
         "__rt_reference_cell_clone", "__rt_hash_to_mixed_box_owned", "__rt_hash_to_mixed_x86_box_owned",
         "__rt_mixed_from_value", "__rt_decref_mixed", "__rt_reference_cell_new",
-        "__rt_reference_cell_value_release",
+        "__rt_reference_cell_value_release", "__rt_ref_copy_slot",
     ] {
         emitter.label_global(symbol);
         emitter.instruction(if target.arch == Arch::X86_64 { "ud2" } else { "brk #0" }); // reject reference paths outside this growth fixture
     }
     emitter.label_global("__rt_object_handle_acquire");
     emitter.instruction("ret");                                                 // fixture Error objects need no external handle registry
+    runtime_state_stubs(&mut emitter);
     emitter.label_global("fixture_grow_owned");
     if target.arch == Arch::X86_64 {
         emitter.instruction("xor eax, eax");                                    // make the unrelated return register differ from the declared pointer argument

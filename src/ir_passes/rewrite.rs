@@ -74,7 +74,7 @@ pub(crate) fn neutralize_to_nop(inst: &mut Instruction) {
 /// Counts how many times each value is *used* across all instruction operands
 /// and terminator slots. Definitions are not counted. Used by peephole patterns
 /// that act only on single-use values (e.g. paired acquire/release).
-pub(crate) fn count_value_uses(function: &Function) -> HashMap<ValueId, usize> {
+pub(crate) fn count_value_uses(function: &Function) -> crate::ir::ValueUseCounts {
     function.value_use_counts()
 }
 

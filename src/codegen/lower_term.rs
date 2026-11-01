@@ -227,6 +227,9 @@ pub(super) fn lower_throw_value(ctx: &mut FunctionContext<'_>, value: ValueId) -
         abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), "_exc_value", 0);
         abi::emit_call_label(ctx.emitter, "__rt_throw_current");
         abi::emit_jump(ctx.emitter, &done_label);
+        // php raises `Error`, not `TypeError`, and names the two failures differently:
+        // `throw 42` -> "Can only throw objects", `throw new stdClass` -> "Cannot throw objects
+        // that do not implement Throwable".
         ctx.emitter.label(&invalid_label);
         ctx.emitter.comment("-- release a non-object thrown box before raising Error --");
         ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
@@ -424,6 +427,9 @@ fn lower_switch(
         validate_block_args(ctx, case.target, &case.args, "switch case")?;
     }
     ctx.load_value_to_result(scrutinee)?;
+    if let Some(table) = SwitchTable::dense(cases) {
+        return lower_switch_table(ctx, cases, &table, default, default_args);
+    }
     let result_reg = abi::int_result_reg(ctx.emitter);
     let case_reg = abi::secondary_scratch_reg(ctx.emitter);
     let mut case_edges = Vec::new();
@@ -452,6 +458,116 @@ fn lower_switch(
     let default_label = ctx.block_label_for_id(default)?;
     let default_edge = edge_label(ctx, default_args, &default_label, "switch_default_args");
     abi::emit_jump(ctx.emitter, &default_edge);
+    emit_edge_args(ctx, &default_edge, default, default_args, "switch default")?;
+    for (label, target, args) in case_edges {
+        emit_edge_args(ctx, &label, target, &args, "switch case")?;
+    }
+    Ok(())
+}
+
+/// Fewest distinct case values worth a jump table; a chain of that many compares is as fast.
+const SWITCH_TABLE_MIN_CASES: usize = 8;
+/// Most table slots spent per distinct case value, so a sparse switch keeps its compares.
+const SWITCH_TABLE_MAX_SLOTS_PER_CASE: usize = 3;
+/// Most slots in one jump table, at four bytes each.
+const SWITCH_TABLE_MAX_SLOTS: usize = 1 << 16;
+
+/// A dense integer switch planned as a jump table.
+struct SwitchTable {
+    /// The smallest case value, which slot 0 stands for.
+    min: i64,
+    /// Per value from `min` upward, the index of the FIRST case with that value, or `None` for
+    /// the default -- a repeated value keeps its first case, as the compare chain does.
+    slots: Vec<Option<usize>>,
+}
+
+impl SwitchTable {
+    /// Plans a table for `cases`, or `None` when they are too few or too sparse to earn one.
+    fn dense(cases: &[SwitchCase]) -> Option<Self> {
+        let mut first = std::collections::BTreeMap::new();
+        for (index, case) in cases.iter().enumerate() {
+            first.entry(case.value).or_insert(index);
+        }
+        if first.len() < SWITCH_TABLE_MIN_CASES {
+            return None;
+        }
+        let min = *first.keys().next()?;
+        let max = *first.keys().next_back()?;
+        let span = usize::try_from(i128::from(max) - i128::from(min) + 1).ok()?;
+        if span > SWITCH_TABLE_MAX_SLOTS || span > first.len() * SWITCH_TABLE_MAX_SLOTS_PER_CASE {
+            return None;
+        }
+        let mut slots = vec![None; span];
+        for (value, index) in first {
+            slots[(i128::from(value) - i128::from(min)) as usize] = Some(index);
+        }
+        Some(Self { min, slots })
+    }
+}
+
+/// Lowers a dense integer switch to one bounds check and one indirect branch through a table of
+/// 32-bit offsets, instead of one compare per case.
+///
+/// The scrutinee minus the smallest case value indexes the table; a value below it wraps to a
+/// huge unsigned index, so the single unsigned bounds check sends both ends to the default. The
+/// offsets are relative to the table, which sits right after the branch, so it needs no
+/// relocation. `ReflectionAttribute::newInstance()` switches over every attribute factory the
+/// program declares, and walked all of them one compare at a time.
+fn lower_switch_table(
+    ctx: &mut FunctionContext<'_>,
+    cases: &[SwitchCase],
+    table: &SwitchTable,
+    default: BlockId,
+    default_args: &[ValueId],
+) -> Result<()> {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let base_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let mut case_labels = Vec::with_capacity(cases.len());
+    let mut case_edges = Vec::new();
+    for case in cases {
+        let target_label = ctx.block_label_for_id(case.target)?;
+        let branch_label = edge_label(ctx, &case.args, &target_label, "switch_case_args");
+        if !case.args.is_empty() {
+            case_edges.push((branch_label.clone(), case.target, case.args.clone()));
+        }
+        case_labels.push(branch_label);
+    }
+    let default_label = ctx.block_label_for_id(default)?;
+    let default_edge = edge_label(ctx, default_args, &default_label, "switch_default_args");
+    let table_label = ctx.next_label("switch_table");
+    if table.min != 0 {
+        abi::emit_load_int_immediate(ctx.emitter, base_reg, table.min);
+        let rebase = match ctx.emitter.target.arch {
+            Arch::AArch64 => format!("sub {}, {}, {}", result_reg, result_reg, base_reg),
+            Arch::X86_64 => format!("sub {}, {}", result_reg, base_reg),
+        };
+        ctx.emitter.instruction(&rebase);                                       // rebase the scrutinee so the smallest case value indexes slot 0
+    }
+    abi::emit_load_int_immediate(ctx.emitter, base_reg, table.slots.len() as i64 - 1);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {}, {}", result_reg, base_reg)); // compare the slot index with the last slot, unsigned
+            ctx.emitter.instruction(&format!("b.hi {}", default_edge));         // values outside the table, either side, take the default
+            ctx.emitter.instruction(&format!("adr {}, {}", base_reg, table_label)); // address the offset table placed after this branch
+            ctx.emitter.instruction(&format!("ldrsw {}, [{}, {}, lsl #2]", result_reg, base_reg, result_reg)); // load the case's offset from the table
+            ctx.emitter.instruction(&format!("add {}, {}, {}", base_reg, base_reg, result_reg)); // turn the offset into the case address
+            ctx.emitter.instruction(&format!("br {}", base_reg));               // jump straight to the matching case
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {}, {}", result_reg, base_reg)); // compare the slot index with the last slot, unsigned
+            ctx.emitter.instruction(&format!("ja {}", default_edge));           // values outside the table, either side, take the default
+            ctx.emitter.instruction(&format!("lea {}, [rip + {}]", base_reg, table_label)); // address the offset table placed after this branch
+            ctx.emitter.instruction(&format!("movsxd {}, DWORD PTR [{} + {}*4]", result_reg, base_reg, result_reg)); // load the case's offset from the table
+            ctx.emitter.instruction(&format!("add {}, {}", base_reg, result_reg)); // turn the offset into the case address
+            ctx.emitter.instruction(&format!("jmp {}", base_reg));              // jump straight to the matching case
+        }
+    }
+    ctx.emitter.raw("    .p2align 2");
+    ctx.emitter.label(&table_label);
+    for slot in &table.slots {
+        let target = slot.map_or(&default_edge, |index| &case_labels[index]);
+        ctx.emitter.raw(&format!("    .long {} - {}", target, table_label));
+    }
     emit_edge_args(ctx, &default_edge, default, default_args, "switch default")?;
     for (label, target, args) in case_edges {
         emit_edge_args(ctx, &label, target, &args, "switch case")?;
@@ -793,8 +909,14 @@ mod tests {
                     .unwrap_or(name);
                 stem.strip_prefix(prefix)
                     .and_then(|rest| rest.strip_prefix('_'))
-                    .is_some_and(|digits| {
-                        !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+                    .is_some_and(|rest| {
+                        // A module-uniquing hex infix now sits between the prefix and the
+                        // counter (`..._args_<module>_<n>`) so two modules cannot give one
+                        // helper two meanings. The counter is the LAST component; matching
+                        // only `prefix_<digits>` stopped finding these labels even though the
+                        // stubs are still emitted and still branched to.
+                        let counter = rest.rsplit('_').next().unwrap_or("");
+                        !counter.is_empty() && counter.bytes().all(|byte| byte.is_ascii_digit())
                     })
             })
             .collect();

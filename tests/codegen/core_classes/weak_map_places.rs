@@ -455,3 +455,61 @@ unset($orphanCopy, $map, $key);
     assert_eq!(out.stdout, "2:2;2:3", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// The Symfony-required WeakMap surface works on the single prelude model: object keys in
+/// `foreach`, count/isset/get/set/unset, and entry removal when the key object is destroyed.
+#[test]
+fn test_core_weak_map_symfony_surface() {
+    let out = compile_and_run_capture(
+        r#"<?php
+final class K { public function __construct(public string $n) {} }
+$a = new K('a'); $b = new K('b'); $c = new K('c');
+$m = new WeakMap();
+$m[$a] = 1; $m[$b] = 2; $m->offsetSet($c, 3);
+echo count($m), isset($m[$a]) ? 'Y' : 'N', $m->offsetExists($b) ? 'Y' : 'N', $m[$c], $m->offsetGet($a), "\n";
+foreach ($m as $k => $v) { echo get_class($k), $k->n, $v, ' '; }
+echo "\n";
+unset($m[$a]);
+$m->offsetUnset($b);
+echo count($m), isset($m[$a]) ? 'Y' : 'N', "\n";
+unset($k);
+$c = null;
+echo count($m), "\n";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "3YY31\nKa1 Kb2 Kc3 \n1N\n0\n", "{}", out.stderr);
+}
+
+/// A nested append through a nullable `?WeakMap` property still adopts the entry's reference when
+/// the program declares a class with `__call()`: the receiver's class is known, so the call must
+/// not be rewritten into the `__call()` fallback ternary, which hands back a copy. Output matches
+/// php (`7anything` / `missing`).
+#[test]
+fn test_core_weak_map_nested_append_nullable_property_with_magic_call() {
+    let out = compile_and_run_capture(
+        r#"<?php
+final class Key {}
+class Magic { public function __call($n, $a) { return $n; } }
+class Parsers {
+    private ?WeakMap $changes = null;
+    public function add(Key $k, int $v): void {
+        $this->changes ??= new WeakMap();
+        $this->changes[$k] = $this->changes[$k] ?? [];
+        $this->changes[$k][] = $v;
+    }
+    public function sum(Key $k): int { return array_sum($this->changes[$k]); }
+    public function missing(Key $k): void {
+        try { $this->changes[$k][] = 1; }
+        catch (Error $e) { echo str_ends_with($e->getMessage(), ' not contained in WeakMap') ? "missing\n" : $e->getMessage(); }
+    }
+}
+$p = new Parsers(); $k = new Key(); $other = new Key();
+$p->add($k, 2); $p->add($k, 5);
+echo $p->sum($k), (new Magic())->anything(), "\n";
+$p->missing($other);
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "7anything\nmissing\n", "{}", out.stderr);
+}

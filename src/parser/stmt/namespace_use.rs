@@ -92,6 +92,11 @@ pub(super) fn parse_namespace_stmt(
     let previous_namespace = crate::parser::enter_namespace(declared_parts);
     let mut body = Vec::new();
     let mut errors = Vec::new();
+    // Anonymous classes are hoisted out of expression position and appended to the program. One
+    // written inside this block must land INSIDE it, or it loses the block's namespace and `use`
+    // imports: `namespace { use Lib\T; … new class { use T; } }` failed with "unknown or invalid
+    // trait 'T'". Classes hoisted before the block belong to the enclosing scope and are put back.
+    let outer_anonymous_classes = crate::parser::take_anonymous_classes();
     while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
         match parse_file_or_namespace_scope_item(tokens, pos, &mut body, false) {
             Ok(()) => {}
@@ -102,6 +107,8 @@ pub(super) fn parse_namespace_stmt(
         }
     }
     crate::parser::restore_namespace(previous_namespace);
+    body.append(&mut crate::parser::take_anonymous_classes());
+    crate::parser::restore_anonymous_classes(outer_anonymous_classes);
     expect_token(
         tokens,
         pos,
@@ -376,14 +383,23 @@ fn parse_use_name(
 
     let mut parts = Vec::new();
     loop {
-        match tokens.get(*pos) {
-            Some((token, metadata))
-                if name_part_from_token(token, metadata).is_some()
-                    || token_as_import_name(token, metadata).is_some() =>
-            {
-                let part = name_part_from_token(token, metadata)
-                    .or_else(|| token_as_import_name(token, metadata))
-                    .expect("import name part was checked immediately above");
+        // After a separator any reserved word is a segment: `use Foo\Default\Bar;` is valid PHP 8.
+        let after_separator = !parts.is_empty() || kind == NameKind::FullyQualified;
+        let part = tokens.get(*pos).and_then(|(token, metadata)| {
+            name_part_from_token(token, metadata)
+                .or_else(|| token_as_import_name(token, metadata))
+                .or_else(|| {
+                    after_separator
+                        .then(|| {
+                            crate::parser::stmt::names::qualified_name_part_from_token(
+                                token, metadata,
+                            )
+                        })
+                        .flatten()
+                })
+        });
+        match part {
+            Some(part) => {
                 parts.push(part);
                 *pos += 1;
             }

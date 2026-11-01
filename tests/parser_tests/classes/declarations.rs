@@ -46,6 +46,19 @@ fn test_parse_class_decl() {
     }
 }
 
+/// Verifies a PHP class doc comment is retained as declaration metadata while member comments remain parseable.
+#[test]
+fn test_parse_class_decl_retains_doc_comment() {
+    let stmts = parse_source(
+        "<?php /**\n * Reflection metadata.\n */ class Documented { /** method docs */ public function run() {} }",
+    );
+    let StmtKind::ClassDecl { doc_comment, methods, .. } = &stmts[0].kind else {
+        panic!("Expected ClassDecl");
+    };
+    assert_eq!(doc_comment.as_deref(), Some("/**\n * Reflection metadata.\n */"));
+    assert_eq!(methods.len(), 1);
+}
+
 /// Verifies PHP 8.3 class-constant types are retained in the parsed AST while
 /// a semi-reserved constant name followed by `=` remains untyped.
 #[test]
@@ -149,6 +162,120 @@ fn test_parse_new_dynamic_object() {
     }
 }
 
+/// Verifies that a dynamic class name read through an array offset is retained as the
+/// `NewDynamic` class-name expression.
+#[test]
+fn test_parse_new_dynamic_object_from_array_offset() {
+    let stmts = parse_source("<?php $o = new $_SERVER['APP_RUNTIME']([]);");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::NewDynamic { name_expr, args } => {
+                match &name_expr.kind {
+                    ExprKind::ArrayAccess { array, index } => {
+                        assert_eq!(array.kind, ExprKind::Variable("_SERVER".to_string()));
+                        assert_eq!(
+                            index.kind,
+                            ExprKind::StringLiteral("APP_RUNTIME".to_string())
+                        );
+                    }
+                    other => panic!("Expected ArrayAccess class name, got {:?}", other),
+                }
+                assert_eq!(args.len(), 1);
+            }
+            other => panic!("Expected NewDynamic, got {:?}", other),
+        },
+        other => panic!("Expected Assign, got {:?}", other),
+    }
+}
+
+/// Verifies that a dynamic class name read from an array offset on a `$this` property is retained
+/// as the `NewDynamic` class-name expression.
+///
+/// `$this` is a `simple_variable` in PHP's `new_variable` production, but it lexes as its own
+/// token; matching the dynamic branch only against `Token::Variable` sent `new $this->…` to the
+/// class-name path and rejected the file. Symfony's routing component builds its matcher exactly
+/// this way.
+#[test]
+fn test_parse_new_dynamic_object_from_this_property_offset() {
+    let stmts = parse_source("<?php $o = new $this->options['matcher_class']($routes);");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::NewDynamic { name_expr, args } => {
+                match &name_expr.kind {
+                    ExprKind::ArrayAccess { array, index } => {
+                        match &array.kind {
+                            ExprKind::PropertyAccess { object, property } => {
+                                assert_eq!(object.kind, ExprKind::This);
+                                assert_eq!(property, "options");
+                            }
+                            other => panic!("Expected PropertyAccess base, got {:?}", other),
+                        }
+                        assert_eq!(
+                            index.kind,
+                            ExprKind::StringLiteral("matcher_class".to_string())
+                        );
+                    }
+                    other => panic!("Expected ArrayAccess class name, got {:?}", other),
+                }
+                assert_eq!(args.len(), 1);
+            }
+            other => panic!("Expected NewDynamic, got {:?}", other),
+        },
+        other => panic!("Expected Assign, got {:?}", other),
+    }
+}
+
+/// Verifies `new static::$builder(...)` parses as a dynamic `new` whose class name is the static
+/// property, and that a named receiver keeps dereferencing: `new Foo::$map['k']()`.
+///
+/// PHP's `new_variable` production includes `class_name '::' simple_variable`. The parser used to
+/// read `new static`, meet `::`, and refuse Laravel's `Application::configure()` with
+/// "Parentheses are required before accessing a parenthesis-free new expression".
+#[test]
+fn test_parse_new_dynamic_object_from_static_property() {
+    let stmts = parse_source("<?php $a = new static::$builder(new static($base));");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::NewDynamic { name_expr, args } => {
+                assert_eq!(
+                    name_expr.kind,
+                    ExprKind::StaticPropertyAccess {
+                        receiver: StaticReceiver::Static,
+                        property: "builder".to_string(),
+                    }
+                );
+                assert_eq!(args.len(), 1);
+            }
+            other => panic!("Expected NewDynamic, got {:?}", other),
+        },
+        other => panic!("Expected Assign, got {:?}", other),
+    }
+
+    let stmts = parse_source("<?php $b = new Foo::$map['k']();");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::NewDynamic { name_expr, args } => {
+                match &name_expr.kind {
+                    ExprKind::ArrayAccess { array, index } => {
+                        assert!(matches!(
+                            &array.kind,
+                            ExprKind::StaticPropertyAccess {
+                                receiver: StaticReceiver::Named(name),
+                                property,
+                            } if name == "Foo" && property == "map"
+                        ));
+                        assert_eq!(index.kind, ExprKind::StringLiteral("k".to_string()));
+                    }
+                    other => panic!("Expected ArrayAccess class name, got {:?}", other),
+                }
+                assert!(args.is_empty());
+            }
+            other => panic!("Expected NewDynamic, got {:?}", other),
+        },
+        other => panic!("Expected Assign, got {:?}", other),
+    }
+}
+
 /// Verifies that `<?php new Point(1, 2);` parses as an expression statement.
 #[test]
 fn test_parse_new_object_expression_statement() {
@@ -245,6 +372,41 @@ fn test_parse_interface_decl() {
             assert!(methods[0].body.is_empty());
         }
         _ => panic!("Expected InterfaceDecl"),
+    }
+}
+
+/// Verifies interface member doc comments remain parser trivia rather than declarations.
+#[test]
+fn test_parse_interface_body_ignores_doc_comments() {
+    let stmts = parse_source(
+        "<?php interface DocumentedContract { /** Documents the method. */ public function run(): void; }",
+    );
+    match &stmts[0].kind {
+        StmtKind::InterfaceDecl { methods, .. } => {
+            assert_eq!(methods.len(), 1);
+            assert_eq!(methods[0].name, "run");
+        }
+        _ => panic!("Expected InterfaceDecl"),
+    }
+}
+
+/// Verifies doc comments before promoted constructor parameters remain parser trivia.
+#[test]
+fn test_parse_promoted_parameter_ignores_doc_comment() {
+    let stmts = parse_source(
+        "<?php class DocumentedParameter { public function __construct(/** @var string */ public string $value) {} }",
+    );
+    match &stmts[0].kind {
+        StmtKind::ClassDecl {
+            methods, properties, ..
+        } => {
+            assert_eq!(methods.len(), 1);
+            assert_eq!(methods[0].params[0].0, "value");
+            assert_eq!(properties.len(), 1);
+            assert_eq!(properties[0].name, "value");
+            assert!(properties[0].is_promoted);
+        }
+        _ => panic!("Expected ClassDecl"),
     }
 }
 

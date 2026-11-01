@@ -2,7 +2,7 @@
 title: "opcache_jit_blacklist() - internals"
 description: "Compiler internals for opcache_jit_blacklist(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 714
+  order: 733
 ---
 
 ## `opcache_jit_blacklist()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/opcache_prelude/build.rs`:1037](https://github.com/illegalstudio/elephc/blob/main/src/opcache_prelude/build.rs#L1037) (`opcache_jit_blacklist`)
+- **Lowering**: [`src/opcache_prelude/build.rs`:1064](https://github.com/illegalstudio/elephc/blob/main/src/opcache_prelude/build.rs#L1064) (`opcache_jit_blacklist`)
 - **Function symbol**: `opcache_jit_blacklist()`
 
 

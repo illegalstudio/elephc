@@ -84,7 +84,12 @@ pub(super) fn emit_reflection_owner_dump_property(
     Ok(())
 }
 
-/// Replaces the Reflection object's boxed `__attrs` value with populated metadata.
+/// Replaces the Reflection object's default `__attrs` array with populated metadata.
+///
+/// The slot holds the RAW `array<ReflectionAttribute>` (type tag 4 in the high word), as
+/// `patch_reflection_attribute_result` declares it and the `getAttributes()` body reads it.
+/// Main stored a boxed Mixed here; mixing the two read a box as an array and every
+/// `getAttributes()` returned garbage.
 pub(super) fn emit_reflection_attrs_property(
     ctx: &mut FunctionContext<'_>,
     class_name: &str,
@@ -99,22 +104,22 @@ pub(super) fn emit_reflection_attrs_property(
     abi::emit_push_reg(ctx.emitter, result_reg);
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, attrs_low_offset);
-    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
     super::super::super::builtins::attributes::emit_reflection_attribute_array(
         ctx,
         attr_names,
         attr_args,
         reflection_attribute_target_for_owner(&target_owner),
     )?;
-    emit_box_current_owned_value_as_mixed(
-        ctx.emitter,
-        &PhpType::Array(Box::new(PhpType::Object(
-            "ReflectionAttribute".to_string(),
-        ))),
-    );
     abi::emit_pop_reg(ctx.emitter, object_reg);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, attrs_low_offset);
-    abi::emit_store_zero_to_address(ctx.emitter, object_reg, attrs_high_offset);
+    abi::emit_load_int_immediate(ctx.emitter, abi::secondary_scratch_reg(ctx.emitter), 4);
+    abi::emit_store_to_address(
+        ctx.emitter,
+        abi::secondary_scratch_reg(ctx.emitter),
+        object_reg,
+        attrs_high_offset,
+    );
     abi::emit_push_reg(ctx.emitter, object_reg);
     abi::emit_pop_reg(ctx.emitter, result_reg);
     Ok(())
@@ -123,7 +128,7 @@ pub(super) fn emit_reflection_attrs_property(
 /// Returns PHP's `Attribute::TARGET_*` bitmask for attributes on one Reflection owner type.
 pub(super) fn reflection_attribute_target_for_owner(class_name: &str) -> i64 {
     match class_name {
-        "ReflectionClass" | "ReflectionObject" => {
+        "ReflectionClass" | "ReflectionObject" | "ReflectionEnum" => {
             super::super::super::builtins::attributes::REFLECTION_ATTRIBUTE_TARGET_CLASS
         }
         "ReflectionFunction" => {
@@ -240,7 +245,7 @@ pub(super) fn emit_reflection_constant_array_property_by_name(
         key: Box::new(PhpType::Str),
         value: Box::new(PhpType::Mixed),
     };
-    emit_box_current_value_as_mixed(ctx.emitter, &assoc_type);
+    emit_box_current_owned_value_as_mixed(ctx.emitter, &assoc_type);
     abi::emit_pop_reg(ctx.emitter, object_reg);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_store_zero_to_address(ctx.emitter, object_reg, high_offset);
@@ -274,7 +279,7 @@ pub(super) fn emit_reflection_default_property_array_property_by_name(
         key: Box::new(PhpType::Str),
         value: Box::new(PhpType::Mixed),
     };
-    emit_box_current_value_as_mixed(ctx.emitter, &assoc_type);
+    emit_box_current_owned_value_as_mixed(ctx.emitter, &assoc_type);
     abi::emit_pop_reg(ctx.emitter, object_reg);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_store_zero_to_address(ctx.emitter, object_reg, high_offset);

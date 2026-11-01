@@ -369,3 +369,22 @@ fn test_compound_append_reserves_slot_before_operation_and_keeps_call_identities
     let identities = helpers.iter().map(|call| call.span).collect::<std::collections::HashSet<_>>();
     assert_eq!(identities.len(), helpers.len());
 }
+
+/// Keeps a ternary wholly inside the right-hand side of a property null-coalesce assignment.
+#[test]
+fn test_property_null_coalesce_assignment_owns_ternary_rhs() {
+    let stmts = parse_source(
+        "<?php $obj->cached ??= false === ($position = find()) ? '' : slice($position);",
+    );
+    let StmtKind::PropertyAssign { value, .. } = &stmts[0].kind else {
+        panic!("expected property assignment, got {:?}", stmts[0].kind);
+    };
+    let ExprKind::NullCoalesce { default, .. } = &value.kind else {
+        panic!("expected null-coalesce value, got {:?}", value.kind);
+    };
+    assert!(
+        matches!(default.kind, ExprKind::Ternary { .. }),
+        "expected ternary RHS, got {:?}",
+        default.kind
+    );
+}

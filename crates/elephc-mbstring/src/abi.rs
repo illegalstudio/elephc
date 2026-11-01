@@ -56,7 +56,8 @@ pub use ini::{elephc_mbstring_ini_v1, elephc_mbstring_configure_v1, elephc_mbstr
     elephc_mbstring_native_string_bind_v1, elephc_mbstring_native_string_lookup_v1,
     elephc_mbstring_native_string_fresh_v1, elephc_mbstring_native_string_literal_v1,
     elephc_mbstring_native_string_persist_v1, elephc_mbstring_native_string_resolve_v1,
-    elephc_mbstring_native_string_copy_v1, elephc_mbstring_native_string_forget_v1, elephc_mbstring_native_string_reset_v1};
+    elephc_mbstring_native_string_copy_v1, elephc_mbstring_native_string_forget_v1, elephc_mbstring_native_string_reset_v1,
+    ELEPHC_MBSTRING_NATIVE_ENTRIES};
 #[cfg(test)]
 mod tests;
 use arguments::Arguments;

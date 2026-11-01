@@ -8,7 +8,6 @@
 //! Key details:
 //! - Phase order controls diagnostics, available declarations, required libraries, and function-local environments.
 
-use std::collections::HashMap;
 
 use crate::errors::CompileError;
 use crate::parser::ast::Program;
@@ -48,6 +47,7 @@ impl Checker {
         let saved_external_ref_bindings =
             std::mem::take(&mut self.active_external_ref_bindings);
         let mut global_env = self.seed_global_env();
+        Self::seed_vivified_array_locals(&mut global_env, program);
         // The pre-scan has to decide before the first statement is checked: a marked local binds
         // boxed `Mixed` at its FIRST store. Top level has no parameters, so the by-reference and
         // declared-type exclusion sets the scan consults are empty — `enter_local_binding_scope`
@@ -195,6 +195,20 @@ impl Checker {
             // and the provisional error it was written to discard reached the user instead.
             || (message.contains(" parameter $")
                 && message.ends_with(" expects callable, got null"))
+            || Self::is_stale_array_argument_error(message)
+    }
+
+    /// Returns true for a builtin's array-argument refusal, which the first pass raises against an
+    /// untyped method's PLACEHOLDER return type.
+    ///
+    /// Until `type_check_methods_until_stable` has walked a method's body, a `return $this->x;` is
+    /// typed `int` (`infer_return_type_syntactic`). The first top-level pass therefore refused
+    /// `count($o->get())`, `array_keys($o->get())`, `in_array($v, $o->get())`, ... even for a
+    /// property DECLARED `array`, although the final pass, with the real return type, accepts them.
+    fn is_stale_array_argument_error(message: &str) -> bool {
+        message.contains("() ")
+            && (message.ends_with("must be array")
+                || message == "count() argument must be array or Countable object")
     }
 
     /// Builds the initial `TypeEnv` with built-in globals `$argc`, `$argv`, and external globals.
@@ -203,7 +217,7 @@ impl Checker {
     /// `self.extern_globals` are inserted verbatim. The returned environment serves as the
     /// starting point for top-level type checking.
     fn seed_global_env(&self) -> TypeEnv {
-        let mut global_env: TypeEnv = HashMap::new();
+        let mut global_env: TypeEnv = TypeEnv::default();
         global_env.insert("argc".to_string(), PhpType::Int);
         global_env.insert("argv".to_string(), PhpType::Array(Box::new(PhpType::Str)));
         for name in crate::superglobals::SUPERGLOBALS {

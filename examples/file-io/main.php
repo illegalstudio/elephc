@@ -55,10 +55,11 @@ while (!feof($f)) {
 fclose($f);
 
 // Directory operations
-mkdir("testdir");
-if (is_dir("testdir")) {
-    echo "Created directory\n";
+mkdir("testdir/nested", 0755, true);
+if (is_dir("testdir/nested")) {
+    echo "Created nested directory\n";
 }
+rmdir("testdir/nested");
 rmdir("testdir");
 
 // Copy and rename

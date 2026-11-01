@@ -11,6 +11,53 @@
 use super::super::*;
 use super::support::*;
 
+/// Verifies attributed arrow closures capture outer variables by value and execute.
+#[test]
+fn execute_program_dispatches_attributed_arrow_closure() {
+    let program = parse_fragment(
+        br#"$prefix = "captured:";
+$fn = #[Marker("arrow")] fn (string $value): string => $prefix . $value;
+return $fn("ready");"#,
+    )
+    .expect("parse attributed arrow closure");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute arrow closure");
+
+    assert_eq!(
+        values.get(result),
+        FakeValue::String("captured:ready".to_string())
+    );
+}
+
+/// Verifies a straight-line generator closure returns a `Generator`, not an `ArrayIterator`.
+///
+/// `php -n` 8.5.6 prints `Generator` for `get_class($generator())` and `2=two;5=five;` for the
+/// keyed walk. This test used to assert `ArrayIterator`, which was the shape of the eager
+/// lowering that re-evaluated every yielded expression at call time; it could not model an
+/// infinite generator, `send()` or `yield from`, and it ran the body before anyone asked.
+#[test]
+fn execute_program_dispatches_straight_line_generator_closure() {
+    let program = parse_fragment(
+        br#"$generator = function () { yield 0 => "first"; yield 1 => "second"; };
+$keyed = function () { yield 2 => "two"; yield 5 => "five"; };
+foreach ($keyed() as $k => $v) { echo $k; echo "="; echo $v; echo ";"; }
+return get_class($generator());"#,
+    )
+    .expect("parse generator closure");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute generator closure");
+
+    assert_eq!(values.output, "2=two;5=five;");
+    assert_eq!(
+        values.get(result),
+        FakeValue::String("Generator".to_string())
+    );
+}
+
 /// Accepts eval closure objects through Closure, callable, and object parameter declarations.
 #[test]
 fn execute_program_accepts_closure_parameter_types() {

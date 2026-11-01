@@ -23,6 +23,15 @@ builtin! {
 
 /// Validates the iterator source type and returns `Int`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    // A value only known at run time (`mixed`, or a union such as `int|iterable` narrowed by an
+    // `is_iterable()` arm) is counted by its runtime tag, which raises php's `TypeError` for a
+    // payload that is not iterable -- the rule `iterator_to_array()` follows.
+    if matches!(
+        cx.checker.infer_type(&cx.args[0], cx.env)?,
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        return Ok(PhpType::Int);
+    }
     checker_spl::check_iterator_source(
         cx.checker,
         &cx.args[0],

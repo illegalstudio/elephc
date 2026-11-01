@@ -358,6 +358,61 @@ echo selected_mismatch();
     assert_eq!(error.matches("Function variants for 'selected_mismatch' must have identical signatures").count(), 1, "{error}");
 }
 
+/// Variants that differ only by an optional parameter the wider one appends share the wider
+/// calling convention: Symfony's grapheme polyfill declares php 8.5's `grapheme_stripos(...,
+/// ?string $locale = '')` in `bootstrap85.php` and the 8.4 shape in `bootstrap80.php`, each behind
+/// `function_exists()`. Either variant may be the bound one, so both are run, with and without the
+/// extra argument.
+#[test]
+fn test_conditional_variants_differing_by_a_trailing_optional_parameter() {
+    let outs = compile_and_run_files_per_argv(
+        &[
+            (
+                "main.php",
+                "<?php\nif ($argc > 1) { require 'wide.php'; } else { require 'narrow.php'; }\nrequire 'narrow.php';\necho pick('a'), '|', pick('b', 2), '|', pick('c', 3, 'L');\n",
+            ),
+            (
+                "narrow.php",
+                "<?php\nif (!function_exists('pick')) {\n    function pick(?string $s, ?int $n = 0): string { return 'n:' . $s . $n; }\n}\n",
+            ),
+            (
+                "wide.php",
+                "<?php\nif (!function_exists('pick')) {\n    function pick(?string $s, ?int $n = 0, ?string $l = 'x'): string { return 'w:' . $s . $n . $l; }\n}\n",
+            ),
+        ],
+        "main.php",
+        &[&[], &["wide"]],
+    );
+    assert_eq!(outs, vec!["n:a0|n:b2|n:c3".to_string(), "w:a0x|w:b2x|w:c3L".to_string()]);
+}
+
+/// A conditional declaration after a statement that always leaves (here an included file's
+/// `return` behind a folded `PHP_VERSION_ID` guard) never executes, so it is not a variant. This
+/// is Symfony's grapheme polyfill: `bootstrap.php` returns into `bootstrap80.php` before its
+/// untyped legacy `grapheme_*`, whose storage no live variant shares. Compiled through the CLI:
+/// the in-process project harness fails this include shape at run time on its own (FOLLOWUPS).
+#[test]
+fn test_conditional_declarations_after_an_included_files_return_are_never_bound() {
+    let out = compile_cli_files_and_run(
+        &[
+            (
+                "main.php",
+                "<?php\nrequire 'boot.php';\necho gpos('abc', 'c'), '|', var_export(gpos('abc', 'z'), true);\n",
+            ),
+            (
+                "boot.php",
+                "<?php\nif (\\PHP_VERSION_ID >= 80000) {\n    return require __DIR__ . '/boot80.php';\n}\nif (!function_exists('gpos')) {\n    function gpos($h, $n, $o = 0): string { return 'legacy'; }\n}\n",
+            ),
+            (
+                "boot80.php",
+                "<?php\nif (!function_exists('gpos')) {\n    function gpos(?string $h, ?string $n, ?int $o = 0): int|false { return strpos((string) $h, (string) $n, (int) $o); }\n}\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "2|false");
+}
+
 /// Conflicting recursive return hints report the group contract before a borrowed placeholder.
 #[test]
 fn test_conditional_include_recursive_variant_signature_mismatch_diagnostic() {
@@ -818,7 +873,8 @@ function countdown_unhinted(int $n) {
 /// A recursive include-loaded `: string` function whose base case returns an int is still rejected.
 ///
 /// The negative control for the group placeholder: trusting the declared hint for the self-call
-/// must not turn into trusting it for the real returns.
+/// must not turn into trusting it for the real returns. The base case returns an ARRAY: an int
+/// would be php-valid here (weak mode coerces it to "3"), an array is a TypeError in php too.
 #[test]
 fn test_include_loaded_recursive_wrong_base_case_is_still_rejected() {
     let error = compile_files_error_message(
@@ -828,7 +884,7 @@ fn test_include_loaded_recursive_wrong_base_case_is_still_rejected() {
                 "lib.php",
                 r#"<?php
 function bad_base(int $x): string {
-    if ($x > 2) { return $x; }
+    if ($x > 2) { return [$x]; }
     return bad_base($x + 1);
 }
 "#,
@@ -838,7 +894,7 @@ function bad_base(int $x): string {
     )
     .expect("a string function returning an int base case must not type-check");
     assert!(
-        error.contains("return type expects string, got int"),
+        error.contains("return type expects string, got array"),
         "unexpected diagnostic: {error}"
     );
 }

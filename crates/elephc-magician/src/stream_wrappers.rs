@@ -21,6 +21,24 @@ pub(crate) fn is_php_memory_stream(path: &str) -> bool {
     path == "php://memory" || path == "php://temp" || path.starts_with("php://temp/")
 }
 
+/// Returns the process descriptor a `php://stdin`, `php://stdout` or `php://stderr` path names.
+///
+/// php matches the stream name case-insensitively. `php://output` is not one of these: it writes
+/// through the output layer (and its buffers), not straight to descriptor 1.
+pub(crate) fn php_std_stream_fd(path: &str) -> Option<i32> {
+    let name = path.strip_prefix("php://").or_else(|| {
+        path.get(..6)
+            .filter(|scheme| scheme.eq_ignore_ascii_case("php://"))
+            .map(|_| &path[6..])
+    })?;
+    match name.to_ascii_lowercase().as_str() {
+        "stdin" => Some(0),
+        "stdout" => Some(1),
+        "stderr" => Some(2),
+        _ => None,
+    }
+}
+
 /// Returns true when the path names a `data://` stream.
 pub(crate) fn is_data_stream(path: &str) -> bool {
     path.starts_with("data://")

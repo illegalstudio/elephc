@@ -19,6 +19,10 @@ pub enum EvalExpr {
         array: Box<EvalExpr>,
         index: Box<EvalExpr>,
     },
+    ArrayDestructureAssign {
+        targets: Vec<Option<EvalDestructureTarget>>,
+        value: Box<EvalExpr>,
+    },
     Call {
         /// Resolved source spelling, normalized only when looking up the function.
         name: String,
@@ -107,15 +111,8 @@ pub enum EvalExpr {
         target: EvalInstanceOfTarget,
     },
     LoadVar(String),
-    /// `$name = value` in expression position, yielding the assigned value.
-    ///
-    /// The parser builds this for a simple variable target. Mutating statements keep their
-    /// dedicated `EvalStmt` forms; this variant only exists so an assignment can appear inside
-    /// a call argument, condition, or return value.
-    Assign {
-        name: String,
-        value: Box<EvalExpr>,
-    },
+    /// A variable named at run time: `$$name` or `${expr}`. The expression yields the name.
+    DynamicVar(Box<EvalExpr>),
     Match {
         subject: Box<EvalExpr>,
         arms: Vec<EvalMatchArm>,
@@ -176,6 +173,60 @@ pub enum EvalExpr {
         value: Box<EvalExpr>,
         default: Box<EvalExpr>,
     },
+    NullCoalesceAssign {
+        target: Box<EvalExpr>,
+        default: Box<EvalExpr>,
+    },
+    CompoundAssign {
+        target: Box<EvalExpr>,
+        op: EvalBinOp,
+        value: Box<EvalExpr>,
+    },
+    PostfixIncDec {
+        target: Box<EvalExpr>,
+        increment: bool,
+    },
+    Assign {
+        target: Box<EvalExpr>,
+        value: Box<EvalExpr>,
+    },
+    /// `$name = &<lvalue>` where the result is used, as in `if (null !== $e = &self::$c[$k])`.
+    ///
+    /// The statement form of the same binding is `EvalStmt::VarReferenceBind`; this one exists
+    /// because PHP's `=` accepts a `&` source wherever an assignment is an expression, and
+    /// `symfony/config/Resource/ClassExistenceResource.php` puts one inside an `if` condition.
+    /// It evaluates to the value the name now aliases, which is what PHP's assignment yields.
+    ReferenceBindAssign {
+        target: String,
+        source: Box<EvalExpr>,
+    },
+    /// `$target[]` naming the element an append WOULD create, valid only as a reference source.
+    ///
+    /// `$closure = &$this->optimized[$e][];` creates the element, leaves it null and binds to
+    /// it. PHP refuses the same syntax where a value is wanted -- `echo $a[];` is the fatal
+    /// `Cannot use [] for reading` -- so this node never reaches `eval_expr`.
+    ArrayAppendSlot {
+        target: Box<EvalExpr>,
+    },
+    /// `TARGET = &SOURCE` used where a VALUE is wanted, as in `if (null !== $e = &self::$c[$k])`.
+    ///
+    /// PHP's reference assignment is an expression. Its value is the bound value as a COPY, not
+    /// a second alias: after `$a = ($b = &$one); $one = 9;` php reports `$b` as 9 and `$a` as
+    /// the 1 it copied.
+    ReferenceBind {
+        target: Box<EvalExpr>,
+        source: Box<EvalExpr>,
+    },
+    /// `$target[] = value` used where a VALUE is wanted, as in `return $this->rules[] = $r;`.
+    ///
+    /// PHP's append is an ordinary assignment expression whose value is the assigned one, so it
+    /// nests (`$a[] = $b[] = 'x'`) and can stand anywhere an expression can. The statement
+    /// spellings (`EvalStmt::ArrayAppendVar` and friends) stay as they are; this is what the
+    /// expression parser builds when an append is not the whole statement.
+    ArrayAppendAssign {
+        target: Box<EvalExpr>,
+        value: Box<EvalExpr>,
+    },
     NullsafePropertyGet {
         object: Box<EvalExpr>,
         property: String,
@@ -194,6 +245,7 @@ pub enum EvalExpr {
         then_branch: Option<Box<EvalExpr>>,
         else_branch: Box<EvalExpr>,
     },
+    Throw(Box<EvalExpr>),
     Unary {
         op: EvalUnaryOp,
         expr: Box<EvalExpr>,
@@ -203,6 +255,26 @@ pub enum EvalExpr {
         left: Box<EvalExpr>,
         right: Box<EvalExpr>,
     },
+}
+
+impl EvalExpr {
+    /// Whether this is a call whose RESULT can take an append: `app(Bag::class)[] = $v` appends
+    /// through the returned object's `offsetSet()` (Laravel's `defer()` does this). php accepts
+    /// it for any call; an array result is a temporary, so the append has no effect.
+    pub(crate) fn is_call_result(&self) -> bool {
+        matches!(
+            self,
+            EvalExpr::Call { .. }
+                | EvalExpr::NamespacedCall { .. }
+                | EvalExpr::DynamicCall { .. }
+                | EvalExpr::MethodCall { .. }
+                | EvalExpr::DynamicMethodCall { .. }
+                | EvalExpr::NullsafeMethodCall { .. }
+                | EvalExpr::NullsafeDynamicMethodCall { .. }
+                | EvalExpr::StaticMethodCall { .. }
+                | EvalExpr::DynamicStaticMethodCall { .. }
+        )
+    }
 }
 
 /// The right-hand side accepted by PHP's `instanceof` operator.
@@ -271,6 +343,12 @@ pub enum EvalArrayElement {
     Reference(EvalExpr),
     KeyValue { key: EvalExpr, value: EvalExpr },
     KeyReference { key: EvalExpr, value: EvalExpr },
+    /// `...$operand` inside an array literal: PHP's unpacking, not the variadic parameter form.
+    ///
+    /// The operand's INTEGER keys are renumbered from the literal's own running key while its
+    /// STRING keys are carried through untouched, so this is neither a plain value nor a keyed
+    /// one and cannot be desugared into either.
+    Spread(EvalExpr),
 }
 
 /// One ordered arm in a PHP `match` expression parsed from an eval fragment.
@@ -341,13 +419,38 @@ pub enum EvalBinOp {
     Spaceship,
 }
 
-/// Scalar cast targets supported by runtime eval expressions.
+/// One slot of a PHP list-destructuring pattern.
+///
+/// A pattern is NOT an array literal, which is why it has its own type: it may carry holes
+/// (`[, , , $x]`), its slots are LVALUES rather than values (`[$this->x, $h["k"], S::$p]`), it
+/// may name keys (`["a" => $x]`), and it nests (`[[$a, $b], $c]`). Modelling it as a list of
+/// optional variable NAMES accepted only the simplest quarter of that.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
+pub struct EvalDestructureTarget {
+    /// The key to read, for the `["a" => $x]` form; positional slots read their index.
+    pub key: Option<EvalExpr>,
+    /// Where the element goes.
+    pub slot: EvalDestructureSlot,
+}
+
+/// The destination of one destructuring slot.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
+pub enum EvalDestructureSlot {
+    /// Any writable PHP lvalue: a variable, a property, an element, a static property.
+    Lvalue(EvalExpr),
+    /// A nested pattern, for `[[$a, $b], $c] = ...`.
+    Nested(Vec<Option<EvalDestructureTarget>>),
+}
+
+/// Cast targets supported by runtime eval expressions.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvalCastType {
     Int,
     Float,
     String,
     Bool,
+    Array,
+    Object,
 }
 
 /// Unary operations supported by the initial EvalIR parser.
@@ -357,4 +460,15 @@ pub enum EvalUnaryOp {
     Negate,
     LogicalNot,
     BitNot,
+    ErrorSuppress,
+}
+
+/// One `declare(name=VALUE)` right-hand side, as written.
+///
+/// php takes an integer for `ticks` and `strict_types` and a string for `encoding`, and the two
+/// are not interchangeable: `declare(ticks="1")` is a parse error.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EvalDeclareValue {
+    Int(i64),
+    Str(String),
 }

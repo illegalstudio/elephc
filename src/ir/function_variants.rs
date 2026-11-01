@@ -75,7 +75,15 @@ fn normalized_function_key(name: &str) -> String {
 
 /// Collects public function names that need an include-variant dispatcher.
 /// Uses `module.functions` (the concrete bodies) for keys, consistent with codegen.
+///
+/// Computed once per module shape: callers ask per call site, and each answer walked every data
+/// string and folded every function name.
 pub fn collect_dispatch_groups(module: &Module) -> Vec<FunctionVariantLabel> {
+    (*module.dispatch_groups(|| scan_dispatch_groups(module))).clone()
+}
+
+/// Walks the module's data strings for [`collect_dispatch_groups`].
+fn scan_dispatch_groups(module: &Module) -> Vec<FunctionVariantLabel> {
     let function_keys = module
         .functions
         .iter()
@@ -104,17 +112,24 @@ pub fn collect_dispatch_groups(module: &Module) -> Vec<FunctionVariantLabel> {
 /// Finds a user function by (normalized) PHP name.
 pub fn function_by_php_name<'a>(module: &'a Module, name: &str) -> Option<&'a crate::ir::Function> {
     let key = normalized_function_key(name);
-    module
-        .functions
-        .iter()
-        .find(|function| normalized_function_key(&function.name) == key)
+    let index = *module
+        .function_indexes_by_key(|| {
+            let mut indexes = crate::fast_hash::FastMap::default();
+            for (index, function) in module.functions.iter().enumerate() {
+                indexes.entry(normalized_function_key(&function.name)).or_insert(index);
+            }
+            indexes
+        })
+        .get(&key)?;
+    module.functions.get(index)
 }
 
 /// Returns a representative concrete variant function for a public function group by name.
 pub fn variant_callee_for_group<'a>(module: &'a Module, name: &str) -> Option<&'a crate::ir::Function> {
     let requested = normalized_function_key(name);
-    collect_dispatch_groups(module)
-        .into_iter()
+    module
+        .dispatch_groups(|| scan_dispatch_groups(module))
+        .iter()
         .find(|group| normalized_function_key(&group.name) == requested)
         .and_then(|group| {
             group

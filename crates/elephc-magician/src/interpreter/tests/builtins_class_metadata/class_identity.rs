@@ -121,6 +121,32 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies a declared relation member still yields a reflector when the dynamic
+/// existence probe refuses it.
+///
+/// `KnownRelationGapClass`'s compiled metadata names `KnownInactiveInterface`, while the fake
+/// runtime's `interface_exists` deliberately denies it. That is the shape Symfony's
+/// `ReflectionClassResource` hit: an activation cell no startup path raised made
+/// `getInterfaces()` hand back a non-object, and the recursion died on its `\ReflectionClass`
+/// parameter. The relation kind must let the compiled metadata win.
+#[test]
+fn execute_program_reflects_declared_relation_member_without_exists_probe() {
+    let program = parse_fragment(
+        br#"$objects = (new ReflectionClass("KnownRelationGapClass"))->getInterfaces();
+echo count($objects); echo ":"; echo $objects["KnownInactiveInterface"]->getName(); echo ":";
+echo (int) interface_exists("KnownInactiveInterface");
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "1:KnownInactiveInterface:0");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClass::implementsInterface reports eval class, enum, and
 /// interface metadata using case-insensitive interface names.
 #[test]

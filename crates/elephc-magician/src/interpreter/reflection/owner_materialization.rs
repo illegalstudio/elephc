@@ -10,6 +10,28 @@
 
 use super::*;
 
+/// Stores owned metadata cells, releasing the builder's key/value references.
+/// Array writes borrow the key and retain the value; the receiver is returned unchanged.
+pub(super) fn eval_reflection_array_set_owned(
+    array: RuntimeCellHandle,
+    key: RuntimeCellHandle,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let result = values.array_set(array, key, value);
+    let key_release = values.release(key);
+    let value_release = values.release(value);
+    let result = result.and_then(|array| {
+        key_release?;
+        value_release?;
+        Ok(array)
+    });
+    if result.is_err() {
+        let _ = values.release(array);
+    }
+    result
+}
+
 /// Materializes one Reflection owner object and transfers the temporary attribute array.
 pub(super) fn eval_reflection_owner_object(
     owner_kind: u64,
@@ -33,6 +55,7 @@ pub(super) fn eval_reflection_owner_object(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    let include_class_members = !eval_reflection_owner_uses_class_metadata(owner_kind);
     eval_reflection_owner_object_with_members(
         owner_kind,
         reflected_name,
@@ -52,7 +75,7 @@ pub(super) fn eval_reflection_owner_object(
         method_modifiers,
         constant_value,
         backing_value,
-        true,
+        include_class_members,
         context,
         values,
     )
@@ -96,7 +119,7 @@ pub(super) fn eval_reflection_owner_object_with_members(
     let is_eval_class = class_metadata_owner
         && eval_reflection_class_like_exists(reflected_name, context);
     let method_objects = if class_metadata_owner && include_class_members {
-        if is_eval_class {
+        if is_eval_class || eval_reflection_is_builtin_closure(reflected_name, context) {
             eval_reflection_member_object_array_result(
                 EVAL_REFLECTION_OWNER_METHOD,
                 reflected_name,
@@ -196,6 +219,13 @@ pub(super) fn eval_reflection_owner_object_with_members(
         Some(value) => (value, false),
         None => (values.null()?, true),
     };
+    if crate::eval_trace::enabled()
+        && matches!(owner_kind, EVAL_REFLECTION_OWNER_CLASS | EVAL_REFLECTION_OWNER_OBJECT)
+    {
+        eprintln!(
+            "[elephc-eval-trace] phase=reflection_owner_materialize name={reflected_name:?} flags={flags:#x}"
+        );
+    }
     let object = values.reflection_owner_new(
         owner_kind,
         reflected_name,
@@ -214,20 +244,77 @@ pub(super) fn eval_reflection_owner_object_with_members(
         backing_value_cell,
         constructor,
     )?;
+    if matches!(
+        owner_kind,
+        EVAL_REFLECTION_OWNER_FUNCTION | EVAL_REFLECTION_OWNER_METHOD
+    ) {
+        let has_return_type = values.bool_value(type_metadata.is_some())?;
+        let return_type = match type_metadata {
+            Some(type_metadata) => eval_reflection_type_object_result(type_metadata, values)?,
+            None => values.null()?,
+        };
+        let declaring_class = if owner_kind == EVAL_REFLECTION_OWNER_FUNCTION {
+            "ReflectionFunction"
+        } else {
+            "ReflectionMethod"
+        };
+        let configured = eval_reflection_with_declaring_class_scope(
+            declaring_class,
+            context,
+            |_| -> Result<(), EvalStatus> {
+                values.property_set(object, "__has_return_type", has_return_type)?;
+                values.property_set(object, "__type", return_type)
+            },
+        );
+        let has_return_type_release = values.release(has_return_type);
+        let return_type_release = values.release(return_type);
+        configured?;
+        has_return_type_release?;
+        return_type_release?;
+    }
+    // PHP's public `$method->class` / `$property->class` is the DECLARING class, read from
+    // `__class`. The compiled constructor fills it; an object built here never ran that
+    // constructor, so it has to be written, or every eval-built member reports an empty class.
+    if matches!(
+        owner_kind,
+        EVAL_REFLECTION_OWNER_METHOD | EVAL_REFLECTION_OWNER_PROPERTY
+    ) {
+        if let Some(declaring_class) = parent_class_name {
+            let class_value = values.string(declaring_class.trim_start_matches('\\'))?;
+            let owner_class = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
+                "ReflectionMethod"
+            } else {
+                "ReflectionProperty"
+            };
+            let configured = eval_reflection_with_declaring_class_scope(
+                owner_class,
+                context,
+                |_| -> Result<(), EvalStatus> { values.property_set(object, "__class", class_value) },
+            );
+            let class_value_release = values.release(class_value);
+            configured?;
+            class_value_release?;
+        }
+    }
     if owner_kind == EVAL_REFLECTION_OWNER_CLASS_CONSTANT {
         let has_type = values.bool_value(type_metadata.is_some())?;
         let type_value = match type_metadata {
             Some(type_metadata) => eval_reflection_type_object_result(type_metadata, values)?,
             None => values.null()?,
         };
-        eval_reflection_with_declaring_class_scope(
+        let configured = eval_reflection_with_declaring_class_scope(
             "ReflectionClassConstant",
             context,
             |_| -> Result<(), EvalStatus> {
                 values.property_set(object, "__has_type", has_type)?;
                 values.property_set(object, "__type", type_value)
             },
-        )?;
+        );
+        let has_type_release = values.release(has_type);
+        let type_value_release = values.release(type_value);
+        configured?;
+        has_type_release?;
+        type_value_release?;
     }
     if matches!(
         owner_kind,
@@ -243,7 +330,14 @@ pub(super) fn eval_reflection_owner_object_with_members(
     } else if owner_kind == EVAL_REFLECTION_OWNER_FUNCTION {
         let identity = values.object_identity(object)?;
         context.register_eval_reflection_function(identity, reflected_name);
-    } else if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY {
+    }
+    if matches!(
+        owner_kind,
+        EVAL_REFLECTION_OWNER_METHOD | EVAL_REFLECTION_OWNER_FUNCTION
+    ) {
+        eval_reflection_store_native_source_slots(object, owner_kind, context, values)?;
+    }
+    if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY {
         if let Some(declaring_class) = parent_class_name {
             if flags & EVAL_REFLECTION_MEMBER_FLAG_DYNAMIC != 0 {
                 let identity = values.object_identity(object)?;
@@ -321,23 +415,88 @@ fn eval_reflection_store_dump(
     result.and(released)
 }
 
+/// Writes a ReflectionFunction/ReflectionMethod's source file and lines into its native slots.
+///
+/// Compiled code calls `getFileName()`, `getStartLine()` and `getEndLine()` as plain slot
+/// getters, and the compiled constructor is what fills those slots. An object built here never
+/// ran that constructor, so compiled code read `""` and `0` for every reflector eval built --
+/// which is every `new ReflectionMethod(...)` a frame with an eval context makes. The eval
+/// dispatcher also defers to these slots for a method an AOT class declares, so a reflector
+/// built in eval for such a method answered from them too. The values are the ones the eval
+/// dispatcher itself answers with (see `eval_reflection_source_location_result`).
+pub(super) fn eval_reflection_store_native_source_slots(
+    object: RuntimeCellHandle,
+    owner_kind: u64,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let identity = values.object_identity(object)?;
+    let Some(target) = eval_reflection_function_method_target(identity, context, values)? else {
+        return Ok(());
+    };
+    let (source_file, source_location) = eval_reflection_function_method_source_location(&target, context);
+    let Some(source_location) = source_location else {
+        return Ok(());
+    };
+    let file = match source_file {
+        Some(source_file) => source_file.to_string(),
+        None => context.eval_file_magic(),
+    };
+    let owner_class = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
+        "ReflectionMethod"
+    } else {
+        "ReflectionFunction"
+    };
+    eval_reflection_write_source_slots(object, owner_class, &file, source_location, context, values)
+}
+
+/// Stores a reflected declaration's file and line range into the owner's source slots.
+pub(super) fn eval_reflection_write_source_slots(
+    object: RuntimeCellHandle,
+    owner_class: &str,
+    file: &str,
+    source_location: EvalSourceLocation,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let file_value = values.string(file)?;
+    let start_value = values.int(source_location.start_line())?;
+    let end_value = values.int(source_location.end_line())?;
+    let configured = eval_reflection_with_declaring_class_scope(
+        owner_class,
+        context,
+        |_| -> Result<(), EvalStatus> {
+            values.property_set(object, "__file_name", file_value)?;
+            values.property_set(object, "__start_line", start_value)?;
+            values.property_set(object, "__end_line", end_value)
+        },
+    );
+    let file_release = values.release(file_value);
+    let start_release = values.release(start_value);
+    let end_release = values.release(end_value);
+    configured?;
+    file_release?;
+    start_release?;
+    end_release
+}
+
 /// Builds the `ReflectionClass|false` value stored in parent or declaring-class slots.
 pub(super) fn eval_reflection_related_class_result(
     owner_kind: u64,
     related_class_name: Option<&str>,
-    include_class_members: bool,
+    _include_class_members: bool,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let Some(related_class_name) = related_class_name else {
         return values.bool_value(false);
     };
-    if eval_reflection_owner_uses_class_metadata(owner_kind) && include_class_members {
-        return eval_reflection_full_class_object_result(related_class_name, context, values);
-    }
     if matches!(
         owner_kind,
-        EVAL_REFLECTION_OWNER_METHOD
+        EVAL_REFLECTION_OWNER_CLASS
+            | EVAL_REFLECTION_OWNER_OBJECT
+            | EVAL_REFLECTION_OWNER_ENUM
+            | EVAL_REFLECTION_OWNER_METHOD
             | EVAL_REFLECTION_OWNER_PROPERTY
             | EVAL_REFLECTION_OWNER_CLASS_CONSTANT
             | EVAL_REFLECTION_OWNER_ENUM_UNIT_CASE
@@ -354,6 +513,24 @@ pub(super) fn eval_reflection_full_class_object_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_reflection_full_class_object_result_with_relation(class_name, None, context, values)
+}
+
+/// Builds a full `ReflectionClass` object, optionally for a declared relation member.
+///
+/// `getInterfaces()`/`getTraits()` read their names out of a compiled class's own metadata, so
+/// each name is a class-like the program declares. The dynamic existence probes can still answer
+/// false for one of them: a compiled interface whose source file no include ever reached has an
+/// activation cell that no startup path raises, while `interface_exists()` consults exactly that
+/// cell. Returning a non-object for such a name made Symfony's `ReflectionClassResource` recurse
+/// with `false`/null and die on its `\ReflectionClass` parameter. A relation kind therefore lets
+/// the compiled reflection metadata stand in for the missing declaration state.
+fn eval_reflection_full_class_object_result_with_relation(
+    class_name: &str,
+    relation_kind: Option<&str>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     if class_name
         .trim_start_matches('\\')
         .eq_ignore_ascii_case("Closure")
@@ -365,7 +542,11 @@ pub(super) fn eval_reflection_full_class_object_result(
         );
     }
     let Some(metadata) = eval_reflection_class_like_attributes(class_name, context) else {
-        let Some((flags, modifiers)) = eval_reflection_aot_class_flags(class_name, values)? else {
+        let resolved = match eval_reflection_aot_class_flags(class_name, values)? {
+            Some(pair) => Some(pair),
+            None => compiled_relation_flags(class_name, relation_kind, values)?,
+        };
+        let Some((flags, modifiers)) = resolved else {
             return values.bool_value(false);
         };
         let runtime_class_name = class_name.trim_start_matches('\\');
@@ -440,6 +621,18 @@ pub(super) fn eval_reflection_shallow_class_object_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    // `Closure` is neither eval nor AOT metadata; `Closure::__invoke()` is the member that
+    // declares it (`new ReflectionMethod($closure, '__invoke')`).
+    if class_name
+        .trim_start_matches('\\')
+        .eq_ignore_ascii_case("Closure")
+    {
+        return eval_reflection_builtin_closure_class_object_result(
+            EVAL_REFLECTION_OWNER_CLASS,
+            context,
+            values,
+        );
+    }
     let Some(metadata) = eval_reflection_class_like_attributes(class_name, context) else {
         let Some((flags, modifiers)) = eval_reflection_aot_class_flags(class_name, values)? else {
             return values.bool_value(false);
@@ -551,7 +744,7 @@ pub(super) fn eval_reflection_string_assoc_result(
     for (key, value) in pairs {
         let key = values.string(&key)?;
         let value = values.string(&value)?;
-        result = values.array_set(result, key, value)?;
+        result = eval_reflection_array_set_owned(result, key, value, values)?;
     }
     Ok(result)
 }
@@ -559,16 +752,60 @@ pub(super) fn eval_reflection_string_assoc_result(
 /// Builds a name-keyed PHP array of full ReflectionClass objects.
 pub(super) fn eval_reflection_class_object_map_result(
     names: &[String],
+    relation_kind: Option<&str>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut result = values.assoc_new(names.len())?;
     for name in names {
         let key = values.string(name)?;
-        let object = eval_reflection_full_class_object_result(name, context, values)?;
-        result = values.array_set(result, key, object)?;
+        let object = eval_reflection_full_class_object_result_with_relation(
+            name,
+            relation_kind,
+            context,
+            values,
+        )?;
+        result = eval_reflection_array_set_owned(result, key, object, values)?;
     }
     Ok(result)
+}
+
+/// Synthesizes reflection flags for a declared interface or trait of a compiled class.
+///
+/// Only a relation lookup supplies a kind: the name came from the compiled class's own
+/// `interfaces`/`traits` metadata, so it is a class-like the program declares even when the
+/// dynamic existence probes answer false for it (an activation cell no startup path raised).
+/// A name the compiled reflection metadata does not know either yields `None`, so a bogus entry
+/// still cannot fabricate a reflector.
+fn compiled_relation_flags(
+    class_name: &str,
+    relation_kind: Option<&str>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(u64, u64)>, EvalStatus> {
+    let Some(relation_kind) = relation_kind else {
+        return Ok(None);
+    };
+    let runtime_class_name = class_name.trim_start_matches('\\');
+    let row_flags = values.reflection_class_flags(runtime_class_name)?;
+    let has_source = values
+        .reflection_class_source_file(runtime_class_name)?
+        .is_some();
+    if row_flags.is_none() && !has_source {
+        return Ok(None);
+    }
+    let mut flags = row_flags.unwrap_or(0) | EVAL_REFLECTION_CLASS_FLAG_USER_DEFINED;
+    match relation_kind {
+        "interfaces" => flags |= EVAL_REFLECTION_CLASS_FLAG_INTERFACE,
+        "traits" => flags |= EVAL_REFLECTION_CLASS_FLAG_TRAIT,
+        _ => return Ok(None),
+    }
+    let modifiers = eval_reflection_class_modifiers(
+        flags & EVAL_REFLECTION_CLASS_FLAG_FINAL != 0,
+        flags & EVAL_REFLECTION_CLASS_FLAG_ABSTRACT != 0,
+        flags & EVAL_REFLECTION_CLASS_FLAG_READONLY != 0,
+        flags & EVAL_REFLECTION_CLASS_FLAG_ENUM != 0,
+    );
+    Ok(Some((flags, modifiers)))
 }
 
 /// Maps a synthetic reflection owner kind to PHP's `Attribute::TARGET_*` bitmask.
@@ -605,7 +842,7 @@ pub(super) fn eval_reflection_parameter_object_array_result(
     for parameter in parameters {
         let parameter_object = eval_reflection_parameter_object_result(parameter, context, values)?;
         let key = values.int(parameter.position as i64)?;
-        result = values.array_set(result, key, parameter_object)?;
+        result = eval_reflection_array_set_owned(result, key, parameter_object, values)?;
     }
     Ok(result)
 }
@@ -787,8 +1024,17 @@ pub(super) fn eval_reflection_class_like_default_value(
     };
     let trait_name =
         trait_origin.or_else(|| context.has_trait(declaring_class).then_some(declaring_class));
+    // `self::` in a default value is the DECLARING class, and php evaluates the default under
+    // that class scope. Only the magic-constant scope was pushed, so `self::CREATED` in
+    // `MetadataBag::$meta` resolved against whatever class happened to be calling
+    // `ReflectionClass::getDefaultProperties()` -- Symfony's DebugClassLoader -- and failed with
+    // "Undefined constant DebugClassLoader::CREATED".
     context.push_class_like_member_magic_scope(declaring_class, trait_name);
+    context.push_class_scope(declaring_class.to_string());
+    context.push_called_class_scope(declaring_class.to_string());
     let result = eval_method_parameter_default(default, context, values);
+    context.pop_called_class_scope();
+    context.pop_class_scope();
     context.pop_magic_scope();
     result
 }
@@ -1000,7 +1246,7 @@ pub(super) fn eval_reflection_named_type_object_array_result(
     for (position, type_metadata) in types.iter().enumerate() {
         let type_object = eval_reflection_named_type_object_result(type_metadata, values)?;
         let key = values.int(position as i64)?;
-        result = values.array_set(result, key, type_object)?;
+        result = eval_reflection_array_set_owned(result, key, type_object, values)?;
     }
     Ok(result)
 }
@@ -1096,6 +1342,11 @@ pub(super) fn eval_reflection_member_object_result(
     } else {
         0
     };
+    let type_metadata = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
+        member.return_type_metadata.as_ref()
+    } else {
+        member.type_metadata.as_ref()
+    };
     eval_reflection_owner_object(
         owner_kind,
         reflected_name,
@@ -1106,7 +1357,7 @@ pub(super) fn eval_reflection_member_object_result(
         &[],
         member.declaring_class_name.as_deref(),
         &member.parameters,
-        member.type_metadata.as_ref(),
+        type_metadata,
         member.settable_type_metadata.as_ref(),
         member.default_value.as_ref(),
         member.default_value_trait_origin.as_deref(),
@@ -1142,7 +1393,7 @@ pub(super) fn eval_reflection_member_object_array_result(
         let member_object =
             eval_reflection_member_object_result(owner_kind, name, &member, context, values)?;
         let key = values.int(index)?;
-        result = values.array_set(result, key, member_object)?;
+        result = eval_reflection_array_set_owned(result, key, member_object, values)?;
         index += 1;
     }
     Ok(result)
@@ -1187,7 +1438,7 @@ pub(super) fn eval_reflection_aot_member_object_array_result(
         let member_object =
             eval_reflection_member_object_result(owner_kind, name, &member, context, values)?;
         let key = values.int(index)?;
-        result = values.array_set(result, key, member_object)?;
+        result = eval_reflection_array_set_owned(result, key, member_object, values)?;
         index += 1;
     }
     Ok(result)

@@ -8,6 +8,7 @@
 //! - Statements encode explicit mutation and structured control flow without runtime ownership.
 
 use super::*;
+use std::sync::Arc;
 
 /// Dynamic eval statements that operate on a materialized activation scope.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
@@ -18,13 +19,34 @@ pub enum EvalStmt {
         name: String,
         value: EvalExpr,
     },
+    ArrayAppend {
+        target: EvalExpr,
+        value: EvalExpr,
+    },
     ArraySetVar {
         name: String,
         index: EvalExpr,
         value: EvalExpr,
     },
-    Break,
-    Continue,
+    ArrayDestructure {
+        targets: Vec<Option<EvalDestructureTarget>>,
+        value: EvalExpr,
+    },
+    /// `TARGET[] = &SOURCE`: binds a NEWLY APPENDED element of `target` to `source`.
+    ///
+    /// The target is a general lvalue rather than a bare name because PHP allows the append
+    /// anywhere an array element can be written -- `$loops[$k][] = &$path;` appends through a
+    /// nested element, which is `PhpDumper`'s shape.
+    ArrayAppendReferenceBind {
+        target: EvalExpr,
+        source: EvalExpr,
+    },
+    ArrayReferenceBind {
+        target: EvalExpr,
+        source: EvalExpr,
+    },
+    Break(u32),
+    Continue(u32),
     DoWhile {
         body: Vec<EvalStmt>,
         condition: EvalExpr,
@@ -36,14 +58,20 @@ pub enum EvalStmt {
         update: Vec<EvalStmt>,
         body: Vec<EvalStmt>,
     },
-    ClassDecl(EvalClass),
+    /// Shared, not owned: declaring the class hands this same allocation to the context, so a
+    /// request that re-runs the file pays a reference-count bump instead of a deep copy of every
+    /// method body. On a Symfony request that copy, and freeing it again at the request boundary,
+    /// was 13% of the interpreter's work.
+    ClassDecl(Arc<EvalClass>),
     EnumDecl(EvalEnum),
     InterfaceDecl(EvalInterface),
+    Label(String),
     TraitDecl(EvalTrait),
     Foreach {
         array: EvalExpr,
         key_name: Option<String>,
         value_name: String,
+        value_by_ref: bool,
         body: Vec<EvalStmt>,
     },
     FunctionDecl {
@@ -57,8 +85,42 @@ pub enum EvalStmt {
         parameter_is_by_ref: Vec<bool>,
         parameter_is_variadic: Vec<bool>,
         return_type: Option<EvalParameterType>,
+        /// Whether the declaration was `function &name()`, PHP's return-by-reference form.
+        returns_by_ref: bool,
         body: Vec<EvalStmt>,
     },
+    /// `declare(strict_types=1);` -- PHP's per-FILE scalar type-checking mode.
+    ///
+    /// A statement rather than a flag on the program because that is how it reaches the
+    /// interpreter's coercion rules, and because php scopes it to the file whose calls it
+    /// governs rather than to the callee.
+    DeclareStrictTypes(bool),
+    /// `declare(ticks=N);` or `declare(ticks=N) { … }` -- php's statement-counting hook.
+    ///
+    /// `body` is `None` for the statement form, which runs to the end of the enclosing scope, and
+    /// `Some` for the block and `enddeclare` forms, which scope the directive to their body.
+    DeclareTicks {
+        every: i64,
+        body: Option<Vec<EvalStmt>>,
+    },
+    /// Any other `declare(name=…)`, kept so its body still runs and its name can be reported.
+    ///
+    /// php never refuses one of these: `encoding` is accepted and ignored when Zend multibyte is
+    /// off, and an unknown name is a warning the script continues past.
+    DeclareDirective {
+        name: String,
+        body: Option<Vec<EvalStmt>>,
+    },
+    Goto(String),
+    /// The source line the statements after it were written on.
+    ///
+    /// Emitted only when a whole FILE is parsed, which is the case that needs it: an included
+    /// file's diagnostics, `debug_backtrace()` frames and `eval()`'d-code spellings all report a
+    /// position, and without a per-statement marker that position stayed at the line the include
+    /// itself began on. A fragment is a piece of a file whose position its caller already knows,
+    /// and `__LINE__` is stamped by the lexer either way, so fragments carry no markers and every
+    /// statement-shape expectation written against them is unaffected.
+    SourceLine(i64),
     Global {
         vars: Vec<String>,
     },
@@ -71,6 +133,15 @@ pub enum EvalStmt {
     ReferenceAssign {
         target: String,
         source: String,
+    },
+    /// Binds a variable to a non-variable lvalue source, as in `$x = &$this->p;`.
+    ///
+    /// `ReferenceAssign` covers the variable-to-variable case, where PHP aliases two scope
+    /// names; this variant covers every other assignable source PHP accepts after `=&`
+    /// (properties, static properties, array elements, and their dynamic-name forms).
+    VarReferenceBind {
+        target: String,
+        source: EvalExpr,
     },
     PropertyReferenceBind {
         object: EvalExpr,
@@ -264,6 +335,10 @@ pub enum EvalStmt {
     UnsetVar {
         name: String,
     },
+    /// `unset($$name)` / `unset(${expr})`: the name is evaluated, then that variable is removed.
+    UnsetDynamicVar {
+        name: EvalExpr,
+    },
     /// Collects cycles after every operand of one source-level unset has been removed.
     GcCollect,
     While {
@@ -271,6 +346,13 @@ pub enum EvalStmt {
         body: Vec<EvalStmt>,
     },
     Expr(EvalExpr),
+}
+
+impl EvalStmt {
+    /// Builds a class declaration statement, sharing the class with everything that declares it.
+    pub fn class_decl(class: EvalClass) -> Self {
+        Self::ClassDecl(Arc::new(class))
+    }
 }
 
 /// One `catch` block attached to an eval `try` statement.

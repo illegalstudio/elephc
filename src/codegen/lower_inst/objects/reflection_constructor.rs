@@ -11,8 +11,25 @@
 use super::super::method_name_data;
 use super::*;
 
+/// Tells whether a Reflection subclass constructor provably forwards the owner's leading
+/// parameters to `parent::__construct()` first, so its metadata can be populated up front.
+///
+/// php lets a subclass constructor skip the parent entirely (psysh's `ConstructParameter`): the
+/// reflector then stays uninitialized and its getters throw "Internal error: Failed to retrieve
+/// the reflection object". `false` therefore leaves the metadata unpopulated instead of refusing
+/// the program.
+pub(super) fn reflection_subclass_forwards_constructor(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    owner_class: &str,
+    constructor: Option<&ConstructorCallTarget>,
+) -> bool {
+    validate_reflection_subclass_constructor_forwarding(ctx, class_name, owner_class, constructor)
+        .is_ok()
+}
+
 /// Rejects Reflection subclass constructors whose parent metadata arguments cannot be proven.
-pub(super) fn validate_reflection_subclass_constructor_forwarding(
+fn validate_reflection_subclass_constructor_forwarding(
     ctx: &FunctionContext<'_>,
     class_name: &str,
     owner_class: &str,
@@ -124,6 +141,11 @@ pub(super) fn validate_reflection_subclass_constructor_forwarding(
                     | Op::Acquire
                     | Op::Borrow
                     | Op::Move
+                    // A `mixed` leading parameter (`ReflectionClass::__construct($objectOrClass)`)
+                    // is forwarded through a box of the local, and the box's own reference is
+                    // released right after it is acquired for the call.
+                    | Op::MixedBox
+                    | Op::Release
                     | Op::StoreLocal
                     | Op::PushCallOperandOwner
                     | Op::Nop
@@ -165,7 +187,10 @@ fn reflection_forwarded_local(
                 _ => None,
             };
         }
-        if !matches!(instruction.op, Op::Acquire | Op::Borrow | Op::Move) {
+        if !matches!(
+            instruction.op,
+            Op::Acquire | Op::Borrow | Op::Move | Op::MixedBox
+        ) {
             return None;
         }
         value = *instruction.operands.first()?;

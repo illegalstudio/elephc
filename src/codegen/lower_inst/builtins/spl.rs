@@ -21,7 +21,8 @@ use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
 use super::super::{
-    callables, direct_call_stack_pad_bytes, iterators, materialize_direct_call_args, predicates,
+    callables, direct_call_stack_pad_bytes, exceptions, iterators, materialize_direct_call_args,
+    predicates,
 };
 use super::{expect_operand, store_if_result};
 
@@ -67,20 +68,17 @@ struct IteratorApplyCallbackTarget {
     return_ty: PhpType,
 }
 
-/// Lowers autoload registration stubs by preserving arg effects and returning true.
+/// Lowers autoload registration through the eval bridge, which owns the autoloader stack.
 pub(crate) fn lower_spl_autoload_bool(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
 ) -> Result<()> {
     match name {
-        "spl_autoload_register" => super::ensure_arg_count_between(inst, name, 0, 3)?,
-        "spl_autoload_unregister" => super::ensure_arg_count(inst, name, 1)?,
-        _ => return Err(CodegenIrError::unsupported(format!("autoload bool stub {}", name))),
+        "spl_autoload_register" => super::eval::lower_eval_spl_autoload_register(ctx, inst),
+        "spl_autoload_unregister" => super::eval::lower_eval_spl_autoload_unregister(ctx, inst),
+        _ => Err(CodegenIrError::unsupported(format!("autoload bool stub {}", name))),
     }
-    emit_args_for_side_effects(ctx, inst)?;
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
-    store_if_result(ctx, inst)
 }
 
 /// Lowers no-op autoload calls by preserving arg effects and returning PHP null if used.
@@ -99,14 +97,56 @@ pub(crate) fn lower_spl_autoload_void(
     store_if_result(ctx, inst)
 }
 
-/// Lowers `spl_autoload_functions()` to an indexed array of AOT rule placeholders.
+/// Lowers `spl_autoload_functions()`.
+///
+/// With a dynamic tier the answer is the interpreter's request-global queue: generated
+/// `spl_autoload_register` calls register through it, so only it knows what PHP would list. A
+/// program without the tier cannot have registered a PHP callable at runtime (the compiler's own
+/// autoload rules are not callables), and the queue is empty. The previous lowering pushed the
+/// rule INDEXES as array elements, which userland read as integers where PHP returns callables.
 pub(crate) fn lower_spl_autoload_functions(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     super::ensure_arg_count(inst, "spl_autoload_functions", 0)?;
+    if ctx.module.required_runtime_features.eval_bridge {
+        return lower_eval_spl_autoload_functions(ctx, inst);
+    }
     let rule_count = crate::codegen::autoload_rule_count();
     emit_int_array(ctx, rule_count.max(1), |ctx| emit_autoload_function_placeholders(ctx, rule_count))?;
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `spl_autoload_functions()` through the interpreter's registered-callback queue.
+///
+/// The hook answers one owned boxed indexed array. The compiled result slot wants the array's
+/// payload, so the box is unboxed, given one owner for the caller, and released; the payload low
+/// word then becomes the result.
+fn lower_eval_spl_autoload_functions(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    const FRAME: usize = 16;
+    const CELL: usize = 0;
+    const PAYLOAD: usize = 8;
+    let target = ctx.emitter.target;
+    let value_reg = abi::int_result_reg(ctx.emitter).to_string();
+    let payload_reg = crate::codegen_support::mixed_unbox_payload_reg(target).to_string();
+
+    abi::emit_reserve_temporary_stack(ctx.emitter, FRAME);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 0), 0);
+    let symbol = target.extern_symbol("__elephc_eval_spl_autoload_functions");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    abi::emit_store_to_sp(ctx.emitter, &value_reg, CELL);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    abi::emit_store_to_sp(ctx.emitter, &payload_reg, PAYLOAD);
+    ctx.emitter
+        .instruction(&format!("mov {value_reg}, {payload_reg}"));             // pass the array payload to the owner helper
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    abi::emit_load_temporary_stack_slot(ctx.emitter, &value_reg, CELL);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+    abi::emit_load_temporary_stack_slot(ctx.emitter, &value_reg, PAYLOAD);
+    abi::emit_release_temporary_stack(ctx.emitter, FRAME);
     store_if_result(ctx, inst)
 }
 
@@ -163,6 +203,11 @@ pub(crate) fn lower_spl_object_id(
     inst: &Instruction,
 ) -> Result<()> {
     super::ensure_arg_count(inst, "spl_object_id", 1)?;
+    let value = expect_operand(inst, 0)?;
+    if ctx.value_php_type(value)?.codegen_repr() == PhpType::Callable {
+        ctx.load_value_to_result(value)?;
+        return store_if_result(ctx, inst);
+    }
     load_object_operand(ctx, inst, "spl_object_id")?;
     abi::emit_call_label(ctx.emitter, "__rt_object_handle_of");
     store_if_result(ctx, inst)
@@ -201,6 +246,11 @@ pub(crate) fn lower_iterator_count(
         }
         PhpType::Object(_) => {
             emit_count_loaded_traversable_object(ctx)?;
+        }
+        // A value only known at run time (Laravel Prompts' untyped `$steps` behind
+        // `is_iterable()`): dispatch on the box's tag the way `iterator_to_array()` does.
+        PhpType::Mixed | PhpType::Union(_) => {
+            emit_count_loaded_mixed(ctx)?;
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -661,15 +711,50 @@ fn iterator_apply_array_items(
 }
 
 /// Loads the single object operand into the canonical integer result register.
+///
+/// Boxed gradual values are unwrapped and checked at runtime so callers retain PHP's catchable
+/// `TypeError` behavior without weakening definite-scalar diagnostics.
 fn load_object_operand(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
 ) -> Result<()> {
     let value = expect_operand(inst, 0)?;
-    let ty = ctx.load_value_to_result(value)?;
+    let ty = ctx.value_php_type(value)?.codegen_repr();
+    ctx.load_value_to_result(value)?;
     match ty {
         PhpType::Object(_) => Ok(()),
+        PhpType::Mixed => {
+            let object_label = ctx.next_label("spl_object_operand_object");
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #6");                      // require the boxed value to contain an object
+                    ctx.emitter.instruction(&format!("b.eq {}", object_label)); // preserve PHP's runtime object check
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("cmp rax, 6");                      // require the boxed value to contain an object
+                    ctx.emitter.instruction(&format!("je {}", object_label));   // preserve PHP's runtime object check
+                }
+            }
+            exceptions::emit_type_error(
+                ctx,
+                &format!(
+                    "{}(): Argument #1 ($object) must be of type object",
+                    name
+                ),
+            );
+            ctx.emitter.label(&object_label);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("mov x0, x1");                      // expose the unboxed object pointer to the runtime helper
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("mov rax, rdi");                    // expose the unboxed object pointer to the runtime helper
+                }
+            }
+            Ok(())
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "{} for PHP type {:?}",
             name,
@@ -706,6 +791,65 @@ fn static_string_operand(
 }
 
 /// Reads the runtime length header from the loaded indexed array or hash pointer.
+/// Counts a boxed `Mixed` source: an indexed or associative array payload by its header, an
+/// object through the Traversable protocol, anything else with php's `TypeError`.
+fn emit_count_loaded_mixed(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    let array_case = ctx.next_label("iterator_count_mixed_array");
+    let object_case = ctx.next_label("iterator_count_mixed_object");
+    let invalid_case = ctx.next_label("iterator_count_mixed_invalid");
+    let done = ctx.next_label("iterator_count_mixed_done");
+
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #4");                              // runtime Mixed tag 4 carries an indexed array payload
+            ctx.emitter.instruction(&format!("b.eq {}", array_case));           // count the indexed payload by its header
+            ctx.emitter.instruction("cmp x0, #5");                              // runtime Mixed tag 5 carries an associative array payload
+            ctx.emitter.instruction(&format!("b.eq {}", array_case));           // count the hash payload by its header
+            ctx.emitter.instruction("cmp x0, #6");                              // runtime Mixed tag 6 carries an object payload
+            ctx.emitter.instruction(&format!("b.eq {}", object_case));          // count through the Traversable protocol
+            ctx.emitter.instruction(&format!("b {}", invalid_case));            // every other payload violates the Traversable|array contract
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 4");                              // runtime Mixed tag 4 carries an indexed array payload
+            ctx.emitter.instruction(&format!("je {}", array_case));             // count the indexed payload by its header
+            ctx.emitter.instruction("cmp rax, 5");                              // runtime Mixed tag 5 carries an associative array payload
+            ctx.emitter.instruction(&format!("je {}", array_case));             // count the hash payload by its header
+            ctx.emitter.instruction("cmp rax, 6");                              // runtime Mixed tag 6 carries an object payload
+            ctx.emitter.instruction(&format!("je {}", object_case));            // count through the Traversable protocol
+            ctx.emitter.instruction(&format!("jmp {}", invalid_case));          // every other payload violates the Traversable|array contract
+        }
+    }
+
+    super::arrays::union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(
+        ctx,
+        &invalid_case,
+        &|given| {
+            format!(
+                "iterator_count(): Argument #1 ($iterator) must be of type Traversable|array, {} given",
+                given
+            )
+        },
+    );
+
+    ctx.emitter.label(&array_case);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("mov x0, x1"),                 // expose the unboxed array pointer to the header read
+        Arch::X86_64 => ctx.emitter.instruction("mov rax, rdi"),                // expose the unboxed array pointer to the header read
+    }
+    emit_count_loaded_array(ctx);
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&object_case);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("mov x0, x1"),                 // expose the unboxed object pointer to Traversable dispatch
+        Arch::X86_64 => ctx.emitter.instruction("mov rax, rdi"),                // expose the unboxed object pointer to Traversable dispatch
+    }
+    emit_count_loaded_traversable_object(ctx)?;
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
 fn emit_count_loaded_array(ctx: &mut FunctionContext<'_>) {
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_from_address(ctx.emitter, result_reg, result_reg, 0);
@@ -731,10 +875,108 @@ fn emit_to_array_loaded_source(
         }
         PhpType::Iterable => emit_to_array_loaded_iterable(ctx, preserve_keys),
         PhpType::Object(_) => emit_to_array_loaded_traversable_object(ctx, preserve_keys),
+        PhpType::Mixed => emit_to_array_loaded_mixed(ctx, preserve_keys),
         other => Err(CodegenIrError::unsupported(format!(
             "iterator_to_array for PHP type {:?}",
             other
         ))),
+    }
+}
+
+/// Unboxes a gradual iterator source, accepts arrays and Traversable objects (php 8.2+ takes
+/// both), and preserves PHP's runtime TypeError for every scalar, null, resource, or callable
+/// payload.
+fn emit_to_array_loaded_mixed(
+    ctx: &mut FunctionContext<'_>,
+    preserve_keys: bool,
+) -> Result<()> {
+    let indexed_case = ctx.next_label("iterator_to_array_mixed_indexed");
+    let hash_case = ctx.next_label("iterator_to_array_mixed_hash");
+    let object_case = ctx.next_label("iterator_to_array_mixed_object");
+    let invalid_case = ctx.next_label("iterator_to_array_mixed_invalid");
+    let done = ctx.next_label("iterator_to_array_mixed_done");
+
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #4");                              // runtime Mixed tag 4 carries an indexed array payload
+            ctx.emitter.instruction(&format!("b.eq {}", indexed_case));         // widen the indexed payload into the result container
+            ctx.emitter.instruction("cmp x0, #5");                              // runtime Mixed tag 5 carries an associative array payload
+            ctx.emitter.instruction(&format!("b.eq {}", hash_case));            // clone or renumber the hash payload
+            ctx.emitter.instruction("cmp x0, #6");                              // runtime Mixed tag 6 carries an object payload
+            ctx.emitter.instruction(&format!("b.eq {}", object_case));          // defer Traversable validation to the object protocol path
+            ctx.emitter.instruction(&format!("b {}", invalid_case));            // every other payload violates the Traversable|array contract
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 4");                              // runtime Mixed tag 4 carries an indexed array payload
+            ctx.emitter.instruction(&format!("je {}", indexed_case));           // widen the indexed payload into the result container
+            ctx.emitter.instruction("cmp rax, 5");                              // runtime Mixed tag 5 carries an associative array payload
+            ctx.emitter.instruction(&format!("je {}", hash_case));              // clone or renumber the hash payload
+            ctx.emitter.instruction("cmp rax, 6");                              // runtime Mixed tag 6 carries an object payload
+            ctx.emitter.instruction(&format!("je {}", object_case));            // defer Traversable validation to the object protocol path
+            ctx.emitter.instruction(&format!("jmp {}", invalid_case));          // every other payload violates the Traversable|array contract
+        }
+    }
+
+    super::arrays::union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(
+        ctx,
+        &invalid_case,
+        &|given| {
+            format!(
+                "iterator_to_array(): Argument #1 ($iterator) must be of type Traversable|array, {} given",
+                given
+            )
+        },
+    );
+
+    ctx.emitter.label(&indexed_case);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("mov x0, x1"),                 // expose the unboxed array pointer to the widening helpers
+        Arch::X86_64 => ctx.emitter.instruction("mov rax, rdi"),                // expose the unboxed array pointer to the widening helpers
+    }
+    emit_to_array_loaded_indexed(ctx, preserve_keys);
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&hash_case);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("mov x0, x1"),                 // expose the unboxed hash pointer to the clone helpers
+        Arch::X86_64 => ctx.emitter.instruction("mov rax, rdi"),                // expose the unboxed hash pointer to the clone helpers
+    }
+    emit_to_array_loaded_hash(ctx, preserve_keys)?;
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&object_case);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("mov x0, x1"),                 // expose the unboxed object pointer to Traversable dispatch
+        Arch::X86_64 => ctx.emitter.instruction("mov rax, rdi"),                // expose the unboxed object pointer to Traversable dispatch
+    }
+    emit_to_array_loaded_traversable_object(ctx, preserve_keys)?;
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Copies a loaded indexed array into boxed Mixed slots; `preserve_keys` makes it a hash keyed
+/// 0..n-1 so the result has the associative shape the checker filed for a preserved-key call.
+fn emit_to_array_loaded_indexed(ctx: &mut FunctionContext<'_>, preserve_keys: bool) {
+    if preserve_keys {
+        if ctx.emitter.target.arch == Arch::X86_64 {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the loaded indexed array to the hash conversion helper
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");
+        emit_loaded_hash_as_mixed(ctx);
+    } else {
+        emit_clone_loaded_array(ctx);
+        emit_loaded_runtime_indexed_array_as_mixed(ctx);
+    }
+}
+
+/// Copies a loaded hash into the Mixed-valued hash (`preserve_keys`) or a renumbered list.
+fn emit_to_array_loaded_hash(ctx: &mut FunctionContext<'_>, preserve_keys: bool) -> Result<()> {
+    if preserve_keys {
+        emit_clone_loaded_hash(ctx, true);
+        Ok(())
+    } else {
+        super::arrays::values::emit_loaded_assoc_array_values(ctx, &PhpType::Mixed)
     }
 }
 
@@ -804,7 +1046,7 @@ fn static_preserve_keys_operand(
 }
 
 /// Materializes PHP truthiness for a dynamic preserve-keys operand.
-fn emit_preserve_keys_truthiness(
+pub(in crate::codegen::lower_inst) fn emit_preserve_keys_truthiness(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
 ) -> Result<()> {
@@ -1147,17 +1389,12 @@ fn emit_to_array_loaded_iterable(
 
     ctx.emitter.label(&hash_case);
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    if preserve_keys {
-        emit_clone_loaded_hash(ctx, true);
-    } else {
-        super::arrays::values::emit_loaded_assoc_array_values(ctx, &PhpType::Mixed)?;
-    }
+    emit_to_array_loaded_hash(ctx, preserve_keys)?;
     abi::emit_jump(ctx.emitter, &done);
 
     ctx.emitter.label(&indexed_case);
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    emit_clone_loaded_array(ctx);
-    emit_loaded_runtime_indexed_array_as_mixed(ctx);
+    emit_to_array_loaded_indexed(ctx, preserve_keys);
 
     ctx.emitter.label(&done);
     Ok(())
@@ -1296,33 +1533,47 @@ fn emit_append_current_to_saved_array(ctx: &mut FunctionContext<'_>) -> Result<(
 fn emit_insert_current_with_iterator_key(ctx: &mut FunctionContext<'_>) -> Result<()> {
     reload_saved_iterator_receiver(ctx);
     let key_ty = iterators::emit_interface_dispatch_call(ctx, "Iterator", "key", None)?;
+    // A `mixed` key() hands back an owned box; the normalized key only VIEWS its payload and
+    // `__rt_hash_set` persists its own copy, so the box is kept beneath the key pair and released
+    // after the insert. It used to be dropped: `iterator_to_array(new ArrayIterator([...]))` leaked
+    // every key box and its string.
+    let owns_key_box = matches!(key_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_));
+    let shift = if owns_key_box { 16 } else { 0 };
+    if owns_key_box {
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    }
     emit_normalized_key_from_result(ctx, &key_ty.codegen_repr())?;
     let (key_lo, key_hi) = normalized_key_regs(ctx);
     abi::emit_push_reg_pair(ctx.emitter, key_lo, key_hi);
 
-    reload_saved_iterator_receiver_at_offset(ctx, 16);
+    reload_saved_iterator_receiver_at_offset(ctx, 16 + shift);
     let current_ty = iterators::emit_interface_dispatch_call(ctx, "Iterator", "current", None)?;
     emit_box_current_value_as_mixed(ctx.emitter, &current_ty.codegen_repr());
 
+    let hash_offset = 16 + shift;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x3, x0");                              // pass boxed current() as hash value_lo
             ctx.emitter.instruction("mov x4, xzr");                             // boxed Mixed hash values do not use value_hi
             ctx.emitter.instruction("mov x5, #7");                              // value tag 7 marks an owned boxed Mixed cell
             abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
-            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // load iterator_to_array()'s hash result beneath the receiver
+            ctx.emitter.instruction(&format!("ldr x0, [sp, #{}]", hash_offset)); // load iterator_to_array()'s hash result beneath the receiver
             abi::emit_call_label(ctx.emitter, "__rt_hash_set");
-            ctx.emitter.instruction("str x0, [sp, #16]");                       // save the possibly-grown hash result beneath the receiver
+            ctx.emitter.instruction(&format!("str x0, [sp, #{}]", hash_offset)); // save the possibly-grown hash result beneath the receiver
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov rcx, rax");                            // pass boxed current() as hash value_lo
             ctx.emitter.instruction("xor r8, r8");                              // boxed Mixed hash values do not use value_hi
             ctx.emitter.instruction("mov r9, 7");                               // value tag 7 marks an owned boxed Mixed cell
             abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
-            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");           // load iterator_to_array()'s hash result beneath the receiver
+            ctx.emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", hash_offset)); // load iterator_to_array()'s hash result beneath the receiver
             abi::emit_call_label(ctx.emitter, "__rt_hash_set");
-            ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");           // save the possibly-grown hash result beneath the receiver
+            ctx.emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", hash_offset)); // save the possibly-grown hash result beneath the receiver
         }
+    }
+    if owns_key_box {
+        abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
     }
     Ok(())
 }
@@ -1556,6 +1807,12 @@ fn emit_branch_if_saved_receiver_implements(
             ctx.emitter.instruction("test rax, rax");                           // did the runtime interface matcher succeed?
             ctx.emitter.instruction(&format!("jne {}", target_label));          // branch to the matching iterator_count object path
         }
+    }
+    // An eval-created object carries the generic `stdClass` header, so the native matcher cannot
+    // see the interfaces its declaring class implements; the bridge can. Without this probe
+    // `iterator_to_array()` over such an object fataled with "unsupported kind".
+    if ctx.module.required_runtime_features.eval_bridge {
+        super::eval::emit_branch_if_eval_saved_object_is_a(ctx, interface_name, target_label);
     }
     Ok(())
 }

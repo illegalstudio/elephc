@@ -12,11 +12,16 @@
 
 mod captures;
 mod engine;
+mod preg_array;
+mod preg_filter;
+mod preg_grep;
+mod preg_last_error;
 mod preg_match;
 mod preg_match_all;
 mod pattern;
 mod preg_replace;
 mod preg_replace_callback;
+mod preg_replace_callback_array;
 mod replacement;
 mod preg_split;
 mod split_helpers;
@@ -24,11 +29,16 @@ mod targets;
 
 pub(in crate::interpreter) use captures::*;
 pub(in crate::interpreter) use engine::*;
+pub(in crate::interpreter) use preg_array::*;
+pub(in crate::interpreter) use preg_filter::*;
+pub(in crate::interpreter) use preg_grep::*;
+pub(in crate::interpreter) use preg_last_error::*;
 pub(in crate::interpreter) use preg_match::*;
 pub(in crate::interpreter) use preg_match_all::*;
 pub(in crate::interpreter) use pattern::*;
 pub(in crate::interpreter) use preg_replace::*;
 pub(in crate::interpreter) use preg_replace_callback::*;
+pub(in crate::interpreter) use preg_replace_callback_array::*;
 pub(in crate::interpreter) use replacement::*;
 pub(in crate::interpreter) use preg_split::*;
 pub(in crate::interpreter) use split_helpers::*;

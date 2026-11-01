@@ -2,7 +2,7 @@
 title: "cairo_set_source()"
 description: "Uses a pattern as the source for subsequent drawing."
 sidebar:
-  order: 448
+  order: 461
 ---
 
 ## cairo_set_source()

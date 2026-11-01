@@ -5,7 +5,7 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Fixtures exercise scalar narrowing (functions and methods), negated guards, the early-return
+//! - Fixtures exercise scalar/object narrowing (functions and methods), negated guards, the early-return
 //!   idiom, `instanceof` narrowing with method dispatch on a runtime-Mixed receiver, `if`/`elseif`
 //!   chains, and `: never`-function divergence that keeps the complement after an exhaustive chain.
 //!   The guarded variables are untyped parameters that are unions at runtime (heterogeneous calls),
@@ -14,6 +14,81 @@
 //!   declared type lacks dispatch on the runtime class.
 
 use super::*;
+
+/// Verifies the false edge of `is_object()` removes the object member from a union, allowing an
+/// object branch converted to its class name to join the untouched string branch as `string`.
+#[test]
+fn test_is_object_union_complement_after_branch_assignment() {
+    let out = compile_and_run(
+        r#"<?php
+class NarrowedClassName {}
+
+function normalizedClassName(object|string $value): string {
+    if (is_object($value)) {
+        $value = $value::class;
+    }
+    $lookup = [];
+    $lookup[$value] = "ok";
+    return $lookup[$value];
+}
+
+echo normalizedClassName(new NarrowedClassName());
+echo normalizedClassName("literal");
+"#,
+    );
+    assert_eq!(out, "okok");
+}
+
+/// Verifies a breaking switch case cannot leak assignments into a sibling default branch.
+#[test]
+fn test_switch_break_keeps_sibling_type_environments_isolated() {
+    let out = compile_and_run(
+        r#"<?php
+function requireString(string $value): string {
+    return strtoupper($value);
+}
+
+function choose(bool $first): string {
+    $value = 'ok';
+    switch (true) {
+        case $first:
+            $value = [1, 2];
+            break;
+        default:
+            return requireString($value);
+    }
+
+    return 'first';
+}
+
+echo choose(false), ':', choose(true);
+"#,
+    );
+    assert_eq!(out, "OK:first");
+}
+
+/// Verifies a switch without a default preserves its unmatched nullable path for list unpacking.
+#[test]
+fn test_switch_without_default_preserves_nullable_fallthrough() {
+    let out = compile_and_run(
+        r#"<?php
+function consume(?array $entry, int $mode): string {
+    if ($entry === null) {
+        switch ($mode) {
+            case 1:
+                return 'returned';
+        }
+    }
+
+    [$key, $value] = $entry;
+    return ($key === null ? 'null' : $key).':'.($value === null ? 'null' : $value);
+}
+
+echo consume(null, 0), '|', consume(['k', 'v'], 0);
+"#,
+    );
+    assert_eq!(out, "null:null|k:v");
+}
 
 /// Verifies the literal `false` subtype remains callable and uses the normal boolean runtime
 /// representation while `int|false` narrows to int after a divergent strict-false guard.
@@ -67,6 +142,37 @@ fn test_property_narrowing_survives_unrelated_local_assignment() {
         }
         echo readBox(new NarrowedBox(new NarrowedValue("ok")))->text;
         "#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies every truthy fact from a nested `&&` prefix reaches the final operand.
+#[test]
+fn test_nested_short_circuit_prefix_preserves_property_instanceof_narrowing() {
+    let out = compile_and_run(
+        r#"<?php
+interface Prototype { public function ready(): bool; }
+class ConcretePrototype implements Prototype {
+    public string $value = 'ok';
+    public string $other = 'initial';
+    public function ready(): bool { return true; }
+}
+class PrototypeHolder {
+    public function __construct(private Prototype $prototype) {}
+    public function empty(): bool {
+        $other = new ConcretePrototype();
+        if ($this->prototype instanceof ConcretePrototype
+            && $this->prototype->ready()
+            && array_key_exists('value', ['value' => true])) {
+            current([$this->prototype]);
+            $other->other = 'changed';
+            return $this->prototype->value === 'ok';
+        }
+        return false;
+    }
+}
+echo (new PrototypeHolder(new ConcretePrototype()))->empty() ? 'ok' : 'bad';
+"#,
     );
     assert_eq!(out, "ok");
 }
@@ -128,6 +234,23 @@ fn test_is_string_narrowing_allows_strlen() {
         "#,
     );
     assert_eq!(out, "3|-1");
+}
+
+/// Verifies a type predicate narrows the local written by its assignment-expression operand.
+#[test]
+fn test_is_string_narrows_assignment_expression_target() {
+    let out = compile_and_run(
+        r#"<?php
+function available() {}
+function check($candidate): void {
+    if (is_string($name = $candidate)) {
+        echo function_exists($name) ? 'yes' : 'no';
+    }
+}
+check('available');
+"#,
+    );
+    assert_eq!(out, "yes");
 }
 
 /// Verifies the early-return idiom: a guard with no `else` whose body always returns narrows the
@@ -231,6 +354,47 @@ fn test_negated_instanceof_early_return_narrows_interface_receiver() {
         "#,
     );
     assert_eq!(out, "4|0");
+}
+
+/// Verifies a local declared as an interface can be narrowed to a concrete implementation,
+/// dispatched through that implementation, and returned through the interface without losing it.
+#[test]
+fn test_instanceof_narrowing_reuses_nominal_object_storage() {
+    let out = compile_and_run(
+        r#"<?php
+        interface NamedValue { public function name(): string; }
+        class DetailedValue implements NamedValue {
+            public function name(): string { return "base"; }
+            public function detail(): string { return "detail"; }
+        }
+        function inspect(NamedValue $value): NamedValue {
+            if ($value instanceof DetailedValue) { echo $value->detail(), "|"; }
+            return $value;
+        }
+        echo inspect(new DetailedValue())->name();
+        "#,
+    );
+    assert_eq!(out, "detail|base");
+}
+
+/// Verifies a gradual receiver resolves `instanceof` interface metadata with PHP's
+/// case-insensitive type-name rules before dispatching the narrowed object.
+#[test]
+fn test_gradual_interface_boundary_is_case_insensitive() {
+    let out = compile_and_run(
+        r#"<?php
+        interface CaseContract { public function value(): string; }
+        class CaseImplementation implements CaseContract {
+            public function value(): string { return "ok"; }
+        }
+        function narrowCase(mixed $value): string {
+            if ($value instanceof casecontract) { return $value->value(); }
+            return "missing";
+        }
+        echo narrowCase(new CaseImplementation());
+        "#,
+    );
+    assert_eq!(out, "ok");
 }
 
 /// Verifies the full overload pattern: an `is_int` guard stores the int into a typed property,
@@ -819,4 +983,330 @@ echo (new Report(new Sold()))->line(), "|", (new Report(new Other()))->line(), "
 "#,
     );
     assert_eq!(out, "sold 7|other\n");
+}
+
+/// Verifies an assignment in a truthy branch cannot change the type seen by its else sibling.
+#[test]
+fn test_if_else_sibling_type_environments_are_isolated() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+final class Replacement {}
+
+function mapUnlessReplaced(array $values, bool $replace): array {
+    if ($replace) {
+        $values = new Replacement();
+        return [];
+    } else {
+        return array_map(static fn (mixed $value): mixed => $value, $values);
+    }
+}
+
+echo count(mapUnlessReplaced([1, 2], false));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies a local assigned on only one path stays gradual after the branch join.
+#[test]
+fn test_conditionally_initialized_local_is_gradual_after_if() {
+    let out = compile_and_run(
+        r#"<?php
+function conditionalCount(bool $enabled): int {
+    if ($enabled) {
+        $values = [1, 2];
+    }
+
+    if ($enabled) {
+        return count($values);
+    }
+
+    return 0;
+}
+
+echo conditionalCount(true), conditionalCount(false);
+"#,
+    );
+    assert_eq!(out, "20");
+}
+
+/// Verifies a by-reference output created on a short-circuit arm remains gradual afterwards.
+#[test]
+fn test_short_circuit_by_ref_output_is_gradual_after_expression() {
+    let out = compile_and_run(
+        r#"<?php
+function fillOutput(?array &$output = null): bool {
+    $output = [1, 2, 3];
+    return true;
+}
+
+function conditionalOutput(bool $enabled): int {
+    $filled = $enabled && fillOutput($values);
+    if ($filled) {
+        return count($values);
+    }
+    return 0;
+}
+
+echo conditionalOutput(true), conditionalOutput(false);
+"#,
+    );
+    assert_eq!(out, "30");
+}
+
+/// Verifies an OR operand sees the non-null fact required by its execution path.
+#[test]
+fn test_nullable_post_decrement_is_narrowed_by_short_circuit_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function retry(?int $attempts): int {
+    while (null === $attempts || $attempts--) {
+        return null === $attempts ? 0 : 1;
+    }
+    return -1;
+}
+
+echo retry(2);
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
+/// Verifies an AND-controlled loop body sees a numeric lower-bound receiver as non-null.
+#[test]
+fn test_nullable_pre_decrement_is_narrowed_by_numeric_lower_bound() {
+    let out = compile_and_run(
+        r#"<?php
+function bounded(?int $limit): int {
+    while (1 < $limit && true) {
+        --$limit;
+        return 1;
+    }
+    return 0;
+}
+
+echo bounded(null), ':', bounded(2);
+"#,
+    );
+    assert_eq!(out, "0:1");
+}
+
+/// Verifies a strict-false guard narrows the local assigned inside the comparison itself.
+#[test]
+fn test_strict_false_guard_narrows_assignment_target() {
+    let out = compile_and_run(
+        r#"<?php
+function maybeIndex(bool $ok): int|false { return $ok ? 7 : false; }
+function requireIndex(bool $ok): int {
+    if (false === $index = maybeIndex($ok)) { return -1; }
+    return $index;
+}
+
+echo requireIndex(true), ':', requireIndex(false);
+"#,
+    );
+    assert_eq!(out, "7:-1");
+}
+
+/// Verifies nullsafe method dispatch short-circuits a boxed gradual null receiver.
+#[test]
+fn test_nullsafe_method_call_on_mixed_receiver() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+final class GradualReceiver {
+    public function value(): string {
+        return 'yes';
+    }
+}
+
+function receiver(bool $present): mixed {
+    return $present ? new GradualReceiver() : null;
+}
+
+echo receiver(true)?->value() ?? 'no';
+echo receiver(false)?->value() ?? 'no';
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "yesno");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies a bare `$this` receiver narrowed by `instanceof` can cross an interface-typed call
+/// boundary while retaining the same runtime object.
+#[test]
+fn test_this_instanceof_narrowing_passes_interface_argument() {
+    let out = compile_and_run(
+        r#"<?php
+interface Named { public function name(): string; }
+abstract class Base {
+    public function describe(): string {
+        if ($this instanceof Named) {
+            return readName($this);
+        }
+        return "base";
+    }
+}
+final class Child extends Base implements Named {
+    public function name(): string { return "child"; }
+}
+function readName(Named $value): string { return $value->name(); }
+echo (new Child())->describe();
+"#,
+    );
+    assert_eq!(out, "child");
+}
+
+/// Verifies trait methods preserve `instanceof` syntax while narrowing their concrete `$this`
+/// receiver after trait composition.
+#[test]
+fn test_trait_this_instanceof_narrowing_passes_interface_argument() {
+    let out = compile_and_run(
+        r#"<?php
+interface Labeled { public function label(): string; }
+trait DescribesLabel {
+    public function describe(): string {
+        if ($this instanceof Labeled) {
+            return readLabel($this);
+        }
+        return "none";
+    }
+}
+final class LabeledValue implements Labeled {
+    use DescribesLabel;
+    public function label(): string { return "value"; }
+}
+function readLabel(Labeled $value): string { return $value->label(); }
+echo (new LabeledValue())->describe();
+"#,
+    );
+    assert_eq!(out, "value");
+}
+
+/// Verifies a trait ternary can read a property declared only by the concrete class proven by
+/// its positive `$this instanceof` branch.
+#[test]
+fn test_trait_this_instanceof_ternary_narrows_property_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+trait ReadsOptionalParent {
+    public function parentName(): ?string {
+        return $this instanceof ParentAware ? $this->parentName : null;
+    }
+}
+
+class PlainValue {
+    use ReadsOptionalParent;
+}
+
+class ParentAware {
+    use ReadsOptionalParent;
+    public ?string $parentName = "root";
+}
+
+echo (new PlainValue())->parentName() ?? "none";
+echo ":";
+echo (new ParentAware())->parentName();
+"#,
+    );
+    assert_eq!(out, "none:root");
+}
+
+/// Verifies `is_countable()` narrows an iterable inside a ternary without claiming every
+/// Traversable is countable. Arrays take the guarded `count()` edge; a plain iterator takes null.
+#[test]
+fn test_is_countable_narrows_iterable_inside_ternary() {
+    let out = compile_and_run(
+        r#"<?php
+final class Sequence implements IteratorAggregate {
+    public function getIterator(): Traversable { yield 1; }
+}
+final class CountedSequence implements IteratorAggregate, Countable {
+    public function getIterator(): Traversable { yield 1; }
+    public function count(): int { return 9; }
+}
+function guarded_count(iterable $values): ?int {
+    return is_countable($values) ? count($values) : null;
+}
+echo guarded_count([1, 2, 3]), "|";
+var_dump(guarded_count(new Sequence()));
+echo guarded_count(new CountedSequence());
+"#,
+    );
+    assert_eq!(out, "3|NULL\n9");
+}
+
+/// Verifies an unguarded iterable remains runtime-checked: a non-Countable Traversable raises a
+/// catchable TypeError instead of being rejected statically or silently counted by iteration.
+#[test]
+fn test_count_non_countable_iterable_raises_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+final class StreamValues implements IteratorAggregate {
+    public function getIterator(): Traversable { yield 1; }
+}
+function unguarded_count(iterable $values): int { return count($values); }
+try {
+    echo unguarded_count(new StreamValues());
+} catch (TypeError $error) {
+    echo "type-error";
+}
+"#,
+    );
+    assert_eq!(out, "type-error");
+}
+
+/// Verifies `is_numeric()` admits a checked numeric string to subsequent arithmetic.
+#[test]
+fn test_is_numeric_guard_allows_string_arithmetic() {
+    let out = compile_and_run(
+        r#"<?php
+function scaled_number(string $value): mixed {
+    if (!is_numeric($value)) {
+        throw new InvalidArgumentException('not numeric');
+    }
+    $value *= 1024;
+    return $value;
+}
+echo scaled_number('2.5');
+"#,
+    );
+    assert_eq!(out, "2560");
+}
+
+/// Verifies a negated `instanceof` return narrows the fallthrough closure invocation path.
+#[test]
+fn test_negated_instanceof_early_return_narrows_union() {
+    let out = compile_and_run(
+        r#"<?php
+class NonceNarrowingProbe {
+    private function resolveNonce(string|Closure|null $nonce): ?string {
+        if (!$nonce instanceof Closure) {
+            return $nonce;
+        }
+        if (!is_string(($value = $nonce()) ?? '')) {
+            throw new LogicException('invalid');
+        }
+        return $value;
+    }
+
+    public function dump(): void {
+        echo $this->resolveNonce('x'), ':', $this->resolveNonce(fn () => 'y'), ':';
+        var_dump($this->resolveNonce(null));
+    }
+}
+(new NonceNarrowingProbe())->dump();
+"#,
+    );
+    assert_eq!(out, "x:y:NULL\n");
 }

@@ -15,7 +15,8 @@
 //! - Padding is applied by this helper; libc only renders the unpadded numeric body into a
 //!   512-byte scratch, bounded because precision is clamped to PHP's 53-digit maximum.
 //!   `%s`, `%b`, and `%c` bypass libc entirely.
-//! - Every write into `_concat_buf` is bounds-checked against the end of the 64 KiB arena.
+//! - Every write is checked against the active result reservation. The result starts in the
+//!   64 KiB concat scratch arena and grows into an owned heap block when that window fills.
 //! - Each conversion coerces its operand from the record's type tag (double↔int,
 //!   string→number, and deferred boxed non-scalars through sprintf-specific Mixed helpers),
 //!   so a record whose tag disagrees with the conversion character is converted, never
@@ -26,7 +27,7 @@
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::runtime::data::{
-    SPRINTF_ARGCOUNT_MSG, SPRINTF_OVERFLOW_MSG, SPRINTF_UNKNOWN_SPEC_MSG, SPRINTF_WIDTH_MSG,
+    SPRINTF_ARGCOUNT_MSG, SPRINTF_UNKNOWN_SPEC_MSG, SPRINTF_WIDTH_MSG,
 };
 
 use super::sprintf::CONV_SCRATCH_CAP;
@@ -41,7 +42,7 @@ use super::sprintf::CONV_SCRATCH_CAP;
 /// - caller stack above the return address: `rdi` records of 16 bytes, `[payload, tag]`
 ///
 /// # Register contract on exit
-/// - `rax`: result pointer inside `_concat_buf`
+/// - `rax`: result pointer in concat scratch storage or an owned heap block
 /// - `rdx`: result byte length
 ///
 /// The record tag word is `0` for int, `1 | (len << 8)` for string, `2` for float, `3` for
@@ -70,11 +71,15 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     //   [rbp-96]             = parsed pad character
     //   [rbp-104]            = parsed conversion character
     //   [rbp-112]            = parsed argument number (0 = next sequential argument)
-    //   [rbp-120]            = one-past-the-end address of _concat_buf
-    //   [rbp-680]            = optional eval context
-    //   [rbp-688]            = formatter-owned temporary string
+    //   [rbp-120]            = current result capacity
     //   [rbp-160 .. rbp-129] = mini C format string built by this helper
     //   [rbp-672 .. rbp-161] = snprintf conversion scratch (CONV_SCRATCH_CAP bytes)
+    //   [rbp-680]            = optional eval context
+    //   [rbp-688]            = formatter-owned temporary string
+    //   [rbp-696]            = grown result capacity
+    //   [rbp-704]            = result bytes preserved while moving to a larger allocation
+    //   [rbp-712]            = conversion-body pointer preserved across a capacity check
+    //   [rbp-720]            = conversion-body length preserved across a capacity check
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for every local slot
@@ -83,7 +88,7 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push r13");                                            // preserve the remaining-format-length register
     emitter.instruction("push r14");                                            // preserve the sequential-argument-index register
     emitter.instruction("push r15");                                            // preserve the argument-record base register
-    emitter.instruction("sub rsp, 648");                                        // reserve parse slots, conversion scratch, and formatter state
+    emitter.instruction("sub rsp, 696");                                        // reserve the parse slots, mini format buffer, conversion scratch, formatter state, and capacity spills
     emitter.instruction("mov r12, rax");                                        // format cursor
     emitter.instruction("mov r13, rdx");                                        // remaining format bytes
     emitter.instruction("xor r14d, r14d");                                      // next sequential argument index
@@ -97,9 +102,15 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rbx, [rcx + r11]");                                // write cursor = buffer base + offset
     emitter.instruction("mov QWORD PTR [rbp - 48], rbx");                       // remember where this result starts
     emitter.instruction("mov QWORD PTR [rbp - 56], r10");                       // remember the concat-offset symbol address
-    crate::codegen_support::abi::emit_load_int_immediate(emitter, "r11", emitter.concat_capacity as i64); // load the shared scratch capacity
-    emitter.instruction("add rcx, r11");                                        // one-past-the-end address of the concat buffer
-    emitter.instruction("mov QWORD PTR [rbp - 120], rcx");                      // publish the hard write limit for every copy below
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "r8", emitter.concat_capacity as i64); // total concat scratch capacity in bytes
+    emitter.instruction("cmp r11, r8");                                         // is the published scratch offset still inside its arena?
+    emitter.instruction("jbe __rt_sprintf_initial_capacity_x64");               // yes → derive the remaining capacity
+    emitter.instruction("xor r8d, r8d");                                        // a stale/out-of-range offset starts with no scratch capacity
+    emitter.instruction("jmp __rt_sprintf_initial_capacity_ready_x64");         // publish the zero capacity
+    emitter.label("__rt_sprintf_initial_capacity_x64");
+    emitter.instruction("sub r8, r11");                                         // capacity remaining from this result's start pointer
+    emitter.label("__rt_sprintf_initial_capacity_ready_x64");
+    emitter.instruction("mov QWORD PTR [rbp - 120], r8");                       // keep the current result capacity for every append
 
     // ================================================================
     // MAIN SCAN LOOP: literal bytes are copied, '%' starts a specifier
@@ -112,9 +123,9 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r13, 1");                                          // account for the consumed format byte
     emitter.instruction("cmp r8b, 37");                                         // is it '%'?
     emitter.instruction("je __rt_sprintf_fmt_x64");                             // yes → parse a conversion specifier
-    emitter.instruction("mov r9, QWORD PTR [rbp - 120]");                       // reload the concat-buffer write limit
-    emitter.instruction("cmp rbx, r9");                                         // would this literal byte land outside the arena?
-    emitter.instruction("jae __rt_sprintf_ofatal_x64");                         // yes → controlled fatal instead of an overrun
+    emitter.instruction("mov rax, 1");                                          // request room for this literal byte
+    emitter.instruction("call __rt_sprintf_ensure_capacity_x64");               // grow the in-progress result when its current reservation is full
+    emitter.instruction("movzx r8d, BYTE PTR [r12 - 1]");                       // reload the literal after a helper that may clobber caller-saved registers
     emitter.instruction("mov BYTE PTR [rbx], r8b");                             // copy the literal byte to the result
     emitter.instruction("add rbx, 1");                                          // advance the write cursor
     emitter.instruction("jmp __rt_sprintf_loop_x64");                           // continue scanning
@@ -127,9 +138,9 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_sprintf_spec_x64");                           // no → parse a real specifier
     emitter.instruction("add r12, 1");                                          // consume the second '%'
     emitter.instruction("sub r13, 1");                                          // account for the consumed byte
-    emitter.instruction("mov r9, QWORD PTR [rbp - 120]");                       // reload the concat-buffer write limit
-    emitter.instruction("cmp rbx, r9");                                         // would the literal '%' land outside the arena?
-    emitter.instruction("jae __rt_sprintf_ofatal_x64");                         // yes → controlled fatal instead of an overrun
+    emitter.instruction("mov rax, 1");                                          // request room for the literal percent byte
+    emitter.instruction("call __rt_sprintf_ensure_capacity_x64");               // grow the result reservation when necessary
+    emitter.instruction("movzx r8d, BYTE PTR [r12 - 1]");                       // reload the percent byte after the capacity helper
     emitter.instruction("mov BYTE PTR [rbx], r8b");                             // emit the literal '%'
     emitter.instruction("add rbx, 1");                                          // advance the write cursor
     emitter.instruction("jmp __rt_sprintf_loop_x64");                           // continue scanning
@@ -145,6 +156,7 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emit_snprintf_result(emitter);
     emit_exponent_compaction(emitter);
     emit_pad_and_copy(emitter);
+    emit_ensure_capacity(emitter);
 
     // ================================================================
     // DONE: publish the result and discard the caller's argument records
@@ -153,13 +165,10 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // result pointer inside the concat buffer
     emitter.instruction("mov rdx, rbx");                                        // current write cursor
     emitter.instruction("sub rdx, rax");                                        // result byte length
-    emitter.instruction("mov r10, QWORD PTR [rbp - 56]");                       // concat-offset symbol address
-    abi::emit_symbol_address(emitter, "r11", "_concat_buf");
-    emitter.instruction("sub rbx, r11");                                        // derive the absolute cursor after nested concat-producing conversions
-    emitter.instruction("mov QWORD PTR [r10], rbx");                            // publish the exact new write offset without double-counting
+    emitter.instruction("call __rt_concat_publish");                            // advance scratch state only when this result still lives in the scratch arena
     emitter.instruction("mov rcx, QWORD PTR [rbp - 64]");                       // packed argument record count
     emitter.instruction("shl rcx, 4");                                          // records are 16 bytes each
-    emitter.instruction("add rsp, 648");                                        // release local buffers and formatter state
+    emitter.instruction("add rsp, 696");                                        // release the local buffers
     emitter.instruction("pop r15");                                             // restore the argument-record base register
     emitter.instruction("pop r14");                                             // restore the sequential-argument-index register
     emitter.instruction("pop r13");                                             // restore the remaining-format-length register
@@ -436,11 +445,14 @@ fn emit_string_conversion(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_sprintf_t_int_x64");                          // format through the integer path
 
     emitter.label("__rt_sprintf_str_mixed_x64");
-    abi::emit_symbol_address(emitter, "r9", "_concat_buf");
-    emitter.instruction("mov rax, rbx");                                        // copy the partial-result write cursor
-    emitter.instruction("sub rax, r9");                                         // compute bytes already written before nested __toString
-    emitter.instruction("mov r9, QWORD PTR [rbp - 56]");                        // reload the address of the global concat offset
-    emitter.instruction("mov QWORD PTR [r9], rax");                             // make nested concat users start after the partial result
+    // The partial result must be published before a nested `__toString` can reserve scratch of
+    // its own, or that call writes straight over it. A grown result no longer lives in the
+    // arena, so this goes through the shared publisher, which is the only thing that knows
+    // the difference; `r10`/`r11` survive it, which is what keeps the record metadata live.
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // start of the partial result written so far
+    emitter.instruction("mov rdx, rbx");                                        // copy the partial-result write cursor
+    emitter.instruction("sub rdx, rax");                                        // bytes already written before nested __toString
+    emitter.instruction("call __rt_concat_publish");                            // make nested concat users start after a scratch-backed partial result
     emitter.instruction("mov rdi, r11");                                        // recover the deferred record metadata
     emitter.instruction("and rdi, 255");                                        // pass only its low-byte tag
     emitter.instruction("mov rsi, r10");                                        // pass the preserved record payload
@@ -778,10 +790,10 @@ fn emit_exponent_compaction(emitter: &mut Emitter) {
 /// Emits the x86_64 pad-and-copy stage shared by every conversion.
 ///
 /// `r10`/`r11` carry the conversion body. The field width is validated against PHP's
-/// `0..INT_MAX` range and the whole padded result is bounds-checked against the end of
-/// `_concat_buf` *before* a single byte is written, so neither an absurd width nor a long
-/// body can walk off the arena. Zero padding is inserted after a leading sign, matching
-/// PHP's `sprintf("%05d", -42)` → `-0042`.
+/// `0..INT_MAX` range and the whole padded result is reserved before a single byte is
+/// written. The reservation moves the in-progress result to owned heap storage when the
+/// scratch window is full. Zero padding is inserted after a leading sign, matching PHP's
+/// `sprintf("%05d", -42)` → `-0042`.
 fn emit_pad_and_copy(emitter: &mut Emitter) {
     emitter.label("__rt_sprintf_emit_x64");
     emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // parsed field width
@@ -797,9 +809,22 @@ fn emit_pad_and_copy(emitter: &mut Emitter) {
     emitter.label("__rt_sprintf_emit_nopad_x64");
     emitter.instruction("mov rdx, r11");                                        // body length
     emitter.instruction("add rdx, rcx");                                        // total bytes this conversion emits
+    emitter.instruction("mov QWORD PTR [rbp - 712], r10");                      // preserve the body pointer across a potential allocation
+    emitter.instruction("mov QWORD PTR [rbp - 720], r11");                      // preserve the body length across a potential allocation
+    emitter.instruction("mov rax, rdx");                                        // request room for the whole padded conversion
+    emitter.instruction("call __rt_sprintf_ensure_capacity_x64");               // grow the result before its first conversion byte is written
+    emitter.instruction("mov r10, QWORD PTR [rbp - 712]");                      // restore the body pointer after the allocator call
+    emitter.instruction("mov r11, QWORD PTR [rbp - 720]");                      // restore the body length after the allocator call
+    emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // reload the stable field width
+    emitter.instruction("xor rcx, rcx");                                        // recompute padding because the helper clobbers caller-saved registers
+    emitter.instruction("cmp rax, r11");                                        // is the body already at least as wide?
+    emitter.instruction("jbe __rt_sprintf_emit_ready_x64");                     // yes → keep zero padding
+    emitter.instruction("mov rcx, rax");                                        // padding = width ...
+    emitter.instruction("sub rcx, r11");                                        // ... minus the body length
+    emitter.label("__rt_sprintf_emit_ready_x64");
+    emitter.instruction("mov rdx, r11");                                        // body length, after the reservation may have moved the result
+    emitter.instruction("add rdx, rcx");                                        // total bytes this conversion emits
     emitter.instruction("add rdx, rbx");                                        // address just past the emitted bytes
-    emitter.instruction("cmp rdx, QWORD PTR [rbp - 120]");                      // would the conversion leave the arena?
-    emitter.instruction("ja __rt_sprintf_ofatal_x64");                          // yes → controlled fatal instead of an overrun
     emitter.instruction("mov r8, rdx");                                         // preserve the end of the complete padded output range
     emitter.instruction("mov rdx, rbx");                                        // default final body destination for a left-aligned field
     emitter.instruction("test QWORD PTR [rbp - 88], 1");                        // is the left-align flag set?
@@ -895,12 +920,54 @@ fn emit_pad_and_copy(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_sprintf_loop_x64");                           // scan the next format byte
 }
 
-/// Emits the x86_64 controlled-fatal exits for invalid widths/specifiers/argument counts,
-/// concat overflow, and non-stringable boxed values. Each writes a PHP-shaped diagnostic
-/// to stderr and exits with PHP's fatal-error status (255).
+/// Emits the x86_64 capacity check shared by literal and conversion emission.
+///
+/// `rax` supplies the bytes about to be appended. The helper keeps formatter state in
+/// callee-saved registers, grows geometrically through `__rt_concat_grow` when the current
+/// reservation is too small, and leaves `rbx` and the saved result start at the same logical
+/// result offset. A wrapped required length follows the shared allocation-overflow fatal path.
+fn emit_ensure_capacity(emitter: &mut Emitter) {
+    emitter.label("__rt_sprintf_ensure_capacity_x64");
+    emitter.instruction("mov r8, rbx");                                         // derive the result bytes already written
+    emitter.instruction("sub r8, QWORD PTR [rbp - 48]");                        // subtract the current result start pointer
+    emitter.instruction("mov r9, r8");                                          // preserve the written length while deriving the required capacity
+    emitter.instruction("add r9, rax");                                         // required capacity after the pending append
+    emitter.instruction("jc __rt_alloc_overflow");                              // a wrapped request cannot describe writable storage
+    emitter.instruction("mov r10, QWORD PTR [rbp - 120]");                      // current result capacity
+    emitter.instruction("cmp r9, r10");                                         // does the pending append still fit?
+    emitter.instruction("jbe __rt_sprintf_ensure_capacity_done_x64");           // yes → retain the existing reservation
+    emitter.instruction("mov r11, r10");                                        // seed geometric growth from the current capacity
+    emitter.instruction("add r11, r10");                                        // double the capacity while it remains representable
+    emitter.instruction("jc __rt_sprintf_ensure_capacity_exact_x64");           // a doubled capacity wrapped, so use the exact required size
+    emitter.instruction("cmp r11, r9");                                         // is the doubled capacity sufficient?
+    emitter.instruction("cmovb r11, r9");                                       // choose max(doubled capacity, required capacity)
+    emitter.instruction("jmp __rt_sprintf_ensure_capacity_prepare_x64");        // retain the selected capacity
+    emitter.label("__rt_sprintf_ensure_capacity_exact_x64");
+    emitter.instruction("mov r11, r9");                                         // preserve the exact required capacity after doubling overflowed
+    emitter.label("__rt_sprintf_ensure_capacity_prepare_x64");
+    emitter.instruction("mov QWORD PTR [rbp - 696], r11");                      // save the new capacity across helper calls
+    emitter.instruction("mov QWORD PTR [rbp - 704], r8");                       // save the written prefix length across helper calls
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // publish the old reservation start pointer
+    emitter.instruction("xor edx, edx");                                        // release an unfinalized scratch reservation before moving it
+    emitter.instruction("call __rt_concat_publish");                            // restore concat scratch state; heap-backed reservations are already independent
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // old result buffer to grow
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 704]");                      // copy exactly the bytes already emitted
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 696]");                      // request the selected grown capacity
+    emitter.instruction("call __rt_concat_grow");                               // allocate owned storage, copy the prefix, and release the old heap block if any
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // publish the new result start pointer
+    emitter.instruction("add rbx, QWORD PTR [rbp - 704]");                      // restore the write cursor at the same logical result offset
+    emitter.instruction("mov r8, QWORD PTR [rbp - 696]");                       // reload the selected capacity
+    emitter.instruction("mov QWORD PTR [rbp - 120], r8");                       // publish the capacity for later appends
+    emitter.label("__rt_sprintf_ensure_capacity_done_x64");
+    emitter.instruction("ret");                                                 // resume the pending literal or conversion write
+}
+
+/// Emits the three x86_64 controlled-fatal exits: out-of-range width, too few arguments,
+/// and an unknown conversion character. Each writes a PHP-shaped diagnostic to stderr and
+/// exits with PHP's fatal-error status (255). A result larger than the concat arena is no
+/// longer among them: it grows onto the heap through `__rt_sprintf_ensure_capacity_x64`.
 fn emit_fatal_paths(emitter: &mut Emitter) {
     emit_fatal(emitter, "__rt_sprintf_wfatal_x64", "_sprintf_width_msg", SPRINTF_WIDTH_MSG.len());
-    emit_fatal(emitter, "__rt_sprintf_ofatal_x64", "_sprintf_overflow_msg", SPRINTF_OVERFLOW_MSG.len());
     emit_fatal(emitter, "__rt_sprintf_afatal_x64", "_sprintf_argcount_msg", SPRINTF_ARGCOUNT_MSG.len());
     emit_fatal(emitter, "__rt_sprintf_sfatal_x64", "_sprintf_unknown_spec_msg", SPRINTF_UNKNOWN_SPEC_MSG.len());
 }

@@ -171,9 +171,20 @@ fn assert_capture(operation: RuntimeBuiltinId, source: &str, pattern: &str, coun
     let _ = std::fs::remove_dir_all(directory);
     assert!(output.success, "{}\n{}", output.stdout, output.stderr);
     assert_eq!(output.stdout, expected);
-    let diagnostics = output.stderr.lines().filter(|line| line.starts_with("Warning:")).collect::<Vec<_>>().join("\n");
+    let diagnostics = output.stderr.lines().filter(|line| line.starts_with("Warning:"))
+        .map(without_php_location).collect::<Vec<_>>().join("\n");
     assert_eq!(diagnostics, warning.trim_end());
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Drops php's ` in FILE on line N` suffix after checking it is present and carries a real line.
+///
+/// php appends the location to every warning; the temporary test path is not part of the contract.
+fn without_php_location(line: &str) -> &str {
+    let (message, location) = line.rsplit_once(" in ").expect("a warning carries php's ' in FILE on line N' suffix");
+    let (_file, number) = location.rsplit_once(" on line ").expect("a warning names its line");
+    assert!(number.parse::<u32>().is_ok_and(|number| number > 0), "{line}");
+    message
 }
 
 /// Runs a complete capture call and reports status plus the boolean result shifted eight bits.

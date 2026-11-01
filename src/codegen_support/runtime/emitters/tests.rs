@@ -76,6 +76,8 @@ fn test_aarch64_runtime_emits_fiber_routines() {
     for sym in [
         "__rt_fiber_alloc_stack",
         "__rt_fiber_free_stack",
+        "__rt_fiber_free_stack_untracked",
+        "__rt_fiber_release_request_stacks",
         "__rt_fiber_switch",
         "__rt_fiber_entry",
         "__rt_fiber_construct",
@@ -141,12 +143,33 @@ fn test_linux_x86_64_runtime_uses_shared_surface() {
         "__rt_json_encode_assoc",
         "__rt_preg_match",
         "__rt_fiber_alloc_stack",
+        "__rt_resource_id_of",
+        "__rt_object_handle_acquire",
+        "__rt_report_uncaught_exception",
+        "__rt_function_exists_lookup",
+        "__rt_hash_flip",
+        "__rt_var_dump_object",
     ] {
         assert!(
             asm.contains(&format!(".globl {}\n", sym)),
             "linux x86_64 shared runtime missing global symbol {}",
             sym
         );
+    }
+}
+
+/// AOT ReflectionClass source-file lookup has matching AArch64 and x86_64 runtime bridges.
+#[test]
+fn reflection_class_source_file_bridge_is_emitted_for_both_architectures() {
+    for target in [
+        Target::new(Platform::MacOS, Arch::AArch64),
+        Target::new(Platform::Linux, Arch::AArch64),
+        Target::new(Platform::Linux, Arch::X86_64),
+    ] {
+        let mut emitter = Emitter::new(target);
+        emit_runtime(&mut emitter, RuntimeFeatures::all());
+        let asm = emitter.output();
+        assert!(asm.contains("__elephc_eval_reflection_class_source_file"));
     }
 }
 
@@ -371,6 +394,127 @@ fn test_macos_dead_strip_no_cross_atom_internal_refs() {
     );
 }
 
+/// Guards the third dead-strip atom invariant: a `.globl` label must never be reached by
+/// FALLING THROUGH from the instruction above it.
+///
+/// `label_global` starts a new linker atom on macOS (`.subsections_via_symbols`) and a new
+/// `.text.<name>` section on Linux, so the code above a global label and the code at it are
+/// separately collectable units the linker may drop or reorder. Fall-through between them is
+/// only ever correct by accident of layout: `-dead_strip` collects the second unit whenever
+/// nothing branches to it by name, and the first then runs straight into whatever the linker
+/// placed next. That is exactly how `__rt_object_to_foreach_array` — two argument-setting
+/// stubs falling into a shared body — turned `foreach ($this as ...)` into a null argument
+/// plus a stray byte on stdout, in the shipped compiler and not only in the test harness,
+/// whose linker call omits `-dead_strip`.
+///
+/// Every global label must therefore be preceded by an unconditional transfer. Assembler
+/// directives end the check: data payloads and section switches are not fall-through paths.
+#[test]
+fn test_runtime_global_labels_are_never_reached_by_fallthrough() {
+    // An exit syscall never returns, so it terminates a helper as surely as `ret`; every
+    // other syscall (`write`, `read`, …) does return and must not be mistaken for one.
+    for (platform, arch, terminators, syscall, exit_selectors) in [
+        // macOS x86_64 has no runtime emission yet (see `Emitter::bl_c`), so the second
+        // target exercises the x86 emitters through the Linux backend instead.
+        (
+            Platform::MacOS,
+            Arch::AArch64,
+            &["b", "br", "ret", "brk", "hlt"][..],
+            "svc",
+            &["mov x16, #1"][..],
+        ),
+        (
+            Platform::Linux,
+            Arch::X86_64,
+            &["jmp", "ret", "ud2", "hlt"][..],
+            "syscall",
+            &["mov eax, 60", "mov eax, 231", "mov rax, 60", "mov rax, 231"][..],
+        ),
+    ] {
+        let asm = crate::codegen_support::generate_runtime_with_features_pic(
+            8 * 1024 * 1024,
+            Target::new(platform, arch),
+            RuntimeFeatures::all(),
+            false,
+        );
+
+        // `.globl NAME` always immediately precedes `NAME:`; `.alt_entry NAME` marks a label
+        // that deliberately stays inside the current atom, so falling into it is correct.
+        let mut declared_global: Option<&str> = None;
+        let mut alt_entry: Option<&str> = None;
+        let mut terminated = true;
+        let mut exit_pending = false;
+        let mut last_code = "<start of file>";
+        let mut violations: Vec<String> = Vec::new();
+
+        for raw in asm.lines() {
+            let line = raw.trim();
+            // Comment syntax is per-assembler: `;` on Darwin, `#` on GNU as.
+            if line.is_empty()
+                || line.starts_with("//")
+                || line.starts_with(';')
+                || line.starts_with('#')
+            {
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix(".globl ") {
+                declared_global = Some(rest.trim());
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix(".alt_entry ") {
+                alt_entry = Some(rest.trim());
+                continue;
+            }
+            // `label_global` itself emits the Linux `.section .text.<name>` / `.type` pair, and
+            // alignment padding is still fall-through, so none of these ends a run of code.
+            if line.starts_with(".type ")
+                || line.starts_with(".section .text.")
+                || line.starts_with(".p2align")
+                || line.starts_with(".balign")
+                || line.starts_with(".align")
+            {
+                continue;
+            }
+            if let Some(name) = line
+                .strip_suffix(':')
+                .filter(|name| !name.contains(char::is_whitespace))
+            {
+                if declared_global == Some(name) && alt_entry != Some(name) && !terminated {
+                    violations.push(format!("{name}   <- falls in from `{last_code}`"));
+                }
+                declared_global = None;
+                alt_entry = None;
+                terminated = true;
+                continue;
+            }
+            declared_global = None;
+            alt_entry = None;
+            if line.starts_with('.') {
+                terminated = true;
+                continue;
+            }
+            // An instruction's mnemonic is everything before its first operand; the emitter
+            // appends `;` comments after the operands, never before them.
+            let body = line.split(';').next().unwrap_or_default().trim();
+            let mnemonic = body.split([' ', '\t']).next().unwrap_or_default();
+            terminated = terminators.contains(&mnemonic)
+                || (mnemonic == syscall && exit_pending);
+            exit_pending = exit_selectors.contains(&body);
+            last_code = body;
+        }
+
+        violations.sort();
+        violations.dedup();
+        assert!(
+            violations.is_empty(),
+            "{arch:?}: these global labels are entered by fall-through, so `-dead_strip` \
+             (macOS) or `--gc-sections` (Linux) can collect them out from under their \
+             predecessor — branch to them explicitly, or use label_shared/.alt_entry:\n{}",
+            violations.join("\n")
+        );
+    }
+}
+
 
 /// `__rt_hash_slice` is emitted for EVERY supported target, and walks the source through the
 /// insertion-order iterator rather than addressing it by key.
@@ -492,7 +636,7 @@ fn serialize_and_json_encoders_emit_the_capacity_guard_for_their_own_architectur
         let target = Target::parse(name).unwrap();
         let aarch64 = name.contains("aarch64");
         let mut object = Emitter::new(target);
-        crate::codegen_support::runtime::system::emit_json_encode_object(&mut object);
+        crate::codegen_support::runtime::system::emit_json_encode_object(&mut object, false);
         let object = object.output();
         let mut array = Emitter::new(target);
         crate::codegen_support::runtime::system::emit_json_encode_array_dynamic(&mut array);
@@ -665,4 +809,33 @@ fn helper_body<'a>(asm: &'a str, name: &str) -> &'a str {
         .unwrap_or_else(|| panic!("missing helper {name}"));
     let rest = &asm[start + marker.len()..];
     rest.find(".globl ").map_or(rest, |end| &rest[..end])
+}
+
+/// Every target that emits the regex runtime defines `__rt_preg_rekey_named` once, and the
+/// `preg_match_all()` capture helper calls it for SET_ORDER rows and the PATTERN_ORDER table.
+#[test]
+fn preg_match_all_capture_rekeys_named_groups_on_every_target() {
+    for name in ["macos-aarch64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let mut emitter = Emitter::new(target);
+        emit_runtime(&mut emitter, RuntimeFeatures { regex: true, ..RuntimeFeatures::none() });
+        let asm = emitter.output();
+        let label = "__rt_preg_rekey_named:";
+        assert_eq!(asm.lines().filter(|line| *line == label).count(), 1, "{name}: {label}");
+        let calls = asm.lines().filter(|line| {
+            let line = line.trim_start();
+            (line.starts_with("bl ") || line.starts_with("call ")) && line.contains("__rt_preg_rekey_named")
+        }).count();
+        assert!(calls >= 2, "{name}: the capture helper calls the re-keyer for both orders ({calls})");
+        // `(*MARK)` names: SET_ORDER rows box theirs, PATTERN_ORDER notes each match's.
+        for helper in ["__rt_preg_mark_cell", "__rt_preg_mark_note"] {
+            let defined = format!("{helper}:");
+            assert_eq!(asm.lines().filter(|line| *line == defined).count(), 1, "{name}: {defined}");
+            let called = asm.lines().any(|line| {
+                let mut words = line.split_whitespace();
+                matches!(words.next(), Some("bl" | "call")) && words.next() == Some(helper)
+            });
+            assert!(called, "{name}: {helper} is called");
+        }
+    }
 }

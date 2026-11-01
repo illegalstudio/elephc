@@ -12,9 +12,8 @@
 //! - `$from` is declared `Mixed` because it is `array|string` in php-src; the check hook
 //!   enforces php-src's own `TypeError` wording at compile time, where elephc can already see
 //!   the argument's type.
-//! - The two-argument form needs string replacement VALUES: elephc reads them straight out of
-//!   the runtime hash instead of converting each one, so an array of non-string values is
-//!   rejected with an explicit diagnostic rather than silently mis-rendered.
+//! - The two-argument form applies PHP string coercion to boxed replacement values at runtime;
+//!   statically-string hashes keep their direct pointer/length fast path.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
@@ -33,8 +32,8 @@ builtin! {
 ///
 /// Argument types are inferred by the common registry dispatch path before this hook fires,
 /// and arity is pre-validated by the registry. The two-argument form requires an array
-/// `$from` whose values are strings, and the three-argument form requires a string `$from`;
-/// both mismatches carry php-src's own `TypeError` wording.
+/// `$from`, and the three-argument form requires a string `$from`; both shape mismatches carry
+/// php-src's own `TypeError` wording.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let from = cx.checker.infer_type(from_argument(cx.args), cx.env)?;
     if cx.args.len() >= 3 {
@@ -46,23 +45,35 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         }
         return Ok(PhpType::Str);
     }
-    let values = match &from {
-        PhpType::Array(values) => values.as_ref().clone(),
-        PhpType::AssocArray { value, .. } => value.as_ref().clone(),
+    match &from {
+        PhpType::Array(_) | PhpType::AssocArray { .. } => {}
+        // A gradual `$from` is what an untyped helper hands back, and the backend dispatches on
+        // the runtime tag for it. Twig's `CoreExtension::replace()` does
+        // `strtr($str ?? '', self::toArray($from))`, where `toArray()` is untyped.
+        ty if gradual_pairs_type(ty) => {}
         _ => {
             return Err(CompileError::new(
                 cx.span,
                 "strtr(): Argument #2 ($from) must be of type array, string given",
             ))
         }
-    };
-    if !matches!(values, PhpType::Str | PhpType::Never) {
-        return Err(CompileError::new(
-            cx.span,
-            "strtr() replacement values must be strings in AOT mode",
-        ));
     }
     Ok(PhpType::Str)
+}
+
+/// Returns whether `$from`'s type leaves the array/string choice to run time.
+///
+/// `Mixed` always does. A union qualifies only when one of its members IS an array, so a union of
+/// scalars keeps php-src's `TypeError` wording at compile time rather than deferring a call that
+/// can never be the two-argument form.
+fn gradual_pairs_type(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Mixed => true,
+        PhpType::Union(members) => members
+            .iter()
+            .any(|member| matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. })),
+        _ => false,
+    }
 }
 
 /// Returns the `$from` argument expression from a call's source-order argument list.

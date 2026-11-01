@@ -20,6 +20,15 @@ impl Parser {
         &mut self,
         attributes: Vec<EvalAttribute>,
     ) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.parse_interface_decl_stmt_with_attributes_and_doc_comment(attributes, None)
+    }
+
+    /// Parses an interface declaration with its attributes and the doc comment written before it.
+    pub(in crate::parser) fn parse_interface_decl_stmt_with_attributes_and_doc_comment(
+        &mut self,
+        attributes: Vec<EvalAttribute>,
+        doc_comment: Option<String>,
+    ) -> Result<Vec<EvalStmt>, EvalParseError> {
         let template_start = self.pos;
         let type_scope = self.type_parameters.len();
         let source_start_line = self.current_line();
@@ -35,6 +44,10 @@ impl Parser {
         let mut properties = Vec::new();
         let mut methods = Vec::new();
         let source_end_line = loop {
+            if matches!(self.current(), TokenKind::DocComment(_)) {
+                self.advance();
+                continue;
+            }
             if matches!(self.current(), TokenKind::RBrace) {
                 let source_end_line = self.current_line();
                 self.advance();
@@ -51,7 +64,8 @@ impl Parser {
                 name.clone(), parents, constants, properties, methods,
             )
             .with_source_location(EvalSourceLocation::new(source_start_line, source_end_line))
-            .with_attributes(attributes),
+            .with_attributes(attributes)
+            .with_doc_comment_option(doc_comment),
         );
         self.type_parameters.truncate(type_scope);
         self.type_parameter_origins.truncate(type_scope);
@@ -177,6 +191,9 @@ impl Parser {
     ) -> Result<EvalInterfaceMethod, EvalParseError> {
         let source_start_line = self.current_line();
         self.advance();
+        // PHP's return-by-reference marker. An interface may REQUIRE it, and an implementation
+        // that drops it is a fatal, so it is recorded rather than skipped.
+        let returns_by_ref = self.consume(TokenKind::Ampersand);
         let TokenKind::Ident(name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
         };
@@ -196,7 +213,10 @@ impl Parser {
         if !promoted_properties.is_empty() || !promoted_assignments.is_empty() {
             return Err(EvalParseError::UnsupportedConstruct);
         }
-        let return_type = self.parse_optional_return_type(EvalTypePosition::MethodReturn)?;
+        let return_type = super::parameters_types::eval_method_return_type_with_implicit(
+            &name,
+            self.parse_optional_return_type(EvalTypePosition::MethodReturn)?,
+        );
         let source_end_line = self.current_line();
         self.expect_semicolon()?;
         Ok(EvalInterfaceMethod::new(name, params)
@@ -207,7 +227,8 @@ impl Parser {
             .with_parameter_defaults(parameter_defaults)
             .with_parameter_by_ref_flags(parameter_is_by_ref)
             .with_parameter_variadic_flags(parameter_is_variadic)
-            .with_return_type(return_type))
+            .with_return_type(return_type)
+            .with_returns_by_ref(returns_by_ref))
     }
 
     /// Parses one interface property hook contract.

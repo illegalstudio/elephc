@@ -19,7 +19,7 @@ pub(super) fn capture_left_operand(
         let pins = pin_in_flight_owners(ctx, &[captured.value], span);
         return (captured, pins);
     }
-    if ctx.classes.keys().any(|name| elephc_builtin_contract::lookup_class(name).is_some_and(|class| class.operators.is_some())) {
+    if ctx.program_has_operator_classes() {
         let ty = ctx.builder.value_php_type(value.value);
         let captured = if matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
             ctx.emit_owned_value(Op::MixedClone, vec![value.value], None, ty,

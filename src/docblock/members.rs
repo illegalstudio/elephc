@@ -1,85 +1,113 @@
 //! Purpose:
-//! Applies generic PHPDoc to properties and methods, including method-local templates.
-//! Keeps class scope separate from templates bound by an individual method call.
+//! Shared rules for deciding which PHPDoc templates and annotations a function adopts.
 //!
 //! Called from:
-//! - `crate::docblock::apply_to_stmt()` for class, interface, trait and enum members.
+//! - `crate::docblock::doc_twin()` for free functions.
 //!
 //! Key details:
-//! - Native method templates take precedence over PHPDoc.
-//! - Ordinary member annotations only apply when they mention a class type parameter.
-//! - An explicit method template applies its parameter and return annotations like a function.
-//! - Promoted properties retain the annotated constructor parameter's storage type.
+//! - Method, class and constructor templates are NOT adopted (see the module doc of
+//!   `crate::docblock`): a PHPDoc template must never remove or rename a php symbol.
+//! - A function annotation only applies when it mentions one of the function's own templates.
+//! - A `@template` no read annotation mentions is not adopted.
 
-use std::collections::HashMap;
-
-use crate::parser::ast::{ClassMethod, ClassProperty, TypeExpr};
+use crate::parser::ast::TypeExpr;
 
 use super::DocBlock;
 
-/// Applies class-scoped member annotations and adopts each method's own template declaration.
-pub(super) fn apply(
-    class_params: &[String],
-    properties: &mut [ClassProperty],
-    methods: &mut [ClassMethod],
-    blocks: &HashMap<(u32, u32), DocBlock>,
-) {
-    for property in properties.iter_mut() {
-        if let Some(annotated) = blocks
-            .get(&(property.span.line, property.span.col))
-            .and_then(|block| block.var_type.as_ref())
-        {
-            apply_type(&mut property.type_expr, annotated, class_params, false);
-        }
-    }
-    let mut promoted = Vec::new();
-    for method in methods.iter_mut() {
-        let Some(block) = blocks.get(&(method.span.line, method.span.col)) else {
-            continue;
-        };
-        if !method.type_params.is_empty() {
-            continue;
-        }
-        let is_template = block.declares_generics();
-        if is_template {
-            method.type_params = block.type_params.clone();
-        }
-        let is_constructor = method.name.eq_ignore_ascii_case("__construct");
-        for (name, declared, _, _) in method.params.iter_mut() {
-            let Some(annotated) = block.params.get(name) else {
-                continue;
-            };
-            if apply_type(declared, annotated, class_params, is_template) && is_constructor {
-                promoted.push((name.clone(), annotated.clone()));
+/// The function's `@template` parameters that one of its read annotations actually mentions.
+///
+/// A template only PHPStan or Psalm vocabulary names (Symfony's `setParent()` declares
+/// `@template TNewParent` for a `@psalm-this-out static<TNewParent>` this reader does not read)
+/// binds nothing at a call, and adopting it would still turn the method into a template whose
+/// instantiation copies `static` out of its class. A parameter a kept one's bound or default
+/// names is kept with it.
+pub(super) fn mentioned_templates(
+    block: &DocBlock,
+    params: &[(String, Option<TypeExpr>, Option<crate::parser::ast::Expr>, bool)],
+    variadic: Option<&String>,
+    variadic_type: Option<&TypeExpr>,
+    return_type: Option<&TypeExpr>,
+) -> Vec<crate::parser::ast::TypeParam> {
+    let all: Vec<String> = block.type_params.iter().map(|param| param.name.clone()).collect();
+    let annotations = params
+        .iter()
+        .map(|(name, ..)| name)
+        .chain(variadic)
+        .filter_map(|name| block.params.get(name))
+        // A return annotation is read only where it is adopted (see `apply_stored_type`).
+        .chain(block.return_type.as_ref().filter(|ty| mentions_directly(ty, &all)))
+        // Written types count too: `/** @template T */ function id(T $v): T` names it natively.
+        .chain(params.iter().filter_map(|(_, ty, _, _)| ty.as_ref()))
+        .chain(variadic_type)
+        .chain(return_type);
+    let mut kept: Vec<String> = Vec::new();
+    for annotated in annotations {
+        for name in &all {
+            if !kept.contains(name) && annotated.mentions_type_param(std::slice::from_ref(name)) {
+                kept.push(name.clone());
             }
         }
-        if let Some(annotated) = method
-            .variadic
-            .as_ref()
-            .and_then(|name| block.params.get(name))
-        {
-            apply_type(&mut method.variadic_type, annotated, class_params, is_template);
+    }
+    loop {
+        let before = kept.len();
+        for param in &block.type_params {
+            if !kept.contains(&param.name) {
+                continue;
+            }
+            for name in &all {
+                let named = param.bound.iter().chain(param.default.iter())
+                    .any(|ty| ty.mentions_type_param(std::slice::from_ref(name)));
+                if named && !kept.contains(name) {
+                    kept.push(name.clone());
+                }
+            }
         }
-        if let Some(annotated) = &block.return_type {
-            apply_type(&mut method.return_type, annotated, class_params, is_template);
+        if kept.len() == before {
+            break;
         }
     }
-    // The parser creates a promoted parameter and its property separately. Both must agree.
-    for property in properties.iter_mut().filter(|property| property.is_promoted) {
-        if let Some((_, annotated)) = promoted.iter().find(|(name, _)| *name == property.name) {
-            property.type_expr = Some(annotated.clone());
+    block
+        .type_params
+        .iter()
+        .filter(|param| kept.contains(&param.name))
+        .cloned()
+        .collect()
+}
+
+/// Adopts an annotation on a position the BODY fills (a return, a property) only where it
+/// names a type parameter directly: `T`, `?T`, `T|null`.
+///
+/// Inside a container (`@return array<T>`) the annotation would fix the element storage of
+/// values the body builds from untyped data — Symfony's `getAttributesOfType()` collects
+/// `$this->attributes` into an `array` declared `@return array<T>`, refused as "the element
+/// storage differs". php reads the written type there, so that is what is kept. A parameter is
+/// different: its type is bound FROM the argument, so `@param array<T> $items` stays adopted.
+pub(super) fn apply_stored_type(
+    declared: &mut Option<TypeExpr>,
+    annotated: &TypeExpr,
+    in_scope: &[String],
+) -> bool {
+    if !mentions_directly(annotated, in_scope) {
+        return false;
+    }
+    apply_type(declared, annotated, in_scope)
+}
+
+/// Whether `ty` names one of `params` outside every container.
+pub(super) fn mentions_directly(ty: &TypeExpr, params: &[String]) -> bool {
+    match ty {
+        TypeExpr::Named(_) => ty.mentions_type_param(params),
+        TypeExpr::Nullable(inner) => mentions_directly(inner, params),
+        TypeExpr::Union(members) | TypeExpr::Intersection(members) => {
+            members.iter().any(|member| mentions_directly(member, params))
         }
+        _ => false,
     }
 }
 
-/// Applies template annotations, retaining the class-parameter gate for ordinary members.
-fn apply_type(
-    declared: &mut Option<TypeExpr>,
-    annotated: &TypeExpr,
-    class_params: &[String],
-    method_template: bool,
-) -> bool {
-    if !method_template && !annotated.mentions_type_param(class_params) {
+/// Adopts an annotation only where it mentions a type parameter in scope.
+pub(super) fn apply_type(declared: &mut Option<TypeExpr>, annotated: &TypeExpr, in_scope: &[String]) -> bool {
+    if !annotated.mentions_type_param(in_scope) {
         return false;
     }
     *declared = Some(annotated.clone());

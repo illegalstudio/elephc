@@ -32,6 +32,7 @@ const SEEK_FAILED_SUFFIX: &str = " in the stream\n";
 pub const FILE_GET_CONTENTS_SEEK_MESSAGES: &[(&str, &str)] = &[
     ("_diag_fgc_seek_prefix_msg", SEEK_FAILED_PREFIX),
     ("_diag_fgc_seek_suffix_msg", SEEK_FAILED_SUFFIX),
+    ("_diag_fgc_unseekable_msg", "Warning: file_get_contents(): Stream does not support seeking\n"),
 ];
 
 /// Emits `__rt_file_get_contents_range` for the active target.

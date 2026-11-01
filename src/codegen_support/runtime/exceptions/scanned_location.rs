@@ -22,7 +22,7 @@ pub(super) fn emit_setter(emitter: &mut Emitter) {
             emitter.instruction("cbz x0, __rt_tokenizer_location_done");        // an invalid internal receiver has no writable metadata
             // -- resolve compact or ordinary Throwable metadata storage --
             emitter.instruction("ldurb w9, [x0, #-8]");                         // inspect the physical heap kind
-            emitter.instruction("mov x10, #32");                                // compact Throwables reserve the fixed creation-line word
+            emitter.instruction(&format!("mov x10, #{}", crate::codegen_support::throwable_layout::LINE_OFFSET)); // compact Throwables keep the creation line in their declared `line` slot
             emitter.instruction("cmp w9, #6");                                  // kind six is the compact Throwable payload
             emitter.instruction("b.eq __rt_tokenizer_location_store");          // preserve the compact storage layout
             emitter.instruction("ldr x9, [x0]");                                // ordinary objects carry a runtime class id
@@ -43,7 +43,7 @@ pub(super) fn emit_setter(emitter: &mut Emitter) {
             emitter.instruction("jz __rt_tokenizer_location_done");             // skip the metadata write for a missing object
             // -- resolve compact or ordinary Throwable metadata storage --
             emitter.instruction("movzx r9, BYTE PTR [rax - 8]");                // inspect the physical heap kind
-            emitter.instruction("mov r10, 32");                                 // compact Throwables reserve the fixed creation-line word
+            emitter.instruction(&format!("mov r10, {}", crate::codegen_support::throwable_layout::LINE_OFFSET)); // compact Throwables keep the creation line in their declared `line` slot
             emitter.instruction("cmp r9, 6");                                   // kind six is the compact Throwable payload
             emitter.instruction("je __rt_tokenizer_location_store");            // preserve the compact storage layout
             emitter.instruction("mov r9, QWORD PTR [rax]");                     // resolve the ordinary runtime class id

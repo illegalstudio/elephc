@@ -92,7 +92,7 @@ fn emit_strtr_int_key_len_aarch64(emitter: &mut Emitter) {
 /// - Input: `x0` = pairs hash, `x1` = position pointer, `x2` = remaining bytes,
 ///   `x3` = shortest usable key length, `x4` = longest usable key length.
 /// - Output: `x0` = matched key length (`0` when nothing matched), `x1` = replacement
-///   pointer, `x2` = replacement length.
+///   pointer, `x2` = replacement length. `x5` selects inline-Mixed value coercion.
 fn emit_strtr_probe_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: strtr_probe ---");
@@ -104,6 +104,7 @@ fn emit_strtr_probe_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save the pairs hash across the lookup calls
     emitter.instruction("str x1, [sp, #8]");                                    // save the probed subject position
     emitter.instruction("str x3, [sp, #16]");                                   // save the shortest usable key length
+    emitter.instruction("str x5, [sp, #32]");                                   // remember whether hash values use inline Mixed payloads
     emitter.instruction("cmp x4, x2");                                          // does the longest key still fit the remaining subject?
     emitter.instruction("csel x5, x2, x4, hi");                                 // clamp the first probed length to what remains
     emitter.instruction("str x5, [sp, #24]");                                   // save the current candidate key length
@@ -125,6 +126,11 @@ fn emit_strtr_probe_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_strtr_probe_loop");                             // keep probing shorter keys
 
     emitter.label("__rt_strtr_probe_hit");
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the inline-value conversion flag
+    emitter.instruction("cbz x9, __rt_strtr_probe_raw_hit");                    // statically-string hashes already returned a pointer/length pair
+    emitter.instruction("mov x0, x3");                                          // pass the inline hash value tag to PHP string coercion
+    emitter.instruction("bl __rt_value_cast_string");                           // x1/x2 = coerced replacement pointer and length
+    emitter.label("__rt_strtr_probe_raw_hit");
     emitter.instruction("ldr x0, [sp, #24]");                                   // report the matched key length without disturbing the replacement pair
     emitter.instruction("b __rt_strtr_probe_done");                             // the probe is finished
 
@@ -241,6 +247,8 @@ fn emit_strtr_hash_aarch64(emitter: &mut Emitter) {
     //   [sp, #64]  = scan position inside the subject
     //   [sp, #72]  = owned result pointer
     //   [sp, #80]  = owned result length
+    //   [sp, #88]  = inline-Mixed value conversion flag
+    //   [sp, #96]  = converted replacement pointer pending release
     //   [sp, #112] = saved x29/x30
     emitter.instruction("sub sp, sp, #128");                                    // allocate the replacement frame
     emitter.instruction("stp x29, x30, [sp, #112]");                            // save the frame pointer and return address across the helper calls
@@ -248,6 +256,7 @@ fn emit_strtr_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save the pairs hash
     emitter.instruction("str x1, [sp, #8]");                                    // save the subject pointer
     emitter.instruction("str x2, [sp, #16]");                                   // save the subject length
+    emitter.instruction("str x3, [sp, #88]");                                   // save whether replacement values need runtime string coercion
     emitter.instruction("str xzr, [sp, #40]");                                  // start the hash walk from the head entry
     emitter.instruction("mov x9, #-1");                                         // seed the shortest key length with the largest possible value
     emitter.instruction("lsr x9, x9, #1");                                      // PHP_INT_MAX is the neutral element for the minimum
@@ -302,8 +311,10 @@ fn emit_strtr_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("sub x2, x10, x9");                                     // tell the probe how many subject bytes remain
     emitter.instruction("ldr x3, [sp, #24]");                                   // pass the shortest usable key length
     emitter.instruction("mov x4, x11");                                         // pass the longest usable key length
+    emitter.instruction("ldr x5, [sp, #88]");                                   // pass the inline-value conversion flag
     emitter.instruction("bl __rt_strtr_probe");                                 // x0 = matched key length, x2 = replacement length
     emitter.instruction("cbz x0, __rt_strtr_hash_measure_plain");               // no key matched here, so this byte is copied verbatim
+    emitter.instruction("str x1, [sp, #96]");                                   // keep any owned coerced replacement until its length is consumed
     emitter.instruction("ldr x9, [sp, #64]");                                   // reload the scan position
     emitter.instruction("add x9, x9, x0");                                      // php-src resumes after the matched key, never re-substituting
     emitter.instruction("str x9, [sp, #64]");                                   // publish the advanced scan position
@@ -311,6 +322,10 @@ fn emit_strtr_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("adds x10, x10, x2");                                   // the replacement contributes its own length
     emitter.instruction("b.cs __rt_strtr_hash_overflow");                       // reject a wrapped size instead of reserving a too-small destination
     emitter.instruction("str x10, [sp, #48]");                                  // publish the measured result length
+    emitter.instruction("ldr x9, [sp, #88]");                                   // did the probe coerce an inline replacement?
+    emitter.instruction("cbz x9, __rt_strtr_hash_measure");                     // raw string hash values are borrowed and need no release
+    emitter.instruction("ldr x0, [sp, #96]");                                   // release a persisted string; scratch results are ignored safely
+    emitter.instruction("bl __rt_heap_free_safe");
     emitter.instruction("b __rt_strtr_hash_measure");                           // measure the next subject position
 
     emitter.label("__rt_strtr_hash_measure_plain");
@@ -327,6 +342,15 @@ fn emit_strtr_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #48]");                                   // request exactly the measured result size
     emitter.instruction("bl __rt_concat_reserve");                              // reserve scratch or heap storage for the replaced result
     emitter.instruction("str x0, [sp, #56]");                                   // save the reservation start
+    // CLAIM the reservation before the writing pass: a replacement coerced from a non-string
+    // value (`__rt_value_cast_string`, an int in `['%l' => $line]`) is spelled into the same
+    // concat scratch, at the offset the reservation did not advance, and it overwrote the first
+    // bytes of the result (`file://` came back as `1ile://`). Publishing is idempotent, so the
+    // closing publish below still leaves the offset right past the result.
+    emitter.instruction("mov x1, x0");                                          // the reservation start is the result pointer to claim
+    emitter.instruction("ldr x2, [sp, #48]");                                   // the measured size is the claimed length
+    emitter.instruction("bl __rt_concat_publish");                              // advance the scratch offset past the reservation now
+    emitter.instruction("ldr x0, [sp, #56]");                                   // reload the reservation start
     emitter.instruction("str x0, [sp, #48]");                                   // the destination cursor starts at the reservation
     emitter.instruction("str xzr, [sp, #64]");                                  // restart the scan for the writing pass
 
@@ -344,8 +368,10 @@ fn emit_strtr_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("sub x2, x10, x9");                                     // tell the probe how many subject bytes remain
     emitter.instruction("ldr x3, [sp, #24]");                                   // pass the shortest usable key length
     emitter.instruction("mov x4, x11");                                         // pass the longest usable key length
+    emitter.instruction("ldr x5, [sp, #88]");                                   // pass the inline-value conversion flag
     emitter.instruction("bl __rt_strtr_probe");                                 // x0 = matched key length, x1/x2 = replacement pair
     emitter.instruction("cbz x0, __rt_strtr_hash_write_plain");                 // no key matched here, so this byte is copied verbatim
+    emitter.instruction("str x1, [sp, #96]");                                   // keep any owned coerced replacement through the copy loop
     emitter.instruction("ldr x9, [sp, #64]");                                   // reload the scan position
     emitter.instruction("add x9, x9, x0");                                      // php-src resumes after the matched key, never re-substituting
     emitter.instruction("str x9, [sp, #64]");                                   // publish the advanced scan position
@@ -363,6 +389,10 @@ fn emit_strtr_hash_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_strtr_hash_copy_done");
     emitter.instruction("add x12, x12, x2");                                    // advance the destination cursor past the replacement
     emitter.instruction("str x12, [sp, #48]");                                  // publish the advanced destination cursor
+    emitter.instruction("ldr x9, [sp, #88]");                                   // did the probe coerce an inline replacement?
+    emitter.instruction("cbz x9, __rt_strtr_hash_write");                       // raw string hash values are borrowed and need no release
+    emitter.instruction("ldr x0, [sp, #96]");                                   // release a persisted string; scratch results are ignored safely
+    emitter.instruction("bl __rt_heap_free_safe");
     emitter.instruction("b __rt_strtr_hash_write");                             // rewrite the next subject position
 
     emitter.label("__rt_strtr_hash_write_plain");
@@ -404,7 +434,7 @@ fn emit_strtr_hash_aarch64(emitter: &mut Emitter) {
 /// is converted into an owned temporary hash, replaced through `__rt_strtr_hash`, and the
 /// temporary is released once the result has been copied into its own storage.
 ///
-/// - Input: `x0` = indexed array, `x1`/`x2` = subject.
+/// - Input: `x0` = indexed array, `x1`/`x2` = subject, `x3` = inline-value flag.
 /// - Output: `x1`/`x2` = owned replaced string.
 fn emit_strtr_array_aarch64(emitter: &mut Emitter) {
     emitter.blank();
@@ -415,9 +445,11 @@ fn emit_strtr_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save the frame pointer and return address across the helper calls
     emitter.instruction("add x29, sp, #32");                                    // establish the indexed-pairs helper frame pointer
     emitter.instruction("stp x1, x2, [sp]");                                    // save the borrowed subject across the conversion
+    emitter.instruction("str x3, [sp, #24]");                                   // preserve the inline-value flag across array-to-hash conversion
     emitter.instruction("bl __rt_array_to_hash");                               // build the owned {0: e0, 1: e1, ...} pair hash
     emitter.instruction("str x0, [sp, #16]");                                   // save the temporary pair hash for release
     emitter.instruction("ldp x1, x2, [sp]");                                    // restore the borrowed subject
+    emitter.instruction("ldr x3, [sp, #24]");                                   // restore the inline-value flag for the hash helper
     emitter.instruction("bl __rt_strtr_hash");                                  // run the ordinary pair-form replacement
     emitter.instruction("stp x1, x2, [sp]");                                    // save the owned result across the temporary release
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the temporary pair hash
@@ -466,7 +498,7 @@ fn emit_strtr_int_key_len_x86_64(emitter: &mut Emitter) {
 /// - Input: `rdi` = pairs hash, `rsi` = position pointer, `rdx` = remaining bytes,
 ///   `rcx` = shortest usable key length, `r8` = longest usable key length.
 /// - Output: `rax` = matched key length (`0` when nothing matched), `rdi` = replacement
-///   pointer, `rsi` = replacement length.
+///   pointer, `rsi` = replacement length. `r9` selects inline-Mixed value coercion.
 fn emit_strtr_probe_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: strtr_probe ---");
@@ -478,6 +510,7 @@ fn emit_strtr_probe_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], rdi");                       // save the pairs hash across the lookup calls
     emitter.instruction("mov QWORD PTR [rbp - 40], rsi");                       // save the probed subject position
     emitter.instruction("mov QWORD PTR [rbp - 48], rcx");                       // save the shortest usable key length
+    emitter.instruction("mov QWORD PTR [rbp - 64], r9");                        // remember whether hash values use inline Mixed payloads
     emitter.instruction("mov r9, r8");                                          // start from the longest usable key length
     emitter.instruction("cmp r9, rdx");                                         // does the longest key still fit the remaining subject?
     emitter.instruction("cmova r9, rdx");                                       // clamp the first probed length to what remains
@@ -501,6 +534,14 @@ fn emit_strtr_probe_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_strtr_probe_loop_x86");                       // keep probing shorter keys
 
     emitter.label("__rt_strtr_probe_hit_x86");
+    emitter.instruction("cmp QWORD PTR [rbp - 64], 0");                         // do hash values require runtime string coercion?
+    emitter.instruction("je __rt_strtr_probe_raw_hit_x86");                     // statically-string hashes already returned a pointer/length pair
+    emitter.instruction("mov rax, rcx");                                        // pass the inline hash value tag in the coercion result register
+    emitter.instruction("mov rdx, rsi");                                        // pass the inline hash value high payload word
+    emitter.instruction("call __rt_value_cast_string");                         // rax/rdx = coerced replacement pointer and length
+    emitter.instruction("mov rdi, rax");                                        // restore the probe's replacement pointer result register
+    emitter.instruction("mov rsi, rdx");                                        // restore the probe's replacement length result register
+    emitter.label("__rt_strtr_probe_raw_hit_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // report the matched key length without disturbing the replacement pair
     emitter.instruction("jmp __rt_strtr_probe_done_x86");                       // the probe is finished
 
@@ -608,12 +649,15 @@ fn emit_strtr_hash_x86_64(emitter: &mut Emitter) {
     //   [rbp - 96]  = scan position inside the subject
     //   [rbp - 104] = owned result pointer
     //   [rbp - 112] = owned result length
+    //   [rbp - 120] = inline-Mixed value conversion flag
+    //   [rbp - 128] = converted replacement pointer pending release
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer across the helper calls
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the replacement state
-    emitter.instruction("sub rsp, 112");                                        // reserve aligned spill slots for the replacement state
+    emitter.instruction("sub rsp, 128");                                        // reserve aligned spill slots for the replacement state
     emitter.instruction("mov QWORD PTR [rbp - 32], rdi");                       // save the pairs hash
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the subject pointer
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save the subject length
+    emitter.instruction("mov QWORD PTR [rbp - 120], rcx");                      // save whether replacement values need runtime string coercion
     emitter.instruction("mov QWORD PTR [rbp - 72], 0");                         // start the hash walk from the head entry
     emitter.instruction("mov r9, 0x7fffffffffffffff");                          // seed the shortest key length with PHP_INT_MAX
     emitter.instruction("mov QWORD PTR [rbp - 56], r9");                        // publish the seeded shortest key length
@@ -668,9 +712,11 @@ fn emit_strtr_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rdx, r9");                                         // tell the probe how many subject bytes remain
     emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // pass the shortest usable key length
     emitter.instruction("mov r8, r11");                                         // pass the longest usable key length
+    emitter.instruction("mov r9, QWORD PTR [rbp - 120]");                       // pass the inline-value conversion flag
     emitter.instruction("call __rt_strtr_probe");                               // rax = matched key length, rsi = replacement length
     emitter.instruction("test rax, rax");                                       // did any replacement key match here?
     emitter.instruction("jz __rt_strtr_hash_measure_plain_x86");                // no key matched here, so this byte is copied verbatim
+    emitter.instruction("mov QWORD PTR [rbp - 128], rdi");                      // keep any owned coerced replacement until its length is consumed
     emitter.instruction("mov r9, QWORD PTR [rbp - 96]");                        // reload the scan position
     emitter.instruction("add r9, rax");                                         // php-src resumes after the matched key, never re-substituting
     emitter.instruction("mov QWORD PTR [rbp - 96], r9");                        // publish the advanced scan position
@@ -678,6 +724,10 @@ fn emit_strtr_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r10, rsi");                                        // the replacement contributes its own length
     emitter.instruction("jc __rt_strtr_hash_overflow_x86");                     // reject a wrapped size instead of reserving a too-small destination
     emitter.instruction("mov QWORD PTR [rbp - 80], r10");                       // publish the measured result length
+    emitter.instruction("cmp QWORD PTR [rbp - 120], 0");                        // did the probe coerce an inline replacement?
+    emitter.instruction("je __rt_strtr_hash_measure_x86");                      // raw string hash values are borrowed and need no release
+    emitter.instruction("mov rax, QWORD PTR [rbp - 128]");                      // release a persisted string; scratch results are ignored safely
+    emitter.instruction("call __rt_heap_free_safe");
     emitter.instruction("jmp __rt_strtr_hash_measure_x86");                     // measure the next subject position
 
     emitter.label("__rt_strtr_hash_measure_plain_x86");
@@ -694,6 +744,10 @@ fn emit_strtr_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // request exactly the measured result size
     emitter.instruction("call __rt_concat_reserve");                            // reserve scratch or heap storage for the replaced result
     emitter.instruction("mov QWORD PTR [rbp - 88], rax");                       // save the reservation start
+    // CLAIM the reservation before the writing pass (see the AArch64 helper).
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 80]");                       // the measured size is the claimed length
+    emitter.instruction("call __rt_concat_publish");                            // advance the scratch offset past the reservation now
+    emitter.instruction("mov rax, QWORD PTR [rbp - 88]");                       // reload the reservation start
     emitter.instruction("mov QWORD PTR [rbp - 80], rax");                       // the destination cursor starts at the reservation
     emitter.instruction("mov QWORD PTR [rbp - 96], 0");                         // restart the scan for the writing pass
 
@@ -713,9 +767,11 @@ fn emit_strtr_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rdx, r9");                                         // tell the probe how many subject bytes remain
     emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // pass the shortest usable key length
     emitter.instruction("mov r8, r11");                                         // pass the longest usable key length
+    emitter.instruction("mov r9, QWORD PTR [rbp - 120]");                       // pass the inline-value conversion flag
     emitter.instruction("call __rt_strtr_probe");                               // rax = matched key length, rdi/rsi = replacement pair
     emitter.instruction("test rax, rax");                                       // did any replacement key match here?
     emitter.instruction("jz __rt_strtr_hash_write_plain_x86");                  // no key matched here, so this byte is copied verbatim
+    emitter.instruction("mov QWORD PTR [rbp - 128], rdi");                      // keep any owned coerced replacement through the copy loop
     emitter.instruction("mov r9, QWORD PTR [rbp - 96]");                        // reload the scan position
     emitter.instruction("add r9, rax");                                         // php-src resumes after the matched key, never re-substituting
     emitter.instruction("mov QWORD PTR [rbp - 96], r9");                        // publish the advanced scan position
@@ -733,6 +789,10 @@ fn emit_strtr_hash_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_strtr_hash_copy_done_x86");
     emitter.instruction("add r10, rsi");                                        // advance the destination cursor past the replacement
     emitter.instruction("mov QWORD PTR [rbp - 80], r10");                       // publish the advanced destination cursor
+    emitter.instruction("cmp QWORD PTR [rbp - 120], 0");                        // did the probe coerce an inline replacement?
+    emitter.instruction("je __rt_strtr_hash_write_x86");                        // raw string hash values are borrowed and need no release
+    emitter.instruction("mov rax, QWORD PTR [rbp - 128]");                      // release a persisted string; scratch results are ignored safely
+    emitter.instruction("call __rt_heap_free_safe");
     emitter.instruction("jmp __rt_strtr_hash_write_x86");                       // rewrite the next subject position
 
     emitter.label("__rt_strtr_hash_write_plain_x86");
@@ -759,7 +819,7 @@ fn emit_strtr_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_heap_free_safe");                            // release a heap-backed reservation; concat-scratch pointers are skipped
     emitter.instruction("mov rax, QWORD PTR [rbp - 104]");                      // restore the owned result pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 112]");                      // restore the owned result length
-    emitter.instruction("add rsp, 112");                                        // release the replacement frame
+    emitter.instruction("add rsp, 128");                                        // release the replacement frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the replaced string as a PHP string pair
 
@@ -770,7 +830,7 @@ fn emit_strtr_hash_x86_64(emitter: &mut Emitter) {
 
 /// Emits the x86_64 `__rt_strtr_array` helper for an indexed-array `$pairs` argument.
 ///
-/// - Input: `rdi` = indexed array, `rax`/`rdx` = subject.
+/// - Input: `rdi` = indexed array, `rax`/`rdx` = subject, `rcx` = inline-value flag.
 /// - Output: `rax`/`rdx` = owned replaced string.
 fn emit_strtr_array_x86_64(emitter: &mut Emitter) {
     emitter.blank();
@@ -779,14 +839,16 @@ fn emit_strtr_array_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer across the helper calls
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the borrowed subject
-    emitter.instruction("sub rsp, 48");                                         // reserve aligned spill slots for the subject and temporary hash
+    emitter.instruction("sub rsp, 64");                                         // reserve aligned spill slots for the subject, flag, and temporary hash
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the borrowed subject pointer across the conversion
     emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // save the borrowed subject length across the conversion
+    emitter.instruction("mov QWORD PTR [rbp - 56], rcx");                       // preserve the inline-value flag across array-to-hash conversion
     emitter.instruction("call __rt_array_to_hash");                             // build the owned {0: e0, 1: e1, ...} pair hash
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the temporary pair hash for release
     emitter.instruction("mov rdi, rax");                                        // pass the temporary pair hash to the replacement helper
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // restore the borrowed subject pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // restore the borrowed subject length
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // restore the inline-value flag for the hash helper
     emitter.instruction("call __rt_strtr_hash");                                // run the ordinary pair-form replacement
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the owned result pointer across the temporary release
     emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // save the owned result length across the temporary release
@@ -794,7 +856,7 @@ fn emit_strtr_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_hash_free_deep");                            // release the temporary pair hash and its persisted values
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // restore the owned result pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // restore the owned result length
-    emitter.instruction("add rsp, 48");                                         // release the conversion frame
+    emitter.instruction("add rsp, 64");                                         // release the conversion frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the replaced string as a PHP string pair
 }

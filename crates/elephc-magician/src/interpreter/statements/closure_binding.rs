@@ -43,6 +43,13 @@ pub(super) fn eval_closure_from_callable(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut args = bind_evaluated_function_args(&[String::from("callback")], evaluated_args)?;
     let callback = args.pop().ok_or(EvalStatus::RuntimeFatal)?;
+    // A compiled Closure is already what php hands back -- the same object. The normalizer has
+    // no shape for a compiled descriptor and answered `function "" not found`, which is how
+    // Twig's `ReflectionCallable` failed on a filter whose callable is a closure. A fresh cell
+    // over the same descriptor keeps `===` true and leaves the argument's ownership alone.
+    if values.type_tag(callback)? == EVAL_TAG_CALLABLE {
+        return values.copy_value(callback);
+    }
     let callable = match lexical_scope {
         Some(scope) => eval_callable_from_scope(callback.borrowed(), context, scope, values),
         None => eval_callable(callback.borrowed(), context, values),
@@ -59,7 +66,29 @@ pub(super) fn eval_closure_from_callable(
         Err(status) => return Err(status),
     };
     let callable = callable.into_callable_transferring_receiver();
+    // With no lexical scope, `fromCallable` was reached through callable dispatch --
+    // `$factory(...$arguments)` with the factory `['Closure', 'fromCallable']`, which is how
+    // Symfony builds its `container.getenv` service from `[service_container, 'getEnv']`. PHP
+    // checks visibility against the frame that made that call, and a compiled frame calling
+    // through a shared callable invoker publishes none: the class scope here is whatever outer
+    // interpreted frame happened to be running (`AbstractRecursivePass` during
+    // `lint:container`), which refused the container's own protected method. The target
+    // object's class stands in for the unknown caller, which errs towards accepting.
+    let stand_in_scope = match &callable {
+        EvaluatedCallable::ObjectMethod {
+            object,
+            native_class: None,
+            ..
+        } if lexical_scope.is_none() => runtime_object_class_name(*object, values).ok(),
+        _ => None,
+    };
+    if let Some(scope) = &stand_in_scope {
+        context.push_class_scope(scope.clone());
+    }
     let valid = eval_validate_closure_from_callable_callback(&callable, context, values);
+    if stand_in_scope.is_some() {
+        context.pop_class_scope();
+    }
     let mut target = eval_closure_object_target_from_callable(callable);
     let receiver = target.receiver_mut().copied();
     let result = valid.and_then(|()| eval_closure_object_from_target(target, context, values));
@@ -78,7 +107,12 @@ pub(super) fn eval_closure_from_callable(
 }
 
 /// Converts a normalized callable target into the storage used by eval Closure objects.
-pub(super) fn eval_closure_object_target_from_callable(
+///
+/// `pub(in crate::interpreter)`: `EXPR(...)` first-class-callable syntax on an arbitrary
+/// runtime value (`expressions::calls::first_class`) needs the exact same normalized-callable
+/// -> closure-target conversion `Closure::fromCallable()` uses here, rather than assuming every
+/// `EXPR` denotes an invokable object.
+pub(in crate::interpreter) fn eval_closure_object_target_from_callable(
     callable: EvaluatedCallable,
 ) -> EvalClosureObjectTarget {
     match callable {
@@ -101,6 +135,9 @@ pub(super) fn eval_closure_object_target_from_callable(
         EvaluatedCallable::InvokableObject { object } => {
             EvalClosureObjectTarget::InvokableObject { object }
         }
+        // Both callers hand a compiled descriptor back unchanged before converting (it already
+        // IS the Closure php returns), so this arm only keeps the match exhaustive.
+        EvaluatedCallable::NativeDescriptor { .. } => EvalClosureObjectTarget::Named(String::new()),
         EvaluatedCallable::ObjectMethod {
             object,
             method,
@@ -131,7 +168,10 @@ pub(super) fn eval_closure_object_target_from_callable(
 }
 
 /// Allocates a PHP-visible eval Closure object for one retained callable target.
-pub(super) fn eval_closure_object_from_target(
+///
+/// `pub(in crate::interpreter)`: shared with `expressions::calls::first_class` for the same
+/// reason as `eval_closure_object_target_from_callable` above.
+pub(in crate::interpreter) fn eval_closure_object_from_target(
     target: EvalClosureObjectTarget,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,

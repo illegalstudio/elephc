@@ -2,7 +2,7 @@
 title: "mysqli_info()"
 description: "Returns information about the last query, when the server supplies it."
 sidebar:
-  order: 139
+  order: 150
 ---
 
 ## mysqli_info()

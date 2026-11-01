@@ -8,7 +8,8 @@
 //! Key details:
 //! - Object inference depends on flattened class metadata, visibility, inheritance, and declared property types.
 
-use crate::errors::CompileError;
+use crate::errors::{CompileError, RuntimeFault};
+use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
 use crate::types::{PhpType, TypeEnv};
 
@@ -38,6 +39,9 @@ impl Checker {
                 return Ok(narrowed.clone());
             }
         }
+        let receiver_is_flow_narrowed = self
+            .flow_guard_env_key(object)
+            .is_some_and(|key| env.contains_key(&key));
         let obj_ty = self.infer_type(object, env)?;
         self.record_member_receiver_type(expr.span, &obj_ty);
         // A `?ptr<T>` reaches its fields like `ptr<T>`: the value is the bare address, and a
@@ -48,7 +52,8 @@ impl Checker {
         };
         let obj_ty = nullable_pointer.unwrap_or(obj_ty);
         if let PhpType::Object(class_name) = &obj_ty {
-            let inferred = self.infer_property_on_class_type(class_name, property, expr);
+            let inferred =
+                self.infer_property_on_class_type(class_name, property, object, expr);
             if inferred.is_err()
                 && self.closure_depth > 0
                 && matches!(object.kind, ExprKind::This)
@@ -59,7 +64,14 @@ impl Checker {
                 // runtime-shaped access whose validity and type depend on the bound receiver.
                 return Ok(PhpType::Mixed);
             }
-            return inferred;
+            let property_ty = inferred?;
+            if receiver_is_flow_narrowed {
+                self.flow_typed_property_accesses.insert(
+                    (self.current_loop_storage_scope.clone(), expr.span),
+                    property_ty.clone(),
+                );
+            }
+            return Ok(property_ty);
         }
         // Non-nullsafe property access on a nullable / union object type is
         // allowed when the union resolves to a single object class.
@@ -72,7 +84,8 @@ impl Checker {
             if let Ok(Some((class_name, nullable))) =
                 self.nullsafe_object_receiver(&obj_ty, expr, "property access")
             {
-                let property_ty = self.infer_property_on_class_type(&class_name, property, expr)?;
+                let property_ty =
+                    self.infer_property_on_class_type(&class_name, property, object, expr)?;
                 return if nullable {
                     Ok(self.normalize_union_type(vec![property_ty, PhpType::Void]))
                 } else {
@@ -80,7 +93,7 @@ impl Checker {
                 };
             }
             if let Some(class_name) = self.union_single_object_class(&obj_ty) {
-                return self.infer_property_on_class_type(&class_name, property, expr);
+                return self.infer_property_on_class_type(&class_name, property, object, expr);
             }
             // Union of two or more distinct object classes (`A|B`): the property
             // must exist on every object member; codegen dispatches on the runtime
@@ -89,11 +102,27 @@ impl Checker {
             if object_classes.len() >= 2 {
                 let mut property_types = Vec::with_capacity(object_classes.len());
                 for class_name in &object_classes {
-                    property_types.push(self.infer_property_on_class_type(class_name, property, expr)?);
+                    // One member lacking the property keeps the error's run-time-fault tag: an
+                    // autoloaded file compiles the read through `runtime_faults`' by-name helper,
+                    // where the other members answer it and the lacking one raises php's Warning
+                    // (`isset($mapping->enumType)` over `JoinColumnMapping|FieldMapping|...` in
+                    // Doctrine's `SchemaTool`, and `$AST->selectClause` over
+                    // `SelectStatement|DeleteStatement`).
+                    let property_ty =
+                        self.infer_property_on_class_type(class_name, property, object, expr)?;
+                    property_types.push(property_ty);
                 }
                 return Ok(self.normalize_union_type(property_types));
             }
-            // No object class at all: surface the strict diagnostic.
+            // No object class at all. A plain `->` read of a scalar union is a runtime-shaped
+            // access, not a type error: php warns and reads null, and the union can be a
+            // transient of the checker's own narrowing -- `$d instanceof BackedEnum &&
+            // !is_string($d = $d->value)` re-reads `$d->value` after `$d` took the enum's
+            // `int|string` value, and refusing it kept Route, RouteRegistrar and UrlGenerator
+            // out of the compiled program. Only the nullsafe form keeps the strict diagnostic.
+            if matches!(expr.kind, ExprKind::PropertyAccess { .. }) {
+                return Ok(PhpType::Mixed);
+            }
             self.nullsafe_object_receiver(&obj_ty, expr, "property access")?;
         }
         // A nested packed field is an embedded record: reading it yields the record's ADDRESS,
@@ -171,7 +200,8 @@ impl Checker {
         else {
             return Ok(PhpType::Void);
         };
-        let property_ty = self.infer_property_on_class_type(&class_name, property, expr)?;
+        let property_ty =
+            self.infer_property_on_class_type(&class_name, property, object, expr)?;
         if nullable {
             Ok(self.normalize_union_type(vec![property_ty, PhpType::Void]))
         } else {
@@ -200,12 +230,7 @@ impl Checker {
         }
 
         let property_ty = self.infer_type(property, env)?;
-        // NOT relaxed for `int|float`, deliberately. Accepting it here only moves the refusal:
-        // the lowering has no arm for a boxed runtime property name and answers
-        // `dynamic_prop_set with runtime property name PHP type Mixed`, which is the same gap a
-        // genuinely `mixed` name hits. The checker's message is the better one until the backend
-        // grows that arm.
-        if !matches!(property_ty, PhpType::Str | PhpType::Int | PhpType::Mixed) {
+        if !property_ty.is_dynamic_property_name() {
             return Err(CompileError::new(
                 property.span,
                 "Dynamic property name must be string or integer",
@@ -243,10 +268,81 @@ impl Checker {
         &self,
         class_name: &str,
         property: &str,
+        receiver: &Expr,
         expr: &Expr,
     ) -> Result<PhpType, CompileError> {
+        if class_name.trim_start_matches('\\').is_empty() {
+            return Ok(PhpType::Mixed);
+        }
         if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
             return Ok(PhpType::Mixed);
+        }
+        if let Some(property_ty) =
+            crate::types::checker::reflection_virtual_property_type_in(class_name, property, |c| {
+                self.classes.get(c).and_then(|info| info.parent.clone())
+            })
+        {
+            return Ok(property_ty);
+        }
+        if let Some(property_ty) = self.enum_interface_property_type(class_name, property) {
+            return Ok(property_ty);
+        }
+        if let Some(interface_info) = self.interfaces.get(class_name) {
+            if let Some(property_ty) = interface_info
+                .properties
+                .get(property)
+                .and_then(|contract| contract.get_type.clone())
+            {
+                return Ok(property_ty);
+            }
+            // The interface itself declares nothing, but an IMPLEMENTATION may — and a receiver
+            // typed as the interface holds one of those at run time. Same treatment the class
+            // branch gives a base whose descendant declares the property: the union of what they
+            // declare, made nullable for the implementation that does not.
+            //
+            // `ReflectionCaster` reads `$m->name` off a value narrowed to `\Reflector`, which every
+            // concrete Reflection class carries.
+            let mut implementor_types =
+                self.descendant_declared_property_types(class_name, property);
+            // A Reflection implementation's `name` / `class` is a virtual property, which no slot
+            // table lists: psysh's `SignatureFormatter` reads `$reflector->class` off a
+            // `\Reflector` it switched on `get_class()`.
+            for (implementor, _) in self.classes.iter() {
+                if !self.class_implements_interface(implementor, class_name) {
+                    continue;
+                }
+                if let Some(ty) = crate::types::checker::reflection_virtual_property_type_in(
+                    implementor,
+                    property,
+                    |c| self.classes.get(c).and_then(|info| info.parent.clone()),
+                ) {
+                    if !implementor_types.contains(&ty) {
+                        implementor_types.push(ty);
+                    }
+                }
+            }
+            if !implementor_types.is_empty() {
+                let mut members = implementor_types;
+                members.push(PhpType::Void);
+                return Ok(self.normalize_union_type(members));
+            }
+            // An implementation that answers undeclared reads itself (`__get`, or
+            // `#[\AllowDynamicProperties]`) makes the read the run-time object's to resolve:
+            // Carbon's language files read `$date->dayOfWeek` off a `CarbonInterface`, which only
+            // `Carbon::__get` serves. The value is whatever that hook returns. `CarbonInterface`
+            // declares `__get` itself, which answers even when no implementation is compiled
+            // (Carbon's class file can be deferred to the autoloader).
+            let interface_declares_get = interface_info.methods.contains_key("__get");
+            if interface_declares_get
+                || self.descendant_answers_undeclared_reads(class_name)
+                || self.null_probe_depth > 0
+            {
+                return Ok(PhpType::Mixed);
+            }
+            return Err(CompileError::new(
+                expr.span,
+                &format!("Undefined property: {}::{}", class_name, property),
+            ));
         }
         if let Some(class_info) = self.classes.get(class_name) {
             if let Some(visibility) = class_info.property_visibilities.get(property) {
@@ -270,7 +366,20 @@ impl Checker {
                     .get(property)
                     .map(String::as_str)
                     .unwrap_or(class_name);
-                if !self.can_access_member(declaring_class, visibility) {
+                let inaccessible_dead_this_branch = matches!(visibility, crate::parser::ast::Visibility::Protected)
+                    && matches!(receiver.kind, ExprKind::This)
+                    && self.current_class.as_deref().is_some_and(|current| {
+                        self.classes_are_instanceof_incompatible(current, declaring_class)
+                    });
+                if !self.can_access_member(declaring_class, visibility)
+                    && !inaccessible_dead_this_branch
+                {
+                    // An inaccessible declared property is read through __get when the
+                    // class provides that hook.  Do not expose the private slot type: the
+                    // caller observes the magic result, not the hidden storage.
+                    if let Some(sig) = class_info.methods.get("__get") {
+                        return Ok(sig.return_type.clone());
+                    }
                     return Err(CompileError::new(
                         expr.span,
                         &format!(
@@ -295,6 +404,12 @@ impl Checker {
             ) {
                 return Ok(PhpType::Mixed);
             }
+            // A class that also allows dynamic properties stores some names itself, and php reads
+            // an existing dynamic property without calling `__get`: guzzle's `FnStream` keeps
+            // its `_fn_*` callables that way behind a throwing `__get(): void`.
+            if class_info.allow_dynamic_properties && class_info.methods.contains_key("__get") {
+                return Ok(PhpType::Mixed);
+            }
             if let Some(sig) = class_info.methods.get("__get") {
                 return Ok(sig.return_type.clone());
             }
@@ -304,10 +419,46 @@ impl Checker {
                 // value is statically `Mixed` because we cannot infer it.
                 return Ok(PhpType::Mixed);
             }
+            // A class that does not declare the property, where a DESCENDANT does. The runtime
+            // receiver may be any of them, so the read's type is what they declare, made nullable
+            // for the case where it really is the base (PHP's undefined-property warning answers
+            // null there). Returning a bare `null` folded the whole access away and handed back
+            // null for an object that held a value — silently.
+            //
+            // `$event->controllerMetadata?->getAttributes('*')` over Symfony's `KernelEvent`
+            // hierarchy is the shape: only `ControllerArgumentsEvent` declares the property, and
+            // every caller passes one.
+            let descendant_types = self.descendant_declared_property_types(class_name, property);
+            if !descendant_types.is_empty() {
+                let mut members = descendant_types;
+                members.push(PhpType::Void);
+                return Ok(self.normalize_union_type(members));
+            }
+            // A descendant that answers undeclared reads itself: `DateTime::modify()` and
+            // `setDate()` are declared to return `DateTime`, and Carbon's `Modifiers` trait reads
+            // `$date->month` off that, which `Carbon::__get` serves at run time.
+            if self.descendant_answers_undeclared_reads(class_name) {
+                return Ok(PhpType::Mixed);
+            }
+            if self.null_probe_depth > 0 {
+                return Ok(PhpType::Void);
+            }
+            // A read php answers with a Warning and null when it runs, judged against this
+            // class and the descendants the checker knows; see `RuntimeFault::UndefinedProperty`.
             return Err(CompileError::new(
                 expr.span,
                 &format!("Undefined property: {}::{}", class_name, property),
-            ));
+            )
+            .with_runtime_fault(RuntimeFault::UndefinedProperty {
+                class: class_name.to_string(),
+                property: property.to_string(),
+            }));
+        }
+        if self.allows_absent_runtime_class() {
+            // PHP permits a declaration to name an absent class. In a function-like body that
+            // class can remain optional until the branch constructing an instance is executed;
+            // no class schema exists yet, so preserve the access as a gradual runtime dispatch.
+            return Ok(PhpType::Mixed);
         }
         if self.awaits_generic_instantiation(class_name) {
             // Resolved by this round, spliced by the next one. `Mixed` keeps the rest of this
@@ -318,6 +469,30 @@ impl Checker {
             expr.span,
             &format!("Undefined class: {}", class_name),
         ))
+    }
+
+    /// Returns the readonly property type guaranteed by PHP's enum interfaces.
+    ///
+    /// Enum case objects carry these properties even though reflection does not expose them as
+    /// declarations on the interfaces. Descendant interfaces retain the same guarantee because
+    /// only enum declarations may implement this hierarchy.
+    fn enum_interface_property_type(
+        &self,
+        interface_name: &str,
+        property: &str,
+    ) -> Option<PhpType> {
+        let interface_key = php_symbol_key(interface_name.trim_start_matches('\\'));
+        let is_unit_enum = interface_key == php_symbol_key("UnitEnum")
+            || self.interface_extends_interface(interface_name, "UnitEnum");
+        if is_unit_enum && property == "name" {
+            return Some(PhpType::Str);
+        }
+        let is_backed_enum = interface_key == php_symbol_key("BackedEnum")
+            || self.interface_extends_interface(interface_name, "BackedEnum");
+        if is_backed_enum && property == "value" {
+            return Some(PhpType::Union(vec![PhpType::Int, PhpType::Str]));
+        }
+        None
     }
 
     /// Returns precise SPL runtime storage metadata for callback-filter internals.
@@ -358,6 +533,13 @@ impl Checker {
                 let mut class_name = None;
                 let mut nullable = false;
                 for member in members {
+                    // `?Closure` is typed `callable|null`; its object is a `Closure`.
+                    let closure_class = PhpType::Object("Closure".to_string());
+                    let member = if matches!(member, PhpType::Callable) {
+                        &closure_class
+                    } else {
+                        member
+                    };
                     match member {
                         PhpType::Void => nullable = true,
                         PhpType::Object(candidate) => {
@@ -368,8 +550,8 @@ impl Checker {
                                 return Err(CompileError::new(
                                     expr.span,
                                     &format!(
-                                        "Nullsafe {} requires a single nullable object type",
-                                        context
+                                        "Nullsafe {} requires a single nullable object type, got {}",
+                                        context, obj_ty
                                     ),
                                 ));
                             }
@@ -378,7 +560,10 @@ impl Checker {
                         _ => {
                             return Err(CompileError::new(
                                 expr.span,
-                                &format!("Nullsafe {} requires an object or null", context),
+                                &format!(
+                                    "Nullsafe {} requires an object or null, got {}",
+                                    context, obj_ty
+                                ),
                             ));
                         }
                     }
@@ -387,7 +572,10 @@ impl Checker {
             }
             _ => Err(CompileError::new(
                 expr.span,
-                &format!("Nullsafe {} requires an object or null", context),
+                &format!(
+                    "Nullsafe {} requires an object or null, got {}",
+                    context, obj_ty
+                ),
             )),
         }
     }
@@ -468,7 +656,10 @@ impl Checker {
             return Err(CompileError::new(
                 expr.span,
                 &format!("Undefined class: {}", class_name),
-            ));
+            )
+            .with_runtime_fault(RuntimeFault::UnknownClass {
+                class: class_name.clone(),
+            }));
         };
         if let Some(visibility) = class_info.static_property_visibilities.get(property) {
             let declaring_class = class_info
@@ -488,17 +679,68 @@ impl Checker {
                 ));
             }
         }
+        // `isset(self::$p)` / `self::$p ?? $d` on a class without `$p` (Symfony's
+        // `HttpClientTrait` in a client that declares no `$emptyDefaults`) is php's plain `false`:
+        // the probe reads as null, and lowering answers it without touching storage.
+        let declared = class_info.static_properties.iter().any(|(name, _)| name == property);        if !declared && self.null_probe_depth > 0 && !self.eval_barrier_active {
+            return Ok(PhpType::Void);
+        }
         class_info
             .static_properties
             .iter()
             .find(|(name, _)| name == property)
             .map(|(_, ty)| ty.clone())
             .ok_or_else(|| {
-                CompileError::new(
+                let error = CompileError::new(
                     expr.span,
                     &format!("Undefined static property: {}::{}", class_name, property),
-                )
+                );
+                // `isset(self::$p)` answers false in php rather than throwing, so only a plain
+                // read is the `Error` the fault names.
+                if self.null_probe_depth > 0 {
+                    return error;
+                }
+                error.with_runtime_fault(RuntimeFault::UndefinedStaticProperty {
+                    class: class_name.clone(),
+                    property: property.to_string(),
+                })
             })
+    }
+
+    /// Infers a static-property read whose property name is computed at runtime.
+    pub(crate) fn infer_dynamic_static_property_access_type(
+        &mut self,
+        receiver: &StaticReceiver,
+        property: &Expr,
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        let name_ty = self.infer_type(property, env)?;
+        if !matches!(name_ty, PhpType::Str | PhpType::Mixed | PhpType::Int) {
+            return Err(CompileError::new(
+                property.span,
+                &format!("Dynamic static property name must be a string, got `{name_ty}`"),
+            ));
+        }
+        let class_name = self.resolve_static_property_receiver(receiver, expr)?;
+        let Some(class_info) = self.classes.get(&class_name) else {
+            return Err(CompileError::new(
+                expr.span,
+                "Dynamic static property access requires a statically-known class",
+            ));
+        };
+        let mut types = class_info.static_properties.iter().map(|(_, ty)| ty.clone());
+        let Some(first) = types.next() else {
+            return Err(CompileError::new(
+                expr.span,
+                &format!("Class {class_name} has no static properties"),
+            ));
+        };
+        if types.all(|ty| ty == first) {
+            Ok(first)
+        } else {
+            Ok(PhpType::Mixed)
+        }
     }
 
     /// Resolves a static property receiver to its class name.
@@ -546,14 +788,28 @@ impl Checker {
 
     /// Infers the type of `$this` inside a class method.
     ///
-    /// Errors if called from a static method or outside a class context.
-    /// Returns `PhpType::Object(current_class)` for valid contexts.
-    pub(crate) fn infer_this_type(&mut self, expr: &Expr) -> Result<PhpType, CompileError> {
+    /// Errors for a direct static-method use or outside an object-capable closure context.
+    /// Returns the flow-narrowed receiver type when an `instanceof` guard proves one, otherwise
+    /// a concrete current class or a gradual receiver for closures that may be bound later.
+    pub(crate) fn infer_this_type(
+        &mut self,
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        if let Some(narrowed) = env.get(Self::narrowed_this_env_key()) {
+            return Ok(narrowed.clone());
+        }
         if self.current_method_is_static {
-            return Err(CompileError::new(
-                expr.span,
-                "Cannot use $this inside a static method",
-            ));
+            if self.closure_depth == 0 {
+                return Err(CompileError::new(
+                    expr.span,
+                    "Cannot use $this inside a static method",
+                ));
+            }
+            // A non-static closure created by a static method can receive `$this`
+            // later through `Closure::bind`, `bindTo`, or `call`. Its eventual
+            // receiver class is unrelated to the lexical class.
+            return Ok(PhpType::Mixed);
         }
         if let Some(class_name) = &self.current_class {
             Ok(PhpType::Object(class_name.clone()))
@@ -593,5 +849,142 @@ impl Checker {
                 )
             })?;
         Ok(PhpType::Pointer(Some(normalized)))
+    }
+}
+
+impl Checker {
+    /// Collects the declared types of `property` on every class descending from `ancestor`.
+    ///
+    /// Used when the ancestor itself declares no such property: the receiver can only be one of
+    /// these descendants, so their declarations are the answer, rather than the `null` an
+    /// undeclared read would otherwise produce.
+    ///
+    /// Duplicates are dropped so a property declared identically down a long hierarchy does not
+    /// turn into a union of one type repeated.
+    /// Returns whether some class below `ancestor` serves undeclared property reads itself: it
+    /// has a `__get` (own or inherited) or allows dynamic properties.
+    pub(crate) fn descendant_answers_undeclared_reads(&self, ancestor: &str) -> bool {
+        self.classes.iter().any(|(name, info)| {
+            name.as_str() != ancestor
+                && (info.methods.contains_key("__get") || info.allow_dynamic_properties)
+                && self.class_descends_from(name, ancestor)
+        })
+    }
+
+    pub(crate) fn descendant_declared_property_types(
+        &self,
+        ancestor: &str,
+        property: &str,
+    ) -> Vec<PhpType> {
+        let mut types: Vec<PhpType> = Vec::new();
+        // Sorted, because the class table is a hash map and this function BUILDS A UNION from
+        // what it finds: an unordered walk would order the union's members differently from one
+        // compilation to the next, and the union's spelling reaches the emitted assembly.
+        // `compiler_determinism_tests` exists to catch exactly that.
+        let mut class_names: Vec<&String> = self.classes.keys().collect();
+        class_names.sort();
+        for name in class_names {
+            let Some(info) = self.classes.get(name) else {
+                continue;
+            };
+            if name.as_str() == ancestor {
+                continue;
+            }
+            if !self.class_descends_from(name, ancestor) {
+                continue;
+            }
+            let Some((_, (_, ty))) = info.visible_property(property) else {
+                continue;
+            };
+            if !types.contains(ty) {
+                types.push(ty.clone());
+            }
+        }
+        // A hierarchy usually REDECLARES the property with a narrower class — Symfony's
+        // `ControllerArgumentsMetadata extends ControllerMetadata` is the shape — and listing
+        // both would build a union of two object classes where one already describes the other.
+        // Keeping only the most general leaves a single object class, which is what a nullsafe
+        // call and a method dispatch can each resolve.
+        let general: Vec<PhpType> = types
+            .iter()
+            .filter(|candidate| {
+                let Some(candidate_class) = Self::single_object_class_name(candidate) else {
+                    return true;
+                };
+                !types.iter().any(|other| {
+                    Self::single_object_class_name(other).is_some_and(|other_class| {
+                        other_class != candidate_class
+                            && self.class_descends_from(candidate_class, other_class)
+                    })
+                })
+            })
+            .cloned()
+            .collect();
+        general
+    }
+
+    /// Names the one object class a declared property type describes, if it describes exactly one.
+    ///
+    /// A nullable declaration (`?Foo`) still describes one class; a union of two unrelated classes
+    /// describes none, and is left alone by the caller's collapse.
+    fn single_object_class_name(ty: &PhpType) -> Option<&str> {
+        match ty {
+            PhpType::Object(name) if !name.is_empty() => Some(name.as_str()),
+            PhpType::Union(members) => {
+                let mut found = None;
+                for member in members {
+                    match member {
+                        PhpType::Object(name) if !name.is_empty() => {
+                            if found.is_some() {
+                                return None;
+                            }
+                            found = Some(name.as_str());
+                        }
+                        PhpType::Void => {}
+                        _ => return None,
+                    }
+                }
+                found
+            }
+            _ => None,
+        }
+    }
+
+    /// Walks a class's parent chain looking for `ancestor`.
+    fn class_descends_from(&self, class_name: &str, ancestor: &str) -> bool {
+        let mut current = Some(class_name);
+        while let Some(name) = current {
+            let Some(info) = self.classes.get(name) else {
+                return false;
+            };
+            if name != class_name && name == ancestor {
+                return true;
+            }
+            // Implementing an interface is descending from it for this purpose: the property the
+            // caller reads is declared by the IMPLEMENTATION, which is exactly the class a
+            // receiver typed as the interface can hold at run time.
+            if info
+                .interfaces
+                .iter()
+                .any(|implemented| self.interface_satisfies(implemented, ancestor))
+            {
+                return true;
+            }
+            current = info.parent.as_deref();
+        }
+        false
+    }
+
+    /// Whether an interface IS the named one, or extends it.
+    fn interface_satisfies(&self, interface_name: &str, ancestor: &str) -> bool {
+        if interface_name == ancestor {
+            return true;
+        }
+        let Some(info) = self.interfaces.get(interface_name) else {
+            return false;
+        };
+        info.parents
+            .iter()
+            .any(|parent| self.interface_satisfies(parent, ancestor))
     }
 }

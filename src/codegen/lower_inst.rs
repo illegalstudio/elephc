@@ -17,8 +17,9 @@ use crate::codegen::{
 };
 use crate::intrinsics::{IntrinsicCall, IntrinsicCallKind};
 use crate::ir::{
-    BlockId, Builder, CmpPredicate, Function, FunctionParam, Immediate, InstId, Instruction,
-    IrType, LocalKind, LocalSlotId, Module, Op, Ownership, Terminator, ValueDef, ValueId,
+    BlockId, Builder, CmpPredicate, Function, FunctionParam, Immediate, InstId,
+    Instruction, IrType, LocalKind, LocalSlotId, NominalObjectBoundary, Op, Ownership,
+    Terminator, ValueDef, ValueId,
 };
 use crate::names::{
     function_symbol, ir_global_symbol, method_symbol, php_symbol_key,
@@ -44,6 +45,7 @@ pub(crate) mod builtins;
 pub(in crate::codegen) mod callables;
 mod callable_guards;
 mod callable_argument_normalizer;
+mod classlike_activation;
 pub(super) use callable_argument_normalizer::emit_callable_argument_normalizer;
 pub(super) use callable_argument_normalizer::CALLABLE_ARGUMENT_NORMALIZER;
 mod comparisons;
@@ -94,16 +96,22 @@ mod exception_instructions;
 mod fiber_methods;
 mod generator_instructions;
 mod globals_constants;
+pub(in crate::codegen) use globals_constants::{
+    lower_store_shared_global, lower_writeback_shared_global,
+};
 mod instruction_helpers;
 mod local_loads;
 pub(in crate::codegen) mod local_stores;
-mod method_call_types;
+pub(in crate::codegen) mod method_call_types;
+pub(in crate::codegen) mod arm_dedup;
 mod method_dispatch;
 mod method_intrinsics;
 mod method_resolution;
 #[cfg(test)]
 #[path = "lower_inst/null_parameter_guard_tests.rs"]
 mod null_parameter_guard_tests;
+mod outlined_dynamic_new;
+mod outlined_method_call;
 mod mixed_array_runtime;
 mod mixed_property_runtime;
 mod output_values;
@@ -115,7 +123,9 @@ mod throwable_methods;
 use array_access_runtime::*;
 use call_cleanup::*;
 use call_operands::*;
+use classlike_activation::*;
 use callable_descriptors::*;
+pub(in crate::codegen) use callables::lower_mixed_callable_descriptor_invoke_inline;
 use core_closures::*;
 use core_builtins::*;
 use core_includes::*;
@@ -135,6 +145,8 @@ use method_call_types::*;
 use method_dispatch::*;
 use method_intrinsics::*;
 use method_resolution::*;
+pub(in crate::codegen) use outlined_method_call::emit_mixed_method_call_helper;
+use outlined_method_call::*;
 use mixed_array_runtime::*;
 use mixed_property_runtime::*;
 use output_values::*;
@@ -149,11 +161,17 @@ pub(super) use call_operands::{
     load_value_to_first_int_arg, resolve_int_operand_to_result,
 };
 pub(in crate::codegen) use builtins::emit_count_countable_guard_from_result;
+pub(in crate::codegen) use builtins::arrays::union_type_guard::emit_shared_type_error_given_body;
+pub(in crate::codegen) use objects::emit_pending_property_guard_helpers;
+pub(in crate::codegen) use builtins::eval::emit_shared_eval_registration_helper;
+pub(in crate::codegen) use objects::emit_reflection_class_table;
+pub(in crate::codegen) use builtins::eval::emit_shared_eval_status_fail_cells_body;
 pub(in crate::codegen) use conversions::{
     emit_mixed_string_dispatch_from_result, MixedStringContextMode,
 };
 pub(super) use core_closures::function_signature_from_eir;
 pub(in crate::codegen) use core_builtins::emit_function_frame_reader;
+pub(in crate::codegen::lower_inst) use core_closures::closure_php_source as core_closures_php_source;
 pub(super) use descriptor_entries::emit_static_method_descriptor_entry_wrapper;
 pub(super) use descriptor_metadata::{
     class_method_body_exists, emit_runtime_descriptor_with_receiver_capture,
@@ -163,6 +181,9 @@ pub(super) use direct_calls::{
     coerce_loaded_value_to_tagged_scalar, materialize_direct_call_args,
 };
 pub(super) use instruction_helpers::instruction_strict_php_profile;
+pub(super) use iterators::{
+    anchored_iterator_state_offsets, emit_clear_iterator_anchors, emit_release_iterator_anchors,
+};
 pub(super) use local_loads::coerce_loaded_local_to_result_type;
 pub(super) use runtime_wrappers::{
     emit_runtime_builtin_wrapper_inline, emit_runtime_extern_wrapper_inline,
@@ -196,10 +217,15 @@ pub(super) fn int_condition_suffix(arch: Arch, predicate: CmpPredicate) -> Resul
 /// Lowers one EIR instruction by opcode.
 pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) -> Result<()> {
     ctx.begin_instruction(inst_id);
-    let inst = ctx
-        .function
+    // BORROWED, not cloned. `FunctionContext::function` is a `&'a Function` whose lifetime is
+    // independent of the borrow of `ctx`, so copying the reference out first lets the
+    // instruction outlive the `&mut ctx` every lowering below takes. Cloning it instead copied
+    // an `Instruction` -- its operand `Vec` and its `PhpType` -- once per instruction of every
+    // body: a sample of the codegen phase put `Instruction::clone`, `PhpType::clone` and their
+    // drops at 26% of it, with most of the 64% spent in the allocator underneath them.
+    let function = ctx.function;
+    let inst = function
         .instruction(inst_id)
-        .cloned()
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst_id.as_raw()))?;
     core_builtins::prepare_backtrace_call_site(ctx, &inst)?;
     if inst.result.is_some_and(|value| ctx.allocation.rematerialized(value).is_some()) {
@@ -209,6 +235,19 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         // The block's `cond_br` emits this compare and branches on its flags directly.
         return Ok(());
     }
+    // A closure bound to a RUNTIME scope enforces it before its property accesses.
+    if matches!(
+        inst.op,
+        Op::PropGet
+            | Op::PropSet
+            | Op::PropUnset
+            | Op::PropGetForWrite
+            | Op::DynamicPropGet
+            | Op::DynamicPropSet
+            | Op::DynamicPropUnset
+    ) {
+        objects::emit_closure_scope_gate(ctx, &inst)?;
+    }
     match inst.op {
         Op::ConstI64 => lower_const_i64(ctx, &inst),
         Op::ConstF64 => floats::lower_const_f64(ctx, &inst),
@@ -216,6 +255,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ConstNull => lower_const_null(ctx, &inst),
         Op::ConstStr => strings::lower_const_str(ctx, &inst),
         Op::ConstClassName => strings::lower_const_class_name(ctx, &inst),
+        Op::ClosureScopeClassName => strings::lower_closure_scope_class_name(ctx, &inst),
         Op::LoadCalledClassId => strings::lower_load_called_class_id(ctx, &inst),
         Op::LoadLocal => lower_load_local(ctx, &inst),
         Op::StoreLocal => lower_store_local(ctx, &inst),
@@ -240,6 +280,11 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ICheckedAdd => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_add_checked"),
         Op::ICheckedSub => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_sub_checked"),
         Op::ICheckedMul => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_mul_checked"),
+        Op::Warn => strings::lower_warn(ctx, &inst),
+        Op::ObjectClassId => objects::lower_object_class_id(ctx, &inst),
+        Op::ClassNameToId => objects::lower_class_name_to_id(ctx, &inst),
+        Op::GlobalRefCell => lower_global_ref_cell(ctx, &inst),
+        Op::UnsetGlobal => lower_unset_global(ctx, &inst),
         Op::ICheckedAddToInt => checked_int_to_int::lower_checked_int_to_int(
             ctx,
             &inst,
@@ -259,6 +304,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
             checked_numeric_chain::lower_checked_numeric_chain_to_int(ctx, &inst)
         }
         Op::ICheckedPow => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_pow_checked"),
+        Op::ICheckedDiv => arithmetic::lower_int_checked_div(ctx, &inst),
         Op::IDiv => arithmetic::lower_int_div_to_float(ctx, &inst),
         Op::ISMod => arithmetic::lower_int_mod(ctx, &inst),
         Op::INeg => arithmetic::lower_int_unary(ctx, &inst, "neg", "neg"),
@@ -301,11 +347,15 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::MixedClone => lower_mixed_clone(ctx, &inst),
         Op::MixedUnbox => lower_mixed_unbox(ctx, &inst),
         Op::InvokerRefArg => lower_invoker_ref_arg(ctx, &inst),
+        Op::ArrayLocalRefCell => lower_array_local_ref_cell(ctx, &inst),
         Op::ArrayToMixed => arrays::lower_array_to_mixed(ctx, &inst),
         Op::ArrayToPointerWords => arrays::lower_array_to_pointer_words(ctx, &inst),
         Op::ArrayCloneShallow => arrays::lower_array_clone_shallow(ctx, &inst),
         Op::HashToMixed => hashes::lower_hash_to_mixed(ctx, &inst),
         Op::StrConcat | Op::StrAppend => strings::lower_str_concat(ctx, &inst),
+        Op::StrBitAnd | Op::StrBitOr | Op::StrBitXor => {
+            strings::lower_str_bitwise(ctx, &inst)
+        }
         Op::StrLen => strings::lower_str_len(ctx, &inst),
         Op::StrCharAt => strings::lower_str_char_at(ctx, &inst),
         Op::StrPersist => strings::lower_str_persist(ctx, &inst),
@@ -361,8 +411,24 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ObjectCloneShallow => objects::lower_object_clone_shallow(ctx, &inst),
         Op::DynamicObjectNew => objects::lower_dynamic_object_new(ctx, &inst),
         Op::DynamicObjectNewMixed => objects::lower_dynamic_object_new_mixed(ctx, &inst),
+        Op::StrSetOffset => strings::lower_str_set_offset(ctx, &inst),
+        Op::ArrayGetMixedKeyForWrite => arrays::lower_array_get_mixed_key_for_write(ctx, &inst),
+        Op::MixedToHash => arrays::lower_mixed_to_hash(ctx, &inst),
+        Op::HashRefElement => hashes::lower_hash_ref_element(ctx, &inst),
+        Op::ElemRefCell => hashes::lower_elem_ref_cell(ctx, &inst),
+        Op::HashBindRefElement => hashes::lower_hash_bind_ref_element(ctx, &inst),
         Op::DynamicObjectNewWithoutConstructorMixed => {
             objects::lower_dynamic_object_new_without_constructor_mixed(ctx, &inst)
+        }
+        Op::ReflectionMaterialize => objects::lower_reflection_materialize(ctx, &inst),
+        Op::ReflectionFillMembers => objects::lower_reflection_fill_members(ctx, &inst),
+        Op::ReflRowLookup => objects::lower_refl_row_lookup(ctx, &inst),
+        Op::ReflWord => objects::lower_refl_word(ctx, &inst),
+        Op::ReflPoolStr => objects::lower_refl_pool_str(ctx, &inst),
+        Op::ReflCallableName => objects::lower_refl_callable_name(ctx, &inst),
+        Op::ReflAt => objects::lower_refl_at(ctx, &inst),
+        Op::ObjectHandleReserve | Op::ObjectHandlePend | Op::ObjectHandleUnpend => {
+            objects::lower_object_handle_reservation(ctx, &inst)
         }
         Op::CallablePtr => builtins::pointers::lower_elephc_callable_ptr(ctx, &inst),
         Op::NormalizeCallable => builtins::pointers::lower_elephc_normalize_callable(ctx, &inst),
@@ -387,31 +453,39 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::PropGetForWrite => objects::lower_prop_get_for_write(ctx, &inst),
         Op::PropInitialized => objects::lower_prop_initialized(ctx, &inst),
         Op::LoadPropRefCell => objects::lower_load_prop_ref_cell(ctx, &inst),
-        Op::LoadPropRefCellChecked => objects::lower_load_prop_ref_cell_checked(ctx, &inst),
         Op::LoadArrayElemRefCell => arrays::lower_load_array_elem_ref_cell(ctx, &inst),
-        Op::LoadArrayElemRefCellExisting => arrays::lower_load_array_elem_ref_cell(ctx, &inst),
-        Op::BindRefCellPtr | Op::AdoptRefCellPtr => lower_bind_ref_cell_ptr(ctx, &inst),
-        Op::AcquireRefCell => lower_acquire_ref_cell(ctx, &inst),
+        Op::BindPropRefCell => objects::lower_bind_prop_ref_cell(ctx, &inst),
         Op::NullsafePropGet => objects::lower_nullsafe_prop_get(ctx, &inst),
         Op::DynamicPropGet => objects::lower_dynamic_prop_get(ctx, &inst),
+        Op::DynamicPropRefCell => objects::lower_dynamic_prop_ref_cell(ctx, &inst),
         Op::PropSet => objects::lower_prop_set(ctx, &inst),
         Op::PropUnset => objects::lower_prop_unset(ctx, &inst),
         Op::DynamicPropSet => objects::lower_dynamic_prop_set(ctx, &inst),
-        Op::DynamicPropUnset => objects::lower_dynamic_prop_unset_runtime(ctx, &inst),
         Op::InstanceOf => objects::lower_instanceof(ctx, &inst),
         Op::InstanceOfDynamic => objects::lower_instanceof_dynamic(ctx, &inst),
         Op::ScopedConstantGet => scoped_constants::lower_scoped_constant_get(ctx, &inst),
         Op::LoadStaticLocal => static_locals::lower_load_static_local(ctx, &inst),
         Op::StoreStaticLocal => static_locals::lower_store_static_local(ctx, &inst),
         Op::InitStaticLocal => static_locals::lower_init_static_local(ctx, &inst),
+        Op::LoadStaticProperty => static_properties::lower_load_static_property(ctx, &inst),
+        Op::LoadDynamicStaticProperty => {
+            static_properties::lower_load_dynamic_static_property(ctx, &inst)
+        }
+        Op::StoreStaticProperty => static_properties::lower_store_static_property(ctx, &inst),
+        Op::StoreDynamicStaticProperty => {
+            static_properties::lower_store_dynamic_static_property(ctx, &inst)
+        }
+        Op::LoadPropRefCellChecked => objects::lower_load_prop_ref_cell_checked(ctx, &inst),
+        Op::LoadArrayElemRefCellExisting => arrays::lower_load_array_elem_ref_cell(ctx, &inst),
+        Op::BindRefCellPtr | Op::AdoptRefCellPtr => lower_bind_ref_cell_ptr(ctx, &inst),
+        Op::AcquireRefCell => lower_acquire_ref_cell(ctx, &inst),
+        Op::DynamicPropUnset => objects::lower_dynamic_prop_unset_runtime(ctx, &inst),
         Op::StaticLocalUninitialized => {
             static_locals::lower_static_local_uninitialized(ctx, &inst)
         }
-        Op::LoadStaticProperty => static_properties::lower_load_static_property(ctx, &inst),
         Op::LoadStaticPropertyRefCell => {
             static_properties::lower_load_static_property_ref_cell(ctx, &inst)
         }
-        Op::StoreStaticProperty => static_properties::lower_store_static_property(ctx, &inst),
         Op::StaticPropInitialized => {
             static_properties::lower_static_property_initialized(ctx, &inst)
         }
@@ -435,6 +509,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::StaticMethodCall => lower_static_method_call(ctx, &inst),
         Op::EvalStaticMethodCall => lower_eval_static_method_call(ctx, &inst),
         Op::EnumBackingStringToInt => enums::lower_enum_backing_string_to_int(ctx, &inst),
+        Op::ArgumentStringToInt => enums::lower_argument_string_to_int(ctx, &inst),
         Op::EnumBackingMixedToInt => enums::lower_enum_backing_mixed_to_int(ctx, &inst),
         Op::PackedFieldMixedToInt => objects::lower_packed_field_mixed_to_int(ctx, &inst),
         Op::PackedFieldMixedToFloat => mixed_narrowing::lower_fixed_field_mixed_narrowing(
@@ -486,6 +561,9 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ErrorSuppressEnd => lower_runtime_void_call(ctx, "__rt_diag_pop_suppression"),
         Op::IncludeOnceMark => lower_include_once_mark(ctx, &inst),
         Op::IncludeOnceGuard => lower_include_once_guard(ctx, &inst),
+        Op::IncludeFrameEnter => lower_include_frame_enter(ctx, &inst),
+        Op::IncludeFrameExit => lower_include_frame_exit(ctx, &inst),
+        Op::ClassLikeActivate => lower_classlike_activate(ctx, &inst),
         Op::FunctionVariantDispatch => Ok(()),
         Op::FunctionVariantMark => lower_function_variant_mark(ctx, &inst),
         Op::RuntimeCall => lower_runtime_call(ctx, &inst),
@@ -496,7 +574,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::Nop => lower_nop(ctx, &inst),
         _ => Err(CodegenIrError::unsupported(format!(
             "opcode {}",
-            inst.op.name()
+            &inst.op.name()
         ))),
     }
 }

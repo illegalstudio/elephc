@@ -41,7 +41,7 @@ pub struct BuiltinDef {
     /// The variadic parameter always carries `Some(ArrayLiteral([]))`.
     pub defaults: Vec<Option<Expr>>,
     /// Per-parameter by-reference flag, in the same order as `params`.
-    /// The variadic parameter follows the shared contract's passing mode.
+    /// The variadic parameter uses the shared contract's passing mode.
     pub ref_params: Vec<bool>,
     /// Name of the variadic parameter, if any.
     pub variadic: Option<String>,
@@ -97,13 +97,13 @@ fn build_registry() -> HashMap<String, BuiltinDef> {
 
         // Append the variadic parameter with an empty-array default, matching the
         // convention used by the legacy `variadic()` helper in `src/types/signatures.rs`.
-        if let Some(var_name) = spec.variadic {
-            params.push((var_name.to_string(), PhpType::Mixed));
+        if let Some(variadic) = spec.variadic {
+            params.push((variadic.name.to_string(), PhpType::Mixed));
             defaults.push(Some(Expr::new(
                 ExprKind::ArrayLiteral(Vec::new()),
                 Span::dummy(),
             )));
-            ref_params.push(spec.variadic_by_ref);
+            ref_params.push(variadic.is_by_reference());
         }
 
         let def = BuiltinDef {
@@ -111,7 +111,7 @@ fn build_registry() -> HashMap<String, BuiltinDef> {
             params,
             defaults,
             ref_params,
-            variadic: spec.variadic.map(str::to_string),
+            variadic: spec.variadic.map(|variadic| variadic.name.to_string()),
             return_type: type_spec_to_php(&spec.returns),
             by_ref_return: spec.by_ref_return,
             spec,
@@ -124,21 +124,28 @@ fn build_registry() -> HashMap<String, BuiltinDef> {
 
 /// Proves every shared contract has exactly its declared compiler implementation route.
 fn validate_shared_aot_coverage(map: &HashMap<String, BuiltinDef>) {
+    let mut violations = Vec::new();
     for contract in contracts() {
         let registered = map.contains_key(contract.name);
         match aot_support(contract) {
-            BackendSupport::Implemented(BackendImplementation::Registry) => assert!(
-                registered,
-                "shared builtin contract {} requires an AOT registry binding",
-                contract.name
-            ),
-            BackendSupport::Implemented(_) | BackendSupport::Unsupported(_) => assert!(
-                !registered,
-                "shared builtin contract {} must not have an AOT registry binding",
-                contract.name
-            ),
+            BackendSupport::Implemented(BackendImplementation::Registry) if !registered => {
+                violations.push(format!(
+                    "shared builtin contract {} requires an AOT registry binding",
+                    contract.name
+                ));
+            }
+            BackendSupport::Implemented(BackendImplementation::Registry) => {}
+            BackendSupport::Implemented(_) | BackendSupport::Unsupported(_) if registered => {
+                violations.push(format!(
+                    "shared builtin contract {} must not have an AOT registry binding",
+                    contract.name
+                ));
+            }
+            BackendSupport::Implemented(_) | BackendSupport::Unsupported(_) => {}
         }
     }
+    // Every violation at once: a registry edited from two directions breaks in several places.
+    assert!(violations.is_empty(), "{}", violations.join("\n"));
 }
 
 /// Returns the global registry, initializing it on first call.
@@ -853,7 +860,9 @@ mod tests {
                 key: Box::new(PhpType::Str),
                 value: Box::new(PhpType::Mixed),
             }),
-            ("get_class_methods", PhpType::Array(Box::new(PhpType::Str))),
+            // A class the compiled world does not know is answered by the eval bridge, whose
+            // result is a Mixed cell holding the same list of strings php returns.
+            ("get_class_methods", PhpType::Array(Box::new(PhpType::Mixed))),
         ] {
             assert_eq!(function_sig(name).unwrap().return_type, expected, "{name}");
             assert_eq!(first_class_callable_sig(name).unwrap().return_type, expected, "{name}");
@@ -879,21 +888,26 @@ mod tests {
     }
 
     /// Callable wrappers expose only the accepted prefix of a capped builtin declaration.
+    ///
+    /// `str_ireplace` is capped at three arguments. `str_replace` accepts php's fourth,
+    /// by-reference `$count` on a DIRECT call (the count prelude serves it), so its cap is the
+    /// whole declaration and so is its callable's arity (php: four parameters). php also reports
+    /// four for `str_ireplace(...)`: that remaining gap is recorded here, not hidden.
     #[test]
     fn first_class_callable_sig_stops_at_the_enforced_arity_cap() {
-        for name in ["str_replace", "str_ireplace"] {
+        for (name, cap) in [("str_replace", 4), ("str_ireplace", 3)] {
             assert_eq!(function_sig(name).unwrap().params.len(), 4, "{name} declaration");
-            assert_eq!(enforced_arity_bounds(name), Some((3, Some(3))), "{name} cap");
+            assert_eq!(enforced_arity_bounds(name), Some((3, Some(cap))), "{name} cap");
             let sig = first_class_callable_sig(name).expect("callable signature");
-            assert_eq!(sig.params.len(), 3, "{name} callable arity");
+            assert_eq!(sig.params.len(), cap, "{name} callable arity");
             assert!(sig.variadic.is_none());
             for field in [
                 sig.defaults.len(), sig.ref_params.len(), sig.declared_params.len(),
                 sig.param_type_exprs.len(), sig.param_attributes.len(),
             ] {
-                assert_eq!(field, 3, "{name} parameter metadata stays aligned");
+                assert_eq!(field, cap, "{name} parameter metadata stays aligned");
             }
-            assert!(sig.defaults.iter().all(Option::is_none), "{name} prefix is required");
+            assert!(sig.defaults[..3].iter().all(Option::is_none), "{name} prefix is required");
         }
     }
 
@@ -941,6 +955,14 @@ mod tests {
         assert_eq!(sig.params.len(), 2);
         assert_eq!(sig.params[0].0, "target");
         assert_eq!(sig.params[1].0, "value");
+    }
+
+    /// Verifies registry signatures preserve by-reference passing for variadic outputs.
+    #[test]
+    fn variadic_ref_marker_sets_ref_params() {
+        let sig = function_sig("sscanf").expect("sscanf registered");
+        assert_eq!(sig.variadic.as_deref(), Some("vars"));
+        assert_eq!(sig.ref_params, vec![false, false, true]);
     }
 
     /// Verifies every registry runtime function has a complete central descriptor and logical ABI.
@@ -1104,10 +1126,17 @@ mod tests {
         use crate::builtins::semantics::BuiltinArgumentLowering;
         for (name, expected) in [
             ("count", BuiltinArgumentLowering::Count),
+            (
+                "html_entity_decode",
+                BuiltinArgumentLowering::HtmlEntityDecode,
+            ),
             ("date", BuiltinArgumentLowering::Date),
             ("json_decode", BuiltinArgumentLowering::JsonSource),
             ("json_validate", BuiltinArgumentLowering::JsonSource),
             ("getenv", BuiltinArgumentLowering::Getenv),
+            // The mbstring engine takes null operands itself, so no operand-nullability lowering.
+            ("mb_strtolower", BuiltinArgumentLowering::PreserveValues),
+            ("mb_strtoupper", BuiltinArgumentLowering::PreserveValues),
             ("pcntl_exec", BuiltinArgumentLowering::PcntlPreserveOmitted),
             ("pcntl_signal", BuiltinArgumentLowering::PcntlPreserveOmitted),
             ("pcntl_wait", BuiltinArgumentLowering::PcntlPreserveOmitted),
@@ -1139,11 +1168,14 @@ mod tests {
     }
 
     /// Verifies checker hooks can retain a representation-safe result resolver for EIR lowering.
+    ///
+    /// `array_pop` is the witness: `preg_split` used to be, until its EIR result began following
+    /// the checker's type vetted by `checked_result_type_fits_operands` instead.
     #[test]
     fn checker_hook_preserves_shared_eir_result_metadata() {
         assert!(matches!(
-            lookup("preg_split")
-                .expect("preg_split must be registered")
+            lookup("array_pop")
+                .expect("array_pop must be registered")
                 .spec
                 .semantics
                 .result_type,

@@ -76,6 +76,42 @@ fn parse_fragment_accepts_array_reference_elements_source() {
     );
 }
 
+/// Verifies array literals accept PHP's `...` unpacking as its own element shape.
+///
+/// The token was already recognised in call arguments and parameter lists, so a reader could
+/// reasonably assume unpacking worked here too; it did not, and `[1, ...$a]` was refused at the
+/// `...`. It is a THIRD element kind rather than a value or a keyed value, because the operand's
+/// integer keys are renumbered while its string keys are kept.
+#[test]
+fn parse_fragment_accepts_array_spread_elements_source() {
+    let program = parse_fragment(br#"return [1, ...$rest, "k" => 2];"#)
+        .expect("array unpacking should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::Array(vec![
+            EvalArrayElement::Value(EvalExpr::Const(EvalConst::Int(1))),
+            EvalArrayElement::Spread(EvalExpr::LoadVar("rest".to_string())),
+            EvalArrayElement::KeyValue {
+                key: EvalExpr::Const(EvalConst::String("k".to_string())),
+                value: EvalExpr::Const(EvalConst::Int(2)),
+            },
+        ])))]
+    );
+}
+
+/// Verifies the legacy `array(...)` spelling unpacks through the same element shape.
+#[test]
+fn parse_fragment_accepts_legacy_array_spread_elements_source() {
+    let program =
+        parse_fragment(br#"return array(...$rest);"#).expect("legacy array unpacking should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::Array(vec![
+            EvalArrayElement::Spread(EvalExpr::LoadVar("rest".to_string())),
+        ])))]
+    );
+}
+
 /// Verifies indexed array writes parse as variable-target array set statements.
 #[test]
 fn parse_fragment_accepts_indexed_array_write_source() {

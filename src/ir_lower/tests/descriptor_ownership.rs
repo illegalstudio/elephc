@@ -312,7 +312,13 @@ fn boxed_array_read_direct_calls_lower_through_descriptors_on_all_targets() {
         }).count();
         assert_eq!(calls, 2, "{target}");
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-        assert!(asm.contains("mixed_callable_closure"), "{target}");
+        // The tag-checked Mixed callee used to be an inline `mixed_callable_closure` ladder per
+        // call site; it is now the shared `mixed_callable_value` routine (one copy per module, a
+        // descriptor arm plus an explicit not-callable arm). The invariant is the same -- a Mixed
+        // callee is only invoked after its tag selects a descriptor, and every other tag reaches the
+        // not-callable error -- so the test asserts both arms exist.
+        assert!(asm.contains("mixed_callable_value_descriptor"), "{target}: descriptor arm");
+        assert!(asm.contains("mixed_callable_value_not_callable"), "{target}: guard arm");
     }
 }
 
@@ -379,7 +385,8 @@ fn retained_callback_arrays_and_object_predicates_lower_on_all_targets() {
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         assert!(asm.contains("__rt_array_reduce"), "{target}");
         assert!(asm.contains("__rt_array_predicate_boxed"), "{target}");
-        assert!(asm.contains("__rt_cleanup_call_operand_owner"), "{target}");
+        // The record link is the out-of-line `__rt_call_operand_link_owner` helper (the cleanup callback it installs lives in the runtime, not in user asm).
+        assert!(asm.contains("__rt_call_operand_link_owner") || asm.contains("__rt_call_operand_push_owner"), "{target}");
     }
 }
 
@@ -397,12 +404,17 @@ fn descriptor_string_return_ownership_requires_every_return_to_transfer_an_owner
             $result = $value . "!";
             return $result;
         }
+        class Holder { public static string $shared = "s"; public string $prop = "p";
+            public function prop_return(): string { return $this->prop; }
+            public static function static_return(): string { return self::$shared; } }
+        function literal_return(string $value): string { return "literal"; }
         function invoke_return(callable $callback, string $value): string {
             return call_user_func($callback, $value);
         }
         echo invoke_return(owned_return(...), "a");
         echo invoke_return(borrowed_return(...), "b");
         echo conditional_return("c", $argc > 1);
+        echo literal_return("d"), Holder::static_return(), (new Holder())->prop_return();
     "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let module = super::lower_source_at_for_target(
@@ -410,12 +422,21 @@ fn descriptor_string_return_ownership_requires_every_return_to_transfer_an_owner
             crate::codegen::platform::Target::parse(target).unwrap(),
         );
         for (name, owned) in [
+            // `return $value` of a parameter now `acquire`s the string (a retain-or-persist), so
+            // every return path of these fixtures transfers an owner to the caller; the borrowed
+            // shapes this table once pinned as `false` no longer reach a plain borrowed return.
             ("owned_return", true),
-            ("borrowed_return", false),
-            ("conditional_return", false),
+            ("borrowed_return", true),
+            ("conditional_return", true),
             ("local_return", true),
+            // Negative control: a literal is persistent storage, not an owner the caller may free.
+            ("literal_return", false),
+            // A property or static read is retained on return as well, so it is an owner too.
+            ("Holder::prop_return", true),
+            ("Holder::static_return", true),
         ] {
-            let function = module.functions.iter().find(|function| function.name == name).unwrap();
+            let function = module.functions.iter().chain(module.class_methods.iter())
+                .find(|function| function.name == name).unwrap();
             assert_eq!(crate::codegen::function_returns_owned_string(function), owned, "{target}: {name}");
         }
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
@@ -500,7 +521,8 @@ fn callback_builtin_operands_have_unwind_scopes_on_all_targets() {
             }).count(), 1, "{target}: each callback root must retire exactly once");
         }
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-        assert!(asm.contains("__rt_cleanup_call_operand_owner"), "{target}");
+        // The record link is the out-of-line `__rt_call_operand_link_owner` helper (the cleanup callback it installs lives in the runtime, not in user asm).
+        assert!(asm.contains("__rt_call_operand_link_owner") || asm.contains("__rt_call_operand_push_owner"), "{target}");
     }
 }
 

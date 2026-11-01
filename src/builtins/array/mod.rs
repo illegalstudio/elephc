@@ -67,6 +67,7 @@ pub mod asort;
 pub mod count;
 pub mod current;
 pub mod end;
+pub mod extract;
 pub mod in_array;
 pub mod internal_pointer;
 pub mod key;

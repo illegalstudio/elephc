@@ -14,12 +14,12 @@ use crate::eval_ir::{EvalBinOp, EvalConst, EvalExpr, EvalStmt};
 use crate::lexer::TokenKind;
 
 impl Parser {
-    /// Consumes `expected` or returns a parse error.
+    /// Consumes `expected` or returns a parse error naming the token that stopped it.
     pub(super) fn expect(&mut self, expected: TokenKind) -> Result<(), EvalParseError> {
         if self.consume(expected) {
             Ok(())
         } else {
-            Err(EvalParseError::UnexpectedToken)
+            Err(self.fail(EvalParseError::UnexpectedToken))
         }
     }
 
@@ -28,7 +28,7 @@ impl Parser {
         if self.consume_semicolon() {
             Ok(())
         } else {
-            Err(EvalParseError::ExpectedSemicolon)
+            Err(self.fail(EvalParseError::ExpectedSemicolon))
         }
     }
 
@@ -88,6 +88,28 @@ impl Parser {
             Err(EvalParseError::UnexpectedToken)
         }
     }
+}
+
+/// Returns true when a token can open the one declaration form that reads a preceding doc comment.
+///
+/// `Parser::parse_stmt()` attaches a doc comment to a class declaration and to nothing else, so a
+/// doc comment in front of any other token is trivia the grammar never reads. The token filter in
+/// `Parser::new()` and `parse_stmt()` share this predicate so the two can never disagree about
+/// which doc comments survive tokenization.
+pub(super) fn starts_doc_commented_declaration(token: &TokenKind) -> bool {
+    // An attribute list may stand between the doc comment and the declaration it documents --
+    // `/** … */ #[AsCommand(…)] class C {}` is how most of Symfony's commands are written -- and
+    // the comment belongs to the class either way. Leaving the attribute out dropped the comment
+    // at tokenization, before any grammar rule could ask for it.
+    matches!(token, TokenKind::AttributeStart)
+        || matches!(token, TokenKind::Ident(name)
+            if ident_eq(name, "abstract")
+                || ident_eq(name, "final")
+                || ident_eq(name, "readonly")
+                || ident_eq(name, "class")
+                // An interface's comment is reflected as well; Symfony describes autowirable
+                // service interfaces from it (`debug:autowiring`).
+                || ident_eq(name, "interface"))
 }
 
 /// Returns true when the current token closes or starts a switch case arm.

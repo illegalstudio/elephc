@@ -5,7 +5,7 @@
 //! - `crate::interpreter::builtins::symbols`.
 //!
 //! Key details:
-//! - Registration stub behavior is shared with `spl_autoload_register()`.
+//! - Removal shares the retained callback lifecycle with `spl_autoload_register()`.
 
 eval_builtin! {
     contract: "spl_autoload_unregister",
@@ -35,12 +35,13 @@ pub(in crate::interpreter) fn eval_spl_autoload_unregister_declared_call(
 /// Evaluates materialized `spl_autoload_unregister(...)` arguments through the registration owner.
 pub(in crate::interpreter) fn eval_spl_autoload_unregister_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
-    _context: &mut ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     super::spl_autoload_register::eval_spl_autoload_bool_result(
         "spl_autoload_unregister",
         evaluated_args,
+        context,
         values,
     )
 }

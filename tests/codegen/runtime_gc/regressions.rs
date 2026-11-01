@@ -408,6 +408,33 @@ echo describe("items", $items);
     );
 }
 
+/// Verifies object-to-string coercion used by formatted string arguments releases each temporary
+/// `__toString()` result after copying it into request-lifetime scratch storage.
+#[test]
+fn test_stringable_format_arguments_are_heap_debug_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class FormattedValue {
+    public function __construct(private int $number) {}
+    public function __toString(): string { return 'value-'.$this->number; }
+}
+
+$formatted = '';
+for ($i = 0; $i < 20; ++$i) {
+    $formatted = sprintf('[%s]', new FormattedValue($i));
+}
+echo $formatted;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "[value-19]");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected object string temporaries to be released, got: {}",
+        out.stderr
+    );
+}
+
 /// Verifies self-reassignment retains a borrowed string slice before freeing its source slot.
 #[test]
 fn test_string_self_reassignment_preserves_borrowed_builtin_slice() {
@@ -887,6 +914,183 @@ echo "done";
     );
 }
 
+/// Verifies a boxed indexed array is unboxed before crossing a typed method-call boundary.
+#[test]
+fn test_mixed_indexed_array_argument_is_unboxed_for_typed_method_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+class Forwarder {
+    public function forwardValue(array $values): string {
+        return $this->firstValue($values);
+    }
+
+    private function firstValue(array $values): string {
+        return in_array('ok', $values, true) ? 'ok' : 'bad';
+    }
+}
+
+$forwarder = new Forwarder();
+$method = $argv[1] ?? 'forwardValue';
+echo $forwarder->$method(['ok']);
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies a runtime-selected receiver normalizes a boxed indexed array before a typed method call.
+#[test]
+fn test_mixed_receiver_normalizes_mixed_indexed_array_for_typed_method_parameter() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Receiver {
+    public function acceptsArray(array $values): string {
+        return in_array('ok', $values, true) ? 'ok' : 'bad';
+    }
+}
+
+function receiver(): mixed {
+    return new Receiver();
+}
+
+function values(): mixed {
+    return ['ok'];
+}
+
+$receiver = receiver();
+echo $receiver->acceptsArray(values());
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "ok");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies a boxed associative array retains string keys when crossing a typed array boundary.
+#[test]
+fn test_mixed_receiver_preserves_associative_array_for_typed_method_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+class Receiver {
+    public function environment(array $context): string {
+        return $context['APP_ENV'];
+    }
+}
+function receiver(): mixed { return new Receiver(); }
+function context(): mixed { return ['APP_ENV' => 'dev']; }
+echo receiver()->environment(context());
+"#,
+    );
+    assert_eq!(out, "dev");
+}
+
+/// Verifies runtime callable unpacking preserves a boxed associative array argument.
+#[test]
+fn test_runtime_callable_spread_preserves_associative_array_argument() {
+    let out = compile_and_run(
+        r#"<?php
+function environment(array $context): string {
+    return $context['APP_ENV'];
+}
+class ParserState {
+    private array $values = [];
+
+    public function arguments(): mixed {
+        $path = __DIR__.'/runtime-context.env';
+        file_put_contents($path, 'APP_ENV=dev');
+        $line = file_get_contents($path);
+        $this->values['APP_ENV'] = substr($line, 8);
+        return [$this->values];
+    }
+}
+$callable = 'environment';
+$parser = new ParserState();
+$arguments = function () use ($parser) {
+    return $parser->arguments();
+};
+echo $callable(...$arguments());
+"#,
+    );
+    assert_eq!(out, "dev");
+}
+
+/// Verifies nested associative bundle-style definitions remain iterable after gradual widening.
+#[test]
+fn test_mixed_nested_associative_array_iteration_preserves_hash_layout() {
+    let out = compile_and_run(
+        r#"<?php
+function definitions(): mixed { return ['Bundle' => ['all' => true]]; }
+foreach (definitions() as $class => $envs) {
+    echo $class, ':', $envs['all'] ? 'yes' : 'no';
+}
+"#,
+    );
+    assert_eq!(out, "Bundle:yes");
+}
+
+/// Verifies nested associative maps survive array-by-reference resolution and later iteration.
+#[test]
+fn test_nested_associative_array_by_ref_resolution_preserves_hash_layout() {
+    let out = compile_and_run(
+        r#"<?php
+function resolve(string $class, array $envs, array $bundles, array &$resolved): void {
+    $resolved[$class] = $envs;
+}
+$bundles = ['Bundle' => ['all' => true]];
+$resolved = [];
+foreach ($bundles as $class => $envs) {
+    resolve($class, $envs, $bundles, $resolved);
+}
+foreach ($resolved as $class => $envs) {
+    echo $class, ':', $envs['all'] ? 'yes' : 'no';
+}
+"#,
+    );
+    assert_eq!(out, "Bundle:yes");
+}
+
+/// Verifies repeated by-reference method calls retain a map promoted from an empty array.
+///
+/// The first call writes a string key, promoting the caller's indexed storage to
+/// an associative map. A runtime include enables the dynamic bridge around the
+/// native calls; the second call must still receive the live promoted map.
+#[test]
+fn test_repeated_by_ref_method_calls_preserve_promoted_associative_map() {
+    let out = compile_cli_files_and_run(
+        &[
+            (
+                "entry.php",
+                r#"<?php
+class Registry {
+    public function register(string $name, array &$registered): void {
+        if (isset($registered[$name])) {
+            return;
+        }
+
+        $registered[$name] = true;
+    }
+}
+
+$path = __DIR__.'/bridge.php';
+require $path;
+$registered = [];
+$registry = new Registry();
+foreach (['first', 'second'] as $name) {
+    $registry->register($name, $registered);
+}
+echo $registered['first'] && $registered['second'] ? 'ok' : 'missing';
+"#,
+            ),
+            ("bridge.php", "<?php\nreturn true;\n"),
+        ],
+        "entry.php",
+    );
+    assert_eq!(out, "ok");
+}
+
 /// Regression test: a loop pushing scalars into a property array repeatedly
 /// exercises the boxing + push path; each iteration must balance its refcount or
 /// the leak compounds. Asserts heap is clean after 20 iterations.
@@ -1047,6 +1251,50 @@ echo count($b);
         "expected a clean heap, got: {}",
         out.stderr
     );
+}
+
+/// Spreading a packed array returned from a function must walk its indexed storage, not pass it
+/// to the hash-table iterator used for associative arrays.
+#[test]
+fn test_regression_spread_array_literal_from_packed_array_return() {
+    let out = compile_and_run(
+        r#"<?php
+function normalizedTypes(): array { return ['array', 'any']; }
+$arrayShape = 'list<string>';
+echo implode('|', [...normalizedTypes(), $arrayShape]);
+"#,
+    );
+    assert_eq!(out, "array|any|list<string>");
+}
+
+/// A builtin may return a packed PHP array through a gradual storage contract; spreading that
+/// result must inspect its runtime representation rather than assuming hash storage.
+#[test]
+fn test_regression_spread_array_literal_from_array_diff_result() {
+    let out = compile_and_run(
+        r#"<?php
+$normalizedTypes = array_diff(['string', 'array', 'any'], ['array', 'any']);
+echo implode('|', [...$normalizedTypes, 'list<string>']);
+"#,
+    );
+    assert_eq!(out, "string|list<string>");
+}
+
+/// Filtering and sorting an array before spreading it exercises the packed result produced by
+/// key-preserving builtins followed by reindexing mutators.
+#[test]
+fn test_regression_spread_array_literal_from_sorted_filtered_result() {
+    let out = compile_and_run(
+        r#"<?php
+function normalizedTypes(): array {
+    $types = array_diff(['z', 'array', 'any', 'a'], ['array', 'any']);
+    sort($types);
+    return $types;
+}
+echo implode('|', [...normalizedTypes(), 'list<string>']);
+"#,
+    );
+    assert_eq!(out, "a|z|list<string>");
 }
 
 /// Regression test: `foreach ($items as &$value)` on a non-empty array where the
@@ -1864,12 +2112,120 @@ echo count($keep), "|", strlen($keep[4]->getMessage());
     // message payloads) live rather than deep-freeing array object elements. Catch
     // cleanup must not free them a second time — a double free would abort with a
     // bad-refcount fatal before this assertion — and must not add blocks beyond that
-    // baseline (10 = 5 exceptions + 5 message strings under the current allocator).
+    // baseline (20 = 5 exceptions, each with its message string, its trace array and the
+    // Mixed cell of its `previous` property, under the current allocator).
     assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: live_blocks=10"),
-        "expected the no-try escape baseline (10 live blocks), got: {}",
+        out.stderr.contains("HEAP DEBUG: leak summary: live_blocks=20"),
+        "expected the no-try escape baseline (20 live blocks), got: {}",
         out.stderr
     );
+}
+
+/// A string-returning method called on an untyped receiver is boxed into the call's Mixed
+/// result; the box copies the string, so the call's own copy must be released. Every such
+/// call leaked one block per call.
+#[test]
+fn test_regression_mixed_receiver_string_method_result_is_released() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Repeater { public string $p = "abc"; function s(): string { return str_repeat($this->p, 3); } }
+class Shouter extends Exception { function s(): string { return strtoupper($this->getMessage()); } }
+function len(mixed $o): int { $r = $o->s(); return strlen($r); }
+$t = 0;
+for ($i = 0; $i < 10; $i++) { $t += len(new Repeater()); $t += len(new Shouter("hey")); }
+echo $t;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "120");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// An owned call result passed to a `?Throwable` parameter goes through forwarding nominal
+/// guards; the caller still owns it after the call. `$e->__construct(..., $e->getPrevious())`
+/// and `f($e->getPrevious())` left the previous exception one reference high, never destroyed.
+/// Callees that return or store the parameter must still see it alive.
+#[test]
+fn test_regression_owned_call_result_through_nullable_nominal_guard_is_released() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Keeper { public ?Throwable $p = null; function take(?Throwable $p): ?Throwable { $this->p = $p; return $p; } }
+function id(?Throwable $p): ?Throwable { return $p; }
+function probe(?Throwable $p): int { return $p === null ? 0 : 1; }
+$e = new Exception("old", 1, new Error("inner"));
+$k = new Keeper();
+$n = 0;
+for ($i = 0; $i < 3; $i++) {
+    $n += probe($e->getPrevious());
+    $x = id($e->getPrevious());
+    $y = $k->take($e->getPrevious());
+    $z = new Exception("z", 0, id($e->getPrevious()));
+    echo $x->getMessage(), $y->getMessage(), $k->p->getMessage(), $z->getPrevious()->getMessage(), "|";
+}
+$e->__construct("new", 2, $e->getPrevious());
+unset($x, $y, $z, $k);
+echo $n, ":", $e->getMessage(), ":", $e->getPrevious()->getMessage();
+unset($e);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "innerinnerinnerinner|innerinnerinnerinner|innerinnerinnerinner|3:new:inner"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A string local assigned under a condition has boxed Mixed storage, so reading it as an array
+/// key detaches a copy; the read must release that copy (`ob_get_status()[$k]` leaked one
+/// block per read).
+#[test]
+fn test_regression_conditional_string_key_local_read_releases_its_copy() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function settings(): array { return ["flags" => 3, "name" => "x"]; }
+$n = 0;
+for ($i = 0; $i < 4; $i++) {
+    if ($argc > 0) { $a = settings(); $k = "flags"; $n += $a[$k]; }
+}
+echo $n;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "12");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Element writes and appends into an untyped property release the property read they mutate
+/// through, and a copy taken before the write keeps its own value.
+///
+/// A Mixed property read already owns a reference to the box; the write path acquired it again
+/// (element write) or never released it (append), so every `$this->data[$k] = $v` and
+/// `$this->data[] = $v` left the array one reference high and it outlived its object.
+#[test]
+fn test_regression_untyped_property_element_writes_release_their_read() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Bag {
+    public $data;
+    public function init() { $this->data = ['x' => str_repeat('a', 3)]; }
+    public function set($k, $v) { $this->data[$k] = $v; }
+    public function push($v) { $this->data[] = $v; }
+}
+$h = new Bag();
+$h->init();
+$copy = $h->data;
+$h->set('y', 'b');
+$h->push('c');
+$alias = &$h->data;
+for ($i = 0; $i < 30; $i++) { $h->set('k' . ($i % 4), $i); $h->push($i); }
+echo json_encode($copy), "|", count($alias), "|", $h->data['k1'];
+unset($h, $copy, $alias);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, r#"{"x":"aaa"}|37|29"#);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
 /// Regression for #448: `finally` on both paths — a caught exception with a finally
@@ -2409,6 +2765,38 @@ echo 'acc=' . $acc;
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected a clean heap (issue #534: leaked inner-counter Mixed boxes), got: {}",
+        out.stderr
+    );
+}
+
+/// Straight-line counterpart of issue #534: `$n` stays an int until its SECOND `+=` widens
+/// the slot to a boxed Mixed, and the backend lays out every store by that final type, so the
+/// first `+=` boxed its sum over the box `$n = 0` had become and never released it. One block
+/// leaked per call, with no loop anywhere in the function.
+#[test]
+fn test_straight_line_widening_store_releases_the_boxed_occupant() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function total(string $a, string $b): int {
+    $n = 0;
+    $n += strlen($a);
+    $n += strlen($b);
+    return $n;
+}
+$a = str_repeat('a', $argc + 1);
+$b = str_repeat('b', $argc + 2);
+$sum = 0;
+for ($i = 0; $i < 50; $i++) {
+    $sum = $sum + total($a, $b);
+}
+echo 'sum=' . $sum;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "sum=250");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap (one leaked box per call), got: {}",
         out.stderr
     );
 }
@@ -4334,6 +4722,70 @@ echo $c, "\n";
     );
 }
 
+/// Verifies an accumulator survives a callee that MIGHT hand its own argument back.
+///
+/// `$acc = f($acc, ...)` in a loop: the store retains the result, releases the slot's previous
+/// occupant, then releases the result as a consumed temporary. That last release assumes the
+/// callee returned a `+1`. On the branch where the callee returns its own parameter there is no
+/// such `+1`, so the accumulator's count dropped one per iteration until a later read hit freed
+/// memory — php prints `2:a,b`, elephc raised
+/// `TypeError: Unsupported operand types: non-array + array`.
+///
+/// A PROVEN alias was already handled; this is the MAY case, where the callee returns the
+/// parameter on only one branch and the decision has to be made at runtime.
+#[test]
+fn test_accumulator_survives_a_callee_that_may_return_its_argument() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function mayReturnArg(mixed $l, mixed $r): mixed {
+    if (!$r) { return $l; }
+    return $l + $r;
+}
+$k = [];
+foreach ([["a" => 1], [], ["b" => 2], []] as $config) {
+    $k = mayReturnArg($k, $config);
+}
+echo count($k), ":", implode(",", array_keys($k)), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2:a,b\n");
+}
+
+/// Same accumulator reached through an INTERFACE, where no callee is known statically and no
+/// return-alias summary exists at all.
+///
+/// This is Symfony's `Config\Definition\Processor::process()` verbatim in shape:
+/// `$currentConfig = $configTree->merge($currentConfig, $config);`. Under `--web` the heap
+/// guard caught it as a double free inside `_rt_mixed_free_deep`.
+#[test]
+fn test_accumulator_through_interface_dispatch_survives_argument_aliasing() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+interface NodeInterface {
+    public function merge(mixed $leftSide, mixed $rightSide): mixed;
+}
+class Node implements NodeInterface {
+    public function merge(mixed $leftSide, mixed $rightSide): mixed {
+        if (!$rightSide) { return $leftSide; }
+        return $leftSide + $rightSide;
+    }
+}
+function process(NodeInterface $tree, array $configs): array {
+    $current = [];
+    foreach ($configs as $config) {
+        $current = $tree->merge($current, $config);
+    }
+    return $current;
+}
+$out = process(new Node(), [["a" => 1], [], ["b" => 2], []]);
+echo count($out), ":", implode(",", array_keys($out)), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2:a,b\n");
+}
+
 /// Regression test for issue #604 (conditional-return callee, alias path): a callee
 /// that returns its parameter on one branch (`if ($c) return $x;`) is summarized as
 /// possibly returning that parameter, so the fix suppresses the argument release. When
@@ -4620,4 +5072,49 @@ echo "\n";
     assert!(output.success, "stdout={:?}\nstderr={}", output.stdout, output.stderr);
     assert_eq!(output.stdout, "q2p1r3,q2p1r3,q2p1r3,\n");
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+
+
+/// Regression test: a static property written from a borrowed parameter and read back through an
+/// accessor stays live for the whole loop, and the arrays it replaces are all released.
+///
+/// Under `--web` this is the difference between a worker that serves and one that dies: the
+/// request boundary releases what each static property holds, so a property left pointing at
+/// reclaimed storage releases a block the arena has already handed to somebody else. In a plain
+/// process it shows up as the count below — one live block per container the property still
+/// holds at exit, never a count that tracks the iteration count.
+#[test]
+fn test_static_property_store_and_return_stay_balanced_across_iterations() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+final class Registry {
+    private static array $entries = [];
+
+    public static function set(array $values): void { self::$entries = $values; }
+
+    public static function entries(): array { return self::$entries; }
+}
+
+$total = 0;
+for ($i = 0; $i < 50; $i++) {
+    Registry::set([$i, $i + 1, $i + 2]);
+    $total += count(Registry::entries());
+    if (Registry::entries()) {
+        $total++;
+    }
+}
+echo $total, "|", implode(",", Registry::entries()), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "200|49,50,51\n");
+    // Static properties are released at exit now, so the array the last iteration stored is
+    // gone too and the heap ends clean. A retain that was never released would leave blocks
+    // that track the iteration count.
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected every stored array to be released, got: {}",
+        out.stderr
+    );
 }

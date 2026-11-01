@@ -265,6 +265,16 @@ pub(super) fn decl_class_xmlwriter() -> Stmt {
                         vec![],
                         None,
                     ),
+                    // php opens a `file://` URI through its plain-files wrapper; the stream layer
+                    // here takes the bare path.
+                    s_if(
+                        e_binop(e_call("substr", vec![e_var("uri"), e_int(0), e_int(7)]), BinOp::StrictEq, e_str("file://")),
+                        vec![
+                            s_assign("uri", e_call("substr", vec![e_var("uri"), e_int(7)])),
+                        ],
+                        vec![],
+                        None,
+                    ),
                     s_assign("stream", e_call("fopen", vec![e_var("uri"), e_str("wb")])),
                     s_if(
                         e_binop(e_var("stream"), BinOp::StrictEq, e_bool(false)),

@@ -2,7 +2,7 @@
 title: "mysqli_stmt_init()"
 description: "Creates a statement object bound to a connection."
 sidebar:
-  order: 173
+  order: 184
 ---
 
 ## mysqli_stmt_init()

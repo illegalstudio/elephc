@@ -19,8 +19,9 @@ use crate::parser::alt_syntax::{
 use crate::parser::ast::{CatchClause, Expr, ExprKind, Stmt, StmtKind};
 use crate::parser::expr::parse_expr;
 use crate::parser::stmt::{
-    expect_semicolon, expect_token, name_starts_at, parse_block, parse_body,
-    parse_destructuring_pattern_unpack, parse_stmt, starts_destructuring_pattern,
+    assignment_target_append_stmt, assignment_target_store_stmt, expect_semicolon, expect_token, name_starts_at, parse_block,
+    parse_body, parse_destructuring_pattern_unpack, parse_stmt,
+    starts_destructuring_pattern,
 };
 use crate::span::Span;
 
@@ -219,6 +220,20 @@ pub fn parse_foreach(
                 "Cannot take a reference to a destructuring pattern in foreach",
             ));
         }
+        if let Some((value_var, unpack)) = parse_foreach_reference_pattern(tokens, pos, span)? {
+            expect_token(tokens, pos, &Token::RParen, "Expected ')' after foreach")?;
+            let loop_body = parse_control_body(tokens, pos, &Token::EndForeach, "endforeach")?;
+            return Ok(Stmt::new(
+                StmtKind::Foreach {
+                    array,
+                    key_var: None,
+                    value_var,
+                    value_by_ref: true,
+                    body: prepend_stmt(unpack, loop_body),
+                },
+                span,
+            ));
+        }
         let (value_var, unpack) = parse_foreach_pattern_target(tokens, pos, span)?;
         expect_token(tokens, pos, &Token::RParen, "Expected ')' after foreach")?;
         let loop_body = parse_control_body(tokens, pos, &Token::EndForeach, "endforeach")?;
@@ -235,14 +250,10 @@ pub fn parse_foreach(
         ));
     }
 
-    let first_var = match tokens.get(*pos).map(|(t, _)| t) {
-        Some(Token::Variable(n)) => n.clone(),
-        _ => return Err(CompileError::new(span, "Expected variable after 'as'")),
-    };
-    *pos += 1;
+    let (first_var, first_bind) = parse_foreach_assignment_target(tokens, pos, span, "key")?;
 
     // Check for => (foreach $arr as $key => $value)
-    let (key_var, value_var, value_by_ref, unpack) =
+    let (key_var, value_var, value_by_ref, unpack, key_bind, value_bind) =
         if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleArrow {
         if first_by_ref {
             return Err(CompileError::new(
@@ -268,26 +279,90 @@ pub fn parse_foreach(
                     "Cannot take a reference to a destructuring pattern in foreach",
                 ));
             }
-            let (val_var, unpack) = parse_foreach_pattern_target(tokens, pos, span)?;
-            (Some(first_var), val_var, false, Some(unpack))
+            if let Some((val_var, unpack)) = parse_foreach_reference_pattern(tokens, pos, span)? {
+                (Some(first_var), val_var, true, Some(unpack), first_bind, None)
+            } else {
+                let (val_var, unpack) = parse_foreach_pattern_target(tokens, pos, span)?;
+                (Some(first_var), val_var, false, Some(unpack), first_bind, None)
+            }
         } else {
-            let val_var = match tokens.get(*pos).map(|(t, _)| t) {
-                Some(Token::Variable(n)) => n.clone(),
-                _ => return Err(CompileError::new(span, "Expected variable after '=>'")),
-            };
-            *pos += 1;
-            (Some(first_var), val_var, value_by_ref, None)
+            let (val_var, value_bind) =
+                parse_foreach_assignment_target(tokens, pos, span, "value")?;
+            if value_by_ref && value_bind.is_some() {
+                return Err(CompileError::new(
+                    span,
+                    "By-reference foreach values currently require a variable target",
+                ));
+            }
+            (
+                Some(first_var),
+                val_var,
+                value_by_ref,
+                None,
+                first_bind,
+                value_bind,
+            )
         }
     } else {
-        (None, first_var, first_by_ref, None)
+        if first_by_ref && first_bind.is_some() {
+            return Err(CompileError::new(
+                span,
+                "By-reference foreach values currently require a variable target",
+            ));
+        }
+        (None, first_var, first_by_ref, None, None, first_bind)
     };
 
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after foreach")?;
     let body = parse_control_body(tokens, pos, &Token::EndForeach, "endforeach")?;
-    let body = match unpack {
+    let mut body = match unpack {
         Some(unpack) => prepend_stmt(unpack, body),
         None => body,
     };
+    if let Some(value_bind) = value_bind {
+        body = prepend_stmt(value_bind, body);
+    }
+    if let Some(key_bind) = key_bind {
+        body = prepend_stmt(key_bind, body);
+    }
+
+    // `foreach ($v as $k => &$v)` — the by-REFERENCE target NAMES its own source. PHP iterates the
+    // array the foreach itself holds, so rebinding `$v` to element after element leaves the walk
+    // untouched; elephc read the source back out of the slot each iteration and followed an
+    // element reference as if it were the array, which segfaults on the second one.
+    //
+    // Binding a hidden local to the source gives the walk a name the body cannot rebind, which is
+    // what PHP's own arrangement amounts to here. The bind is by VALUE, not by reference: a
+    // reference-aliased source is itself miscompiled by the by-reference element walk (it yields
+    // the cell pointers instead of the values), and the copy is not observable for THIS shape —
+    // the first iteration rebinds the only name the original array had, so nothing can read it
+    // again. `Symfony\Component\VarDumper\Caster\ReflectionCaster::castFunctionAbstract` is the
+    // shape (`foreach ($v as $k => &$v)` over `getStaticVariables()`).
+    if value_by_ref {
+        if let ExprKind::Variable(source) = &array.kind {
+            if source == &value_var || key_var.as_deref() == Some(source.as_str()) {
+                let alias = format!("__elephc_foreach_src_{}_{}", span.line, span.col);
+                let bind = Stmt::new(
+                    StmtKind::Assign {
+                        name: alias.clone(),
+                        value: array.clone(),
+                    },
+                    span,
+                );
+                let loop_stmt = Stmt::new(
+                    StmtKind::Foreach {
+                        array: Expr::new(ExprKind::Variable(alias), span),
+                        key_var,
+                        value_var,
+                        value_by_ref,
+                        body,
+                    },
+                    span,
+                );
+                return Ok(Stmt::new(StmtKind::Synthetic(vec![bind, loop_stmt]), span));
+            }
+        }
+    }
 
     Ok(Stmt::new(
         StmtKind::Foreach {
@@ -299,6 +374,77 @@ pub fn parse_foreach(
         },
         span,
     ))
+}
+
+/// Parses one non-destructuring `foreach` target, lowering a complex lvalue to a hidden
+/// loop variable plus a write at the start of every iteration.
+fn parse_foreach_assignment_target(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+    role: &str,
+) -> Result<(String, Option<Stmt>), CompileError> {
+    let target_span = tokens
+        .get(*pos)
+        .map(|(_, metadata)| metadata.span)
+        .unwrap_or(span);
+    // `foreach ($event->getAttributes() as $class => $attributes[])` appends every value (Symfony's
+    // `IsGrantedAttributeListener`). `[]` is no expression, so the container is parsed alone.
+    let append_end = foreach_append_target_end(tokens, *pos);
+    let target = match append_end {
+        Some(end) => {
+            let mut target_pos = 0;
+            let container = parse_expr(&tokens[*pos..end], &mut target_pos)?;
+            if target_pos != end - *pos {
+                return Err(CompileError::new(target_span, "Invalid foreach target"));
+            }
+            *pos = end + 2;
+            container
+        }
+        None => parse_expr(tokens, pos)?,
+    };
+    if append_end.is_none() {
+        if let ExprKind::Variable(name) = &target.kind {
+            return Ok((name.clone(), None));
+        }
+    }
+
+    let value_var = format!(
+        "__elephc_foreach_{}_{}_{}",
+        role, target_span.line, target_span.col
+    );
+    let value = Expr::new(ExprKind::Variable(value_var.clone()), target_span);
+    let bind = match append_end {
+        Some(_) => assignment_target_append_stmt(target, value, target_span)?,
+        None => Stmt::new(
+            assignment_target_store_stmt(target, value, target_span)?,
+            target_span,
+        ),
+    };
+    Ok((value_var, Some(bind)))
+}
+
+/// Returns where the `[` of a trailing `[]` sits when the `foreach` target starting at `start`
+/// is an append (`$list[]`, `$m['x'][]`): the target ends at the first `=>` or `)` outside
+/// brackets and parentheses.
+fn foreach_append_target_end(tokens: &[SpannedToken], start: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut index = start;
+    while let Some((token, _)) = tokens.get(index) {
+        match token {
+            Token::LParen | Token::LBracket | Token::LBrace => depth += 1,
+            Token::RParen if depth == 0 => break,
+            Token::RParen | Token::RBracket | Token::RBrace => depth = depth.checked_sub(1)?,
+            Token::DoubleArrow if depth == 0 => break,
+            Token::Semicolon | Token::Eof => return None,
+            _ => {}
+        }
+        index += 1;
+    }
+    let is_append = index >= start + 3
+        && tokens[index - 2].0 == Token::LBracket
+        && tokens[index - 1].0 == Token::RBracket;
+    is_append.then_some(index - 2)
 }
 
 /// Parses a `foreach` value destructuring pattern into a hidden loop variable plus the
@@ -323,6 +469,100 @@ fn parse_foreach_pattern_target(
     let source = Expr::new(ExprKind::Variable(value_var.clone()), pattern_span);
     let unpack = parse_destructuring_pattern_unpack(tokens, pos, pattern_span, source)?;
     Ok((value_var, unpack))
+}
+
+/// Parses a flat destructuring pattern that binds at least one element BY REFERENCE
+/// (`foreach ($rows as [$multi, &$responses])`), or returns `None` without consuming anything.
+///
+/// php iterates such a loop by reference, so it becomes
+/// `foreach (… as &$tmp) { $multi = $tmp[0]; $responses = &$tmp[1]; … }`: every by-value entry is
+/// an ordinary copy of the element's slot and every `&` entry an alias of it. Only the flat shape
+/// with plain variable targets and literal (or implicit) keys is accepted; anything else keeps the
+/// ordinary pattern path, which still refuses a `&` inside a pattern. Symfony's
+/// `TransportResponseTrait::stream()` is written this way, and refusing it sent the whole HTTP
+/// client to the interpreter, whose parser refuses it too.
+fn parse_foreach_reference_pattern(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Option<(String, Stmt)>, CompileError> {
+    let start = *pos;
+    if !matches!(tokens.get(start).map(|(token, _)| token), Some(Token::LBracket)) {
+        return Ok(None);
+    }
+    let pattern_span = tokens[start].1.span;
+    // (key, by_ref, variable) per entry.
+    let mut entries: Vec<(Option<Expr>, bool, String)> = Vec::new();
+    let mut cursor = start + 1;
+    let mut next_index = 0i64;
+    loop {
+        let key = match (
+            tokens.get(cursor).map(|(token, _)| token),
+            tokens.get(cursor + 1).map(|(token, _)| token),
+        ) {
+            (Some(Token::StringLiteral(text)), Some(Token::DoubleArrow)) => {
+                cursor += 2;
+                Expr::new(ExprKind::StringLiteral(text.clone()), pattern_span)
+            }
+            (Some(Token::IntLiteral(value)), Some(Token::DoubleArrow)) => {
+                cursor += 2;
+                next_index = value + 1;
+                Expr::new(ExprKind::IntLiteral(*value), pattern_span)
+            }
+            _ => {
+                let key = Expr::new(ExprKind::IntLiteral(next_index), pattern_span);
+                next_index += 1;
+                key
+            }
+        };
+        let by_ref = matches!(tokens.get(cursor).map(|(token, _)| token), Some(Token::Ampersand));
+        if by_ref {
+            cursor += 1;
+        }
+        let Some(Token::Variable(name)) = tokens.get(cursor).map(|(token, _)| token) else {
+            return Ok(None);
+        };
+        entries.push((Some(key), by_ref, name.clone()));
+        cursor += 1;
+        match tokens.get(cursor).map(|(token, _)| token) {
+            Some(Token::Comma) => cursor += 1,
+            Some(Token::RBracket) => {
+                cursor += 1;
+                break;
+            }
+            _ => return Ok(None),
+        }
+    }
+    if !entries.iter().any(|(_, by_ref, _)| *by_ref) {
+        return Ok(None);
+    }
+    *pos = cursor;
+    let value_var = crate::names::generated_local_name(&format!(
+        "__elephc_foreach_{}_{}",
+        pattern_span.line, pattern_span.col
+    ));
+    let element = |key: Expr| {
+        Expr::new(
+            ExprKind::ArrayAccess {
+                array: Box::new(Expr::new(ExprKind::Variable(value_var.clone()), pattern_span)),
+                index: Box::new(key),
+            },
+            pattern_span,
+        )
+    };
+    let unpack = entries
+        .into_iter()
+        .map(|(key, by_ref, name)| {
+            let source = element(key.expect("every entry has a key"));
+            let kind = if by_ref {
+                StmtKind::RefAssign { target: name, source }
+            } else {
+                StmtKind::Assign { name, value: source }
+            };
+            Stmt::new(kind, span)
+        })
+        .collect();
+    Ok(Some((value_var, Stmt::new(StmtKind::Synthetic(unpack), span))))
 }
 
 /// Returns `body` with `first` inserted as its first statement.

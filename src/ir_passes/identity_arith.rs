@@ -52,8 +52,13 @@ impl IrPass for IdentityArith {
                 // rewrites the instruction to `const_i64 0` in place, so `result` must
                 // already be I64. Mismatches (e.g. a float-producing op classified as an
                 // integer identity) are left unfolded rather than miscompiled.
+                // The PHP types must agree too: a `bool` shares `i64` storage with an `int`, but
+                // `true * 1` is `int(1)`, and folding it to the operand made `var_dump` print
+                // `bool(true)` (php's `+$b`, `$b * 1`, `$b + 0`).
                 Some(Fold::ToOperand(replacement))
-                    if value_ir_type(function, result) == value_ir_type(function, replacement) =>
+                    if value_ir_type(function, result) == value_ir_type(function, replacement)
+                        && value_php_type(function, result)
+                            == value_php_type(function, replacement) =>
                 {
                     to_operand.push((inst_id, result, replacement));
                 }
@@ -234,6 +239,11 @@ fn classify(function: &Function, inst: &Instruction) -> Option<Fold> {
 /// only applies to I64 results).
 fn value_ir_type(function: &Function, value: ValueId) -> Option<IrType> {
     function.value(value).map(|v| v.ir_type)
+}
+
+/// Returns the PHP-visible type of `value`, if the value exists.
+fn value_php_type(function: &Function, value: ValueId) -> Option<&crate::types::PhpType> {
+    function.value(value).map(|v| &v.php_type)
 }
 
 /// Returns true when `value` is an `i64` constant equal to `expected`.

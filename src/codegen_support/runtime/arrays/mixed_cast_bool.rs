@@ -16,9 +16,9 @@ use crate::codegen_support::platform::Arch;
 ///
 /// Dispatches on the unboxed runtime tag to apply PHP scalar truthiness rules:
 /// integers (zero/nonzero), strings (empty/"0"/non-empty), floats (zero/nonzero),
-/// bools (direct), indexed/associative arrays (empty/non-empty), and objects,
-/// resources, and closure descriptors (always true). Null/unsupported tags are falsy.
-/// Calls `__rt_mixed_unbox` to unbox the input pointer without changing ownership.
+/// bools (direct), indexed/associative arrays (empty/non-empty), objects, resources and callable
+/// descriptors (always true -- a closure is an object), and null/unsupported (falsy). Calls
+/// `__rt_mixed_unbox` to unbox the input pointer without changing ownership.
 ///
 /// ABI: ARM64, input boxed mixed pointer in `x0`, result boolean in `x0`.
 /// ABI: x86_64, input boxed mixed pointer in `rax`, result boolean in `rax`. The input
@@ -54,8 +54,8 @@ pub fn emit_mixed_cast_bool(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_cast_bool_from_resource");             // objects are always truthy in PHP (reuse the always-true path)
     emitter.instruction("cmp x0, #9");                                          // does the mixed payload hold a resource?
     emitter.instruction("b.eq __rt_mixed_cast_bool_from_resource");             // resources are always truthy
-    emitter.instruction("cmp x0, #10");                                         // does the mixed payload hold a closure descriptor?
-    emitter.instruction("b.eq __rt_mixed_cast_bool_from_resource");             // closures are always truthy PHP objects
+    emitter.instruction("cmp x0, #10");                                         // does the mixed payload hold a callable descriptor?
+    emitter.instruction("b.eq __rt_mixed_cast_bool_from_resource");             // a closure is an object, always truthy
     emitter.instruction("mov x0, #0");                                          // null and unsupported payloads are falsy for now
     emitter.instruction("b __rt_mixed_cast_bool_done");                         // return the normalized boolean result
 
@@ -139,8 +139,8 @@ fn emit_mixed_cast_bool_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_cast_bool_from_resource_linux_x86_64");  // objects are always truthy in PHP (reuse the always-true path)
     emitter.instruction("cmp rax, 9");                                          // does the mixed payload hold a resource?
     emitter.instruction("je __rt_mixed_cast_bool_from_resource_linux_x86_64");  // resources are always truthy
-    emitter.instruction("cmp rax, 10");                                         // does the mixed payload hold a closure descriptor?
-    emitter.instruction("je __rt_mixed_cast_bool_from_resource_linux_x86_64");  // closures are always truthy PHP objects
+    emitter.instruction("cmp rax, 10");                                         // does the mixed payload hold a callable descriptor?
+    emitter.instruction("je __rt_mixed_cast_bool_from_resource_linux_x86_64");  // a closure is an object, always truthy
     emitter.instruction("mov rax, 0");                                          // null and unsupported payloads are falsy for now
     emitter.instruction("jmp __rt_mixed_cast_bool_done_linux_x86_64");          // return the normalized boolean result
 

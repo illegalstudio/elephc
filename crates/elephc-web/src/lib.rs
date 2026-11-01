@@ -18,8 +18,10 @@ mod handler_ipc;
 mod isolated_worker;
 mod multipart;
 mod probe_route;
+mod request_env;
 mod request_state;
 mod server;
+mod shared_listener;
 mod session;
 mod trans_sid;
 mod worker;
@@ -47,7 +49,8 @@ pub use request_state::{
 // Re-exported so the compiled `--web` runtime routines (`__rt_header`,
 // `__rt_http_response_code`) can link against the response-control setters.
 pub use request_state::{
-    elephc_web_handle_uncaught_exception, elephc_web_header, elephc_web_set_status,
+    elephc_web_handle_uncaught_exception, elephc_web_header, elephc_web_header_remove,
+    elephc_web_response_header_line, elephc_web_set_status,
 };
 
 // Re-exported so the compiled `--web` web prelude can link against all session

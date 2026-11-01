@@ -91,8 +91,11 @@ pub(super) fn lower_live_array_push_place(
 fn addressable(ctx: &LoweringContext<'_, '_>, place: &Expr) -> bool {
     match &place.kind {
         ExprKind::Variable(_) => true,
-        ExprKind::PropertyAccess { .. } => reference_getter_method(ctx, place).is_some()
-            || property_plan(ctx, place).is_some_and(|plan| plan.live_addressable),
+        // The checker's plan alone is not enough: preparation binds the property through
+        // `by_ref_foreach_property_source_is_addressable`, which refuses an untyped/Mixed slot.
+        ExprKind::PropertyAccess { object, property } => reference_getter_method(ctx, place).is_some()
+            || (property_plan(ctx, place).is_some_and(|plan| plan.live_addressable)
+                && super::super::by_ref_foreach_property_source_is_addressable(ctx, object, property)),
         ExprKind::StaticPropertyAccess { .. } => static_place_type(ctx, place)
             .is_some_and(|ty| ty.supports_live_array_push_place()),
         ExprKind::ArrayAccess { array, .. } => {

@@ -117,7 +117,7 @@ mod preload;
 mod restricted_status;
 mod status_render;
 mod scripts_configuration;
-mod cli_ini;
+pub(crate) mod cli_ini;
 mod env_ini;
 mod injection;
 mod manifest_bake;
@@ -156,4 +156,5 @@ pub use preload::{
 pub use state_restriction::canonical_entry_path;
 pub(crate) use state_restriction::restrict_api_denies;
 pub(crate) use cli_ini::ini_module_known_declaration;
+pub use cli_ini::inject_cli_ini_if_used;
 pub(crate) use env_ini::{env_override_declarations, ini_helper_declarations};

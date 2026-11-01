@@ -77,6 +77,175 @@ pub fn emit_strcasecmp(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits `__rt_name_list_find_ci`, the shared case-insensitive lookup of a runtime name in a
+/// packed name list.
+///
+/// The list is one byte string of entries `[u16 little-endian length][name bytes]`, baked by the
+/// caller as content-addressed data, so every site that asks the same question (a dynamic
+/// `class_exists($name)` against the program's classes) shares one copy of the names and one
+/// copy of this loop instead of unrolling a `__rt_strcasecmp` call per candidate.
+///
+/// - ARM64: x1=name ptr, x2=name len, x3=list ptr, x4=list byte length → x0 = entry index or -1
+/// - x86_64: rdi=name ptr, rsi=name len, rdx=list ptr, rcx=list byte length → rax = same
+///
+/// One leading `\` of the name is dropped first, as php resolves `'\Foo'` as `Foo`. Leaf routine:
+/// it clobbers only caller-saved scratch and never touches the stack.
+pub fn emit_name_list_find_ci(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_name_list_find_ci_x86_64(emitter);
+        return;
+    }
+
+    emitter.blank();
+    emitter.comment("--- runtime: name_list_find_ci ---");
+    emitter.label_global("__rt_name_list_find_ci");
+    emitter.instruction("cbz x2, __rt_name_list_find_ci_start");                // an empty name has no separator to drop
+    emitter.instruction("ldrb w9, [x1]");                                       // read the first byte of the name
+    emitter.instruction("cmp w9, #92");                                         // is it the namespace separator?
+    emitter.instruction("b.ne __rt_name_list_find_ci_start");                   // a bare name is used as is
+    emitter.instruction("add x1, x1, #1");                                      // skip the leading separator
+    emitter.instruction("sub x2, x2, #1");                                      // and shorten the name by one byte
+    emitter.label("__rt_name_list_find_ci_start");
+    emitter.instruction("add x4, x3, x4");                                      // x4 = end of the packed list
+    emitter.instruction("mov x5, #0");                                          // x5 = index of the current entry
+
+    emitter.label("__rt_name_list_find_ci_entry");
+    emitter.instruction("cmp x3, x4");                                          // every entry visited?
+    emitter.instruction("b.hs __rt_name_list_find_ci_missing");                 // then the name is not in the list
+    emitter.instruction("ldrh w6, [x3]");                                       // x6 = byte length of this entry
+    emitter.instruction("add x3, x3, #2");                                      // x3 = first byte of this entry's name
+    emitter.instruction("cmp x6, x2");                                          // only an entry of the same length can match
+    emitter.instruction("b.ne __rt_name_list_find_ci_next");                    // skip it otherwise
+    emitter.instruction("mov x7, #0");                                          // x7 = byte index inside the name
+
+    emitter.label("__rt_name_list_find_ci_byte");
+    emitter.instruction("cmp x7, x2");                                          // every byte equal?
+    emitter.instruction("b.hs __rt_name_list_find_ci_found");                   // then this entry is the name
+    emitter.instruction("ldrb w8, [x3, x7]");                                   // byte of the entry
+    emitter.instruction("ldrb w9, [x1, x7]");                                   // byte of the runtime name
+    emitter.instruction("sub w10, w8, #65");                                    // offset of the entry byte from 'A'
+    emitter.instruction("cmp w10, #26");                                        // is the entry byte an uppercase ASCII letter?
+    emitter.instruction("add w10, w8, #32");                                    // its lowercase form
+    emitter.instruction("csel w8, w10, w8, lo");                                // lowercase the entry byte when it was uppercase
+    emitter.instruction("sub w10, w9, #65");                                    // offset of the name byte from 'A'
+    emitter.instruction("cmp w10, #26");                                        // is the name byte an uppercase ASCII letter?
+    emitter.instruction("add w10, w9, #32");                                    // its lowercase form
+    emitter.instruction("csel w9, w10, w9, lo");                                // lowercase the name byte when it was uppercase
+    emitter.instruction("cmp w8, w9");                                          // do the lowered bytes agree?
+    emitter.instruction("b.ne __rt_name_list_find_ci_next");                    // no: try the next entry
+    emitter.instruction("add x7, x7, #1");                                      // advance to the next byte
+    emitter.instruction("b __rt_name_list_find_ci_byte");                       // and compare it
+
+    emitter.label("__rt_name_list_find_ci_next");
+    emitter.instruction("add x3, x3, x6");                                      // step over this entry's name bytes
+    emitter.instruction("add x5, x5, #1");                                      // count the entry
+    emitter.instruction("b __rt_name_list_find_ci_entry");                      // and visit the next one
+
+    emitter.label("__rt_name_list_find_ci_found");
+    emitter.instruction("mov x0, x5");                                          // return the index of the matching entry
+    emitter.instruction("ret");                                                 // return to the caller
+
+    emitter.label("__rt_name_list_find_ci_missing");
+    emitter.instruction("mov x0, #-1");                                         // no entry matched
+    emitter.instruction("ret");                                                 // return to the caller
+}
+
+/// Emits `__rt_name_list_entry`, which returns entry `index` of a packed name list (the layout
+/// [`emit_name_list_find_ci`] walks) as a string pair. It pairs with the lookup to map a found
+/// name to a value baked in a parallel list (a class name to its parent's name).
+///
+/// - ARM64: x0=index, x3=list ptr → x1=entry ptr, x2=entry len
+/// - x86_64: rdi=index, rsi=list ptr → rax=entry ptr, rdx=entry len
+///
+/// The index must be in range. Leaf routine: it clobbers only caller-saved scratch.
+pub fn emit_name_list_entry(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: name_list_entry ---");
+    emitter.label_global("__rt_name_list_entry");
+    if emitter.target.arch == Arch::X86_64 {
+        emitter.label("__rt_name_list_entry_loop_x86_64");
+        emitter.instruction("movzx rdx, WORD PTR [rsi]");                       // rdx = byte length of the current entry
+        emitter.instruction("lea rax, [rsi + 2]");                              // rax = first byte of the current entry
+        emitter.instruction("test rdi, rdi");                                   // is this the requested entry?
+        emitter.instruction("jz __rt_name_list_entry_done_x86_64");             // then return it
+        emitter.instruction("lea rsi, [rax + rdx]");                            // step over the current entry
+        emitter.instruction("sub rdi, 1");                                      // one entry closer to the requested one
+        emitter.instruction("jmp __rt_name_list_entry_loop_x86_64");            // and visit the next entry
+        emitter.label("__rt_name_list_entry_done_x86_64");
+        emitter.instruction("ret");                                             // return the entry's string pair
+        return;
+    }
+    emitter.label("__rt_name_list_entry_loop");
+    emitter.instruction("ldrh w2, [x3]");                                       // x2 = byte length of the current entry
+    emitter.instruction("add x1, x3, #2");                                      // x1 = first byte of the current entry
+    emitter.instruction("cbz x0, __rt_name_list_entry_done");                   // the requested entry: return it
+    emitter.instruction("add x3, x1, x2");                                      // step over the current entry
+    emitter.instruction("sub x0, x0, #1");                                      // one entry closer to the requested one
+    emitter.instruction("b __rt_name_list_entry_loop");                         // and visit the next entry
+    emitter.label("__rt_name_list_entry_done");
+    emitter.instruction("ret");                                                 // return the entry's string pair
+}
+
+/// Emits the x86_64 variant of [`emit_name_list_find_ci`].
+fn emit_name_list_find_ci_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: name_list_find_ci ---");
+    emitter.label_global("__rt_name_list_find_ci");
+    emitter.instruction("test rsi, rsi");                                       // an empty name has no separator to drop
+    emitter.instruction("jz __rt_name_list_find_ci_start_x86_64");
+    emitter.instruction("cmp BYTE PTR [rdi], 92");                              // is the first byte the namespace separator?
+    emitter.instruction("jne __rt_name_list_find_ci_start_x86_64");             // a bare name is used as is
+    emitter.instruction("add rdi, 1");                                          // skip the leading separator
+    emitter.instruction("sub rsi, 1");                                          // and shorten the name by one byte
+    emitter.label("__rt_name_list_find_ci_start_x86_64");
+    emitter.instruction("add rcx, rdx");                                        // rcx = end of the packed list
+    emitter.instruction("xor r8d, r8d");                                        // r8 = index of the current entry
+
+    emitter.label("__rt_name_list_find_ci_entry_x86_64");
+    emitter.instruction("cmp rdx, rcx");                                        // every entry visited?
+    emitter.instruction("jae __rt_name_list_find_ci_missing_x86_64");           // then the name is not in the list
+    emitter.instruction("movzx r9, WORD PTR [rdx]");                            // r9 = byte length of this entry
+    emitter.instruction("add rdx, 2");                                          // rdx = first byte of this entry's name
+    emitter.instruction("cmp r9, rsi");                                         // only an entry of the same length can match
+    emitter.instruction("jne __rt_name_list_find_ci_next_x86_64");              // skip it otherwise
+    emitter.instruction("xor r10d, r10d");                                      // r10 = byte index inside the name
+
+    emitter.label("__rt_name_list_find_ci_byte_x86_64");
+    emitter.instruction("cmp r10, rsi");                                        // every byte equal?
+    emitter.instruction("jae __rt_name_list_find_ci_found_x86_64");             // then this entry is the name
+    emitter.instruction("movzx eax, BYTE PTR [rdx + r10]");                     // byte of the entry
+    emitter.instruction("movzx r11d, BYTE PTR [rdi + r10]");                    // byte of the runtime name
+    emitter.instruction("cmp al, 65");                                          // is the entry byte at or above 'A'?
+    emitter.instruction("jb __rt_name_list_find_ci_lower_x86_64");              // no: keep it
+    emitter.instruction("cmp al, 90");                                          // is it at or below 'Z'?
+    emitter.instruction("ja __rt_name_list_find_ci_lower_x86_64");              // no: keep it
+    emitter.instruction("add al, 32");                                          // lowercase the uppercase entry byte
+    emitter.label("__rt_name_list_find_ci_lower_x86_64");
+    emitter.instruction("cmp r11b, 65");                                        // is the name byte at or above 'A'?
+    emitter.instruction("jb __rt_name_list_find_ci_cmp_x86_64");                // no: keep it
+    emitter.instruction("cmp r11b, 90");                                        // is it at or below 'Z'?
+    emitter.instruction("ja __rt_name_list_find_ci_cmp_x86_64");                // no: keep it
+    emitter.instruction("add r11b, 32");                                        // lowercase the uppercase name byte
+    emitter.label("__rt_name_list_find_ci_cmp_x86_64");
+    emitter.instruction("cmp eax, r11d");                                       // do the lowered bytes agree?
+    emitter.instruction("jne __rt_name_list_find_ci_next_x86_64");              // no: try the next entry
+    emitter.instruction("add r10, 1");                                          // advance to the next byte
+    emitter.instruction("jmp __rt_name_list_find_ci_byte_x86_64");              // and compare it
+
+    emitter.label("__rt_name_list_find_ci_next_x86_64");
+    emitter.instruction("add rdx, r9");                                         // step over this entry's name bytes
+    emitter.instruction("add r8, 1");                                           // count the entry
+    emitter.instruction("jmp __rt_name_list_find_ci_entry_x86_64");             // and visit the next one
+
+    emitter.label("__rt_name_list_find_ci_found_x86_64");
+    emitter.instruction("mov rax, r8");                                         // return the index of the matching entry
+    emitter.instruction("ret");                                                 // return to the caller
+
+    emitter.label("__rt_name_list_find_ci_missing_x86_64");
+    emitter.instruction("mov rax, -1");                                         // no entry matched
+    emitter.instruction("ret");                                                 // return to the caller
+}
+
 /// Emits the x86_64 Linux variant of `__rt_strcasecmp`.
 ///
 /// Registers (System V AMD64 ABI):

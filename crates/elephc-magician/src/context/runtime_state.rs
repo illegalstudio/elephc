@@ -13,6 +13,36 @@ use super::*;
 use crate::errors::EvalStatus;
 use crate::interpreter::RuntimeValueOps;
 
+/// Hands out the request-wide registration order of SPL autoload callbacks.
+///
+/// Appends count up from zero and prepends count down, so ordering the two together puts every
+/// prepend ahead of every append and keeps each group in the order PHP would run it.
+static EVAL_AUTOLOAD_APPEND_SEQUENCE: std::sync::atomic::AtomicI64 =
+    std::sync::atomic::AtomicI64::new(0);
+static EVAL_AUTOLOAD_PREPEND_SEQUENCE: std::sync::atomic::AtomicI64 =
+    std::sync::atomic::AtomicI64::new(0);
+
+thread_local! {
+    /// Classes whose autoload is running right now, across every eval context of the request.
+    static GLOBAL_AUTOLOADING_CLASSES: std::cell::RefCell<std::collections::HashSet<String>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+/// Forgets every in-flight autoload attempt, at a request reset boundary.
+pub(crate) fn clear_global_autoloading_classes() {
+    GLOBAL_AUTOLOADING_CLASSES.with(|set| set.borrow_mut().clear());
+}
+
+/// Returns the next registration number for one callback.
+fn next_autoload_registration_sequence(prepend: bool) -> i64 {
+    use std::sync::atomic::Ordering;
+    if prepend {
+        EVAL_AUTOLOAD_PREPEND_SEQUENCE.fetch_sub(1, Ordering::Relaxed) - 1
+    } else {
+        EVAL_AUTOLOAD_APPEND_SEQUENCE.fetch_add(1, Ordering::Relaxed) + 1
+    }
+}
+
 impl ElephcEvalContext {
     /// Returns whether an earlier complex fragment requires full scope synchronization.
     pub(crate) const fn eval_scope_sync_requires_full(&self) -> bool {
@@ -95,9 +125,31 @@ impl ElephcEvalContext {
         }
     }
 
-    /// Returns true when the context has a dynamic or native function with this lowercase PHP name.
+    /// Returns true when this lowercase PHP name resolves to a dynamic or native function.
+    ///
+    /// A function ANOTHER eval context declared counts: PHP's function table is process-global,
+    /// while elephc gives every compiled function that performs an eval or include its own
+    /// `LocalKind::EvalContext` frame slot. So a `require` inside a closure declares into a
+    /// context the caller has never seen — which is exactly Composer's `files` autoload shape
+    /// (`Closure::bind(static function ($file) { require $file; }, null, null)`), and why
+    /// `trigger_deprecation()` came back undefined while Symfony rendered an error page.
+    ///
+    /// Classes already cross that boundary through `sync_global_eval_classes`; this is the
+    /// function half of the same rule. The registry entry is removed when its owning context is
+    /// destroyed (`unregister_global_eval_functions_for_context`), so a hit here names a context
+    /// that is still alive — the same one `global_eval_function_owner_context` dispatches through.
     pub fn has_function(&self, name: &str) -> bool {
-        self.functions.contains_key(name) || self.native_functions.contains_key(name)
+        if self.functions.contains_key(name) || self.has_active_native_function(name) {
+            return true;
+        }
+        #[cfg(not(test))]
+        {
+            crate::context::global_eval_function_owner_context(name).is_some()
+        }
+        #[cfg(test)]
+        {
+            false
+        }
     }
 
     /// Returns true when the context has a closure registered under this synthetic name.
@@ -106,32 +158,81 @@ impl ElephcEvalContext {
     }
 
     /// Returns a stored static local cell for an eval-declared function.
+    ///
+    /// Reads the one scope every `static` slot lives in, so a caller that asks between calls --
+    /// `ReflectionFunction::getStaticVariables()` does -- sees what the last activation left, and
+    /// an activation still on the stack sees what a deeper one wrote.
     pub fn static_local(&self, function_name: &str, name: &str) -> Option<RuntimeCellHandle> {
-        self.static_locals
-            .get(&(function_name.to_string(), name.to_string()))
-            .copied()
+        let scope = super::request_statics::request_static_scope_ptr();
+        unsafe { scope.as_ref() }?
+            .visible_cell(&Self::static_slot_name(function_name, name))
             .map(RuntimeCellHandle::borrowed)
     }
 
+    /// Returns the scope holding every `static` slot, for alias reads and writes.
+    ///
+    /// Handed out as a raw pointer for the same reason `global_scope_ptr` is: a write to a static
+    /// reaches this through a shared context, and the alternative -- interior mutability -- is not
+    /// `RefUnwindSafe` and would poison every `catch_unwind` in the FFI.
+    /// The scope is the REQUEST's (see `request_statics`), shared by every context.
+    pub fn static_scope_ptr(&self) -> *mut ElephcEvalScope {
+        super::request_statics::request_static_scope_ptr()
+    }
+
+    /// Pushes the key this activation's `static` slots hang from.
+    pub fn push_static_slot_key(&mut self, key: impl Into<String>) {
+        self.static_slot_keys.push(key.into());
+    }
+
+    /// Pops the innermost static slot key override.
+    pub fn pop_static_slot_key(&mut self) {
+        self.static_slot_keys.pop();
+    }
+
+    /// Returns the key the running activation's `static` slots hang from.
+    ///
+    /// The override when one is in force, otherwise the function name -- which is right for a
+    /// plain function, and right for a method, where php shares one slot across instances and
+    /// with inheriting classes.
+    pub fn current_static_slot_key(&self) -> Option<String> {
+        self.static_slot_keys
+            .last()
+            .cloned()
+            .or_else(|| self.current_function().map(str::to_string))
+    }
+
+    /// Names one `static` slot uniquely across every function that declares one.
+    ///
+    /// The separator is a NUL so it cannot collide with a slot key built from a PHP function name,
+    /// which never contains one.
+    pub fn static_slot_name(function_name: &str, name: &str) -> String {
+        format!("{function_name}\0{name}")
+    }
+
     /// Stores one static local cell and returns any replaced distinct cell.
+    ///
     pub fn set_static_local(
         &mut self,
         function_name: impl Into<String>,
         name: impl Into<String>,
         cell: RuntimeCellHandle,
     ) -> Option<RuntimeCellHandle> {
-        let previous = self
-            .static_locals
-            .insert((function_name.into(), name.into()), cell);
+        let slot = Self::static_slot_name(&function_name.into(), &name.into());
+        let scope = super::request_statics::request_static_scope_ptr();
+        let previous = unsafe { scope.as_mut() }?
+            .set(slot, cell, crate::scope::ScopeCellOwnership::Owned);
         previous.filter(|previous| *previous != cell)
     }
 
     /// Returns a stored static property cell for an eval-declared class.
+    ///
+    /// Static values belong to the request, not to this context (see `request_statics`).
     pub fn static_property(&self, class_name: &str, name: &str) -> Option<RuntimeCellHandle> {
-        self.static_properties
-            .get(&(normalize_class_name(class_name), name.to_string()))
-            .copied()
-            .map(RuntimeCellHandle::borrowed)
+        super::request_statics::request_static_property(&(
+            normalize_class_name(class_name),
+            name.to_string(),
+        ))
+        .map(RuntimeCellHandle::borrowed)
     }
 
     /// Stores one eval static property cell and returns any replaced distinct cell.
@@ -141,10 +242,19 @@ impl ElephcEvalContext {
         name: impl Into<String>,
         cell: RuntimeCellHandle,
     ) -> Option<RuntimeCellHandle> {
-        let previous = self
-            .static_properties
-            .insert((normalize_class_name(class_name), name.into()), cell);
+        let previous = super::request_statics::set_request_static_property(
+            (normalize_class_name(class_name), name.into()),
+            cell,
+        );
         previous.filter(|previous| *previous != cell)
+    }
+
+    /// Removes one eval static property cell; the caller owns (and releases) what comes back.
+    pub fn take_static_property(&mut self, class_name: &str, name: &str) -> Option<RuntimeCellHandle> {
+        super::request_statics::take_request_static_property(&(
+            normalize_class_name(class_name),
+            name.to_string(),
+        ))
     }
 
     /// Binds one eval static property slot to a persistent PHP reference target.
@@ -154,8 +264,10 @@ impl ElephcEvalContext {
         name: &str,
         target: EvalReferenceTarget,
     ) -> Option<EvalReferenceTarget> {
-        self.static_property_aliases
-            .insert((normalize_class_name(class_name), name.to_string()), target)
+        super::request_statics::bind_request_static_property_alias(
+            (normalize_class_name(class_name), name.to_string()),
+            target,
+        )
     }
 
     /// Returns the persistent reference target bound to one eval static property slot.
@@ -163,9 +275,11 @@ impl ElephcEvalContext {
         &self,
         class_name: &str,
         name: &str,
-    ) -> Option<&EvalReferenceTarget> {
-        self.static_property_aliases
-            .get(&(normalize_class_name(class_name), name.to_string()))
+    ) -> Option<EvalReferenceTarget> {
+        super::request_statics::request_static_property_alias(&(
+            normalize_class_name(class_name),
+            name.to_string(),
+        ))
     }
 
     /// Returns a materialized eval class constant cell.
@@ -187,6 +301,22 @@ impl ElephcEvalContext {
             .class_constants
             .insert((normalize_class_name(class_name), name.into()), cell);
         previous.filter(|previous| *previous != cell)
+    }
+
+    /// Marks one class-like constant as under evaluation, detecting a self-referencing cycle.
+    ///
+    /// Returns `false` when the constant is already being evaluated on this call chain -- php's
+    /// `Cannot declare self-referencing constant` condition -- so the caller can raise a
+    /// catchable `Error` instead of recursing into the same uncached cell forever.
+    pub fn begin_class_constant_evaluation(&mut self, class_name: &str, name: &str) -> bool {
+        self.evaluating_class_constants
+            .insert((normalize_class_name(class_name), name.to_string()))
+    }
+
+    /// Clears a class-like constant's in-progress marker once its value resolves or fails.
+    pub fn end_class_constant_evaluation(&mut self, class_name: &str, name: &str) {
+        self.evaluating_class_constants
+            .remove(&(normalize_class_name(class_name), name.to_string()));
     }
 
     /// Returns the PHP internal array pointer tracked for one runtime array cell.
@@ -213,22 +343,57 @@ impl ElephcEvalContext {
         self.array_cursors.insert(key, cursor);
     }
 
-    /// Returns true when an eval include key was already loaded by this context.
-    pub fn has_included_file(&self, path: &str) -> bool {
-        self.included_files.contains(path)
+    /// Queries the request's single include-state owner.
+    pub fn has_included_file(&self, path: impl AsRef<std::path::Path>) -> bool {
+        self.include_state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(path.as_ref())
     }
 
-    /// Records one successfully loaded eval include key for include_once/require_once.
+    /// Whether the COMPILER already performed this inclusion, splicing the file into the program.
     ///
-    /// The set retains the existing once-deduplication behavior; the separate list
-    /// records first inclusion rather than reconstructing a lexical order on reads.
-    /// The main script may already have been seeded without joining the once set.
-    pub fn mark_included_file(&mut self, path: impl Into<String>) {
+    /// Distinct from [`Self::has_included_file`], which is also true for a file THIS request
+    /// opened. An `include`/`require` whose value is discarded can be skipped for the first but
+    /// not for the second: the compiler ran the file's top-level statements at program start, so
+    /// running them again is duplicate execution, not PHP's re-inclusion semantics.
+    pub fn compiler_included_file(&self, path: impl AsRef<std::path::Path>) -> bool {
+        self.include_state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+            .compiler_included(path.as_ref())
+    }
+
+    /// Pushes whether the next interpreter program originates from an actual include file.
+    pub fn push_include_execution(&mut self, is_include: bool) {
+        self.include_execution_stack.push(is_include);
+    }
+
+    /// Restores the previous interpreter program origin after nested include or eval execution.
+    pub fn pop_include_execution(&mut self) {
+        self.include_execution_stack.pop();
+    }
+
+    /// Returns true only for statements parsed directly from the active include file.
+    pub fn executing_include(&self) -> bool {
+        self.include_execution_stack.last().copied().unwrap_or(false)
+    }
+
+    /// Claims one AOT-backed class-like declaration at its first runtime include point.
+    pub fn claim_aot_include_classlike(&mut self, name: &str) -> bool {
+        self.claimed_aot_include_classlikes
+            .insert(normalize_class_name(name))
+    }
+
+    /// Registers an opened source once, without a context-local shadow copy.
+    ///
+    /// The set of included sources is the request's shared state; the separate list here
+    /// records first inclusion, so `get_included_files()` does not reconstruct a lexical order
+    /// on reads. The main script may already have been seeded without joining the once set.
+    pub fn mark_included_file(&mut self, path: impl Into<std::path::PathBuf>) {
         let path = path.into();
-        if self.included_files.insert(path.clone())
-            && self.included_main_file.as_deref() != Some(path.as_str())
-        {
-            self.included_file_order.push(path);
+        let first = !self.has_included_file(&path);
+        self.include_state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+            .mark(path.clone());
+        let key = path.to_string_lossy().into_owned();
+        if first && self.included_main_file.as_deref() != Some(key.as_str()) {
+            self.included_file_order.push(key);
         }
     }
 
@@ -362,21 +527,15 @@ impl ElephcEvalContext {
         self.eval_backtrace_boundaries.pop();
     }
 
-    /// Reports whether an `eval()` call (bridge or nested) is executing in this context.
-    ///
-    /// The native frame that installed the global scope handle is alive for the whole call,
-    /// whereas a context a callback retains can outlive that frame and its scopes.
-    pub(crate) fn in_eval_execution(&self) -> bool {
-        !self.eval_backtrace_boundaries.is_empty()
-    }
-
     /// Stores the non-owned global scope handle used by eval `global` aliases.
     pub fn set_global_scope(&mut self, scope: *mut ElephcEvalScope) -> bool {
         if scope.is_null() {
             self.global_scope = None;
+            self.owns_global_scope = false;
             false
         } else {
             self.global_scope = Some(scope);
+            self.owns_global_scope = false;
             true
         }
     }
@@ -386,9 +545,277 @@ impl ElephcEvalContext {
         self.global_scope
     }
 
+    /// Refreshes request globals at a native-to-eval boundary and publishes changes on return.
+    ///
+    /// A context imported for a runtime-declared class may have no originating eval frame.
+    /// Its module transfer hooks still describe the live native globals; give those hooks an
+    /// owned scope rather than letting a method seed a detached copy from the environment.
+    pub(crate) fn with_native_global_sync<R>(
+        &mut self,
+        execute: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let transfer = self.native_global_sync.map(|hooks| {
+            let scope = match self.global_scope {
+                Some(scope) => scope,
+                None => {
+                    let scope = Box::into_raw(Box::new(ElephcEvalScope::new()));
+                    self.global_scope = Some(scope);
+                    self.owns_global_scope = true;
+                    scope
+                }
+            };
+            (hooks, scope)
+        });
+        if let Some((hooks, scope)) = transfer {
+            unsafe { (hooks.native_to_eval)(scope) };
+        }
+        let result = execute(self);
+        if let Some((hooks, scope)) = transfer {
+            unsafe { (hooks.eval_to_native)(scope) };
+        }
+        result
+    }
+
+    /// Publishes interpreted globals before native code and refreshes them on return.
+    ///
+    /// This is the reverse boundary of `with_native_global_sync`. A native constructor can
+    /// mutate request globals too; retaining the pre-call scope snapshot would undo those
+    /// writes when control eventually returns through the outer native-to-eval boundary.
+    pub(crate) fn with_eval_global_sync<R>(
+        &mut self,
+        execute: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let transfer = self.native_global_sync.zip(self.global_scope_ptr());
+        if let Some((hooks, scope)) = transfer {
+            unsafe { (hooks.eval_to_native)(scope) };
+        }
+        let result = execute(self);
+        if let Some((hooks, scope)) = transfer {
+            unsafe { (hooks.native_to_eval)(scope) };
+        }
+        result
+    }
+
+    /// Reports whether this context has no retained SPL autoload callbacks.
+    pub(crate) fn has_no_autoload_callbacks(&self) -> bool {
+        self.autoload_callbacks.is_empty()
+    }
+
+    /// Stores one already-retained SPL autoload callback at PHP's requested position.
+    ///
+    /// The position is recorded as a request-wide number, not merely as a place in THIS context's
+    /// list. PHP has one autoload queue per request and runs it in registration order, while
+    /// elephc keeps each callback on the context that registered it, because that is where it is
+    /// retained and released. Sorting the contexts' callbacks by this number reproduces the single
+    /// queue -- an append takes the next number up, a prepend the next number down, so a prepend
+    /// lands ahead of everything registered before it no matter which context owns it.
+    pub(crate) fn register_autoload_callback(
+        &mut self,
+        callback: RuntimeCellHandle,
+        prepend: bool,
+    ) {
+        let sequence = next_autoload_registration_sequence(prepend);
+        if prepend {
+            self.autoload_callbacks.insert(0, (sequence, callback));
+        } else {
+            self.autoload_callbacks.push((sequence, callback));
+        }
+    }
+
+    /// Returns a snapshot of this context's callbacks in their PHP invocation order.
+    pub(crate) fn autoload_callbacks(&self) -> Vec<RuntimeCellHandle> {
+        self.autoload_callbacks
+            .iter()
+            .map(|(_, callback)| *callback)
+            .collect()
+    }
+
+    /// Returns this context's callbacks with the request-wide order they were registered in.
+    pub(crate) fn autoload_callbacks_ordered(&self) -> Vec<(i64, RuntimeCellHandle)> {
+        self.autoload_callbacks.clone()
+    }
+
+    /// Removes the callback stored at one position, which the caller matched BY VALUE.
+    ///
+    /// PHP matches an autoload callback by value, not by cell identity: `spl_autoload_register`
+    /// then `spl_autoload_unregister` with the same `'name'` written twice is two different cells
+    /// and one callback. Identity matching made unregistration answer `false` for a callback that
+    /// was plainly there, and let the same loader be registered twice.
+    pub(crate) fn remove_autoload_callback_at(&mut self, index: usize) -> Option<RuntimeCellHandle> {
+        (index < self.autoload_callbacks.len())
+            .then(|| self.autoload_callbacks.remove(index))
+            .map(|(_, callback)| callback)
+    }
+
+    /// Drains every retained callback when the surrounding PHP request ends.
+    pub(crate) fn take_autoload_callbacks(&mut self) -> Vec<RuntimeCellHandle> {
+        std::mem::take(&mut self.autoload_callbacks)
+            .into_iter()
+            .map(|(_, callback)| callback)
+            .collect()
+    }
+
+    /// Starts one class-autoload attempt and rejects recursive attempts for the same class.
+    ///
+    /// The guard is request-wide, not per context: every compiled frame that includes a file
+    /// opens a context of its own, so a loader that re-enters `interface_exists($class)` (nette's
+    /// `compatibility.php`, whose `interface_exists(IHtmlString::class)` guards a `class_alias`)
+    /// reached the autoloader again through a context that had never heard of the attempt, and
+    /// recursed until the stack ran out. php answers the nested lookup with `false`.
+    pub(crate) fn begin_autoload_class(&mut self, class_name: &str) -> bool {
+        let key = normalize_class_name(class_name);
+        if !GLOBAL_AUTOLOADING_CLASSES.with(|set| set.borrow_mut().insert(key.clone())) {
+            return false;
+        }
+        self.autoloading_classes.insert(key)
+    }
+
+    /// Ends one class-autoload attempt, including error paths.
+    pub(crate) fn end_autoload_class(&mut self, class_name: &str) {
+        let key = normalize_class_name(class_name);
+        GLOBAL_AUTOLOADING_CLASSES.with(|set| {
+            set.borrow_mut().remove(&key);
+        });
+        self.autoloading_classes.remove(&key);
+    }
+
+    /// Transfers the active eval global scope to a context retained beyond its AOT frame.
+    pub(crate) fn retain_global_scope_for_request(
+        &mut self,
+        scope: *mut ElephcEvalScope,
+    ) -> bool {
+        if scope.is_null()
+            || self.global_scope != Some(scope)
+            || !self.has_retained_request_lifetime()
+        {
+            return false;
+        }
+        self.owns_global_scope = true;
+        true
+    }
+
+    /// Returns the frame scope whose ownership was transferred to this context.
+    pub(crate) fn take_owned_global_scope(&mut self) -> Option<*mut ElephcEvalScope> {
+        if !self.owns_global_scope {
+            return None;
+        }
+        self.owns_global_scope = false;
+        self.global_scope.take()
+    }
+
     /// Pushes an eval-executed function name for magic-constant resolution.
     pub fn push_function(&mut self, name: impl Into<String>) {
         self.function_stack.push(name.into());
+    }
+
+    /// Turns PHP's `declare(strict_types=1)` on or off, returning the previous setting.
+    ///
+    /// php scopes this to the file containing the code doing the coercing. An argument is coerced
+    /// at the CALL, so the caller's file decides; a returned value is coerced at the `return`, so
+    /// the callee's file decides. The flag therefore holds the mode of the file whose code is
+    /// running right now: an include frame saves and restores it, and each body-execution site
+    /// sets it to the callee's declaration stamp and puts the caller's back afterwards.
+    pub fn set_strict_types(&mut self, strict_types: bool) -> bool {
+        std::mem::replace(&mut self.strict_types, strict_types)
+    }
+
+    /// Returns whether scalar arguments and returns are checked strictly.
+    pub const fn strict_types(&self) -> bool {
+        self.strict_types
+    }
+
+    /// Sets `declare(ticks=N)`'s interval, returning the previous one.
+    ///
+    /// Zero means no tick directive is in force, which is the state every program starts in and
+    /// the one `register_tick_function()` alone does not leave: php needs BOTH the directive and
+    /// a registered handler before anything runs.
+    pub fn set_tick_interval(&mut self, interval: i64) -> i64 {
+        self.tick_counter = 0;
+        std::mem::replace(&mut self.tick_interval, interval)
+    }
+
+    /// Returns the tick interval in force, or zero when ticking is off.
+    pub const fn tick_interval(&self) -> i64 {
+        self.tick_interval
+    }
+
+    /// Counts one executed statement and reports whether a tick is due.
+    ///
+    /// Measured with `php -n` 8.5.6: `declare(ticks=3)` over six statements fires twice, so the
+    /// counter resets on each fire rather than testing a running total.
+    pub fn tick_statement_is_due(&mut self) -> bool {
+        if self.tick_interval <= 0 || self.tick_running || self.tick_functions.is_empty() {
+            return false;
+        }
+        self.tick_counter += 1;
+        if self.tick_counter < self.tick_interval {
+            return false;
+        }
+        self.tick_counter = 0;
+        true
+    }
+
+    /// Returns the registered tick handlers, in registration order.
+    pub fn tick_functions(&self) -> Vec<RuntimeCellHandle> {
+        self.tick_functions.clone()
+    }
+
+    /// Registers one tick handler, taking ownership of the retained callable.
+    pub fn push_tick_function(&mut self, handler: RuntimeCellHandle) {
+        self.tick_functions.push(handler);
+    }
+
+    /// Removes the tick handler at one index and hands its owned reference back.
+    pub fn take_tick_function(&mut self, index: usize) -> Option<RuntimeCellHandle> {
+        if index >= self.tick_functions.len() {
+            return None;
+        }
+        Some(self.tick_functions.remove(index))
+    }
+
+    /// Marks a tick handler as running, returning the previous state.
+    ///
+    /// php does not tick inside a tick handler; without this the first handler statement would
+    /// schedule another tick and the interpreter would recurse until it ran out of stack.
+    pub fn set_tick_running(&mut self, running: bool) -> bool {
+        std::mem::replace(&mut self.tick_running, running)
+    }
+
+    /// Marks whether the body about to run returns BY REFERENCE, returning the previous value.
+    ///
+    /// Saved and restored by the caller rather than kept on a stack, because the three places
+    /// that run a body -- function, closure, method -- already own that save/restore shape and a
+    /// parallel stack could desync from `function_stack` on an early return.
+    pub fn set_returns_by_ref(&mut self, returns_by_ref: bool) -> bool {
+        std::mem::replace(&mut self.returns_by_ref, returns_by_ref)
+    }
+
+    /// Returns whether the currently executing body was declared to return by reference.
+    pub const fn returns_by_ref(&self) -> bool {
+        self.returns_by_ref
+    }
+
+    /// Records the reference a by-reference `return` produced, with the value already RETAINED.
+    ///
+    /// Whatever outlives the call owns its reference: the callee's activation scope is drained
+    /// the moment it returns, so the cell handed to the caller has to carry a reference of its
+    /// own. Any previous unclaimed reference is given back, which is what a `&f();` statement --
+    /// a by-reference call whose result nobody binds -- leaves behind.
+    pub fn set_pending_return_reference(
+        &mut self,
+        target: EvalReferenceTarget,
+        value: RuntimeCellHandle,
+    ) -> Option<RuntimeCellHandle> {
+        self.pending_return_reference
+            .replace((target, value))
+            .map(|(_, value)| value)
+    }
+
+    /// Takes the reference a by-reference `return` produced, handing its ownership to the caller.
+    pub fn take_pending_return_reference(
+        &mut self,
+    ) -> Option<(EvalReferenceTarget, RuntimeCellHandle)> {
+        self.pending_return_reference.take()
     }
 
     /// Pops the current eval-executed function name after its body completes.
@@ -507,6 +934,33 @@ impl ElephcEvalContext {
         self.clone_reinitialized_properties
             .get_mut(&identity)
             .is_some_and(|properties| properties.insert(property.to_string()))
+    }
+
+    /// Renders the whole class-scope stack, innermost last, for a diagnostic.
+    ///
+    /// A visibility refusal only ever prints the TOP of this stack, which says what the check
+    /// compared but not how execution got there. Kept off every hot path on purpose: this is
+    /// called from failure paths only, so it carries no `ELEPHC_EVAL_TRACE` lookup of its own.
+    pub fn debug_class_scope_stack(&self) -> String {
+        self.class_stack.join(" > ")
+    }
+
+    /// Enters a class-like-member-default evaluation (constant initializer, property default,
+    /// enum case value), where `static::` has no live call frame to bind late.
+    pub fn push_compile_time_constant_context(&mut self) {
+        self.compile_time_constant_depth += 1;
+    }
+
+    /// Leaves a class-like-member-default evaluation started by
+    /// `push_compile_time_constant_context`.
+    pub fn pop_compile_time_constant_context(&mut self) {
+        self.compile_time_constant_depth = self.compile_time_constant_depth.saturating_sub(1);
+    }
+
+    /// Returns whether evaluation is currently inside a class-like-member default, where php
+    /// refuses `static::` as an uncatchable compile-time error rather than binding it late.
+    pub fn in_compile_time_constant_context(&self) -> bool {
+        self.compile_time_constant_depth > 0
     }
 
     /// Pushes the class name used to dispatch the current eval method call.
@@ -750,6 +1204,22 @@ impl ElephcEvalContext {
         self.seed_main_included_file();
     }
 
+    /// Moves the current line without disturbing the file or directory it belongs to.
+    ///
+    /// `set_call_site` replaces all three and clears the `__FILE__` override, which is right when
+    /// ENTERING a file and wrong for every statement inside it. This is what an
+    /// `EvalStmt::SourceLine` marker calls, and what makes a `debug_backtrace()` frame, a
+    /// diagnostic's `on line N` and an `eval()`'d-code spelling name the statement that is
+    /// actually running rather than the line the file was entered on.
+    pub fn set_call_line(&mut self, line: i64) -> i64 {
+        std::mem::replace(&mut self.call_line, line)
+    }
+
+    /// Returns the line currently being executed.
+    pub const fn call_line(&self) -> i64 {
+        self.call_line
+    }
+
     /// Returns a copy of the current call-site metadata for temporary overrides.
     pub fn call_site(&self) -> (String, String, i64, Option<String>) {
         (
@@ -768,6 +1238,33 @@ impl ElephcEvalContext {
     /// Returns the source directory associated with the current eval call site.
     pub fn call_dir(&self) -> &str {
         &self.call_dir
+    }
+
+    /// Makes the call site the eval'd code itself, php's `FILE(LINE) : eval()'d code` at line 1.
+    ///
+    /// php reports code inside `eval()` as a file of its own whose lines count from the
+    /// fragment's first line: a warning says `in x.php(3) : eval()'d code on line 2`, a frame
+    /// called from there carries that file and line, and so do `__FILE__`/`__LINE__`. The
+    /// fragment's `SourceLine` markers move the line from here. Returns the site to hand back to
+    /// [`Self::leave_eval_code_site`]; a context with no file (a bare bridge call) is left alone.
+    pub fn enter_eval_code_site(&mut self) -> (String, String, i64, Option<String>) {
+        let previous = self.call_site();
+        let name = self.eval_file_magic();
+        if !name.is_empty() {
+            self.call_file = name.clone();
+            self.call_line = 1;
+            self.file_magic_override = Some(name);
+        }
+        previous
+    }
+
+    /// Restores the site [`Self::enter_eval_code_site`] replaced, without reseeding main.
+    pub fn leave_eval_code_site(&mut self, previous: (String, String, i64, Option<String>)) {
+        let (file, dir, line, file_magic) = previous;
+        self.call_file = file;
+        self.call_dir = dir;
+        self.call_line = line;
+        self.file_magic_override = file_magic;
     }
 
     /// Returns PHP's `__FILE__` string for code currently running inside eval.

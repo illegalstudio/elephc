@@ -903,6 +903,43 @@ fn test_cli_web_prunes_unused_session_surface_from_assembly() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies a CLI program that names no session function and loads no unseen source carries
+/// none of the session surface, and keeps no uncalled user declaration either: the forced
+/// session group's callable save-handler adapter used to widen every declaration to reachable.
+#[test]
+fn test_cli_prunes_unused_session_surface_and_declarations() {
+    let dir = make_cli_test_dir("elephc_cli_pruned_session_prelude");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        "<?php function cli_prune_unused_fn() { return 1; } echo 'ok';",
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile pruned CLI program");
+    assert!(
+        output.status.success(),
+        "elephc failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let asm = fs::read_to_string(dir.join("main.s")).expect("failed to read CLI assembly");
+    for symbol in [
+        "_fn_session_u_start",
+        "_fn__u__u_elephc_u_session_u_start_u_core",
+        "__ElephcCallableSessionHandler",
+        "_fn_setcookie",
+        "_fn_cli_u_prune_u_unused_u_fn",
+    ] {
+        assert!(!asm.contains(symbol), "CLI assembly must not contain {symbol}");
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies compile-time web isolation selects one bridge symbol and leaves the default
 /// assembly byte-identical to an explicit `worker` selection.
 #[test]
@@ -1072,8 +1109,8 @@ fn test_with_eval_keeps_unreferenced_user_declaration() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies repeated boxed-Mixed callable sites reuse module-wide descriptor
-/// wrappers instead of regenerating the full candidate set in every function.
+/// Verifies repeated boxed-Mixed callable sites reuse one module-wide dispatch helper
+/// instead of regenerating the full candidate set in every function.
 #[test]
 fn test_cli_runtime_callable_descriptors_are_shared_across_call_sites() {
     let dir = make_cli_test_dir("elephc_cli_callable_descriptor_dedup");
@@ -1102,13 +1139,19 @@ echo second('plus_one');
     );
 
     let asm = fs::read_to_string(dir.join("main.s")).expect("failed to read callable assembly");
-    assert!(
-        asm.contains("_eir_first_callable_invoker"),
-        "the first dynamic call site must emit shared invokers"
+    assert_eq!(
+        asm.matches("_eir_shared_mixed_callable_invoke:").count(),
+        1,
+        "equivalent open callback sites must emit one shared dispatch helper"
     );
     assert!(
-        !asm.contains("_eir_second_callable_invoker"),
-        "the second equivalent call site must reuse the first site's invokers"
+        asm.matches("_eir_shared_mixed_callable_invoke").count() >= 3,
+        "both dynamic call sites must invoke the shared helper"
+    );
+    assert!(
+        !asm.contains("_eir_first_callable_invoker")
+            && !asm.contains("_eir_second_callable_invoker"),
+        "per-function callable catalogs must not be regenerated"
     );
 
     let run = run_binary(&dir.join("main"), &dir);
@@ -2356,4 +2399,97 @@ fn test_cli_source_map_keeps_long_included_line_ends() {
     assert_eq!(strlen["php_col"], 70_015);
     assert_eq!(strlen["php_end_col"], 70_025, "the included strlen() lost its end: {strlen}");
     assert_eq!(included, root, "the included line maps differently from the same root line");
+}
+
+/// The one-argument `assert()` helper is called only from lowering, so no declaration-level call
+/// edge names it. The CLI's unreachable-declaration pass removed it, and the compiled binary died
+/// with "Call to undefined function __elephc_assert_one_arg()" -- a failure the in-process test
+/// harness, which skips that pass, cannot see.
+#[test]
+fn test_cli_keeps_the_assert_helper_through_declaration_pruning() {
+    let dir = make_cli_test_dir("elephc_cli_assert_helper");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+namespace App;
+function check($value) { assert($value); return "ok"; }
+echo check(true);
+try {
+    check(false);
+} catch (\AssertionError $error) {
+    echo ":caught";
+}
+"#,
+    )
+    .unwrap();
+    let output = elephc_cli_command(&dir).arg(&php_path).output().unwrap();
+    assert!(
+        output.status.success(),
+        "compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let run = Command::new(dir.join("main")).output().unwrap();
+    assert!(run.status.success(), "binary failed: {}", String::from_utf8_lossy(&run.stderr));
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "ok:caught");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Average length of the assembler-local label names (`L_...`) the text spells, and the number of
+/// full-line comments other than the merge markers and the visibility footer marker.
+///
+/// Per label, not per instruction: shared helpers shrink the instruction count while each body
+/// keeps its labels, and a per-instruction ratio then rose with every size win.
+fn assembly_text_profile(asm: &str) -> (f64, usize) {
+    let mut labels = 0usize;
+    let mut label_bytes = 0usize;
+    let mut comments = 0usize;
+    for line in asm.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with(';') || trimmed.starts_with("//") {
+            if !trimmed.contains("@helper") && !trimmed.contains("@endhelper") && !trimmed.contains("internal symbols are local") {
+                comments += 1;
+            }
+            continue;
+        }
+        for token in trimmed.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
+            if token.starts_with("L_") {
+                labels += 1;
+                label_bytes += token.len();
+            }
+        }
+    }
+    (label_bytes as f64 / labels.max(1) as f64, comments)
+}
+
+/// An ordinary build writes its assembly compact -- no comment lines, short local labels --
+/// while `--emit-asm` keeps the readable form. The label bound is the regression guard: spelling
+/// the function and block in every local label (23% of the Symfony text) made each one 40 bytes
+/// and more; a compact `L_<body hash>_<n>` is 17.
+#[test]
+fn test_cli_ordinary_build_writes_compact_assembly_and_emit_asm_stays_readable() {
+    let dir = make_cli_test_dir("elephc_cli_compact_asm");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        "<?php\nfunction f($a) { if ($a > 1) { return $a * 2; } return $a; }\nfor ($i = 0; $i < 3; $i++) { echo f($i), \"\\n\"; }\n",
+    )
+    .unwrap();
+
+    let built = elephc_cli_command(&dir).arg(&php_path).output().expect("failed to run elephc");
+    assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
+    let compact = fs::read_to_string(dir.join("main.s")).expect("a build keeps its main.s");
+    let (compact_ratio, compact_comments) = assembly_text_profile(&compact);
+    assert_eq!(compact_comments, 0, "an ordinary build must not write comment lines");
+    assert!(!compact.contains("L_eir_"), "local labels must not spell function and block names");
+    assert!(compact_ratio < 20.0, "{compact_ratio} bytes per local label");
+
+    let emitted = elephc_cli_command(&dir).arg("--emit-asm").arg(&php_path).output().unwrap();
+    assert!(emitted.status.success(), "{}", String::from_utf8_lossy(&emitted.stderr));
+    let readable = fs::read_to_string(dir.join("main.s")).unwrap();
+    let (readable_ratio, readable_comments) = assembly_text_profile(&readable);
+    assert!(readable_comments > 0, "--emit-asm keeps its comments");
+    assert!(readable.contains("L_eir_"), "--emit-asm keeps readable labels");
+    assert!(readable_ratio > 2.0 * compact_ratio, "{readable_ratio} vs {compact_ratio}");
+    let _ = fs::remove_dir_all(&dir);
 }

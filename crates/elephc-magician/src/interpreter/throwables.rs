@@ -10,6 +10,25 @@
 
 use super::*;
 
+/// Records why the interpreter is about to fail, with the PHP location that asked for it.
+///
+/// The bridge status the caller returns carries a number and nothing else, so the description
+/// travels beside it and `__elephc_eval_report_runtime_fatal` prints the pair. Only failures
+/// that are NOT Throwables need this: a Throwable already names itself.
+///
+/// The line is the one the failing STATEMENT was written on. It used to be dropped whenever an
+/// included file was executing, because a context's call site was the `include` that started the
+/// file and naming the top of a file for a failure forty lines down is worse than naming nothing.
+/// `EvalStmt::SourceLine` markers moved the call site to the statement being executed, so the
+/// number is now the one php prints and there is nothing left to suppress.
+pub(in crate::interpreter) fn note_eval_runtime_failure(
+    what: impl Into<String>,
+    context: &ElephcEvalContext,
+) {
+    let (file, _, line, _) = context.call_site();
+    crate::errors::note_eval_runtime_failure(what, file, Some(line));
+}
+
 /// Constructs a builtin exception, releasing borrowed constructor operands before publishing its owner.
 pub(in crate::interpreter) fn eval_throw_builtin_exception<T>(
     class_name: &str,
@@ -17,11 +36,30 @@ pub(in crate::interpreter) fn eval_throw_builtin_exception<T>(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
+    eval_throw_builtin_exception_with_code(class_name, message, 0, context, values)
+}
+
+/// [`eval_throw_builtin_exception`] with an explicit `$code` (JsonException carries the error).
+pub(in crate::interpreter) fn eval_throw_builtin_exception_with_code<T>(
+    class_name: &str,
+    message: &str,
+    code: i64,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
     let exception = values.new_object(class_name)?;
+    // A throwable records its source at allocation, before any constructor runs; a user `new`
+    // does it through `initialize_native_throwable_source`. An error the interpreter raises
+    // itself ("Call to undefined method") skipped that, so it carried an empty file and line 0,
+    // and Symfony's console printed `In n/a line n/a:` where php names the failing statement.
+    if let Err(status) = initialize_native_throwable_source(exception, context, values) {
+        let _ = eval_release_value(context, values, exception);
+        return Err(status);
+    }
     let constructed = (|| {
         let message = values.string(message)?;
         with_eval_value_lease(message, context, values, |message, context, values| {
-            let code = values.int(0)?;
+            let code = values.int(code)?;
             with_eval_value_lease(code, context, values, |code, _, values| {
                 values.construct_object(exception, vec![message, code])
             })

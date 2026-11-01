@@ -44,6 +44,9 @@ use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::sentinels::emit_branch_if_null_container;
+use crate::codegen_support::callable_invoker_args::{
+    ARRAY_GLOBAL_REF_CELL_TAG, ARRAY_LOCAL_REF_CELL_TAG, INVOKER_ARG_REF_CELL_TAG,
+};
 
 /// Dispatches the fetch-for-write helper family to the target-specific emitters.
 pub fn emit_mixed_array_fetch_for_write(emitter: &mut Emitter) {
@@ -245,6 +248,9 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload the requested integer index
     emitter.instruction("cmp x9, #0");                                          // negative indexes are not representable in dense storage
     emitter.instruction("b.lt __rt_mixed_array_gfw_promote");                   // negative integer keys require associative PHP-array storage
+    emitter.instruction("ldr x14, [x10]");                                      // load the indexed array's current logical length
+    emitter.instruction("cmp x9, x14");                                         // would autovivifying this key leave a gap in packed storage?
+    emitter.instruction("b.hi __rt_mixed_array_gfw_promote");                   // a key past the next append slot promotes to a hash like PHP (never pads)
     emitter.instruction("ldr x12, [x10, #-8]");                                 // load the packed indexed-array metadata
     emitter.instruction("ubfx x1, x12, #8, #7");                                // pass the source value_type tag to the Mixed conversion helper
     emitter.instruction("mov x0, x10");                                         // pass the indexed array to the Mixed conversion helper
@@ -268,8 +274,10 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [x13, x9, lsl #3]");                           // load the stored boxed cell from the slot
     emitter.instruction("cbz x0, __rt_mixed_array_gfw_fill_slot");              // null gap slots autovivify in place
     emitter.instruction("ldr x11, [x0]");                                       // load the stored cell's payload tag
+    emit_branch_if_ref_marker_aarch64(emitter, "x11", "__rt_mixed_array_gfw_ref_marker");
     emitter.instruction("cmp x11, #8");                                         // does the slot hold a boxed Mixed(null)?
     emitter.instruction("b.eq __rt_mixed_array_gfw_replace_null");              // PHP autovivifies null elements: replace the slot cell
+    emitter.label("__rt_mixed_array_gfw_indexed_detach");
     emitter.instruction("str x0, [sp, #40]");                                   // preserve the replaced slot owner after the bounds check
     emitter.instruction("bl __rt_mixed_clone");                                 // detach the child zval while preserving resource identity
     emitter.instruction("ldr x10, [sp, #24]");                                  // reload the unique parent array after cloning
@@ -364,6 +372,8 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, #8");                                          // does the entry hold a boxed Mixed(null)?
     emitter.instruction("b.eq __rt_mixed_array_gfw_assoc_create");              // PHP autovivifies null elements: overwrite (hash_set releases it)
     emitter.instruction("mov x0, x1");                                          // pass the existing boxed child to value cloning
+    emit_branch_if_ref_marker_aarch64(emitter, "x9", "__rt_mixed_array_gfw_ref_marker");
+    emitter.label("__rt_mixed_array_gfw_assoc_detach");
     emitter.instruction("bl __rt_mixed_clone");                                 // detach the child zval from copies of the outer hash
     emitter.instruction("b __rt_mixed_array_gfw_assoc_install");                // publish the detached child through the owning parent boundary
     emitter.label("__rt_mixed_array_gfw_assoc_box");
@@ -394,6 +404,24 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_incref");                                      // retain the installed cell so the caller owns the returned result
     emitter.instruction("b __rt_mixed_array_gfw_return");                       // finish after installing the autovivified element
 
+    // A reference marker (`$a = [&$t]; $a[0]['k'] = v`): the write goes to the referenced value,
+    // so the slot keeps its marker and the referenced boxed cell is returned. Detaching cloned
+    // the marker and the write landed in the copy. A referent stored unboxed keeps the old path.
+    emitter.label("__rt_mixed_array_gfw_ref_marker");
+    emitter.instruction("ldr x9, [x0, #16]");                                   // load the runtime tag of the referenced storage
+    emitter.instruction("cmp x9, #7");                                          // is the referenced storage a boxed Mixed cell?
+    emitter.instruction("b.ne __rt_mixed_array_gfw_ref_marker_unboxed");        // other referents keep the detaching path
+    emitter.instruction("ldr x10, [x0, #8]");                                   // load the referenced storage address
+    emitter.instruction("ldr x0, [x10]");                                       // load the referenced boxed cell
+    emitter.instruction("cbz x0, __rt_mixed_array_gfw_detached_null");          // an empty referent cannot be written through
+    emitter.instruction("bl __rt_incref");                                      // the caller owns one reference to the returned cell
+    emitter.instruction("b __rt_mixed_array_gfw_return");                       // write through the referenced cell
+    emitter.label("__rt_mixed_array_gfw_ref_marker_unboxed");
+    emitter.instruction("ldr x10, [sp, #0]");                                   // reload the receiver cell
+    emitter.instruction("ldr x10, [x10]");                                      // load its payload tag
+    emitter.instruction("cmp x10, #5");                                         // is the parent an associative array?
+    emitter.instruction("b.eq __rt_mixed_array_gfw_assoc_detach");              // hash parents detach through the hash install path
+    emitter.instruction("b __rt_mixed_array_gfw_indexed_detach");               // indexed parents detach in place
     emitter.label("__rt_mixed_array_gfw_detached_null");
     emitter.instruction("mov x0, #8");                                          // tag = 8 (null)
     emitter.instruction("mov x1, #0");                                          // value_lo = 0
@@ -609,6 +637,8 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // reload the requested integer index
     emitter.instruction("cmp r9, 0");                                           // negative indexes are not representable in dense storage
     emitter.instruction("jl __rt_mixed_array_gfw_promote");                     // negative integer keys require associative PHP-array storage
+    emitter.instruction("cmp r9, QWORD PTR [r10]");                             // would autovivifying this key leave a gap in packed storage?
+    emitter.instruction("ja __rt_mixed_array_gfw_promote");                     // a key past the next append slot promotes to a hash like PHP (never pads)
     emitter.instruction("mov r8, QWORD PTR [r10 - 8]");                         // load the packed indexed-array metadata
     emitter.instruction("shr r8, 8");                                           // shift the runtime element value_type tag into the low bits
     emitter.instruction("and r8, 0x7f");                                        // remove the persistent COW flag from the extracted tag
@@ -635,8 +665,10 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // null gap slots autovivify in place
     emitter.instruction("je __rt_mixed_array_gfw_fill_slot");                   // branch to the slot-install path
     emitter.instruction("mov r11, QWORD PTR [rax]");                            // load the stored cell's payload tag
+    emit_branch_if_ref_marker_x86_64(emitter, "r11", "__rt_mixed_array_gfw_ref_marker");
     emitter.instruction("cmp r11, 8");                                          // does the slot hold a boxed Mixed(null)?
     emitter.instruction("je __rt_mixed_array_gfw_replace_null");                // PHP autovivifies null elements: replace the slot cell
+    emitter.label("__rt_mixed_array_gfw_indexed_detach");
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // preserve the replaced slot owner after the bounds check
     emitter.instruction("call __rt_mixed_clone");                               // detach the child zval while preserving resource identity
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the unique parent array after cloning
@@ -733,6 +765,8 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r11, 8");                                          // does the entry hold a boxed Mixed(null)?
     emitter.instruction("je __rt_mixed_array_gfw_assoc_create");                // PHP autovivifies null elements: overwrite (hash_set releases it)
     emitter.instruction("mov rax, rdi");                                        // pass the existing boxed child to value cloning
+    emit_branch_if_ref_marker_x86_64(emitter, "r11", "__rt_mixed_array_gfw_ref_marker");
+    emitter.label("__rt_mixed_array_gfw_assoc_detach");
     emitter.instruction("call __rt_mixed_clone");                               // detach the child zval from copies of the outer hash
     emitter.instruction("jmp __rt_mixed_array_gfw_assoc_install");              // publish the detached child through the owning parent boundary
     emitter.label("__rt_mixed_array_gfw_assoc_box");
@@ -765,6 +799,25 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
     abi::emit_pop_reg(emitter, "rax");
     emitter.instruction("jmp __rt_mixed_array_gfw_return");                     // finish after installing the autovivified element
 
+    // A reference marker: write through the referenced boxed cell (see the AArch64 arm).
+    emitter.label("__rt_mixed_array_gfw_ref_marker");
+    emitter.instruction("mov r11, QWORD PTR [rax + 16]");                       // load the runtime tag of the referenced storage
+    emitter.instruction("cmp r11, 7");                                          // is the referenced storage a boxed Mixed cell?
+    emitter.instruction("jne __rt_mixed_array_gfw_ref_marker_unboxed");         // other referents keep the detaching path
+    emitter.instruction("mov r10, QWORD PTR [rax + 8]");                        // load the referenced storage address
+    emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the referenced boxed cell
+    emitter.instruction("test rax, rax");                                       // an empty referent cannot be written through
+    emitter.instruction("je __rt_mixed_array_gfw_detached_null");               // fall back to a detached null
+    abi::emit_push_reg(emitter, "rax");
+    emitter.instruction("call __rt_incref");                                    // the caller owns one reference to the returned cell
+    abi::emit_pop_reg(emitter, "rax");
+    emitter.instruction("jmp __rt_mixed_array_gfw_return");                     // write through the referenced cell
+    emitter.label("__rt_mixed_array_gfw_ref_marker_unboxed");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the receiver cell
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load its payload tag
+    emitter.instruction("cmp r10, 5");                                          // is the parent an associative array?
+    emitter.instruction("je __rt_mixed_array_gfw_assoc_detach");                // hash parents detach through the hash install path
+    emitter.instruction("jmp __rt_mixed_array_gfw_indexed_detach");             // indexed parents detach in place
     emitter.label("__rt_mixed_array_gfw_detached_null");
     emitter.instruction("mov rax, 8");                                          // tag = 8 (null) for mixed_from_value
     emitter.instruction("mov rdi, 0");                                          // value_lo = 0
@@ -861,5 +914,21 @@ mod tests {
             };
             assert!(normalize < republish, "{name}: {promote_hash}");
         }
+    }
+}
+
+/// Branches to `label` when `tag_reg` holds one of the array reference-marker tags.
+fn emit_branch_if_ref_marker_aarch64(emitter: &mut Emitter, tag_reg: &str, label: &str) {
+    for tag in [INVOKER_ARG_REF_CELL_TAG, ARRAY_GLOBAL_REF_CELL_TAG, ARRAY_LOCAL_REF_CELL_TAG] {
+        emitter.instruction(&format!("cmp {tag_reg}, #{tag}"));                // is this cell a reference marker?
+        emitter.instruction(&format!("b.eq {label}"));                          // write through the referenced value instead
+    }
+}
+
+/// Branches to `label` when `tag_reg` holds one of the array reference-marker tags.
+fn emit_branch_if_ref_marker_x86_64(emitter: &mut Emitter, tag_reg: &str, label: &str) {
+    for tag in [INVOKER_ARG_REF_CELL_TAG, ARRAY_GLOBAL_REF_CELL_TAG, ARRAY_LOCAL_REF_CELL_TAG] {
+        emitter.instruction(&format!("cmp {tag_reg}, {tag}"));                 // is this cell a reference marker?
+        emitter.instruction(&format!("je {label}"));                            // write through the referenced value instead
     }
 }

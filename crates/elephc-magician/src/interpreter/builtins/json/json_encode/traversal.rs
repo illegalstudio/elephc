@@ -144,9 +144,18 @@ impl<V: RuntimeValueOps> EvalJsonTraversal<'_, V> {
                 },
                 false,
             )?,
-            EVAL_TAG_ASSOC => self.start_container(
-                value, depth, EvalJsonContainerKind::AssocArray, false,
-            )?,
+            EVAL_TAG_ASSOC => {
+                // PHP decides the bracket from the KEYS, not the storage kind: keys exactly
+                // 0..len-1 make a JSON list, and the empty array is the degenerate case.
+                let kind = if self.assoc_is_list(value)? {
+                    EvalJsonContainerKind::IndexedArray {
+                        force_object: self.flags & EVAL_JSON_FORCE_OBJECT != 0,
+                    }
+                } else {
+                    EvalJsonContainerKind::AssocArray
+                };
+                self.start_container(value, depth, kind, false)?
+            }
             EVAL_TAG_OBJECT => self.encode_object(value, depth)?,
             EVAL_TAG_NULL | EVAL_TAG_RESOURCE => self.output.extend_from_slice(b"null"),
             _ => return Err(EvalStatus::UnsupportedConstruct.into()),
@@ -177,16 +186,43 @@ impl<V: RuntimeValueOps> EvalJsonTraversal<'_, V> {
                 )
             }
             EvalJsonObjectEncoding::SerializableEnum => {
-                self.encode_serializable_enum(value, depth)
+                self.encode_serializable(value, depth, true)
+            }
+            EvalJsonObjectEncoding::Serializable => {
+                self.encode_serializable(value, depth, false)
             }
         }
     }
 
-    /// Invokes one enum serializer and schedules its owned result at the same depth.
-    fn encode_serializable_enum(
+    /// Reports whether a hash's keys are exactly the integers `0..len-1`, in order.
+    ///
+    /// A key is compared by its rendered form because php normalizes a numeric string key to an
+    /// integer on insert, so a hash can never hold the string "0" alongside the int 0.
+    fn assoc_is_list(&mut self, value: RuntimeCellHandle) -> EvalJsonEncodeResult<bool> {
+        let len = self.values.array_len(value)?;
+        for position in 0..len {
+            let key = self.values.array_iter_key(value, position)?;
+            let tag = self.values.type_tag(key);
+            let bytes = self.values.string_bytes(key);
+            if !key.is_borrowed() {
+                eval_release_value(self.context, self.values, key)?;
+            }
+            if tag? != EVAL_TAG_INT || bytes? != position.to_string().into_bytes() {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Invokes one `jsonSerialize()` and schedules its owned result at the same depth.
+    ///
+    /// An object that hands itself back is encoded as its own properties, as php does, instead of
+    /// recursing forever.
+    fn encode_serializable(
         &mut self,
         value: RuntimeCellHandle,
         depth: usize,
+        is_enum: bool,
     ) -> EvalJsonEncodeResult {
         let identity = self.values.object_identity(value)? as usize;
         if self.active.contains(&identity) {
@@ -208,10 +244,9 @@ impl<V: RuntimeValueOps> EvalJsonTraversal<'_, V> {
             && self.values.object_identity(result)? as usize == identity;
         if returns_receiver {
             // Native enum iterators do not expose their synthetic name/value properties.
-            let native_receiver = dynamic_object_is_a(
-                result, "UnitEnum", false, self.context, self.values,
-            )?
-            .is_none();
+            let native_receiver = is_enum
+                && dynamic_object_is_a(result, "UnitEnum", false, self.context, self.values)?
+                    .is_none();
             let kind = if native_receiver {
                 EvalJsonContainerKind::NativeEnumProperties
             } else {

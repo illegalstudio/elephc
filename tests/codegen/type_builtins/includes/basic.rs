@@ -64,6 +64,20 @@ fn test_include_top_level_code() {
     assert_eq!(out, "beforemiddleafter");
 }
 
+/// Verifies a static statement-position include resumes the caller after the
+/// included file returns, while preserving the returned expression's side effect.
+#[test]
+fn test_include_return_does_not_return_from_caller() {
+    let out = compile_and_run_files(
+        &[
+            ("main.php", "<?php include 'included.php'; echo 'caller';"),
+            ("included.php", "<?php echo 'included:'; return 7; echo 'skipped';"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "included:caller");
+}
+
 /// Verifies `include_once` only executes the file the first time; subsequent calls in the same runtime are no-ops.
 #[test]
 fn test_include_once() {
@@ -447,4 +461,39 @@ fn test_require_value_without_return_yields_one() {
         "main.php",
     );
     assert_eq!(out, "1:H");
+}
+
+/// Verifies builtin result metadata is isolated between equal coordinates in separate files.
+#[test]
+fn test_included_builtin_call_spans_do_not_share_result_types() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+require __DIR__ . '/keys.php';
+require __DIR__ . '/slice.php';
+echo implode(',', selected_keys()) . ':' . implode(',', selected_slice());
+"#,
+            ),
+            (
+                "keys.php",
+                r#"<?php
+function selected_keys(): array {
+    return array_keys(['left' => 1, 'right' => 2]);
+}
+"#,
+            ),
+            (
+                "slice.php",
+                r#"<?php
+function selected_slice(): array {
+    return array_slice([10, 20, 30], 1);
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "left,right:20,30");
 }

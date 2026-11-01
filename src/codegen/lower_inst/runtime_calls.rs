@@ -79,6 +79,19 @@ pub(super) fn lower(
         RuntimeCallTarget::WriteDiagnostic => super::string_write_offsets::lower_diagnostic(ctx, inst),
         RuntimeCallTarget::MixedArrayCellHasLiveOwner => super::runtime_array_liveness::lower(ctx, inst),
         RuntimeCallTarget::MixedCellHasOtherOwner => lower_mixed_cell_has_other_owner(ctx, inst),
+        RuntimeCallTarget::DynamicInclude {
+            once,
+            required,
+            strict_php,
+            value_discarded,
+        } => super::builtins::lower_dynamic_include(
+            ctx,
+            inst,
+            once,
+            required,
+            strict_php,
+            value_discarded,
+        ),
         RuntimeCallTarget::MixedCellPromoteToHash(sort) => {
             lower_mixed_cell_promote_to_hash(ctx, inst, sort, false)
         }
@@ -87,6 +100,9 @@ pub(super) fn lower(
         }
         RuntimeCallTarget::MixedCellClone => lower_mixed_cell_clone(ctx, inst),
         RuntimeCallTarget::MixedCellResolveForWrite => lower_mixed_cell_resolve_for_write(ctx, inst),
+        RuntimeCallTarget::EvalQuietPropertyFetch { enter } => {
+            lower_eval_quiet_property_fetch(ctx, enter)
+        }
         RuntimeCallTarget::ArrayUnpackToHash => lower_array_unpack_to_hash(ctx, inst),
         RuntimeCallTarget::ExceptionGuardOwned => super::exception_instructions::lower_guard_owned(ctx, inst),
         RuntimeCallTarget::ExceptionUnguardOwned => super::exception_instructions::lower_unguard_owned(ctx, inst),
@@ -254,6 +270,28 @@ fn lower_mixed_cell_has_other_owner(ctx: &mut FunctionContext<'_>, inst: &Instru
     }
     ctx.emitter.label(&done);
     store_if_result(ctx, inst)
+}
+
+/// Enters or leaves PHP's quiet property fetch around a compiled `isset`/`empty`/`??` operand.
+///
+/// A bare bridge call with no arguments and no result: the depth it moves is thread-local and
+/// shared with the interpreter's, which is the point -- the operand is lowered by the compiler
+/// while the property it reaches may be owned by an eval context, and both sides have to agree
+/// that the fetch is quiet.
+///
+/// Without the bridge no eval context can own the receiver, so the scope has nothing to tell
+/// anyone and emits nothing.
+fn lower_eval_quiet_property_fetch(ctx: &mut FunctionContext<'_>, enter: bool) -> Result<()> {
+    if !ctx.module.required_runtime_features.eval_bridge {
+        return Ok(());
+    }
+    let symbol = ctx.emitter.target.extern_symbol(if enter {
+        "__elephc_eval_quiet_property_fetch_push"
+    } else {
+        "__elephc_eval_quiet_property_fetch_pop"
+    });
+    abi::emit_call_label(ctx.emitter, &symbol);
+    Ok(())
 }
 
 /// Promotes an independent cell copy and transfers one hash owner to a literal unpack operation.
@@ -467,7 +505,9 @@ fn separate_shared_attached_cell(ctx: &mut FunctionContext<'_>, cell: crate::ir:
         // A global-backed receiver's write-back retires the symbol's previous cell itself.
         ReceiverPlace::RefCell(_) | ReceiverPlace::Global { .. } => true,
         ReceiverPlace::Local(_) => false,
-        ReceiverPlace::Opaque | ReceiverPlace::Property { .. } => return Ok(()),
+        ReceiverPlace::Opaque | ReceiverPlace::StaticLocal(_) | ReceiverPlace::Property { .. } => {
+            return Ok(())
+        }
     };
     let done = ctx.next_label("mixed_cell_attached_separate_done");
     ctx.load_value_to_result(cell)?;
@@ -530,13 +570,21 @@ fn lower_unary_string(
         )));
     }
     abi::emit_call_label(ctx.emitter, unary_string_symbol(runtime));
-    if runtime == UnaryStringRuntime::BinToHex {
+    // A callable wrapper hands its string to the descriptor invoker as an owner, and most of these
+    // helpers reserve concat scratch for short results (`strrev`, `addslashes`, `urlencode`, ...):
+    // `array_map($name, ['ab', 'cd'])` with `$name = 'strrev'` left every element aliasing the one
+    // scratch slot ("dc,dc"). Only the scratch case is copied; a heap result is already owned.
+    if runtime == UnaryStringRuntime::BinToHex || ctx.function.flags.is_callback_wrapper {
         let owned = ctx.next_label("bin2hex_heap_result_owned");
         let ready = ctx.next_label("bin2hex_result_ready");
         let (pointer, length) = abi::string_result_regs(ctx.emitter);
         abi::emit_push_reg_pair(ctx.emitter, pointer, length);
-        abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
         let result = abi::int_result_reg(ctx.emitter);
+        // `__rt_heap_kind` classifies the pointer in the int result register. On AArch64 the string
+        // pointer sits in x1, so without this move the test classified whatever x0 held, and a
+        // scratch `strrev` result passed for an owned one: `array_map($name, ...)` aliased it again.
+        abi::emit_reg_move(ctx.emitter, result, pointer);
+        abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
         ctx.emitter.instruction(&format!("cmp {result}, 1"));                   // reserve returns a fresh owned string only after leaving scratch storage
         ctx.emitter.instruction(&format!("{} {owned}", if ctx.emitter.target.arch == crate::codegen::platform::Arch::AArch64 { "b.eq" } else { "je" })); // preserve an already-owned heap result
         abi::emit_pop_reg_pair(ctx.emitter, pointer, length);

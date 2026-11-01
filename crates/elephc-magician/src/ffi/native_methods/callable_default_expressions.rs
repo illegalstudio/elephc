@@ -165,6 +165,7 @@ fn normalize_expression(expression: &mut crate::eval_ir::EvalExpr) -> bool {
             EvalArrayElement::Value(value) => normalize_array_value(value),
             EvalArrayElement::KeyValue { key, value } =>
                 normalize_expression(key) && normalize_expression(value),
+            EvalArrayElement::Spread(source) => normalize_expression(source),
             EvalArrayElement::Reference(_) | EvalArrayElement::KeyReference { .. } => false,
         }),
         EvalExpr::ArrayGet { array, index } => normalize_expression(array) && normalize_expression(index),

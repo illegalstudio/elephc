@@ -2,19 +2,21 @@
 title: "html_entity_decode()"
 description: "Converts HTML entities in a string back into their corresponding characters."
 sidebar:
-  order: 883
+  order: 921
 ---
 
 ## html_entity_decode()
 
 ```php
-function html_entity_decode(string $string): string
+function html_entity_decode(string $string, int $flags = 11, string $encoding = 'UTF-8'): string
 ```
 
 Converts HTML entities in a string back into their corresponding characters.
 
 **Parameters**:
 - `$string` (`string`)
+- `$flags` (`int`), default `11`, optional
+- `$encoding` (`string`), default `'UTF-8'`, optional
 
 **Returns**: `string`
 

@@ -2,7 +2,7 @@
 title: "mysqli_init()"
 description: "Creates an unconnected mysqli object for mysqli_real_connect()."
 sidebar:
-  order: 140
+  order: 151
 ---
 
 ## mysqli_init()

@@ -9,17 +9,10 @@
 //!   was refused as "expects 0 arguments, got 1" in AOT mode and the eval bridge answered
 //!   with every attribute on the target (issue #983).
 //! - Every expected string here is real `LC_ALL=C php` 8.5 output.
-//! - `$flags` is declared for signature parity and `0` is honoured. `ReflectionAttribute::
-//!   IS_INSTANCEOF` would need a subclass test on a runtime class name that no AOT builtin answers
-//!   (#1113), so a call that provably requests it for a name is a compile error, and one that
-//!   only requests it at run time throws a `ReflectionException` from the synthesized body.
-//! - The compile-time refusal is exercised in every spelling that reaches the flag (positional,
-//!   named, through a literal spread, and on a `mixed` receiver), because the first cut read
-//!   `args[1]` on a named-class receiver only.
-//! - Every spelling the checker cannot fold (a runtime flag, a spread of a runtime array, a
-//!   first-class callable, `call_user_func_array`, a dynamic method name, which the parser
-//!   desugars to `call_user_func`) reaches the body's run-time checks: a `0` filters, `2` with a
-//!   non-null name throws, and anything but `0` and `2` raises PHP's
+//! - `$flags` follows PHP: `0` filters by exact name and `ReflectionAttribute::IS_INSTANCEOF`
+//!   widens the filter to subclasses and implementing classes, in every spelling (positional,
+//!   named, literal and runtime spreads, a `mixed` receiver, a first-class callable,
+//!   `call_user_func_array`, a dynamic method name). Anything but `0` and `2` raises PHP's
 //!   `ValueError: <Owner>::getAttributes(): Argument #2 ($flags) must be a valid attribute filter
 //!   flag` (measured with 1, 3, 4 and -1, whatever `$name` holds).
 
@@ -300,11 +293,11 @@ echo "name-only:", count($r->getAttributes(name: Marker::class)), "\n";
 }
 
 /// The flag reaches `$flags` through a named argument at index 0, where a positional read of
-/// `args[1]` would find the NAME. Measured before the guard read named arguments: this answered
-/// `1` where PHP answers `2`.
+/// `args[1]` would find the NAME.
+/// Expected output measured with `php -n` 8.5.
 #[test]
-fn test_get_attributes_rejects_a_named_is_instanceof_flag() {
-    let err = compile_expect_type_error(
+fn test_get_attributes_named_is_instanceof_flag_matches_subclasses() {
+    let out = compile_and_run(
         r#"<?php
 #[Attribute] class Base {}
 #[Attribute] class Derived extends Base {}
@@ -317,19 +310,14 @@ $r = new ReflectionClass(Target::class);
 echo count($r->getAttributes(flags: ReflectionAttribute::IS_INSTANCEOF, name: Base::class)), "\n";
 "#,
     );
-    assert!(
-        err.contains("getAttributes(): the $flags argument is not supported yet"),
-        "unexpected diagnostic: {}",
-        err
-    );
+    assert_eq!(out, "2\n");
 }
 
-/// A spread is ONE AST argument holding a runtime array, so the checker cannot tell a flag from
-/// an absent one. It compiles, and the body refuses `IS_INSTANCEOF` at run time instead of
-/// answering with the silent subset (`1` where PHP answers `2`, measured before any refusal).
+/// A spread is ONE AST argument holding a runtime array; the body reads the flag at run time.
+/// Expected output measured with `php -n` 8.5.
 #[test]
-fn test_get_attributes_spread_argument_list_refuses_the_flag_at_run_time() {
-    let out = compile_and_run_expect_failure(
+fn test_get_attributes_spread_argument_list_honours_the_flag() {
+    let out = compile_and_run(
         r#"<?php
 #[Attribute] class Base {}
 #[Attribute] class Derived extends Base {}
@@ -343,11 +331,7 @@ $args = [Base::class, ReflectionAttribute::IS_INSTANCEOF];
 echo count($r->getAttributes(...$args)), "\n";
 "#,
     );
-    assert!(
-        out.contains("ReflectionAttribute::IS_INSTANCEOF is not supported yet"),
-        "expected the runtime refusal, got: {}",
-        out
-    );
+    assert_eq!(out, "2\n");
 }
 
 /// A spread of an array LITERAL is readable at compile time, positionally or by name, so it is
@@ -372,12 +356,11 @@ echo count($r->getAttributes(...['name' => Marker::class, 'flags' => 0])), "\n";
     assert_eq!(out, "1|2|2\n");
 }
 
-/// A runtime array wrapped in a literal (`...[...$args]`) is no more readable than `...$args`:
-/// the literal's element index is no longer the argument index, and the flag it carries is only
-/// known at run time, so the body refuses it like the bare spread.
+/// A runtime array wrapped in a literal (`...[...$args]`) carries the flag at run time.
+/// Expected output measured with `php -n` 8.5.
 #[test]
-fn test_get_attributes_runtime_array_nested_in_a_literal_spread_refuses_at_run_time() {
-    let out = compile_and_run_expect_failure(
+fn test_get_attributes_runtime_array_nested_in_a_literal_spread_honours_the_flag() {
+    let out = compile_and_run(
         r#"<?php
 #[Attribute] class Base {}
 #[Attribute] class Derived extends Base {}
@@ -387,33 +370,28 @@ $args = [Base::class, ReflectionAttribute::IS_INSTANCEOF];
 echo count($r->getAttributes(...[...$args])), "\n";
 "#,
     );
-    assert!(
-        out.contains("ReflectionAttribute::IS_INSTANCEOF is not supported yet"),
-        "expected the runtime refusal, got: {}",
-        out
-    );
+    assert_eq!(out, "2\n");
 }
 
-/// A literal spread carrying `IS_INSTANCEOF` is refused at compile time exactly like the written
-/// `getAttributes(Marker::class, 2)`, instead of compiling and throwing at run time.
+/// A literal spread carrying `IS_INSTANCEOF` filters like the written `getAttributes(Marker::class, 2)`.
+/// Expected output measured with `php -n` 8.5.
 #[test]
-fn test_get_attributes_rejects_the_flag_through_a_literal_spread() {
-    let err = compile_expect_type_error(
+fn test_get_attributes_flag_through_a_literal_spread() {
+    let out = compile_and_run(
         r#"<?php
 #[Attribute] class Marker {}
 #[Marker] class C {}
 echo count((new ReflectionClass('C'))->getAttributes(...[Marker::class, ReflectionAttribute::IS_INSTANCEOF])), "\n";
 "#,
     );
-    assert!(err.contains("the $flags argument is not supported yet"), "unexpected diagnostic: {}", err);
+    assert_eq!(out, "1\n");
 }
 
-/// A `mixed` receiver dispatches on the runtime class id over every class declaring the method,
-/// so a Reflection owner is among the candidates and the flag has to be refused there too.
-/// Measured before this: `1` where PHP answers `2`.
+/// A `mixed` receiver dispatches on the runtime class id and reaches the same filter.
+/// Expected output measured with `php -n` 8.5.
 #[test]
-fn test_get_attributes_rejects_the_flag_on_a_mixed_receiver() {
-    let err = compile_expect_type_error(
+fn test_get_attributes_flag_on_a_mixed_receiver() {
+    let out = compile_and_run(
         r#"<?php
 #[Attribute] class Base {}
 #[Attribute] class Derived extends Base {}
@@ -430,19 +408,14 @@ $r = pick(1);
 echo count($r->getAttributes(Base::class, ReflectionAttribute::IS_INSTANCEOF)), "\n";
 "#,
     );
-    assert!(
-        err.contains("getAttributes(): the $flags argument is not supported yet"),
-        "unexpected diagnostic: {}",
-        err
-    );
+    assert_eq!(out, "2\n");
 }
 
-/// A first-class callable hands the method its arguments at a call site the checker cannot tie
-/// back to `getAttributes`, so the compile-time rejection never sees the flag. The body throws
-/// instead of answering with the subset.
+/// A first-class callable hands the method its arguments at run time.
+/// Expected output measured with `php -n` 8.5.
 #[test]
-fn test_get_attributes_first_class_callable_throws_on_the_flag() {
-    let out = compile_and_run_expect_failure(
+fn test_get_attributes_first_class_callable_honours_the_flag() {
+    let out = compile_and_run(
         r#"<?php
 #[Attribute] class Base {}
 #[Attribute] class Derived extends Base {}
@@ -456,22 +429,17 @@ $f = $r->getAttributes(...);
 echo count($f(Base::class, ReflectionAttribute::IS_INSTANCEOF)), "\n";
 "#,
     );
-    assert!(
-        out.contains("ReflectionAttribute::IS_INSTANCEOF is not supported yet"),
-        "expected the runtime refusal, got: {}",
-        out
-    );
+    assert_eq!(out, "2\n");
 }
 
-/// `call_user_func_array` hands over a runtime array, which is the same blind spot.
+/// `call_user_func_array` hands over a runtime array.
 ///
-/// The argument list is written INLINE rather than through a variable. A variable one makes the
-/// call take the descriptor-invoker path, which currently refuses an array-of-Reflection-objects
-/// result at compile time (#1233) — an upstream limitation this fixture must not be blocked by,
-/// and must not enshrine as expected either.
+/// The argument list is written INLINE: a variable one takes the descriptor-invoker path, which
+/// refuses an array-of-Reflection-objects result at compile time (#1233).
+/// Expected output measured with `php -n` 8.5.
 #[test]
-fn test_get_attributes_call_user_func_array_throws_on_the_flag() {
-    let out = compile_and_run_expect_failure(
+fn test_get_attributes_call_user_func_array_honours_the_flag() {
+    let out = compile_and_run(
         r#"<?php
 #[Attribute] class Base {}
 #[Attribute] class Derived extends Base {}
@@ -484,11 +452,7 @@ $r = new ReflectionClass(Target::class);
 echo count(call_user_func_array([$r, 'getAttributes'], [Base::class, ReflectionAttribute::IS_INSTANCEOF])), "\n";
 "#,
     );
-    assert!(
-        out.contains("ReflectionAttribute::IS_INSTANCEOF is not supported yet"),
-        "expected the runtime refusal, got: {}",
-        out
-    );
+    assert_eq!(out, "2\n");
 }
 
 /// The runtime check sits BELOW the null-name early return, so a call that filters nothing still
@@ -512,12 +476,11 @@ echo count($f(null, ReflectionAttribute::IS_INSTANCEOF)), "\n";
     assert_eq!(out, "2\n");
 }
 
-/// A dynamic method name desugars to `call_user_func([$r, $m], ...)` in the parser, so no method
-/// inference runs and the compile-time rejection cannot see the call at all. The body's throw is
-/// what makes it loud.
+/// A dynamic method name desugars to `call_user_func([$r, $m], ...)` in the parser.
+/// Expected output measured with `php -n` 8.5.
 #[test]
-fn test_get_attributes_dynamic_method_name_throws_on_the_flag() {
-    let out = compile_and_run_expect_failure(
+fn test_get_attributes_dynamic_method_name_honours_the_flag() {
+    let out = compile_and_run(
         r#"<?php
 #[Attribute] class Base {}
 #[Attribute] class Derived extends Base {}
@@ -531,11 +494,7 @@ $m = 'getAttributes';
 echo count($r->$m(Base::class, ReflectionAttribute::IS_INSTANCEOF)), "\n";
 "#,
     );
-    assert!(
-        out.contains("ReflectionAttribute::IS_INSTANCEOF is not supported yet"),
-        "expected the runtime refusal, got: {}",
-        out
-    );
+    assert_eq!(out, "2\n");
 }
 
 /// A named `flags:` can stand alone, and then `$name` takes its `null` default — so PHP filters
@@ -631,13 +590,11 @@ echo count(call_user_func_array([$r, 'getAttributes'], ['Marker'])), "\n";
     assert_eq!(out, "1\n");
 }
 
-/// `ReflectionAttribute::IS_INSTANCEOF` is declared — PHP has exactly that one constant — so the
-/// name resolves; the CALL is what is refused, and loudly. Answering it by exact name would
-/// return a subset of PHP's answer with no diagnostic, and this call was a compile error before
-/// the filter existed anyway.
+/// `IS_INSTANCEOF` widens the name filter to subclasses, as in PHP.
+/// Expected output measured with `php -n` 8.5.
 #[test]
-fn test_get_attributes_rejects_is_instanceof_flag() {
-    let err = compile_expect_type_error(
+fn test_get_attributes_is_instanceof_flag_matches_subclasses() {
+    let out = compile_and_run(
         r#"<?php
 #[Attribute] class Base {}
 #[Attribute] class Derived extends Base {}
@@ -649,11 +606,7 @@ $r = new ReflectionClass(Target::class);
 echo count($r->getAttributes(Base::class, ReflectionAttribute::IS_INSTANCEOF)), "\n";
 "#,
     );
-    assert!(
-        err.contains("getAttributes(): the $flags argument is not supported yet"),
-        "unexpected diagnostic: {}",
-        err
-    );
+    assert_eq!(out, "1\n");
 }
 
 /// Verifies a STATIC associative spread is read rather than refused.
@@ -736,11 +689,11 @@ echo count($r->getAttributes(...$named)), "\n";
     assert_eq!(out, "1|2|1|1\n");
 }
 
-/// `IS_INSTANCEOF` in a variable next to a real name compiles, and the body refuses it at run
-/// time with the same `ReflectionException` the indirect spellings get.
+/// `IS_INSTANCEOF` held in a variable reaches the same run-time filter.
+/// Expected output measured with `php -n` 8.5.
 #[test]
-fn test_get_attributes_runtime_is_instanceof_flag_is_refused_at_run_time() {
-    let out = compile_and_run_expect_failure(
+fn test_get_attributes_runtime_is_instanceof_flag_matches_subclasses() {
+    let out = compile_and_run(
         r#"<?php
 #[Attribute] class Base {}
 #[Attribute] class Derived extends Base {}
@@ -750,11 +703,7 @@ $flag = ReflectionAttribute::IS_INSTANCEOF;
 echo count($r->getAttributes(Base::class, $flag)), "\n";
 "#,
     );
-    assert!(
-        out.contains("ReflectionAttribute::IS_INSTANCEOF is not supported yet"),
-        "expected the runtime refusal, got: {}",
-        out
-    );
+    assert_eq!(out, "2\n");
 }
 
 /// A literal `null` flag is refused at compile time: PHP coerces it to `0` behind a deprecation

@@ -311,28 +311,22 @@ fn assert_bound_descriptor_shape(module: &crate::ir::Module, target: &str, bind_
         bind_count * 2,
         "{target}: each bind emits the literal's descriptor and the bound one"
     );
-    let bound = descriptors
-        .iter()
-        .filter(|inst| {
-            inst.operands.len() == 1
-                && main
-                    .instructions
-                    .iter()
-                    .any(|producer| {
-                        producer.result == inst.operands.first().copied()
-                            && producer.op == Op::MixedBox
-                    })
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        bound.len(),
-        bind_count,
-        "{target}: the bound descriptor captures the boxed receiver"
-    );
-    for (index, descriptor) in bound.iter().enumerate() {
+    // The literal's own descriptor now captures its receiver boxed as well, so a box operand no
+    // longer singles out the bound descriptor. The pair structure does: every bind emits the
+    // literal's descriptor immediately followed by the bound one, over the SAME compiled function,
+    // and the bound one owns exactly one capture -- the receiver boxed as `Mixed`.
+    let boxed_capture = |inst: &crate::ir::Instruction| {
+        inst.operands.len() == 1
+            && main.instructions.iter().any(|producer| {
+                producer.result == inst.operands.first().copied() && producer.op == Op::MixedBox
+            })
+    };
+    for index in 0..bind_count {
+        let literal = descriptors[index * 2];
+        let bound = descriptors[index * 2 + 1];
+        assert!(boxed_capture(bound), "{target}: the bound descriptor captures the boxed receiver");
         assert_eq!(
-            descriptor.immediate,
-            descriptors[index * 2].immediate,
+            bound.immediate, literal.immediate,
             "{target}: the bound descriptor reuses the literal's compiled function"
         );
     }

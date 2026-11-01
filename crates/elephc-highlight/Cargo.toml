@@ -1,0 +1,16 @@
+[package]
+name = "elephc-highlight"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "PHP-exact source highlighter (highlight_string/highlight_file) as a C-callable staticlib for programs compiled by elephc, shared with the elephc-magician interpreter"
+publish = false
+
+# A C-callable staticlib linked into compiled programs that call highlight_string() or
+# highlight_file(), and an rlib so elephc-magician renders through the same code and the
+# renderer is unit-testable with `cargo test -p elephc-highlight`.
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+# No dependencies: the renderer is a byte scanner over the source and needs only std.
+[dependencies]

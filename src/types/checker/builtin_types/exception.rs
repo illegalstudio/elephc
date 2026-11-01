@@ -17,14 +17,13 @@ use crate::types::PhpType;
 
 use super::super::Checker;
 
-/// Returns a synthetic `ClassProperty` AST node for the `message` property of builtin Exception classes.
-/// The property is public, typed `string`, with an empty string default value.
+/// Returns a synthetic `ClassProperty` AST node for PHP's protected Exception `$message` field.
 pub(super) fn builtin_exception_message_property() -> ClassProperty {
     ClassProperty {
         name: "message".to_string(),
-        visibility: Visibility::Public,
+        visibility: Visibility::Protected,
         set_visibility: None,
-        type_expr: Some(TypeExpr::Str),
+        type_expr: None,
         hooks: PropertyHooks::none(),
         readonly: false,
         is_final: false,
@@ -125,14 +124,13 @@ pub(super) fn builtin_exception_constructor_method() -> ClassMethod {
     }
 }
 
-/// Returns a synthetic `ClassProperty` AST node for the `code` property of builtin Exception classes.
-/// The property is protected, typed `int`, with a `0` default value.
+/// Returns a synthetic `ClassProperty` AST node for PHP's protected Exception `$code` field.
 pub(super) fn builtin_exception_code_property() -> ClassProperty {
     ClassProperty {
         name: "code".to_string(),
         visibility: Visibility::Protected,
         set_visibility: None,
-        type_expr: Some(TypeExpr::Int),
+        type_expr: None,
         hooks: PropertyHooks::none(),
         readonly: false,
         is_final: false,
@@ -149,14 +147,102 @@ pub(super) fn builtin_exception_code_property() -> ClassProperty {
     }
 }
 
+/// Returns PHP's private cached Exception string representation field.
+pub(super) fn builtin_exception_string_property() -> ClassProperty {
+    ClassProperty {
+        name: "string".to_string(),
+        visibility: Visibility::Private,
+        set_visibility: None,
+        type_expr: Some(TypeExpr::Str),
+        hooks: PropertyHooks::none(),
+        readonly: false,
+        is_final: false,
+        is_static: false,
+        is_abstract: false,
+        by_ref: false,
+        is_promoted: false,
+        default: Some(Expr::new(
+            ExprKind::StringLiteral(String::new()),
+            crate::span::Span::dummy(),
+        )),
+        span: crate::span::Span::dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns PHP's protected Exception source-file field.
+pub(super) fn builtin_exception_file_property() -> ClassProperty {
+    ClassProperty {
+        name: "file".to_string(),
+        visibility: Visibility::Protected,
+        set_visibility: None,
+        type_expr: Some(TypeExpr::Str),
+        hooks: PropertyHooks::none(),
+        readonly: false,
+        is_final: false,
+        is_static: false,
+        is_abstract: false,
+        by_ref: false,
+        is_promoted: false,
+        default: Some(Expr::new(
+            ExprKind::StringLiteral(String::new()),
+            crate::span::Span::dummy(),
+        )),
+        span: crate::span::Span::dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns PHP's protected Exception source-line field.
+pub(super) fn builtin_exception_line_property() -> ClassProperty {
+    ClassProperty {
+        name: "line".to_string(),
+        visibility: Visibility::Protected,
+        set_visibility: None,
+        type_expr: Some(TypeExpr::Int),
+        hooks: PropertyHooks::none(),
+        readonly: false,
+        is_final: false,
+        is_static: false,
+        is_abstract: false,
+        by_ref: false,
+        is_promoted: false,
+        default: Some(Expr::new(ExprKind::IntLiteral(0), crate::span::Span::dummy())),
+        span: crate::span::Span::dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns PHP's private Exception backtrace field.
+pub(super) fn builtin_exception_trace_property() -> ClassProperty {
+    ClassProperty {
+        name: "trace".to_string(),
+        visibility: Visibility::Private,
+        set_visibility: None,
+        type_expr: Some(array_type()),
+        hooks: PropertyHooks::none(),
+        readonly: false,
+        is_final: false,
+        is_static: false,
+        is_abstract: false,
+        by_ref: false,
+        is_promoted: false,
+        default: Some(Expr::new(
+            ExprKind::ArrayLiteral(Vec::new()),
+            crate::span::Span::dummy(),
+        )),
+        span: crate::span::Span::dummy(),
+        attributes: Vec::new(),
+    }
+}
+
 /// Returns a synthetic `ClassProperty` for PHP's `$previous` chain on builtin Exception classes.
 ///
-/// Typed `?Throwable` and stored at compact-payload offset 40 so `getPrevious()` round-trips
-/// wrap-and-rethrow chains. Default is `null`.
+/// Typed `?Throwable`, private, and defaulted to `null`.
 pub(super) fn builtin_exception_previous_property() -> ClassProperty {
     ClassProperty {
         name: "previous".to_string(),
-        visibility: Visibility::Protected,
+        visibility: Visibility::Private,
         set_visibility: None,
         type_expr: Some(nullable_throwable_type()),
         hooks: PropertyHooks::none(),
@@ -167,6 +253,30 @@ pub(super) fn builtin_exception_previous_property() -> ClassProperty {
         by_ref: false,
         is_promoted: false,
         default: Some(Expr::new(ExprKind::Null, crate::span::Span::dummy())),
+        span: crate::span::Span::dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a synthetic `ClassMethod` for `Exception::__wakeup()`.
+/// php declares it on Exception and Error with no return type; the body does nothing here.
+pub(super) fn builtin_exception_wakeup_method() -> ClassMethod {
+    ClassMethod {
+        type_params: Vec::new(),
+        name: "__wakeup".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: None,
+        by_ref_return: false,
+        body: Vec::new(),
         span: crate::span::Span::dummy(),
         attributes: Vec::new(),
     }
@@ -241,14 +351,17 @@ pub(super) fn builtin_exception_get_trace_method() -> ClassMethod {
 }
 
 /// Returns a synthetic `ClassMethod` for `Exception::getTraceAsString()`.
-/// Body returns an empty string; Throwable trace getters currently expose no frames.
+///
+/// A real body: it renders `$this->getTrace()` through `crate::throwable_string_prelude`, which
+/// the pipeline always injects. Emitting it fills the vtable slot, so a boxed, interface-typed or
+/// subclass receiver reaches php's listing instead of the `""` the old intrinsic answered.
 pub(super) fn builtin_exception_get_trace_as_string_method() -> ClassMethod {
     concrete_throwable_method(
         "getTraceAsString",
         TypeExpr::Str,
-        Expr::new(
-            ExprKind::StringLiteral(String::new()),
-            crate::span::Span::dummy(),
+        crate::synthetic_class::e_call(
+            crate::throwable_string_prelude::TRACE_STRING_FN,
+            vec![Expr::new(ExprKind::This, crate::span::Span::dummy())],
         ),
     )
 }
@@ -264,23 +377,23 @@ pub(super) fn builtin_exception_get_previous_method() -> ClassMethod {
 }
 
 /// Returns a synthetic `ClassMethod` for `Exception::__toString()`.
-/// Body returns `$this->message` cast to `string`.
+///
+/// A real body rendering php's `Class: message in FILE:LINE`, the stack trace and the `Next`
+/// chain through `crate::throwable_string_prelude`. It used to answer the bare message, and with
+/// no emitted body an `echo $e` on a boxed Throwable jumped through an empty vtable slot.
 pub(super) fn builtin_exception_to_string_method() -> ClassMethod {
     concrete_throwable_method(
         "__toString",
         TypeExpr::Str,
-        Expr::new(
-            ExprKind::PropertyAccess {
-                object: Box::new(Expr::new(ExprKind::This, crate::span::Span::dummy())),
-                property: "message".to_string(),
-            },
-            crate::span::Span::dummy(),
+        crate::synthetic_class::e_call(
+            crate::throwable_string_prelude::TO_STRING_FN,
+            vec![Expr::new(ExprKind::This, crate::span::Span::dummy())],
         ),
     )
 }
 
 /// Returns the list of abstract `ClassMethod` nodes for the Throwable interface methods:
-/// getMessage, getCode, getFile, getLine, getTrace, getTraceAsString, getPrevious, __toString.
+/// getMessage, getCode, getFile, getLine, getTrace, getPrevious, getTraceAsString, __toString.
 pub(super) fn builtin_throwable_methods() -> Vec<ClassMethod> {
     vec![
         abstract_throwable_method("getMessage", TypeExpr::Str),
@@ -288,8 +401,8 @@ pub(super) fn builtin_throwable_methods() -> Vec<ClassMethod> {
         abstract_throwable_method("getFile", TypeExpr::Str),
         abstract_throwable_method("getLine", TypeExpr::Int),
         abstract_throwable_method("getTrace", array_type()),
-        abstract_throwable_method("getTraceAsString", TypeExpr::Str),
         abstract_throwable_method("getPrevious", nullable_throwable_type()),
+        abstract_throwable_method("getTraceAsString", TypeExpr::Str),
         abstract_throwable_method("__toString", TypeExpr::Str),
     ]
 }

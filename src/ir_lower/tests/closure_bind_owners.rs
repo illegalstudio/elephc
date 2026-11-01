@@ -55,9 +55,9 @@ echo $bound();
         let extraction = main
             .instructions
             .iter()
-            .find(|inst| inst.op == Op::MixedUnbox && inst.result_php_type == PhpType::Callable)
+            .find(|inst| inst.op == Op::NormalizeCallable && inst.result_php_type == PhpType::Callable)
             .unwrap_or_else(|| panic!("{name}: invalidated closure storage was not extracted"));
-        let extracted = extraction.result.expect("MixedUnbox produces a descriptor");
+        let extracted = extraction.result.expect("NormalizeCallable produces a descriptor");
         assert_eq!(
             main.value(extracted).unwrap().ownership,
             Ownership::Owned,
@@ -235,11 +235,18 @@ echo $bound();
             Path::new("."),
             Target::parse(name).unwrap(),
         );
+        // An explicit scope no longer clones the closure body per target class: the one body takes
+        // the scope as a hidden `__elephc_closure_scope#gen` parameter and resolves private
+        // property access against it at run time. The invariants that matter are unchanged -- the
+        // body is runtime-shaped (Mixed return, boxed receiver) because it can be rebound to any
+        // class -- so the test finds the closure that carries the scope parameter.
         let scoped = module
             .closures
             .iter()
-            .find(|function| function.lexical_class.as_deref() == Some("Vault"))
-            .unwrap_or_else(|| panic!("{name}: explicit scope must clone the closure"));
+            .find(|function| {
+                function.params.iter().any(|param| param.name == "__elephc_closure_scope#gen")
+            })
+            .unwrap_or_else(|| panic!("{name}: a scope-rebindable closure takes its scope as a parameter"));
         assert_eq!(
             scoped.return_php_type,
             PhpType::Mixed,

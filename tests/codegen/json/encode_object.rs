@@ -164,3 +164,27 @@ echo json_encode($h);
     );
     assert_eq!(out, r#"{"a":{"n":5,"s":"hi"},"b":{"n":5,"s":"hi"}}"#);
 }
+
+/// Verifies a `?int` / `int|null` property encodes as its own value.
+///
+/// Its slot is an inline `{payload, tag}` pair, not a pointer to a boxed cell, so the JSON
+/// descriptor cannot name one static tag for it: the encoder resolves the tag out of the slot
+/// (0 → number, 8 → JSON `null`). Naming tag 7 instead sent the raw payload to the Mixed
+/// unboxer, which dereferenced the null sentinel.
+#[test]
+fn test_json_encode_nullable_int_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class N { public ?int $n = null; public ?int $v = 5; public int|null $u = null; public int|null $w = 7; }
+echo json_encode(new N()), "\n";
+$o = new N();
+$o->n = -3;
+$o->v = null;
+echo json_encode($o), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"n\":null,\"v\":5,\"u\":null,\"w\":7}\n{\"n\":-3,\"v\":null,\"u\":null,\"w\":7}\n"
+    );
+}

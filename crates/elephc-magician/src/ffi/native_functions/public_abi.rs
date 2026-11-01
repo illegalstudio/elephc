@@ -45,6 +45,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_function(
     invoker: Option<NativeFunctionInvoker>,
     param_count: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_function");
     let status = std::panic::catch_unwind(|| unsafe {
         register_native_function_inner(ctx, name_ptr, name_len, descriptor, invoker, param_count)
     })
@@ -99,6 +100,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_function_param(
     param_name_ptr: *const u8,
     param_name_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_function_param");
     let status = std::panic::catch_unwind(|| unsafe {
         register_native_function_param_inner(
             ctx,
@@ -125,6 +127,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_function_bridge_support(
     function_name_len: u64,
     supported: i32,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_function_bridge_support");
     let status = std::panic::catch_unwind(|| unsafe {
         register_native_function_bridge_support_inner(
             ctx,
@@ -135,6 +138,28 @@ pub unsafe extern "C" fn __elephc_eval_register_native_function_bridge_support(
     })
     .unwrap_or(0);
     unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
+}
+
+/// Makes a registered native PHP function exist only while the word at `slot` is nonzero.
+///
+/// Generated code passes the "active variant" slot of a conditionally declared function
+/// (`if (!function_exists('f')) { function f() {} }`), which its declaration fills when it runs.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. The function name must be readable for its
+/// declared byte length, and `slot` must point at a process-lifetime 8-byte word.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_function_active_slot(
+    ctx: *mut ElephcEvalContext,
+    function_name_ptr: *const u8,
+    function_name_len: u64,
+    slot: *const u64,
+) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_function_active_slot");
+    std::panic::catch_unwind(|| unsafe {
+        register_native_function_active_slot_inner(ctx, function_name_ptr, function_name_len, slot)
+    })
+    .unwrap_or(0)
 }
 
 /// Registers one generated native PHP function parameter's by-ref and variadic flags.
@@ -151,6 +176,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_function_param_flags(
     is_by_ref: i32,
     is_variadic: i32,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_function_param_flags");
     let status = std::panic::catch_unwind(|| unsafe {
         register_native_function_param_flags_inner(
             ctx,
@@ -179,6 +205,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_function_param_type(
     type_spec_ptr: *const u8,
     type_spec_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_function_param_type");
     let status = std::panic::catch_unwind(|| unsafe {
         register_native_function_param_type_inner(
             ctx,
@@ -206,6 +233,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_function_return_type(
     type_spec_ptr: *const u8,
     type_spec_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_function_return_type");
     let status = std::panic::catch_unwind(|| unsafe {
         register_native_function_return_type_inner(
             ctx,
@@ -251,6 +279,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_function_param_default_sc
     default_kind: u64,
     default_payload: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_function_param_default_scalar");
     let status = std::panic::catch_unwind(|| unsafe {
         register_native_function_param_default_scalar_inner(
             ctx,
@@ -279,6 +308,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_function_param_default_st
     default_ptr: *const u8,
     default_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_function_param_default_string");
     let status = std::panic::catch_unwind(|| unsafe {
         register_native_function_param_default_string_inner(
             ctx,
@@ -307,6 +337,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_function_param_default_ob
     spec_ptr: *const u8,
     spec_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_function_param_default_object");
     let status = std::panic::catch_unwind(|| unsafe {
         register_native_function_param_default_object_inner(
             ctx,
@@ -335,6 +366,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_function_param_default_ar
     spec_ptr: *const u8,
     spec_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_function_param_default_array");
     let status = std::panic::catch_unwind(|| unsafe {
         register_native_function_param_default_array_inner(
             ctx,

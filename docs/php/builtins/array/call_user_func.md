@@ -2,7 +2,7 @@
 title: "call_user_func()"
 description: "Calls a callback with the given arguments."
 sidebar:
-  order: 52
+  order: 62
 ---
 
 ## call_user_func()

@@ -2,7 +2,7 @@
 title: "gmp_xor()"
 description: "Bitwise XOR of two GMP numbers."
 sidebar:
-  order: 639
+  order: 652
 ---
 
 ## gmp_xor()

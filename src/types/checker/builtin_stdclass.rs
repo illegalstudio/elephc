@@ -1,12 +1,13 @@
 //! Purpose:
-//! Injects the PHP `stdClass` builtin into the checker schema.
-//! Gives `new stdClass()` and default `json_decode()` object results a nominal class entry with dynamic-property behavior.
+//! Injects PHP core object classes into the checker schema.
+//! Gives `stdClass` and `__PHP_Incomplete_Class` nominal entries for object operations and type checks.
 //!
 //! Called from:
 //! - `crate::types::checker::driver` during builtin type/schema initialization.
 //!
 //! Key details:
 //! - `stdClass` has no declared properties; property reads and writes are typed as `mixed` and handled by runtime hash helpers.
+//! - `__PHP_Incomplete_Class` is an internal nominal type produced by deserialization and is not constructible by user code.
 
 use std::collections::HashMap;
 
@@ -14,9 +15,7 @@ use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::types::traits::FlattenedClass;
 
-/// Inject the PHP `stdClass` builtin so that `new stdClass()`, `instanceof
-/// stdClass`, and the default object form returned by `json_decode($json)` all
-/// type-check.
+/// Injects PHP's core object classes so their type hints and `instanceof` checks resolve.
 ///
 /// `stdClass` is a special builtin: it has no statically declared properties,
 /// yet user code can read or write any property name on instances. The
@@ -24,38 +23,43 @@ use crate::types::traits::FlattenedClass;
 /// routes property reads/writes through `__rt_stdclass_get` /
 /// `__rt_stdclass_set` so the underlying hash table stores arbitrary names at
 /// runtime.
-pub(crate) fn inject_builtin_stdclass(
+///
+/// `__PHP_Incomplete_Class` is represented as an empty nominal class because PHP creates it only
+/// while deserializing unavailable classes; static construction remains unavailable to user code.
+pub(crate) fn inject_builtin_core_object_classes(
     class_map: &mut HashMap<String, FlattenedClass>,
 ) -> Result<(), CompileError> {
-    let builtin_key = php_symbol_key("stdClass");
-    if class_map
-        .keys()
-        .any(|name| php_symbol_key(name) == builtin_key)
-    {
-        return Err(CompileError::new(
-            crate::span::Span::dummy(),
-            "Cannot redeclare built-in class: stdClass",
-        ));
-    }
+    for class_name in ["stdClass", "__PHP_Incomplete_Class"] {
+        let builtin_key = php_symbol_key(class_name);
+        if class_map
+            .keys()
+            .any(|name| php_symbol_key(name) == builtin_key)
+        {
+            return Err(CompileError::new(
+                crate::span::Span::dummy(),
+                &format!("Cannot redeclare built-in class: {class_name}"),
+            ));
+        }
 
-    class_map.insert(
-        "stdClass".to_string(),
-        FlattenedClass {
-            name: "stdClass".to_string(),
-            span: crate::span::Span::dummy(),
-            extends: None,
-            implements: Vec::new(),
-            is_abstract: false,
-            is_final: false,
-            is_readonly_class: false,
-            properties: Vec::new(),
-            methods: Vec::new(),
-            attributes: Vec::new(),
-            constants: Vec::new(),
-            used_traits: Vec::new(),
-            trait_aliases: Vec::new(),
-        },
-    );
+        class_map.insert(
+            class_name.to_string(),
+            FlattenedClass {
+                name: class_name.to_string(),
+                span: crate::span::Span::dummy(),
+                extends: None,
+                implements: Vec::new(),
+                is_abstract: false,
+                is_final: false,
+                is_readonly_class: false,
+                properties: Vec::new(),
+                methods: Vec::new(),
+                attributes: Vec::new(),
+                constants: Vec::new(),
+                used_traits: Vec::new(),
+                trait_aliases: Vec::new(),
+            },
+        );
+    }
 
     Ok(())
 }

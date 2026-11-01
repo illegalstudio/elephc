@@ -2,7 +2,7 @@
 title: "current()"
 description: "Returns the element under the array's internal pointer."
 sidebar:
-  order: 55
+  order: 65
 ---
 
 ## current()

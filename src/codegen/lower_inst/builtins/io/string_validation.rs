@@ -104,6 +104,38 @@ pub(super) fn emit_empty_string_result(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Verifies that a path builtin scalar argument has the supported integer representation.
+/// Loads `value` into the integer result register as a PHP int, converting a boxed or tagged
+/// scalar at run time the way php converts an `int` parameter's argument.
+///
+/// The checker admits a value that only MAY be an int where an int parameter is expected (a
+/// `?int` property read behind a null check); the conversion happens here, and a tagged scalar's
+/// temporary box is released after it.
+pub(super) fn load_value_as_int(ctx: &mut FunctionContext<'_>, value: ValueId, name: &str) -> Result<()> {
+    let ty = ctx.load_value_to_result(value)?.codegen_repr();
+    if !matches!(ty, PhpType::Mixed | PhpType::TaggedScalar) {
+        return require_int(ty, name);
+    }
+    let fresh_box = ty == PhpType::TaggedScalar;
+    if fresh_box {
+        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::TaggedScalar);
+    }
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    if result_reg != arg_reg {
+        abi::emit_reg_move(ctx.emitter, arg_reg, result_reg);
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    if fresh_box {
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
+        abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    }
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    Ok(())
+}
+
 pub(super) fn require_int(ty: PhpType, name: &str) -> Result<()> {
     if ty == PhpType::Int {
         return Ok(());

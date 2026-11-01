@@ -27,10 +27,16 @@ inspectCatchPredicateOwners('throw new RuntimeException("right"); // ' . $argc);
     let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     let symbol = target.extern_symbol("__elephc_eval_object_is_a");
     let mut probes = 0;
-    for path in asm.split(&format!("{symbol}\n")).skip(1) {
+    // Only the fixture's own catch predicates: the compatibility preludes a real build adds
+    // probe `object_is_a` for their own, unrelated reasons.
+    let start = asm.find("_fn_inspectCatchPredicateOwners:").unwrap_or_else(|| panic!("{name}"));
+    let body = &asm[start..];
+    let body = &body[..body[1..].find("@fn name=").map_or(body.len(), |end| end + 1)];
+    for path in body.split(&format!("{symbol}\n")).skip(1) {
         let restore = if name == "linux-x86_64" { "add rsp, 96" } else { "add sp, sp, #96" };
         let cleanup = path.split_once(restore).expect("predicate scratch restoration").0;
-        assert!(cleanup.contains("retire temporary eval metadata operand box"), "{name}: {cleanup}");
+        // The retirement itself is what matters: the probe's operand box is reloaded from its
+        // scratch slot and decref'd. The explanatory asm comment no longer annotates this path.
         assert!(cleanup.contains("__rt_decref_mixed"), "{name}: {cleanup}");
         probes += 1;
     }

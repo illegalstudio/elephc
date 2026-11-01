@@ -69,6 +69,12 @@ pub(in crate::interpreter) use callable_objects::*;
 pub(in crate::interpreter) use class_declarations::*;
 pub(in crate::interpreter) use class_resolution::*;
 use closure_binding::*;
+// `EXPR(...)` first-class-callable syntax on an arbitrary runtime value
+// (`expressions::calls::first_class::eval_first_class_callable_from_value`) reuses the same
+// normalized-callable -> closure-target conversion `Closure::fromCallable()` uses here.
+pub(in crate::interpreter) use closure_binding::{
+    eval_closure_object_from_target, eval_closure_object_target_from_callable,
+};
 pub(in crate::interpreter) use closure_binding::eval_closure_bind_this_for_ffi;
 pub(in crate::interpreter) use dispatch::*;
 pub(in crate::interpreter) use dynamic_method_execution::*;

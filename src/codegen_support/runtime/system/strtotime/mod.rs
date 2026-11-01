@@ -23,6 +23,7 @@
 mod data;
 mod epoch;
 mod first_last_day;
+mod first_last_time;
 mod iso_date;
 mod keywords;
 mod slash_date;
@@ -137,6 +138,22 @@ fn emit_dispatcher_arm64(emitter: &mut Emitter) {
 
     // -- digit: probe for HH:MM[:SS] then ISO date, else offsets --
     emitter.instruction("ldr x2, [sp, #56]");                                   // reload trimmed length
+    emitter.instruction("cmp x2, #3");                                          // shortest 12-hour form is "9am"
+    emitter.instruction("b.lt __rt_strtotime_digit_no_meridiem");               // too short for a meridiem
+    emitter.instruction("ldr x3, [sp, #48]");                                   // trimmed input pointer
+    emitter.instruction("add x3, x3, x2");                                      // end pointer
+    emitter.instruction("ldrb w11, [x3, #-1]");                                 // last byte
+    emitter.instruction("orr w11, w11, #32");                                   // fold ASCII case
+    emitter.instruction("cmp w11, #109");                                       // ends in 'm' ?
+    emitter.instruction("b.ne __rt_strtotime_digit_no_meridiem");               // no → not a 12-hour form
+    emitter.instruction("ldrb w11, [x3, #-2]");                                 // byte before the 'm'
+    emitter.instruction("orr w11, w11, #32");                                   // fold ASCII case
+    emitter.instruction("cmp w11, #97");                                        // 'am' ?
+    emitter.instruction("b.eq __rt_strtotime_ampm_entry");                      // → 12-hour clock strategy
+    emitter.instruction("cmp w11, #112");                                       // 'pm' ?
+    emitter.instruction("b.eq __rt_strtotime_ampm_entry");                      // → 12-hour clock strategy
+    emitter.label("__rt_strtotime_digit_no_meridiem");
+    emitter.instruction("ldr x2, [sp, #56]");                                   // reload trimmed length
     emitter.instruction("cmp x2, #4");                                          // shortest time-only is "H:MM" = 4 chars
     emitter.instruction("b.lt __rt_strtotime_offsets_entry");                   // too short for date/time → offsets
     emitter.instruction("ldrb w11, [sp, #65]");                                 // lc16[1] (second char)
@@ -166,8 +183,6 @@ fn emit_dispatcher_arm64(emitter: &mut Emitter) {
     emitter.instruction("sub w10, w9, #97");                                    // 'a' = 97
     emitter.instruction("cmp w10, #25");                                        // ASCII alpha (a-z) ?
     emitter.instruction("b.hi __rt_strtotime_fail");                            // not alpha → fail
-    emitter.instruction("cmp w9, #97");                                         // possible "a/an <unit>" article-relative form ?
-    emitter.instruction("b.eq __rt_strtotime_offsets_entry");                   // let offsets parse or reject the article form
 
     // -- alpha: try keyword table match --
     emitter.instruction("add x6, sp, #64");                                     // x6 = lc16 buffer ptr (candidate)
@@ -183,8 +198,221 @@ fn emit_dispatcher_arm64(emitter: &mut Emitter) {
     emitter.instruction("b.hi __rt_strtotime_alpha_not_keyword");               // no → check modifiers/weekdays
     emitter.instruction("ldr x8, [sp, #56]");                                   // reload trimmed input length
     emitter.instruction("cmp x10, x8");                                         // keyword consumed the whole input ?
-    emitter.instruction("b.ne __rt_strtotime_fail");                            // trailing junk after keyword → fail
+    emitter.instruction("b.ne __rt_strtotime_kw_trailing");                     // trailing input after keyword → only a signed offset may follow
     emitter.instruction("b __rt_strtotime_kw_entry");                           // → keyword strategy
+
+    // -- keyword followed by a signed offset ("now - 7200 seconds", "tomorrow + 1 hour") --
+    // x10 = keyword length, x8 = trimmed length. The keyword alone is evaluated first by a
+    // nested call on the current clock, and the signed remainder is then parsed by another
+    // nested call whose base is that result: the offsets strategy already applies a
+    // "+/- N unit" expression to whatever clock it is given. Anything else after a keyword
+    // ("noon tomorrow", "now junk") still fails, as it always did.
+    emitter.label("__rt_strtotime_kw_trailing");
+    emitter.instruction("str x10, [sp, #88]");                                  // keep the keyword length across the remainder classification and the nested calls
+    emitter.instruction("str x9, [sp, #96]");                                   // keep the head's keyword kind: a day-shifting head refuses a day-shifting second keyword
+    emitter.instruction("ldr x3, [sp, #48]");                                   // x3 = trimmed input pointer
+    emitter.instruction("mov x11, x10");                                        // cursor = first byte after the keyword
+    emitter.label("__rt_strtotime_kw_trailing_skip");
+    emitter.instruction("cmp x11, x8");                                         // cursor reached the end of the input ?
+    emitter.instruction("b.ge __rt_strtotime_fail");                            // nothing follows the separator → fail
+    emitter.instruction("ldrb w12, [x3, x11]");                                 // load the byte under the cursor
+    emitter.instruction("cmp w12, #32");                                        // space ?
+    emitter.instruction("b.eq __rt_strtotime_kw_trailing_adv");                 // skip separating whitespace
+    emitter.instruction("cmp w12, #9");                                         // tab ?
+    emitter.instruction("b.eq __rt_strtotime_kw_trailing_adv");                 // skip separating whitespace
+    emitter.instruction("cmp w12, #43");                                        // '+' starts a signed offset ?
+    emitter.instruction("b.eq __rt_strtotime_kw_trailing_go");                  // offset found → evaluate in two steps
+    emitter.instruction("cmp w12, #45");                                        // '-' starts a signed offset ?
+    emitter.instruction("b.eq __rt_strtotime_kw_trailing_go");                  // offset found → evaluate in two steps
+    emitter.instruction("sub w13, w12, #48");                                   // digit value of the byte under the cursor
+    emitter.instruction("cmp w13, #9");                                         // a digit starts a time of day ?
+    emitter.instruction("b.ls __rt_strtotime_kw_trailing_digit");               // H:MM / HH:MM / Ham forms continue the keyword
+    emitter.instruction("orr w13, w12, #32");                                   // fold ASCII case for the letter test
+    emitter.instruction("sub w13, w13, #97");                                   // offset from 'a'
+    emitter.instruction("cmp w13, #25");                                        // an ASCII letter starts a second word ?
+    emitter.instruction("b.ls __rt_strtotime_kw_trailing_word");                // only another keyword may continue the first
+    emitter.instruction("b __rt_strtotime_fail");                               // anything else after a keyword is not a form we parse
+    emitter.label("__rt_strtotime_kw_trailing_digit");
+    emitter.instruction("add x13, x11, #1");                                      // index of the byte after the first digit
+    emitter.instruction("cmp x13, x8");                                           // is there a second byte ?
+    emitter.instruction("b.ge __rt_strtotime_fail");                              // a lone trailing digit is not a time
+    emitter.instruction("ldrb w14, [x3, x13]");                                   // second byte
+    emitter.instruction("cmp w14, #58");                                          // 'H:' ?
+    emitter.instruction("b.eq __rt_strtotime_kw_trailing_go");                    // H:MM[:SS] continues the keyword
+    emitter.instruction("sub w15, w14, #48");                                     // digit value of the second byte
+    emitter.instruction("cmp w15, #9");                                           // 'HH' ?
+    emitter.instruction("b.hi __rt_strtotime_kw_trailing_digit_one");             // H followed by a non-digit: a date separator, a unit word or the am/pm suffix
+    emitter.instruction("add x13, x13, #1");                                      // index of the byte after the second digit
+    emitter.instruction("cmp x13, x8");                                           // is there a third byte ?
+    emitter.instruction("b.ge __rt_strtotime_fail");                              // two digits alone are not a time
+    emitter.instruction("ldrb w14, [x3, x13]");                                   // third byte
+    emitter.instruction("cmp w14, #58");                                          // 'HH:' ?
+    emitter.instruction("b.eq __rt_strtotime_kw_trailing_go");                    // HH:MM[:SS] continues the keyword
+    emitter.instruction("sub w15, w14, #48");                                     // digit value of the third byte
+    emitter.instruction("cmp w15, #9");                                           // a third digit starts a year-first date (2023-04-01) ?
+    emitter.instruction("b.ls __rt_strtotime_kw_trailing_dateish");               // an absolute date follows the keyword
+    emitter.label("__rt_strtotime_kw_trailing_digit_one");
+    emitter.instruction("cmp w14, #45");                                          // '-' (2023-04-01, 1-4-2023) ?
+    emitter.instruction("b.eq __rt_strtotime_kw_trailing_dateish");               // an absolute date follows the keyword
+    emitter.instruction("cmp w14, #47");                                          // '/' (4/1/2023) ?
+    emitter.instruction("b.eq __rt_strtotime_kw_trailing_dateish");               // an absolute date follows the keyword
+    emitter.instruction("cmp w14, #46");                                          // '.' (1.4.2023) ?
+    emitter.instruction("b.eq __rt_strtotime_kw_trailing_dateish");               // an absolute date follows the keyword
+    emitter.label("__rt_strtotime_kw_trailing_ampm");
+    emitter.instruction("cmp w14, #32");                                          // optional space before the meridiem ?
+    emitter.instruction("b.ne __rt_strtotime_kw_trailing_ampm_letter");           // no space: the byte itself must be the meridiem
+    emitter.instruction("add x13, x13, #1");                                      // skip the single space
+    emitter.instruction("cmp x13, x8");                                           // is there a byte after the space ?
+    emitter.instruction("b.ge __rt_strtotime_fail");                              // a space with nothing after it is not a time
+    emitter.instruction("ldrb w14, [x3, x13]");                                   // byte after the space
+    emitter.label("__rt_strtotime_kw_trailing_ampm_letter");
+    emitter.instruction("orr w14, w14, #32");                                     // fold ASCII case
+    emitter.instruction("cmp w14, #97");                                          // 'a' of am ?
+    emitter.instruction("b.eq __rt_strtotime_kw_trailing_ampm_m");                // check the 'm' that completes am
+    emitter.instruction("cmp w14, #112");                                         // 'p' of pm ?
+    emitter.instruction("b.ne __rt_strtotime_kw_trailing_digit_word");            // a number followed by another word: a unit or a month name
+    emitter.label("__rt_strtotime_kw_trailing_ampm_m");
+    emitter.instruction("add x13, x13, #1");                                      // index of the byte after the a/p
+    emitter.instruction("cmp x13, x8");                                           // is there a byte after it ?
+    emitter.instruction("b.ge __rt_strtotime_fail");                              // a bare 'a' or 'p' is not a meridiem
+    emitter.instruction("ldrb w14, [x3, x13]");                                   // the byte after the a/p
+    emitter.instruction("orr w14, w14, #32");                                     // fold ASCII case
+    emitter.instruction("cmp w14, #109");                                         // 'm' ?
+    emitter.instruction("b.eq __rt_strtotime_kw_trailing_go");                    // Ham / Hpm / H am / H pm continue the keyword
+    emitter.instruction("sub x13, x13, #1");                                      // back to the first letter of the word
+    emitter.instruction("b __rt_strtotime_kw_trailing_digit_word");               // '1 april', '2 apples': classify the word
+    emitter.label("__rt_strtotime_kw_trailing_digit_word");
+    emitter.instruction("ldr x3, [sp, #48]");                                     // trimmed input pointer
+    emitter.instruction("ldr x4, [sp, #56]");                                     // trimmed input length
+    emitter.instruction("add x4, x3, x4");                                        // end pointer
+    emitter.instruction("add x3, x3, x13");                                       // cursor at the word after the number
+    emitter.instruction("bl __rt_strtotime_lc_cursor");                           // lowercase the word into the lc16 buffer
+    emitter.instruction("add x6, sp, #64");                                       // x6 = lc16 buffer ptr (candidate)
+    abi::emit_symbol_address(emitter, "x7", "_strtotime_keyword_tab");
+    emitter.instruction("sub x8, x4, x3");                                        // remaining bytes
+    emitter.instruction("mov x11, #16");                                          // cap candidate window to lc16 size
+    emitter.instruction("cmp x8, x11");                                           // remaining > 16 ?
+    emitter.instruction("csel x8, x8, x11, lo");                                  // x8 = min(remaining, 16)
+    emitter.instruction("bl __rt_strtotime_match_word");                          // x9 = kind (-1 if no match), x10 = consumed
+    emitter.instruction("cbz x10, __rt_strtotime_kw_trailing_digit_unit");        // not a keyword-table word: a unit such as 'days'
+    emitter.instruction("cmp x9, #19");                                           // month names are kinds 19..30
+    emitter.instruction("b.lt __rt_strtotime_kw_trailing_digit_unit");            // not a month: continue the keyword
+    emitter.instruction("cmp x9, #30");                                           // last month kind
+    emitter.instruction("b.gt __rt_strtotime_kw_trailing_digit_unit");            // not a month: continue the keyword
+    emitter.instruction("b __rt_strtotime_kw_trailing_dateish");                  // '<keyword> 1 april' is an absolute date
+    emitter.label("__rt_strtotime_kw_trailing_digit_unit");
+    emitter.instruction("ldr x10, [sp, #88]");                                    // reload the keyword length
+    emitter.instruction("ldr x3, [sp, #48]");                                     // reload the trimmed input pointer
+    emitter.instruction("b __rt_strtotime_kw_trailing_go");                       // evaluate the keyword, then the remainder, in two steps
+    emitter.label("__rt_strtotime_kw_trailing_dateish");
+    emitter.instruction("ldr x12, [sp, #96]");                                    // the head's keyword kind
+    emitter.instruction("cmp x12, #2");                                           // head tomorrow/yesterday ?
+    emitter.instruction("b.lo __rt_strtotime_fail");                              // other heads keep refusing an absolute date
+    emitter.instruction("cmp x12, #3");                                           // yesterday at most
+    emitter.instruction("b.hi __rt_strtotime_fail");                              // other heads keep refusing an absolute date
+    emitter.instruction("b __rt_strtotime_kw_trailing_reverse");                  // date first, then the relative day
+    emitter.label("__rt_strtotime_kw_trailing_word");
+    emitter.instruction("ldr x4, [sp, #56]");                                     // trimmed input length
+    emitter.instruction("add x4, x3, x4");                                        // end pointer
+    emitter.instruction("add x3, x3, x11");                                       // x3 = cursor at the second word
+    emitter.instruction("bl __rt_strtotime_lc_cursor");                           // lowercase the second word into the lc16 buffer
+    emitter.instruction("add x6, sp, #64");                                       // x6 = lc16 buffer ptr (candidate)
+    abi::emit_symbol_address(emitter, "x7", "_strtotime_keyword_tab");
+    emitter.instruction("sub x8, x4, x3");                                        // remaining bytes
+    emitter.instruction("mov x11, #16");                                          // cap candidate window to lc16 size
+    emitter.instruction("cmp x8, x11");                                           // remaining > 16 ?
+    emitter.instruction("csel x8, x8, x11, lo");                                  // x8 = min(remaining, 16)
+    emitter.instruction("bl __rt_strtotime_match_word");                          // x9 = kind (-1 if no match), x10 = consumed
+    emitter.instruction("cbz x10, __rt_strtotime_fail");                          // not a keyword → fail
+    emitter.instruction("cmp x9, #5");                                            // kind in 0..5 = bare keyword ?
+    emitter.instruction("b.hi __rt_strtotime_kw_trailing_word_other");            // weekdays and months continue some keywords, modifiers never do
+    emitter.instruction("cmp x9, #2");                                            // second keyword tomorrow/yesterday ?
+    emitter.instruction("b.lo __rt_strtotime_kw_trailing_word_ok");               // no (now/today) → fine
+    emitter.instruction("cmp x9, #3");                                            // second keyword yesterday at most
+    emitter.instruction("b.hi __rt_strtotime_kw_trailing_word_ok");               // no (midnight/noon) → fine
+    emitter.instruction("ldr x12, [sp, #96]");                                    // the head's keyword kind
+    emitter.instruction("cmp x12, #2");                                           // head tomorrow/yesterday ?
+    emitter.instruction("b.lo __rt_strtotime_kw_trailing_word_ok");               // no → fine
+    emitter.instruction("cmp x12, #3");                                           // head yesterday at most
+    emitter.instruction("b.hi __rt_strtotime_kw_trailing_word_ok");               // no → fine
+    emitter.instruction("b __rt_strtotime_kw_trailing_rest_only");                // php sets the relative day once: 'tomorrow tomorrow' is one day, the second keyword wins
+    emitter.label("__rt_strtotime_kw_trailing_word_other");
+    emitter.instruction("cmp x9, #10");                                           // weekday kinds start at 10
+    emitter.instruction("b.lt __rt_strtotime_fail");                              // next/last/this/ago are not parsed after a keyword
+    emitter.instruction("cmp x9, #16");                                           // weekday kinds end at 16
+    emitter.instruction("b.le __rt_strtotime_kw_trailing_word_weekday");          // a weekday after the keyword
+    emitter.instruction("cmp x9, #19");                                           // month kinds start at 19
+    emitter.instruction("b.lt __rt_strtotime_fail");                              // ordinals and the rest are not parsed after a keyword
+    emitter.instruction("cmp x9, #30");                                           // month kinds end at 30
+    emitter.instruction("b.gt __rt_strtotime_fail");                              // ordinals and the rest are not parsed after a keyword
+    emitter.instruction("b __rt_strtotime_kw_trailing_dateish");                  // a month name starts an absolute date
+    emitter.label("__rt_strtotime_kw_trailing_word_weekday");
+    emitter.instruction("ldr x12, [sp, #96]");                                    // the head's keyword kind
+    emitter.instruction("cmp x12, #5");                                           // only the bare keywords combine with a weekday
+    emitter.instruction("b.hi __rt_strtotime_fail");                              // weekday followed by weekday is not a form we parse
+    emitter.instruction("cmp x12, #2");                                           // head tomorrow/yesterday ?
+    emitter.instruction("b.lo __rt_strtotime_kw_trailing_word_ok");               // now/today: the weekday is evaluated against the head's result
+    emitter.instruction("cmp x12, #3");                                           // head yesterday at most
+    emitter.instruction("b.hi __rt_strtotime_kw_trailing_word_ok");               // midnight/noon: the weekday resets the time like php
+    emitter.instruction("b __rt_strtotime_kw_trailing_reverse");                  // tomorrow friday: the weekday first, then the relative day
+    emitter.label("__rt_strtotime_kw_trailing_word_ok");
+    emitter.instruction("ldr x10, [sp, #88]");                                    // reload the first keyword's length
+    emitter.instruction("ldr x3, [sp, #48]");                                     // reload the trimmed input pointer
+    emitter.instruction("b __rt_strtotime_kw_trailing_go");                       // evaluate the first keyword, then the remainder, in two steps
+    emitter.label("__rt_strtotime_kw_trailing_rest_only");
+    emitter.instruction("ldr x10, [sp, #88]");                                    // the first keyword's length
+    emitter.instruction("ldr x3, [sp, #48]");                                     // trimmed input pointer
+    emitter.instruction("ldr x2, [sp, #56]");                                     // trimmed input length
+    emitter.instruction("add x1, x3, x10");                                       // x1 = first byte after the keyword
+    emitter.instruction("sub x2, x2, x10");                                       // x2 = remaining length
+    emitter.adrp("x0", "_strtotime_clock");                                     // page of the effective-clock global
+    emitter.add_lo12("x0", "x0", "_strtotime_clock");                           // resolve the clock global address
+    emitter.instruction("ldr x0, [x0]");                                          // the remainder is evaluated against the original clock
+    emitter.instruction("mov x3, #1");                                            // the base timestamp is supplied
+    emitter.instruction("bl __rt_strtotime");                                     // x0 = remainder timestamp or the failure sentinel
+    emitter.instruction("cbz x1, __rt_strtotime_fail");                           // the nested parse failed: so does this one
+    emitter.instruction("b __rt_strtotime_ret");                                  // return through the shared epilogue
+    emitter.label("__rt_strtotime_kw_trailing_reverse");
+    emitter.instruction("ldr x10, [sp, #88]");                                    // the first keyword's length
+    emitter.instruction("ldr x3, [sp, #48]");                                     // trimmed input pointer
+    emitter.instruction("ldr x2, [sp, #56]");                                     // trimmed input length
+    emitter.instruction("add x1, x3, x10");                                       // x1 = first byte after the keyword
+    emitter.instruction("sub x2, x2, x10");                                       // x2 = remaining length
+    emitter.adrp("x0", "_strtotime_clock");                                     // page of the effective-clock global
+    emitter.add_lo12("x0", "x0", "_strtotime_clock");                           // resolve the clock global address
+    emitter.instruction("ldr x0, [x0]");                                          // the remainder is evaluated against the original clock
+    emitter.instruction("mov x3, #1");                                            // the base timestamp is supplied
+    emitter.instruction("bl __rt_strtotime");                                     // x0 = remainder timestamp or the failure sentinel
+    emitter.instruction("cbz x1, __rt_strtotime_fail");                           // success flag clear: propagate the nested failure
+    emitter.instruction("ldr x3, [sp, #48]");                                     // reload the trimmed input pointer
+    emitter.instruction("ldr x2, [sp, #88]");                                     // the first keyword's length
+    emitter.instruction("mov x1, x3");                                            // x1 = keyword pointer
+    emitter.instruction("mov x3, #1");                                            // the remainder's timestamp is the base
+    emitter.instruction("bl __rt_strtotime");                                     // x0 = the keyword applied to the remainder, or the failure sentinel
+    emitter.instruction("cbz x1, __rt_strtotime_fail");                           // the nested parse failed: so does this one
+    emitter.instruction("b __rt_strtotime_ret");                                  // return through the shared epilogue
+    emitter.label("__rt_strtotime_kw_trailing_adv");
+    emitter.instruction("add x11, x11, #1");                                    // advance past one separator byte
+    emitter.instruction("b __rt_strtotime_kw_trailing_skip");                   // keep skipping
+    emitter.label("__rt_strtotime_kw_trailing_go");
+    emitter.instruction("str x10, [sp, #88]");                                  // keep the keyword length across the nested calls
+    emitter.adrp("x0", "_strtotime_clock");                                     // page of the effective-clock global
+    emitter.add_lo12("x0", "x0", "_strtotime_clock");                           // resolve the clock global address
+    emitter.instruction("ldr x0, [x0]");                                        // x0 = base timestamp for the keyword
+    emitter.instruction("mov x1, x3");                                          // x1 = keyword pointer
+    emitter.instruction("mov x2, x10");                                         // x2 = keyword length
+    emitter.instruction("mov x3, #1");                                          // the base timestamp is supplied
+    emitter.instruction("bl __rt_strtotime");                                   // x0 = keyword timestamp or the failure sentinel
+    emitter.instruction("cbz x1, __rt_strtotime_fail");                         // success flag clear: propagate the nested failure
+    emitter.instruction("ldr x3, [sp, #48]");                                   // reload the trimmed input pointer
+    emitter.instruction("ldr x10, [sp, #88]");                                  // reload the keyword length
+    emitter.instruction("ldr x2, [sp, #56]");                                   // reload the trimmed input length
+    emitter.instruction("add x1, x3, x10");                                     // x1 = first byte after the keyword
+    emitter.instruction("sub x2, x2, x10");                                     // x2 = remaining length
+    emitter.instruction("mov x3, #1");                                          // the keyword timestamp is the base
+    emitter.instruction("bl __rt_strtotime");                                   // x0 = offset applied to the keyword timestamp, or the failure sentinel
+    emitter.instruction("cbz x1, __rt_strtotime_fail");                         // the nested parse failed: so does this one
+    emitter.instruction("b __rt_strtotime_ret");                                // return through the shared epilogue
 
     emitter.label("__rt_strtotime_alpha_not_keyword");
 
@@ -283,7 +511,7 @@ fn emit_dispatcher_arm64(emitter: &mut Emitter) {
     emitter.label("__rt_strtotime_alpha_direct_weekday");
     emitter.instruction("ldr x8, [sp, #56]");                                   // reload trimmed input length
     emitter.instruction("cmp x10, x8");                                         // weekday consumed the whole input ?
-    emitter.instruction("b.ne __rt_strtotime_fail");                            // trailing junk after weekday → fail
+    emitter.instruction("b.ne __rt_strtotime_kw_trailing");                     // trailing input after the weekday: only a time of day, a keyword or an offset may follow
     emitter.instruction("b __rt_strtotime_weekdays_entry");                     // → weekdays strategy
 }
 
@@ -368,6 +596,21 @@ fn emit_dispatcher_linux_x86_64(emitter: &mut Emitter) {
 
     // -- digit: probe for HH:MM[:SS] then ISO date, else offsets --
     emitter.instruction("mov rsi, QWORD PTR [rbp - 72]");                       // reload trimmed length
+    emitter.instruction("cmp rsi, 3");                                          // shortest 12-hour form is "9am"
+    emitter.instruction("jl __rt_strtotime_digit_no_meridiem_linux_x86_64");    // too short for a meridiem
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 80]");                       // trimmed input pointer
+    emitter.instruction("movzx r8d, BYTE PTR [rdi + rsi - 1]");                 // last byte
+    emitter.instruction("or r8d, 32");                                          // fold ASCII case
+    emitter.instruction("cmp r8b, 109");                                        // ends in 'm' ?
+    emitter.instruction("jne __rt_strtotime_digit_no_meridiem_linux_x86_64");   // no → not a 12-hour form
+    emitter.instruction("movzx r8d, BYTE PTR [rdi + rsi - 2]");                 // byte before the 'm'
+    emitter.instruction("or r8d, 32");                                          // fold ASCII case
+    emitter.instruction("cmp r8b, 97");                                         // 'am' ?
+    emitter.instruction("je __rt_strtotime_ampm_entry_linux_x86_64");           // → 12-hour clock strategy
+    emitter.instruction("cmp r8b, 112");                                        // 'pm' ?
+    emitter.instruction("je __rt_strtotime_ampm_entry_linux_x86_64");           // → 12-hour clock strategy
+    emitter.label("__rt_strtotime_digit_no_meridiem_linux_x86_64");
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 72]");                       // reload trimmed length
     emitter.instruction("cmp rsi, 4");                                          // shortest time-only is "H:MM"
     emitter.instruction("jl __rt_strtotime_offsets_entry_linux_x86_64");        // too short for date/time → offsets
     emitter.instruction("movzx r8d, BYTE PTR [rbp - 63]");                      // lc16[1]
@@ -398,8 +641,6 @@ fn emit_dispatcher_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub ecx, 97");                                         // 'a' = 97
     emitter.instruction("cmp ecx, 25");                                         // ASCII alpha ?
     emitter.instruction("ja __rt_strtotime_fail_linux_x86_64");                 // not alpha → fail
-    emitter.instruction("cmp al, 97");                                          // possible "a/an <unit>" article-relative form ?
-    emitter.instruction("je __rt_strtotime_offsets_entry_linux_x86_64");        // let offsets parse or reject the article form
 
     // -- alpha: try keyword table match --
     // Args (caller-saved): rdi = candidate ptr, rsi = table base, rcx = available bytes.
@@ -417,8 +658,231 @@ fn emit_dispatcher_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rdx, 5");                                          // kind in 0..5 = bare keyword ?
     emitter.instruction("ja __rt_strtotime_alpha_not_keyword_linux_x86_64");    // no → check modifiers/weekdays
     emitter.instruction("cmp rax, QWORD PTR [rbp - 72]");                       // keyword consumed the whole input ?
-    emitter.instruction("jne __rt_strtotime_fail_linux_x86_64");                // trailing junk after keyword → fail
+    emitter.instruction("jne __rt_strtotime_kw_trailing_linux_x86_64");         // trailing input after keyword → only a signed offset may follow
     emitter.instruction("jmp __rt_strtotime_kw_entry_linux_x86_64");            // yes → keyword strategy
+
+    // -- keyword followed by a signed offset ("now - 7200 seconds", "tomorrow + 1 hour") --
+    // rax = keyword length. The keyword alone is evaluated first by a nested call on the
+    // current clock, and the signed remainder is then parsed by another nested call whose base
+    // is that result. Anything else after a keyword still fails, as it always did.
+    emitter.label("__rt_strtotime_kw_trailing_linux_x86_64");
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // keep the keyword length across the remainder classification and the nested calls
+    emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // keep the head's keyword kind: a day-shifting head refuses a day-shifting second keyword
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 80]");                       // rdi = trimmed input pointer
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 72]");                       // rcx = trimmed input length
+    emitter.instruction("mov r8, rax");                                         // cursor = first byte after the keyword
+    emitter.label("__rt_strtotime_kw_trailing_skip_linux_x86_64");
+    emitter.instruction("cmp r8, rcx");                                         // cursor reached the end of the input ?
+    emitter.instruction("jge __rt_strtotime_fail_linux_x86_64");                // nothing follows the separator → fail
+    emitter.instruction("movzx r9d, BYTE PTR [rdi + r8]");                      // load the byte under the cursor
+    emitter.instruction("cmp r9b, 32");                                         // space ?
+    emitter.instruction("je __rt_strtotime_kw_trailing_adv_linux_x86_64");      // skip separating whitespace
+    emitter.instruction("cmp r9b, 9");                                          // tab ?
+    emitter.instruction("je __rt_strtotime_kw_trailing_adv_linux_x86_64");      // skip separating whitespace
+    emitter.instruction("cmp r9b, 43");                                         // '+' starts a signed offset ?
+    emitter.instruction("je __rt_strtotime_kw_trailing_go_linux_x86_64");       // offset found → evaluate in two steps
+    emitter.instruction("cmp r9b, 45");                                         // '-' starts a signed offset ?
+    emitter.instruction("je __rt_strtotime_kw_trailing_go_linux_x86_64");       // offset found → evaluate in two steps
+    emitter.instruction("mov r10d, r9d");                                       // copy the byte for the digit test
+    emitter.instruction("sub r10d, 48");                                        // digit value of the byte under the cursor
+    emitter.instruction("cmp r10d, 9");                                         // a digit starts a time of day ?
+    emitter.instruction("jbe __rt_strtotime_kw_trailing_digit_linux_x86_64");   // H:MM / HH:MM / Ham forms continue the keyword
+    emitter.instruction("mov r10d, r9d");                                       // copy the byte for the letter test
+    emitter.instruction("or r10d, 32");                                         // fold ASCII case
+    emitter.instruction("sub r10d, 97");                                        // offset from 'a'
+    emitter.instruction("cmp r10d, 25");                                        // an ASCII letter starts a second word ?
+    emitter.instruction("jbe __rt_strtotime_kw_trailing_word_linux_x86_64");    // only another keyword may continue the first
+    emitter.instruction("jmp __rt_strtotime_fail_linux_x86_64");                // anything else after a keyword is not a form we parse
+    emitter.label("__rt_strtotime_kw_trailing_digit_linux_x86_64");
+    emitter.instruction("lea r10, [r8 + 1]");                                     // index of the byte after the first digit
+    emitter.instruction("cmp r10, rcx");                                          // is there a second byte ?
+    emitter.instruction("jge __rt_strtotime_fail_linux_x86_64");                  // a lone trailing digit is not a time
+    emitter.instruction("movzx r11d, BYTE PTR [rdi + r10]");                      // second byte
+    emitter.instruction("cmp r11b, 58");                                          // 'H:' ?
+    emitter.instruction("je __rt_strtotime_kw_trailing_go_linux_x86_64");         // H:MM[:SS] continues the keyword
+    emitter.instruction("mov edx, r11d");                                         // copy the second byte for the digit test
+    emitter.instruction("sub edx, 48");                                           // digit value of the second byte
+    emitter.instruction("cmp edx, 9");                                            // 'HH' ?
+    emitter.instruction("ja __rt_strtotime_kw_trailing_digit_one_linux_x86_64");  // H followed by a non-digit: a date separator, a unit word or the am/pm suffix
+    emitter.instruction("add r10, 1");                                            // index of the byte after the second digit
+    emitter.instruction("cmp r10, rcx");                                          // is there a third byte ?
+    emitter.instruction("jge __rt_strtotime_fail_linux_x86_64");                  // two digits alone are not a time
+    emitter.instruction("movzx r11d, BYTE PTR [rdi + r10]");                      // third byte
+    emitter.instruction("cmp r11b, 58");                                          // 'HH:' ?
+    emitter.instruction("je __rt_strtotime_kw_trailing_go_linux_x86_64");         // HH:MM[:SS] continues the keyword
+    emitter.instruction("mov edx, r11d");                                         // copy the third byte for the digit test
+    emitter.instruction("sub edx, 48");                                           // digit value of the third byte
+    emitter.instruction("cmp edx, 9");                                            // a third digit starts a year-first date (2023-04-01) ?
+    emitter.instruction("jbe __rt_strtotime_kw_trailing_dateish_linux_x86_64");   // an absolute date follows the keyword
+    emitter.label("__rt_strtotime_kw_trailing_digit_one_linux_x86_64");
+    emitter.instruction("cmp r11b, 45");                                          // '-' (2023-04-01, 1-4-2023) ?
+    emitter.instruction("je __rt_strtotime_kw_trailing_dateish_linux_x86_64");    // an absolute date follows the keyword
+    emitter.instruction("cmp r11b, 47");                                          // '/' (4/1/2023) ?
+    emitter.instruction("je __rt_strtotime_kw_trailing_dateish_linux_x86_64");    // an absolute date follows the keyword
+    emitter.instruction("cmp r11b, 46");                                          // '.' (1.4.2023) ?
+    emitter.instruction("je __rt_strtotime_kw_trailing_dateish_linux_x86_64");    // an absolute date follows the keyword
+    emitter.label("__rt_strtotime_kw_trailing_ampm_linux_x86_64");
+    emitter.instruction("cmp r11b, 32");                                          // optional space before the meridiem ?
+    emitter.instruction("jne __rt_strtotime_kw_trailing_ampm_letter_linux_x86_64"); // no space: the byte itself must be the meridiem
+    emitter.instruction("add r10, 1");                                            // skip the single space
+    emitter.instruction("cmp r10, rcx");                                          // is there a byte after the space ?
+    emitter.instruction("jge __rt_strtotime_fail_linux_x86_64");                  // a space with nothing after it is not a time
+    emitter.instruction("movzx r11d, BYTE PTR [rdi + r10]");                      // byte after the space
+    emitter.label("__rt_strtotime_kw_trailing_ampm_letter_linux_x86_64");
+    emitter.instruction("or r11d, 32");                                           // fold ASCII case
+    emitter.instruction("cmp r11b, 97");                                          // 'a' of am ?
+    emitter.instruction("je __rt_strtotime_kw_trailing_ampm_m_linux_x86_64");     // check the 'm' that completes am
+    emitter.instruction("cmp r11b, 112");                                         // 'p' of pm ?
+    emitter.instruction("jne __rt_strtotime_kw_trailing_digit_word_linux_x86_64"); // a number followed by another word: a unit or a month name
+    emitter.label("__rt_strtotime_kw_trailing_ampm_m_linux_x86_64");
+    emitter.instruction("add r10, 1");                                            // index of the byte after the a/p
+    emitter.instruction("cmp r10, rcx");                                          // is there a byte after it ?
+    emitter.instruction("jge __rt_strtotime_fail_linux_x86_64");                  // a bare 'a' or 'p' is not a meridiem
+    emitter.instruction("movzx r11d, BYTE PTR [rdi + r10]");                      // the byte after the a/p
+    emitter.instruction("or r11d, 32");                                           // fold ASCII case
+    emitter.instruction("cmp r11b, 109");                                         // 'm' ?
+    emitter.instruction("je __rt_strtotime_kw_trailing_go_linux_x86_64");         // Ham / Hpm / H am / H pm continue the keyword
+    emitter.instruction("sub r10, 1");                                            // back to the first letter of the word
+    emitter.instruction("jmp __rt_strtotime_kw_trailing_digit_word_linux_x86_64"); // '1 april', '2 apples': classify the word
+    emitter.label("__rt_strtotime_kw_trailing_digit_word_linux_x86_64");
+    emitter.instruction("mov r8, r10");                                           // r8 = index of the word after the number
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 80]");                         // trimmed input pointer
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 72]");                         // trimmed input length
+    emitter.instruction("mov r10, rdi");                                          // end = trimmed input pointer ...
+    emitter.instruction("add r10, rcx");                                          // ... + trimmed length
+    emitter.instruction("add rdi, r8");                                           // rdi = cursor at the word
+    emitter.instruction("call __rt_strtotime_lc_cursor_linux_x86_64");            // lowercase the word into the lc16 buffer
+    emitter.instruction("mov QWORD PTR [rbp - 48], rdi");                         // park the cursor across match_word
+    emitter.instruction("lea rdi, [rbp - 64]");                                   // rdi = candidate prefix (lc16 buffer)
+    abi::emit_symbol_address(emitter, "rsi", "_strtotime_keyword_tab");
+    emitter.instruction("mov rcx, r10");                                          // remaining = end ...
+    emitter.instruction("sub rcx, QWORD PTR [rbp - 48]");                         // ... - cursor
+    emitter.instruction("mov r8, 16");                                            // cap candidate window to 16
+    emitter.instruction("cmp rcx, r8");                                           // remaining > 16 ?
+    emitter.instruction("cmovae rcx, r8");                                        // rcx = min(remaining, 16)
+    emitter.instruction("call __rt_strtotime_match_word_linux_x86_64");           // rax = consumed, rdx = kind (-1 if no match)
+    emitter.instruction("test rax, rax");                                         // not a keyword-table word ?
+    emitter.instruction("jz __rt_strtotime_kw_trailing_digit_unit_linux_x86_64"); // a unit such as 'days'
+    emitter.instruction("cmp rdx, 19");                                           // month names are kinds 19..30
+    emitter.instruction("jl __rt_strtotime_kw_trailing_digit_unit_linux_x86_64"); // not a month: continue the keyword
+    emitter.instruction("cmp rdx, 30");                                           // last month kind
+    emitter.instruction("jg __rt_strtotime_kw_trailing_digit_unit_linux_x86_64"); // not a month: continue the keyword
+    emitter.instruction("jmp __rt_strtotime_kw_trailing_dateish_linux_x86_64");   // '<keyword> 1 april' is an absolute date
+    emitter.label("__rt_strtotime_kw_trailing_digit_unit_linux_x86_64");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                         // reload the keyword length
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 80]");                         // reload the trimmed input pointer
+    emitter.instruction("jmp __rt_strtotime_kw_trailing_go_linux_x86_64");        // evaluate the keyword, then the remainder, in two steps
+    emitter.label("__rt_strtotime_kw_trailing_dateish_linux_x86_64");
+    emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                          // the head's keyword kind
+    emitter.instruction("cmp r9, 2");                                             // head tomorrow/yesterday ?
+    emitter.instruction("jb __rt_strtotime_fail_linux_x86_64");                   // other heads keep refusing an absolute date
+    emitter.instruction("cmp r9, 3");                                             // yesterday at most
+    emitter.instruction("ja __rt_strtotime_fail_linux_x86_64");                   // other heads keep refusing an absolute date
+    emitter.instruction("jmp __rt_strtotime_kw_trailing_reverse_linux_x86_64");   // date first, then the relative day
+    emitter.label("__rt_strtotime_kw_trailing_word_linux_x86_64");
+    emitter.instruction("mov r10, rdi");                                          // end = trimmed input pointer ...
+    emitter.instruction("add r10, rcx");                                          // ... + trimmed length
+    emitter.instruction("add rdi, r8");                                           // rdi = cursor at the second word
+    emitter.instruction("call __rt_strtotime_lc_cursor_linux_x86_64");            // lowercase the second word into the lc16 buffer
+    emitter.instruction("mov QWORD PTR [rbp - 48], rdi");                         // park the cursor across match_word
+    emitter.instruction("lea rdi, [rbp - 64]");                                   // rdi = candidate prefix (lc16 buffer)
+    abi::emit_symbol_address(emitter, "rsi", "_strtotime_keyword_tab");
+    emitter.instruction("mov rcx, r10");                                          // remaining = end ...
+    emitter.instruction("sub rcx, QWORD PTR [rbp - 48]");                         // ... - cursor
+    emitter.instruction("mov r8, 16");                                            // cap candidate window to 16
+    emitter.instruction("cmp rcx, r8");                                           // remaining > 16 ?
+    emitter.instruction("cmovae rcx, r8");                                        // rcx = min(remaining, 16)
+    emitter.instruction("call __rt_strtotime_match_word_linux_x86_64");           // rax = consumed, rdx = kind (-1 if no match)
+    emitter.instruction("test rax, rax");                                         // not a keyword ?
+    emitter.instruction("jz __rt_strtotime_fail_linux_x86_64");                   // not a keyword → fail
+    emitter.instruction("cmp rdx, 5");                                            // kind in 0..5 = bare keyword ?
+    emitter.instruction("ja __rt_strtotime_kw_trailing_word_other_linux_x86_64"); // weekdays and months continue some keywords, modifiers never do
+    emitter.instruction("cmp rdx, 2");                                            // second keyword tomorrow/yesterday ?
+    emitter.instruction("jb __rt_strtotime_kw_trailing_word_ok_linux_x86_64");    // no (now/today) → fine
+    emitter.instruction("cmp rdx, 3");                                            // second keyword yesterday at most
+    emitter.instruction("ja __rt_strtotime_kw_trailing_word_ok_linux_x86_64");    // no (midnight/noon) → fine
+    emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                          // the head's keyword kind
+    emitter.instruction("cmp r9, 2");                                             // head tomorrow/yesterday ?
+    emitter.instruction("jb __rt_strtotime_kw_trailing_word_ok_linux_x86_64");    // no → fine
+    emitter.instruction("cmp r9, 3");                                             // head yesterday at most
+    emitter.instruction("ja __rt_strtotime_kw_trailing_word_ok_linux_x86_64");    // no → fine
+    emitter.instruction("jmp __rt_strtotime_kw_trailing_rest_only_linux_x86_64"); // php sets the relative day once: 'tomorrow tomorrow' is one day, the second keyword wins
+    emitter.label("__rt_strtotime_kw_trailing_word_other_linux_x86_64");
+    emitter.instruction("cmp rdx, 10");                                           // weekday kinds start at 10
+    emitter.instruction("jl __rt_strtotime_fail_linux_x86_64");                   // next/last/this/ago are not parsed after a keyword
+    emitter.instruction("cmp rdx, 16");                                           // weekday kinds end at 16
+    emitter.instruction("jle __rt_strtotime_kw_trailing_word_weekday_linux_x86_64"); // a weekday after the keyword
+    emitter.instruction("cmp rdx, 19");                                           // month kinds start at 19
+    emitter.instruction("jl __rt_strtotime_fail_linux_x86_64");                   // ordinals and the rest are not parsed after a keyword
+    emitter.instruction("cmp rdx, 30");                                           // month kinds end at 30
+    emitter.instruction("jg __rt_strtotime_fail_linux_x86_64");                   // ordinals and the rest are not parsed after a keyword
+    emitter.instruction("jmp __rt_strtotime_kw_trailing_dateish_linux_x86_64");   // a month name starts an absolute date
+    emitter.label("__rt_strtotime_kw_trailing_word_weekday_linux_x86_64");
+    emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                          // the head's keyword kind
+    emitter.instruction("cmp r9, 5");                                             // only the bare keywords combine with a weekday
+    emitter.instruction("ja __rt_strtotime_fail_linux_x86_64");                   // weekday followed by weekday is not a form we parse
+    emitter.instruction("cmp r9, 2");                                             // head tomorrow/yesterday ?
+    emitter.instruction("jb __rt_strtotime_kw_trailing_word_ok_linux_x86_64");    // now/today: the weekday is evaluated against the head's result
+    emitter.instruction("cmp r9, 3");                                             // head yesterday at most
+    emitter.instruction("ja __rt_strtotime_kw_trailing_word_ok_linux_x86_64");    // midnight/noon: the weekday resets the time like php
+    emitter.instruction("jmp __rt_strtotime_kw_trailing_reverse_linux_x86_64");   // tomorrow friday: the weekday first, then the relative day
+    emitter.label("__rt_strtotime_kw_trailing_word_ok_linux_x86_64");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                         // reload the first keyword's length
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 80]");                         // reload the trimmed input pointer
+    emitter.instruction("jmp __rt_strtotime_kw_trailing_go_linux_x86_64");        // evaluate the first keyword, then the remainder, in two steps
+    emitter.label("__rt_strtotime_kw_trailing_rest_only_linux_x86_64");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                         // the first keyword's length
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 80]");                         // trimmed input pointer
+    emitter.instruction("add rdi, r10");                                          // rdi = first byte after the keyword
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 72]");                         // trimmed input length
+    emitter.instruction("sub rsi, r10");                                          // rsi = remaining length
+    emitter.instruction("mov rdx, QWORD PTR [rip + _strtotime_clock]");           // the remainder is evaluated against the original clock
+    emitter.instruction("mov rcx, 1");                                            // the base timestamp is supplied
+    emitter.instruction("call __rt_strtotime");                                   // rax = remainder timestamp or the failure sentinel
+    emitter.instruction("test rdx, rdx");                                         // did the nested parse succeed?
+    emitter.instruction("jz __rt_strtotime_fail_linux_x86_64");                   // the nested parse failed: so does this one
+    emitter.instruction("jmp __rt_strtotime_ret_linux_x86_64");                   // return through the shared epilogue
+    emitter.label("__rt_strtotime_kw_trailing_reverse_linux_x86_64");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                         // the first keyword's length
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 80]");                         // trimmed input pointer
+    emitter.instruction("add rdi, r10");                                          // rdi = first byte after the keyword
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 72]");                         // trimmed input length
+    emitter.instruction("sub rsi, r10");                                          // rsi = remaining length
+    emitter.instruction("mov rdx, QWORD PTR [rip + _strtotime_clock]");           // the remainder is evaluated against the original clock
+    emitter.instruction("mov rcx, 1");                                            // the base timestamp is supplied
+    emitter.instruction("call __rt_strtotime");                                   // rax = remainder timestamp or the failure sentinel
+    emitter.instruction("test rdx, rdx");                                         // did the nested parse succeed?
+    emitter.instruction("jz __rt_strtotime_fail_linux_x86_64");                   // success flag clear: propagate the nested failure
+    emitter.instruction("mov rdx, rax");                                          // the remainder's timestamp is the base
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 80]");                         // keyword pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                         // keyword length
+    emitter.instruction("mov rcx, 1");                                            // the base timestamp is supplied
+    emitter.instruction("call __rt_strtotime");                                   // rax = the keyword applied to the remainder, or the failure sentinel
+    emitter.instruction("test rdx, rdx");                                         // did the nested parse succeed?
+    emitter.instruction("jz __rt_strtotime_fail_linux_x86_64");                   // the nested parse failed: so does this one
+    emitter.instruction("jmp __rt_strtotime_ret_linux_x86_64");                   // return through the shared epilogue
+    emitter.label("__rt_strtotime_kw_trailing_adv_linux_x86_64");
+    emitter.instruction("add r8, 1");                                           // advance past one separator byte
+    emitter.instruction("jmp __rt_strtotime_kw_trailing_skip_linux_x86_64");    // keep skipping
+    emitter.label("__rt_strtotime_kw_trailing_go_linux_x86_64");
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // keep the keyword length across the nested calls
+    emitter.instruction("mov rsi, rax");                                        // rsi = keyword length
+    emitter.instruction("mov rdx, QWORD PTR [rip + _strtotime_clock]");         // rdx = base timestamp for the keyword
+    emitter.instruction("mov rcx, 1");                                          // the base timestamp is supplied
+    emitter.instruction("call __rt_strtotime");                                 // rax = keyword timestamp or the failure sentinel
+    emitter.instruction("test rdx, rdx");                                       // did the nested parse succeed?
+    emitter.instruction("jz __rt_strtotime_fail_linux_x86_64");                 // success flag clear: propagate the nested failure
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the keyword length
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 80]");                       // reload the trimmed input pointer
+    emitter.instruction("add rdi, r10");                                        // rdi = first byte after the keyword
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 72]");                       // reload the trimmed input length
+    emitter.instruction("sub rsi, r10");                                        // rsi = remaining length
+    emitter.instruction("mov rdx, rax");                                        // the keyword timestamp is the base
+    emitter.instruction("mov rcx, 1");                                          // the base timestamp is supplied
+    emitter.instruction("call __rt_strtotime");                                 // rax = offset applied to the keyword timestamp, or the failure sentinel
+    emitter.instruction("test rdx, rdx");                                       // did the nested parse succeed?
+    emitter.instruction("jz __rt_strtotime_fail_linux_x86_64");                 // the nested parse failed: so does this one
+    emitter.instruction("jmp __rt_strtotime_ret_linux_x86_64");                 // return through the shared epilogue
 
     emitter.label("__rt_strtotime_alpha_not_keyword_linux_x86_64");
 
@@ -520,7 +984,7 @@ fn emit_dispatcher_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_strtotime_fail_linux_x86_64");                // unknown kind → fail
     emitter.label("__rt_strtotime_alpha_direct_weekday_linux_x86_64");
     emitter.instruction("cmp rax, QWORD PTR [rbp - 72]");                       // weekday consumed the whole input ?
-    emitter.instruction("jne __rt_strtotime_fail_linux_x86_64");                // trailing junk after weekday → fail
+    emitter.instruction("jne __rt_strtotime_kw_trailing_linux_x86_64");         // trailing input after the weekday: only a time of day, a keyword or an offset may follow
     emitter.instruction("jmp __rt_strtotime_weekdays_entry_linux_x86_64");      // yes → weekdays
 }
 

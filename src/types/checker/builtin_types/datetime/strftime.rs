@@ -211,6 +211,65 @@ pub(super) fn datetime_extract_micros() -> ClassMethod {
     }
 }
 
+/// PHP source for `DateTime::__elephc_now_micros($s, $tz)` -- the sub-second part a "now"-relative
+/// constructor string carries. PHP keeps the current microseconds unless the string sets a time of
+/// day (an explicit `HH:MM`, `@ts`, a bare date, `today`, `tomorrow`, a weekday, ...). Rather than
+/// enumerate those spellings, the string is parsed against two base times one second apart: only a
+/// string that leaves the time of day alone moves with its base. `$tz` is the display zone to parse
+/// in (`""` for the default one).
+#[cfg(test)]
+pub(super) const NOW_MICROS_SRC: &str = r#"<?php
+$__mt = explode(" ", microtime(false));
+$__us = intval(substr($__mt[0], 2, 6));
+$__b = intval($__mt[1]);
+$__r = 0;
+$__n = strtolower(trim($s));
+if ($__n === "now") {
+    $__r = $__us;
+}
+if ($__n !== "now" && strpos($s, ":") === false && substr($s, 0, 1) !== "@") {
+    $__saved = date_default_timezone_get();
+    if ($tz !== "") {
+        date_default_timezone_set($tz);
+    }
+    $__t1 = strtotime($s, $__b);
+    if ($__t1 !== false && strtotime($s, $__b + 1) === $__t1 + 1) {
+        $__r = $__us;
+    }
+    if ($tz !== "") {
+        date_default_timezone_set($__saved);
+    }
+}
+return $__r;
+"#;
+
+/// Builds the internal static `DateTime::__elephc_now_micros(string $s, string $tz): int`.
+pub(super) fn datetime_now_micros() -> ClassMethod {
+    let body = super::bodies::now_micros();
+    ClassMethod {
+        type_params: Vec::new(),
+        name: "__elephc_now_micros".to_string(),
+        visibility: Visibility::Public,
+        is_static: true,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![
+            ("s".to_string(), Some(TypeExpr::Str), None, false),
+            ("tz".to_string(), Some(TypeExpr::Str), None, false),
+        ],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Int),
+        by_ref_return: false,
+        body,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
 /// PHP source for `DateTime::__elephc_extract_modify_micros($m)` — sums the
 /// microsecond deltas in a modify() string (each `<±N> microsecond[s]|usec[s]`
 /// clause), returning the total (which may exceed one second or be negative).

@@ -5,7 +5,8 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - `check` returns `Int` (the number of bytes written).
+//! - `check` returns `int|false`: the byte count, or false when the file cannot be opened,
+//!   locked or written (`false === file_put_contents(...)` is how Symfony detects a failed write).
 //! - The `check` hook links the PHAR bridge: a literal `phar://` URL writes through
 //!   the read-modify-write bridge and links `elephc_phar` plus `elephc_crypto` (the
 //!   assembly SHA1 path remains a fallback); any non-literal path links `elephc_phar`.
@@ -23,7 +24,7 @@ builtin! {
     requirements: crate::builtins::semantics::file_put_contents_requirements,
 }
 
-/// Returns `Int` and records the PHAR libraries the write may need.
+/// Returns `int|false` and records the PHAR libraries the write may need.
 ///
 /// A literal `phar://` target writes through the `elephc_phar` bridge and also links
 /// `elephc_crypto`; any other target (including non-literal paths) links `elephc_phar`.
@@ -31,5 +32,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     for arg in cx.args {
         cx.checker.infer_type(arg, cx.env)?;
     }
-    Ok(PhpType::Int)
+    Ok(PhpType::Union(vec![PhpType::Int, PhpType::False]))
 }

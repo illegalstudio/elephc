@@ -104,7 +104,7 @@ fn eval_dynamic_object_vars_result(
         &mut emitted_keys,
         context,
     )?;
-    eval_add_dynamic_object_vars(&mut result, object, &mut emitted_keys, &storage_keys)?;
+    eval_add_dynamic_object_vars(&mut result, object, &mut emitted_keys, &storage_keys, context)?;
     Ok(result.finish())
 }
 
@@ -134,7 +134,7 @@ fn eval_runtime_object_vars_result(
         &mut emitted_keys,
         context,
     )?;
-    eval_add_dynamic_object_vars(&mut result, object, &mut emitted_keys, &HashSet::new())?;
+    eval_add_dynamic_object_vars(&mut result, object, &mut emitted_keys, &HashSet::new(), context)?;
     Ok(result.finish())
 }
 
@@ -286,6 +286,7 @@ fn eval_add_dynamic_object_vars<V: RuntimeValueOps>(
     object: RuntimeCellHandle,
     emitted_keys: &mut HashSet<String>,
     storage_keys: &HashSet<String>,
+    context: &ElephcEvalContext,
 ) -> Result<(), EvalStatus> {
     let property_count = result.values().object_property_len(object)?;
     for position in 0..property_count {
@@ -303,6 +304,30 @@ fn eval_add_dynamic_object_vars<V: RuntimeValueOps>(
         }
         result.string(&key_name, |values| {
             values.property_get(object, &key_name)
+        })?;
+    }
+    // A property created by `$object->name = ...` on an eval-declared object never reaches the
+    // runtime slots scanned above: that write is guarded on the property being declared. The
+    // overlay is where it lives, and the same two filters apply -- a declared storage name is
+    // not a dynamic property, and a mangled name is not visible under any circumstances.
+    //
+    // The overlay reports its names in creation order, which is the order PHP lists dynamic
+    // properties in, so they are appended as they come.
+    let identity = result.values().object_identity(object)?;
+    let overlay_names: Vec<String> = context
+        .dynamic_property_storage_names(identity)
+        .into_iter()
+        .filter(|key_name| !key_name.contains('\0') && !storage_keys.contains(key_name))
+        .collect();
+    for key_name in overlay_names {
+        if !emitted_keys.insert(key_name.clone()) {
+            continue;
+        }
+        // Read the overlay cell directly rather than through the ordinary property path: this
+        // helper is also reached with a shared context, and the value is right here.
+        result.string(&key_name, |values| match context.dynamic_property_value(identity, &key_name) {
+            Some(stored) => values.retain(stored),
+            None => values.property_get(object, &key_name),
         })?;
     }
     Ok(())
@@ -347,14 +372,37 @@ fn eval_public_object_vars_result(
 pub(in crate::interpreter) fn eval_object_public_property_exists(
     object: RuntimeCellHandle,
     property_name: &str,
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
+    // The overlay is consulted first: a dynamic property on an eval-declared object exists
+    // only there, so `property_exists($object, "dynamic")` answered false without this.
+    let identity = values.object_identity(object)?;
+    if context
+        .dynamic_property_storage_names(identity)
+        .iter()
+        .any(|name| name == property_name)
+    {
+        return Ok(true);
+    }
     let property_count = values.object_property_len(object)?;
     for position in 0..property_count {
         let key = values.object_property_iter_key(object, position)?;
         let key_bytes = values.string_bytes(key);
         values.release(key)?;
         if key_bytes? == property_name.as_bytes() {
+            // `unset()` on an undeclared property cannot REMOVE the object's slot, because
+            // `RuntimeValueOps` has no property-removal primitive; it nulls the slot and drops
+            // the overlay entry instead. For an object the context owns, every live slot also
+            // carries an initialization marker, so a slot without one is a property that was
+            // unset — and `php -n` 8.5.6 answers false for `property_exists()` after an
+            // `unset()`. A plain runtime object has no markers at all and keeps its slot.
+            //
+            // Only undeclared names reach this helper, so a declared-but-uninitialized typed
+            // property, which PHP does report as existing, is not affected.
+            if context.dynamic_object_class(identity).is_some() {
+                return Ok(context.dynamic_property_is_initialized(identity, property_name));
+            }
             return Ok(true);
         }
     }

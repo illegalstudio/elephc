@@ -8,7 +8,7 @@
 //! - The golden signature is `first_param_ref(fixed(["array"]))`: exactly 1 argument,
 //!   the `array` param is by-reference. The `ref` marker is mandatory — it is what makes
 //!   by-reference mutation lower correctly (ir_lower reads `ref_params` from the registry sig).
-//! - `check` requires the argument be an Array or AssocArray, returning Void.
+//! - `check` accepts gradual array-compatible values and returns PHP's boolean success result.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
@@ -28,7 +28,7 @@ builtin! {
 /// pre-validated by the registry. Returns `Ok(PhpType::Bool)` on success.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+    if !crate::types::checker::builtins::arrays::array_arg_is_gradually_acceptable(&ty) {
         return Err(CompileError::new(cx.span, &format!("{}() argument must be array", cx.name)));
     }
     Ok(PhpType::Bool)

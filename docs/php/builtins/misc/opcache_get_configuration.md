@@ -2,7 +2,7 @@
 title: "opcache_get_configuration()"
 description: "Returns the OPcache directives, blacklist, and version, or false when API access is restricted."
 sidebar:
-  order: 709
+  order: 728
 ---
 
 ## opcache_get_configuration()

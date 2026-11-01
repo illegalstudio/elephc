@@ -44,6 +44,18 @@ pub(in crate::parser::stmt) fn parse_variable_stmt(
         _ => unreachable!(),
     };
 
+    // Variable-led statements bypass the expression parser's whole-array `$GLOBALS` refusal.
+    // Apply the same rule here while leaving the supported literal-key assignment route intact.
+    if name == "GLOBALS" {
+        let next = tokens.get(*pos + 1).map(|(token, _)| token);
+        if let Some(message) = crate::globals_array::unsupported_use_message(
+            matches!(next, Some(Token::LBracket)),
+            matches!(next, Some(Token::Assign)),
+        ) {
+            return Err(CompileError::new(span, message));
+        }
+    }
+
     if let Some(stmt) = postfix::try_parse_postfix_assignment(tokens, pos, span)? {
         return Ok(stmt);
     }

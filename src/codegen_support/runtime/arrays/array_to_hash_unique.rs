@@ -15,6 +15,11 @@
 //!   The comparison is unchanged: the same 8-byte word equality the dense helper used.
 //! - Payload handling is `__rt_array_to_hash_reverse`'s, slot for slot: strings are persisted
 //!   into independent copies and heap-backed values retained, so the result owns its payloads.
+//! - A BOXED (`Mixed`, tag 7) slot holds a CELL POINTER, so word equality compared cell
+//!   addresses: `array_unique([1, "b", 1, 4])` kept both `1`s. PHP compares `array_unique`
+//!   elements by their STRING rendering (the `SORT_STRING` default), which `__rt_mixed_string_eq`
+//!   applies to a pair of cells — the same `__rt_mixed_cast_string` -> `__rt_str_eq` chain
+//!   `__rt_assoc_diff_intersect` uses for hash values.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -81,6 +86,8 @@ pub fn emit_array_to_hash_unique(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #32]");                                   // reload the value_type
     emitter.instruction("cmp x9, #1");                                          // is the element a string?
     emitter.instruction("b.eq __rt_array_to_hash_uniq_scan_string");            // strings compare by value
+    emitter.instruction("cmp x9, #7");                                          // is the element a boxed Mixed cell?
+    emitter.instruction("b.eq __rt_array_to_hash_uniq_scan_mixed");             // boxed cells compare by their PHP string rendering
     emitter.instruction("ldr x8, [x13]");                                       // load the earlier element low word
     emitter.instruction("cmp x8, x6");                                          // is the earlier element equal to the candidate?
     emitter.instruction("b.eq __rt_array_to_hash_uniq_skip");                   // duplicate: PHP keeps only the FIRST occurrence
@@ -104,6 +111,24 @@ pub fn emit_array_to_hash_unique(emitter: &mut Emitter) {
     emitter.label("__rt_array_to_hash_uniq_scan_next");
     emitter.instruction("add x7, x7, #1");                                      // advance the backward scan
     emitter.instruction("b __rt_array_to_hash_uniq_scan");                      // keep scanning earlier elements
+
+    // A boxed slot holds a CELL POINTER, so word equality compared cell ADDRESSES and
+    // `array_unique([1, "b", 1, 4])` kept both `1`s. PHP compares these elements by their string
+    // rendering, which is what the shared cell comparator applies.
+    emitter.label("__rt_array_to_hash_uniq_scan_mixed");
+    emitter.instruction("str x7, [sp, #64]");                                   // the comparison call clobbers the scan index
+    emitter.instruction("ldr x0, [sp, #48]");                                   // candidate boxed Mixed cell
+    emitter.instruction("ldr x1, [x13]");                                       // earlier boxed Mixed cell
+    emitter.instruction("bl __rt_mixed_string_eq");                             // compare the two cells by their PHP string rendering
+    emitter.instruction("cbnz x0, __rt_array_to_hash_uniq_skip");               // duplicate: PHP keeps only the FIRST occurrence
+    // Every loop register is caller-saved, so the scan state is rebuilt from the frame.
+    emitter.instruction("ldr x7, [sp, #64]");                                   // scan index j
+    emitter.instruction("ldr x10, [sp, #16]");                                  // candidate index i
+    emitter.instruction("ldr x11, [sp, #0]");                                   // indexed array pointer
+    emitter.instruction("add x11, x11, #24");                                   // skip the 24-byte indexed-array header
+    emitter.instruction("ldr x12, [sp, #40]");                                  // element stride
+    emitter.instruction("ldr x6, [sp, #48]");                                   // candidate element low word
+    emitter.instruction("b __rt_array_to_hash_uniq_scan_next");                 // share the scan advance
 
     emitter.label("__rt_array_to_hash_uniq_first");
     emitter.instruction("ldr x9, [sp, #32]");                                   // reload the value_type
@@ -145,6 +170,57 @@ pub fn emit_array_to_hash_unique(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #96");                                     // deallocate the stack frame
     emitter.instruction("ret");                                                 // return the result hash in x0
+
+    emit_mixed_string_eq_aarch64(emitter);
+}
+
+/// mixed_string_eq: PHP's `(string)$a === (string)$b` over two BOXED Mixed cells.
+/// Input:  x0 = left boxed cell, x1 = right boxed cell
+/// Output: x0 = 1 when the two renderings are byte-equal, 0 otherwise
+///
+/// Emitted next to its only caller so the reference from `__rt_array_to_hash_unique` is what keeps
+/// the atom alive; it needs no emission-list entry of its own.
+///
+/// Ownership follows `__rt_mixed_cast_string`'s per-tag contract: a string payload comes back as a
+/// FRESH heap copy the caller owns, every other scalar tag borrows the shared concat scratch.
+/// Both results are handed to `__rt_heap_free`, which by contract ignores anything that is not a
+/// live heap block, and the concat cursor is restored to its entry value — without which an
+/// `array_unique` of n elements would burn 21 bytes of scratch per rendering across its O(n²)
+/// scan.
+fn emit_mixed_string_eq_aarch64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: mixed_string_eq ---");
+    emitter.label_global("__rt_mixed_string_eq");
+    emitter.instruction("sub sp, sp, #64");                                     // allocate the boxed-cell comparison frame
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #48");                                    // set up the new frame pointer
+    emitter.instruction("str x1, [sp, #0]");                                    // save the right cell across the left rendering
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    emitter.instruction("ldr x10, [x9]");                                       // load the shared concat scratch cursor
+    emitter.instruction("str x10, [sp, #24]");                                  // save the cursor so both renderings are reclaimed on the way out
+    emitter.instruction("bl __rt_mixed_cast_string");                           // render the left cell: x1 = pointer, x2 = length
+    emitter.instruction("str x1, [sp, #8]");                                    // save the left rendering pointer
+    emitter.instruction("str x2, [sp, #16]");                                   // save the left rendering length
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the right cell
+    emitter.instruction("bl __rt_mixed_cast_string");                           // render the right cell: x1 = pointer, x2 = length
+    emitter.instruction("str x1, [sp, #40]");                                   // save the right rendering pointer for its release
+    emitter.instruction("mov x3, x1");                                          // pass the right rendering pointer to the byte comparator
+    emitter.instruction("mov x4, x2");                                          // pass the right rendering length to the byte comparator
+    emitter.instruction("ldr x1, [sp, #8]");                                    // reload the left rendering pointer
+    emitter.instruction("ldr x2, [sp, #16]");                                   // reload the left rendering length
+    emitter.instruction("bl __rt_str_eq");                                      // byte equality of the two PHP string renderings
+    emitter.instruction("str x0, [sp, #32]");                                   // save the answer across the releases
+    emitter.instruction("ldr x0, [sp, #8]");                                    // reload the left rendering pointer
+    emitter.instruction("bl __rt_heap_free");                                   // release a persisted copy; concat scratch is ignored by contract
+    emitter.instruction("ldr x0, [sp, #40]");                                   // reload the right rendering pointer
+    emitter.instruction("bl __rt_heap_free");                                   // release a persisted copy; concat scratch is ignored by contract
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    emitter.instruction("ldr x10, [sp, #24]");                                  // reload the saved concat scratch cursor
+    emitter.instruction("str x10, [x9]");                                       // hand back the scratch both renderings consumed
+    emitter.instruction("ldr x0, [sp, #32]");                                   // x0 = 1 when the two renderings are equal
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // deallocate the stack frame
+    emitter.instruction("ret");                                                 // return the string-rendering equality answer
 }
 
 /// x86_64 Linux implementation of `__rt_array_to_hash_unique`.
@@ -201,6 +277,8 @@ fn emit_array_to_hash_unique_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload the value_type
     emitter.instruction("cmp rdx, 1");                                          // is the element a string?
     emitter.instruction("je __rt_array_to_hash_uniq_scan_string");              // strings compare by value
+    emitter.instruction("cmp rdx, 7");                                          // is the element a boxed Mixed cell?
+    emitter.instruction("je __rt_array_to_hash_uniq_scan_mixed");               // boxed cells compare by their PHP string rendering
     emitter.instruction("mov rdx, QWORD PTR [r11]");                            // load the earlier element low word
     emitter.instruction("cmp rdx, rcx");                                        // is the earlier element equal to the candidate?
     emitter.instruction("je __rt_array_to_hash_uniq_skip");                     // duplicate: PHP keeps only the FIRST occurrence
@@ -224,6 +302,23 @@ fn emit_array_to_hash_unique_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_array_to_hash_uniq_scan_next");
     emitter.instruction("add r9, 1");                                           // advance the backward scan
     emitter.instruction("jmp __rt_array_to_hash_uniq_scan");                    // keep scanning earlier elements
+
+    // See the ARM64 path: a boxed slot's low word is a CELL POINTER, so word equality compared
+    // cell addresses instead of the values PHP renders and compares.
+    emitter.label("__rt_array_to_hash_uniq_scan_mixed");
+    emitter.instruction("mov QWORD PTR [rbp - 80], r9");                        // the comparison call clobbers the scan index
+    emitter.instruction("mov rdi, QWORD PTR [r11]");                            // earlier boxed Mixed cell
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // candidate boxed Mixed cell
+    emitter.instruction("call __rt_mixed_string_eq");                           // compare the two cells by their PHP string rendering
+    emitter.instruction("test rax, rax");                                       // did the two renderings match?
+    emitter.instruction("jne __rt_array_to_hash_uniq_skip");                    // duplicate: PHP keeps only the FIRST occurrence
+    // Every loop register is caller-saved, so the scan state is rebuilt from the frame.
+    emitter.instruction("mov r9, QWORD PTR [rbp - 80]");                        // scan index j
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // candidate index i
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // indexed array pointer
+    emitter.instruction("add r10, 24");                                         // skip the 24-byte indexed-array header
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // candidate element low word
+    emitter.instruction("jmp __rt_array_to_hash_uniq_scan_next");               // share the scan advance
 
     emitter.label("__rt_array_to_hash_uniq_first");
     emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload the value_type
@@ -265,4 +360,49 @@ fn emit_array_to_hash_unique_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 80");                                         // release the local slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the result hash in rax
+
+    emit_mixed_string_eq_x86_64(emitter);
+}
+
+/// x86_64 variant of `__rt_mixed_string_eq`.
+/// Input:  rax = left boxed cell, rdi = right boxed cell
+/// Output: rax = 1 when the two PHP string renderings are byte-equal, 0 otherwise
+///
+/// `__rt_mixed_cast_string` reads its argument from RAX on this target (it hands the register
+/// straight to `__rt_mixed_unbox`), and `__rt_heap_free` reads RAX too, which is why neither takes
+/// RDI here. Ownership and the concat-cursor restore match the ARM64 emitter exactly.
+fn emit_mixed_string_eq_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: mixed_string_eq ---");
+    emitter.label_global("__rt_mixed_string_eq");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
+    emitter.instruction("sub rsp, 64");                                         // reserve the boxed-cell comparison slots
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the right cell across the left rendering
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_off");
+    emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the shared concat scratch cursor
+    emitter.instruction("mov QWORD PTR [rbp - 16], r9");                        // save the cursor so both renderings are reclaimed on the way out
+    emitter.instruction("call __rt_mixed_cast_string");                         // render the left cell: rax = pointer, rdx = length
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the left rendering pointer
+    emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // save the left rendering length
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the right cell into the cast helper's input register
+    emitter.instruction("call __rt_mixed_cast_string");                         // render the right cell: rax = pointer, rdx = length
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the right rendering pointer for its release
+    emitter.instruction("mov rcx, rdx");                                        // pass the right rendering length to the byte comparator
+    emitter.instruction("mov rdx, rax");                                        // pass the right rendering pointer to the byte comparator
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the left rendering pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // reload the left rendering length
+    emitter.instruction("call __rt_str_eq");                                    // byte equality of the two PHP string renderings
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the answer across the releases
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the left rendering pointer
+    emitter.instruction("call __rt_heap_free");                                 // release a persisted copy; concat scratch is ignored by contract
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the right rendering pointer
+    emitter.instruction("call __rt_heap_free");                                 // release a persisted copy; concat scratch is ignored by contract
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_off");
+    emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // reload the saved concat scratch cursor
+    emitter.instruction("mov QWORD PTR [r8], r9");                              // hand back the scratch both renderings consumed
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // rax = 1 when the two renderings are equal
+    emitter.instruction("add rsp, 64");                                         // release the comparison slots
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the string-rendering equality answer
 }

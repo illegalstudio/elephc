@@ -100,6 +100,20 @@ fn callee_fits_budget(callee: &Function, receiver: bool) -> bool {
     }
 }
 
+/// Returns the per-host inline budget, overridable for measurement.
+///
+/// At the default a single host may absorb 10,000 callees of up to 24 instructions each —
+/// a quarter of a million instructions spliced into one body — which is the shape the Symfony
+/// `--web` build shows (`ReflectionParameter::getDefaultValue` emits 1.2 million assembly
+/// lines). `ELEPHC_INLINE_BUDGET` exists to measure how much of that volume the inliner is
+/// responsible for before deciding whether the cap should move.
+fn inline_budget() -> usize {
+    std::env::var("ELEPHC_INLINE_BUDGET")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(MAX_INLINES_PER_FUNCTION)
+}
+
 /// Returns true if `n` is a direct user-function call opcode we consider for inlining.
 fn is_user_call_op(op: Op) -> bool {
     matches!(op, Op::Call | Op::FunctionVariantCall)
@@ -369,6 +383,11 @@ fn is_eligible_callee(callee: &Function, recursive: &HashSet<String>, receiver: 
     // owner in a cleanup-excluded slot. Keep the call boundary until the splice can reproduce
     // the parameter-prologue retain and path-sensitive return transfer.
     if callee_mutates_lifetime_tracked_parameter(callee) {
+        return false;
+    }
+    // The same write can happen through a reference: a parameter handed to a by-reference
+    // parameter is overwritten (and its old value released) by the inner callee.
+    if !callee.by_ref_argument_param_slots.is_empty() {
         return false;
     }
     // A directly returned non-parameter local transfers its frame-owned value at the real
@@ -654,10 +673,17 @@ fn site_is_inlinable(callee: &Function, has_result: bool, result_ownership: Owne
 }
 
 /// Build name -> index map over the user function table (module.functions only).
+///
+/// The entry function shares the name `main` with a user `function main()` but is no call
+/// target, so it is skipped; the first function carrying a name wins, as in codegen's direct-call
+/// resolution (`Module::function_or_closure_by_key`).
 fn build_name_to_index(module: &Module) -> HashMap<String, usize> {
     let mut m = HashMap::new();
     for (i, f) in module.functions.iter().enumerate() {
-        m.insert(f.name.clone(), i);
+        if f.flags.is_main {
+            continue;
+        }
+        m.entry(f.name.clone()).or_insert(i);
     }
     m
 }
@@ -1384,7 +1410,7 @@ impl Callees<'_> {
 /// `fuel` cap backstops termination; recursive callees are already excluded.
 fn inline_into_function(host: &mut Function, callees: &Callees<'_>, data: &mut DataPool) -> bool {
     let mut any = false;
-    let mut fuel = MAX_INLINES_PER_FUNCTION;
+    let mut fuel = inline_budget();
     loop {
         // Recompute after every splice because an inlined body can add blocks to
         // an existing loop and can itself contain further eligible call sites.

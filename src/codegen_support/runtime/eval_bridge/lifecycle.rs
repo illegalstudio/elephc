@@ -22,17 +22,23 @@ pub(super) fn emit(emitter: &mut Emitter) {
 fn release_body(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("ldr x0, [sp, #224]");                          // recover the retained owned value from the C callback frame
+            emitter.instruction(&format!("ldr x0, [sp, #{}]", crate::codegen_support::runtime::exceptions::PROTECTED_INPUT_OFFSET));                          // recover the retained owned value from the C callback frame
             emitter.instruction("bl __rt_decref_mixed");                        // finish recursive cleanup before propagating a destructor exception
         },
         Arch::X86_64 => {
-            emitter.instruction("mov rax, QWORD PTR [rsp + 224]");              // adapt the retained C owner to the native Mixed release convention
+            emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", crate::codegen_support::runtime::exceptions::PROTECTED_INPUT_OFFSET));              // adapt the retained C owner to the native Mixed release convention
             emitter.instruction("call __rt_decref_mixed");                      // contain destructor throws until the complete release has finished
         },
     }
 }
 
 /// Runs the shared collector after eval has removed a root from its live scope.
+///
+/// This is the UNCONDITIONAL collector, unlike the compiled `unset()` (`__rt_gc_safepoint`, which
+/// only buffers the possible root like php does). An interpreted cycle is reachable at shutdown
+/// only while the interpreter's context is alive -- the main epilogue's final pass does not
+/// reach it -- so deferring here would never run its destructor at all. The price is that an
+/// interpreted `unset($cycle)` destroys the cycle at once where php waits for its buffer.
 fn collect_body(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_gc_collect_cycles");
 }

@@ -26,6 +26,7 @@ mod formatting;
 mod gmp;
 mod hooks;
 mod json;
+pub(crate) use json::eval_json_encode_serialized_object;
 mod math;
 mod network_env;
 mod pcntl;
@@ -36,8 +37,11 @@ mod regex;
 mod registry;
 mod scalars;
 mod spec;
+pub(in crate::interpreter) mod spl;
 mod string;
 mod symbols;
+
+pub(crate) use symbols::eval_registered_spl_autoload_functions_result;
 mod time;
 mod types;
 mod xml;
@@ -63,7 +67,18 @@ pub(super) use regex::*;
 pub(super) use registry::*;
 pub(super) use scalars::*;
 pub(super) use string::*;
+pub(crate) use string::highlight::eval_highlight_render;
 pub(super) use symbols::*;
+#[cfg(not(test))]
+pub(crate) use core::eval_unserialize_declared_object_from_hash;
+#[cfg(not(test))]
+pub(crate) use core::eval_serialize_object_fragment;
+#[cfg(not(test))]
+pub(crate) use core::eval_throwable_trace_value;
+pub(in crate::interpreter) use core::eval_throwable_string;
+pub(crate) use symbols::eval_class_name_is_a_bridge;
+pub(crate) use symbols::eval_spl_autoload_class;
+pub(crate) use symbols::eval_spl_autoload_classlike_definition;
 pub(super) use time::*;
 pub(super) use xml::*;
 pub(super) use tokenizer::*;

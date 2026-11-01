@@ -50,16 +50,21 @@ pub(super) fn lower_chown_or_chgrp_aarch64(
 ) -> Result<()> {
     load_string_to_result(ctx, path, name)?;
     abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+    let emit_string = |ctx: &mut FunctionContext<'_>| {
+        emit_owner_group_name_wrapper_dispatch(
+            ctx,
+            principal_name_option(kind),
+            principal_string_runtime(kind),
+        );
+    };
+    let emit_int = |ctx: &mut FunctionContext<'_>| {
+        emit_owner_group_wrapper_dispatch(ctx, principal_int_option(kind));
+    };
     match ctx.load_value_to_result(principal)?.codegen_repr() {
-        PhpType::Str => {
-            emit_owner_group_name_wrapper_dispatch(
-                ctx,
-                principal_name_option(kind),
-                principal_string_runtime(kind),
-            );
-        }
-        PhpType::Int => {
-            emit_owner_group_wrapper_dispatch(ctx, principal_int_option(kind));
+        PhpType::Str => emit_string(ctx),
+        PhpType::Int => emit_int(ctx),
+        PhpType::Mixed | PhpType::Union(_) => {
+            emit_mixed_principal(ctx, name, kind, &emit_string, &emit_int);
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -81,16 +86,21 @@ pub(super) fn lower_chown_or_chgrp_x86_64(
 ) -> Result<()> {
     load_string_to_result(ctx, path, name)?;
     abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+    let emit_string = |ctx: &mut FunctionContext<'_>| {
+        emit_owner_group_name_wrapper_dispatch(
+            ctx,
+            principal_name_option(kind),
+            principal_string_runtime(kind),
+        );
+    };
+    let emit_int = |ctx: &mut FunctionContext<'_>| {
+        emit_owner_group_wrapper_dispatch(ctx, principal_int_option(kind));
+    };
     match ctx.load_value_to_result(principal)?.codegen_repr() {
-        PhpType::Str => {
-            emit_owner_group_name_wrapper_dispatch(
-                ctx,
-                principal_name_option(kind),
-                principal_string_runtime(kind),
-            );
-        }
-        PhpType::Int => {
-            emit_owner_group_wrapper_dispatch(ctx, principal_int_option(kind));
+        PhpType::Str => emit_string(ctx),
+        PhpType::Int => emit_int(ctx),
+        PhpType::Mixed | PhpType::Union(_) => {
+            emit_mixed_principal(ctx, name, kind, &emit_string, &emit_int);
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -129,24 +139,29 @@ pub(super) fn lower_lchown_or_lchgrp_aarch64(
 ) -> Result<()> {
     load_string_to_result(ctx, path, name)?;
     abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
-    match ctx.load_value_to_result(principal)?.codegen_repr() {
-        PhpType::Str => {
-            ctx.emitter.instruction("mov x3, x1");                              // pass principal name pointer to symlink ownership helper
-            ctx.emitter.instruction("mov x4, x2");                              // pass principal name length to symlink ownership helper
-            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
-            abi::emit_call_label(ctx.emitter, lprincipal_string_runtime(kind));
+    let emit_string = |ctx: &mut FunctionContext<'_>| {
+        ctx.emitter.instruction("mov x3, x1");                              // pass principal name pointer to symlink ownership helper
+        ctx.emitter.instruction("mov x4, x2");                              // pass principal name length to symlink ownership helper
+        abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+        abi::emit_call_label(ctx.emitter, lprincipal_string_runtime(kind));
+    };
+    let emit_int = |ctx: &mut FunctionContext<'_>| {
+        ctx.emitter.instruction("mov x9, x0");                              // preserve uid/gid while restoring the path
+        abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+        if matches!(kind, PrincipalKind::Owner) {
+            ctx.emitter.instruction("mov x3, x9");                          // pass uid and leave symlink group unchanged
+            ctx.emitter.instruction("mov x4, #-1");                         // keep the symlink group unchanged
+        } else {
+            ctx.emitter.instruction("mov x3, #-1");                         // keep the symlink owner unchanged
+            ctx.emitter.instruction("mov x4, x9");                          // pass gid and leave symlink owner unchanged
         }
-        PhpType::Int => {
-            ctx.emitter.instruction("mov x9, x0");                              // preserve uid/gid while restoring the path
-            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
-            if matches!(kind, PrincipalKind::Owner) {
-                ctx.emitter.instruction("mov x3, x9");                          // pass uid and leave symlink group unchanged
-                ctx.emitter.instruction("mov x4, #-1");                         // keep the symlink group unchanged
-            } else {
-                ctx.emitter.instruction("mov x3, #-1");                         // keep the symlink owner unchanged
-                ctx.emitter.instruction("mov x4, x9");                          // pass gid and leave symlink owner unchanged
-            }
-            abi::emit_call_label(ctx.emitter, "__rt_lchown");
+        abi::emit_call_label(ctx.emitter, "__rt_lchown");
+    };
+    match ctx.load_value_to_result(principal)?.codegen_repr() {
+        PhpType::Str => emit_string(ctx),
+        PhpType::Int => emit_int(ctx),
+        PhpType::Mixed | PhpType::Union(_) => {
+            emit_mixed_principal(ctx, name, kind, &emit_string, &emit_int);
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -168,24 +183,29 @@ pub(super) fn lower_lchown_or_lchgrp_x86_64(
 ) -> Result<()> {
     load_string_to_result(ctx, path, name)?;
     abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
-    match ctx.load_value_to_result(principal)?.codegen_repr() {
-        PhpType::Str => {
-            ctx.emitter.instruction("mov rdi, rax");                            // pass principal name pointer to symlink ownership helper
-            ctx.emitter.instruction("mov rsi, rdx");                            // pass principal name length to symlink ownership helper
-            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
-            abi::emit_call_label(ctx.emitter, lprincipal_string_runtime(kind));
+    let emit_string = |ctx: &mut FunctionContext<'_>| {
+        ctx.emitter.instruction("mov rdi, rax");                            // pass principal name pointer to symlink ownership helper
+        ctx.emitter.instruction("mov rsi, rdx");                            // pass principal name length to symlink ownership helper
+        abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+        abi::emit_call_label(ctx.emitter, lprincipal_string_runtime(kind));
+    };
+    let emit_int = |ctx: &mut FunctionContext<'_>| {
+        ctx.emitter.instruction("mov r9, rax");                             // preserve uid/gid while restoring the path
+        abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+        if matches!(kind, PrincipalKind::Owner) {
+            ctx.emitter.instruction("mov rdi, r9");                         // pass uid and leave symlink group unchanged
+            ctx.emitter.instruction("mov rsi, -1");                         // keep the symlink group unchanged
+        } else {
+            ctx.emitter.instruction("mov rdi, -1");                         // keep the symlink owner unchanged
+            ctx.emitter.instruction("mov rsi, r9");                         // pass gid and leave symlink owner unchanged
         }
-        PhpType::Int => {
-            ctx.emitter.instruction("mov r9, rax");                             // preserve uid/gid while restoring the path
-            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
-            if matches!(kind, PrincipalKind::Owner) {
-                ctx.emitter.instruction("mov rdi, r9");                         // pass uid and leave symlink group unchanged
-                ctx.emitter.instruction("mov rsi, -1");                         // keep the symlink group unchanged
-            } else {
-                ctx.emitter.instruction("mov rdi, -1");                         // keep the symlink owner unchanged
-                ctx.emitter.instruction("mov rsi, r9");                         // pass gid and leave symlink owner unchanged
-            }
-            abi::emit_call_label(ctx.emitter, "__rt_lchown");
+        abi::emit_call_label(ctx.emitter, "__rt_lchown");
+    };
+    match ctx.load_value_to_result(principal)?.codegen_repr() {
+        PhpType::Str => emit_string(ctx),
+        PhpType::Int => emit_int(ctx),
+        PhpType::Mixed | PhpType::Union(_) => {
+            emit_mixed_principal(ctx, name, kind, &emit_string, &emit_int);
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -195,6 +215,122 @@ pub(super) fn lower_lchown_or_lchgrp_x86_64(
         }
     }
     Ok(())
+}
+
+/// Dispatches a boxed principal on its runtime tag, coercing it the way php's weak mode passes a
+/// value to a `string|int` parameter: an int or a bool takes the uid/gid path, a float the uid/gid
+/// path when it is integral and the name path (its string form) otherwise, a string the name path,
+/// and null the name path as `""` after php's deprecation. Anything else raises php's `TypeError`.
+/// psysh's Hoa `FileGeneric::changeGroup($group)` passes an untyped parameter.
+fn emit_mixed_principal(
+    ctx: &mut FunctionContext<'_>,
+    name: &str,
+    kind: PrincipalKind,
+    emit_string: &dyn Fn(&mut FunctionContext<'_>),
+    emit_int: &dyn Fn(&mut FunctionContext<'_>),
+) {
+    let int_payload = ctx.next_label("principal_mixed_int");
+    let int_ready = ctx.next_label("principal_mixed_int_ready");
+    let string_payload = ctx.next_label("principal_mixed_string");
+    let string_ready = ctx.next_label("principal_mixed_string_ready");
+    let float_label = ctx.next_label("principal_mixed_float");
+    let null_label = ctx.next_label("principal_mixed_null");
+    let wrong_label = ctx.next_label("principal_mixed_wrong");
+    let done_label = ctx.next_label("principal_mixed_done");
+    let parameter = match kind {
+        PrincipalKind::Owner => "user",
+        PrincipalKind::Group => "group",
+    };
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #1");                              // runtime tag 1 = string
+            ctx.emitter.instruction(&format!("b.eq {}", string_payload));
+            ctx.emitter.instruction("cmp x0, #0");                              // runtime tag 0 = int
+            ctx.emitter.instruction(&format!("b.eq {}", int_payload));
+            ctx.emitter.instruction("cmp x0, #3");                              // runtime tag 3 = bool, passed as 0 or 1
+            ctx.emitter.instruction(&format!("b.eq {}", int_payload));
+            ctx.emitter.instruction("cmp x0, #2");                              // runtime tag 2 = float
+            ctx.emitter.instruction(&format!("b.eq {}", float_label));
+            ctx.emitter.instruction("cmp x0, #8");                              // runtime tag 8 = null
+            ctx.emitter.instruction(&format!("b.eq {}", null_label));
+            ctx.emitter.instruction(&format!("b {}", wrong_label));
+            ctx.emitter.label(&float_label);
+            ctx.emitter.instruction("fmov d0, x1");                             // the float payload
+            ctx.emitter.instruction("fcvtzs x0, d0");                           // its integer part
+            ctx.emitter.instruction("scvtf d1, x0");                            // back to a float
+            ctx.emitter.instruction("fcmp d0, d1");                             // is the float integral?
+            ctx.emitter.instruction(&format!("b.eq {}", int_ready));
+            abi::emit_call_label(ctx.emitter, "__rt_ftoa");                     // x1/x2 = its string form
+            ctx.emitter.instruction(&format!("b {}", string_ready));
+            ctx.emitter.label(&int_payload);
+            ctx.emitter.instruction("mov x0, x1");                              // the uid/gid where an int principal is loaded
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 1");                              // runtime tag 1 = string
+            ctx.emitter.instruction(&format!("je {}", string_payload));
+            ctx.emitter.instruction("test rax, rax");                           // runtime tag 0 = int
+            ctx.emitter.instruction(&format!("je {}", int_payload));
+            ctx.emitter.instruction("cmp rax, 3");                              // runtime tag 3 = bool, passed as 0 or 1
+            ctx.emitter.instruction(&format!("je {}", int_payload));
+            ctx.emitter.instruction("cmp rax, 2");                              // runtime tag 2 = float
+            ctx.emitter.instruction(&format!("je {}", float_label));
+            ctx.emitter.instruction("cmp rax, 8");                              // runtime tag 8 = null
+            ctx.emitter.instruction(&format!("je {}", null_label));
+            ctx.emitter.instruction(&format!("jmp {}", wrong_label));
+            ctx.emitter.label(&float_label);
+            ctx.emitter.instruction("movq xmm0, rdi");                          // the float payload
+            ctx.emitter.instruction("cvttsd2si rax, xmm0");                     // its integer part
+            ctx.emitter.instruction("cvtsi2sd xmm1, rax");                      // back to a float
+            ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // is the float integral?
+            ctx.emitter.instruction(&format!("je {}", int_ready));
+            abi::emit_call_label(ctx.emitter, "__rt_ftoa");                     // rax/rdx = its string form
+            ctx.emitter.instruction(&format!("jmp {}", string_ready));
+            ctx.emitter.label(&int_payload);
+            ctx.emitter.instruction("mov rax, rdi");                            // the uid/gid where an int principal is loaded
+        }
+    }
+    ctx.emitter.label(&int_ready);
+    emit_int(ctx);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&null_label);
+    let message = format!(
+        "Deprecated: {name}(): Passing null to parameter #2 (${parameter}) of type string|int is deprecated\n"
+    );
+    let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
+    let (empty_label, _) = ctx.data.add_string(b"");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", &message_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", message_len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            abi::emit_symbol_address(ctx.emitter, "x1", &empty_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", 0);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rdi", &message_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", message_len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            abi::emit_symbol_address(ctx.emitter, "rax", &empty_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", 0);
+        }
+    }
+    abi::emit_jump(ctx.emitter, &string_ready);
+
+    ctx.emitter.label(&string_payload);
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rax, rdi");                                // the name pointer where a string principal is loaded
+    }
+    ctx.emitter.label(&string_ready);
+    emit_string(ctx);
+    abi::emit_jump(ctx.emitter, &done_label);
+    crate::codegen::lower_inst::builtins::arrays::union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(
+        ctx,
+        &wrong_label,
+        &|given| format!("{name}(): Argument #2 (${parameter}) must be of type string|int, {given} given"),
+    );
+    ctx.emitter.label(&done_label);
 }
 
 /// Returns the wrapper metadata option for string ownership changes.
@@ -242,7 +378,7 @@ pub(super) fn lower_chmod_with_wrapper(ctx: &mut FunctionContext<'_>, inst: &Ins
             ctx.emitter.instruction("sub sp, sp, #32");                         // reserve path and mode scratch storage
             ctx.emitter.instruction("str x1, [sp, #0]");                        // preserve the path pointer
             ctx.emitter.instruction("str x2, [sp, #8]");                        // preserve the path length
-            require_int(ctx.load_value_to_result(mode)?.codegen_repr(), "chmod mode")?;
+            load_value_as_int(ctx, mode, "chmod mode")?;
             ctx.emitter.instruction("str x0, [sp, #16]");                       // preserve the requested mode
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // pass path pointer to wrapper-scheme probe
             ctx.emitter.instruction("ldr x1, [sp, #8]");                        // pass path length to wrapper-scheme probe
@@ -280,7 +416,7 @@ pub(super) fn lower_chmod_with_wrapper(ctx: &mut FunctionContext<'_>, inst: &Ins
             ctx.emitter.instruction("sub rsp, 32");                             // reserve path and mode scratch storage
             ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");            // preserve the path pointer
             ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdx");            // preserve the path length
-            require_int(ctx.load_value_to_result(mode)?.codegen_repr(), "chmod mode")?;
+            load_value_as_int(ctx, mode, "chmod mode")?;
             ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");           // preserve the requested mode
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // pass path pointer to wrapper-scheme probe
             ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");            // pass path length to wrapper-scheme probe

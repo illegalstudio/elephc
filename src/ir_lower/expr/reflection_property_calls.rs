@@ -13,11 +13,22 @@ use super::*;
 pub(super) fn lower_reflection_property_value_call(
     ctx: &mut LoweringContext<'_, '_>,
     object_expr: Option<&Expr>,
+    reflection_property: LoweredValue,
     method: &str,
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
     let object_expr = object_expr?;
+    let reflection_property_ty = ctx.builder.value_php_type(reflection_property.value);
+    let reflection_property_class = singular_object_class(&reflection_property_ty)
+        .map(|(class_name, _)| class_name.to_string())
+        .filter(|class_name| !class_name.trim_start_matches('\\').is_empty())
+        .or_else(|| expression_object_class(ctx, object_expr))?;
+    if php_symbol_key(reflection_property_class.trim_start_matches('\\'))
+        != php_symbol_key("ReflectionProperty")
+    {
+        return None;
+    }
     match php_symbol_key(method).as_str() {
         "getvalue" => {
             if let Some((declaring_class, property, property_ty)) =
@@ -39,6 +50,31 @@ pub(super) fn lower_reflection_property_value_call(
                 &declaring_class,
                 &property,
                 property_ty,
+                args,
+                expr,
+            )
+        }
+        "getrawvalue" => {
+            if let Some((declaring_class, property, property_ty)) =
+                reflection_property_static_target(ctx, object_expr)
+            {
+                return lower_reflection_property_get_static_value(
+                    ctx,
+                    &declaring_class,
+                    &property,
+                    property_ty,
+                    args,
+                    expr,
+                );
+            }
+            if let Some((_, property, _)) =
+                reflection_property_any_instance_target(ctx, object_expr)
+            {
+                return lower_reflection_property_get_raw_value(ctx, &property, args, expr);
+            }
+            lower_reflection_property_get_runtime_raw_value(
+                ctx,
+                reflection_property,
                 args,
                 expr,
             )
@@ -66,6 +102,29 @@ pub(super) fn lower_reflection_property_value_call(
                 expr,
             )
         }
+        "setrawvalue" | "setrawvaluewithoutlazyinitialization" => {
+            if let Some((declaring_class, property, _)) =
+                reflection_property_static_target(ctx, object_expr)
+            {
+                return lower_reflection_property_set_static_value(
+                    ctx,
+                    &declaring_class,
+                    &property,
+                    args,
+                    expr,
+                );
+            }
+            if let Some((_, property, _)) =
+                reflection_property_any_instance_target(ctx, object_expr)
+            {
+                return lower_reflection_property_set_raw_value(ctx, &property, args, expr);
+            }
+            // A property known only at run time goes through the method body, as `setValue()`
+            // does: the inline dynamic write carried no declaring-class scope, so it stored
+            // nothing into a private property and refused a protected one -- Doctrine's
+            // `RawValuePropertyAccessor` hydrates every entity property this way.
+            None
+        }
         "isinitialized" => {
             if let Some((declaring_class, property, _)) =
                 reflection_property_static_target(ctx, object_expr)
@@ -83,6 +142,84 @@ pub(super) fn lower_reflection_property_value_call(
         }
         _ => None,
     }
+}
+
+/// Returns the concrete object class retained in the lowering environment for an expression.
+fn expression_object_class(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> Option<String> {
+    let environment_ty = match &expr.kind {
+        ExprKind::Variable(name) => ctx.local_type(name),
+        _ => fallback_expr_type(expr),
+    };
+    singular_object_class(&environment_ty)
+        .map(|(class_name, _)| class_name.trim_start_matches('\\').to_string())
+        .filter(|class_name| !class_name.is_empty())
+}
+
+/// Loads the reflected runtime property name from a ReflectionProperty value.
+fn lower_reflection_property_runtime_name(
+    ctx: &mut LoweringContext<'_, '_>,
+    reflection_property: LoweredValue,
+    expr: &Expr,
+) -> LoweredValue {
+    let data = ctx.intern_string("__name");
+    ctx.emit_value(
+        Op::PropGet,
+        vec![reflection_property.value],
+        Some(Immediate::Data(data)),
+        PhpType::Str,
+        Op::PropGet.default_effects(),
+        Some(expr.span),
+    )
+}
+
+/// Restores a statically known object shape after loading an object from gradual storage.
+fn lower_reflection_property_object_argument(
+    ctx: &mut LoweringContext<'_, '_>,
+    object_arg: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    let object = lower_expr(ctx, object_arg);
+    if ctx.builder.value_php_type(object.value).codegen_repr() != PhpType::Mixed {
+        return object;
+    }
+    let Some(class_name) = expression_object_class(ctx, object_arg) else {
+        return object;
+    };
+    ctx.emit_value(
+        Op::MixedUnbox,
+        vec![object.value],
+        None,
+        PhpType::Object(class_name),
+        Op::MixedUnbox.default_effects(),
+        Some(expr.span),
+    )
+}
+
+/// Lowers a raw reflected-property read whose property name is known only at runtime.
+fn lower_reflection_property_get_runtime_raw_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    reflection_property: LoweredValue,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let object_arg = reflection_property_get_value_arg(args)?;
+    let object = lower_reflection_property_object_argument(ctx, &object_arg, expr);
+    let object = box_generic_object_for_dynamic_property(ctx, object, expr.span);
+    let property = lower_reflection_property_runtime_name(ctx, reflection_property, expr);
+    let result = ctx.emit_value(
+        Op::DynamicPropGet,
+        vec![object.value, property.value],
+        None,
+        PhpType::Mixed,
+        Op::DynamicPropGet.default_effects(),
+        Some(expr.span),
+    );
+    if ctx.value_is_owning_temporary(property) {
+        crate::ir_lower::ownership::release_if_owned(ctx, property, Some(expr.span));
+    }
+    Some(stabilize_borrowed_result_and_release_receiver(
+        ctx, object, result, expr.span,
+    ))
 }
 
 /// Lowers `ReflectionProperty::getValue($object)` to a direct property read.
@@ -116,6 +253,20 @@ pub(super) fn lower_reflection_property_get_value(
     ))
 }
 
+/// Lowers a raw ReflectionProperty read to the reflected backing slot without hooks.
+pub(super) fn lower_reflection_property_get_raw_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    property: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let object_arg = reflection_property_get_value_arg(args)?;
+    let object = lower_expr(ctx, &object_arg);
+    Some(lower_raw_property_get_from_value(
+        ctx, object, property, expr,
+    ))
+}
+
 /// Lowers `ReflectionProperty::setValue($object, $value)` to a direct property write.
 pub(super) fn lower_reflection_property_set_value(
     ctx: &mut LoweringContext<'_, '_>,
@@ -130,6 +281,9 @@ pub(super) fn lower_reflection_property_set_value(
         return None;
     }
     let object = lower_expr(ctx, &object_arg);
+    // The store only borrows its receiver; an owning receiver temporary (a local load carries
+    // one) must be retired afterwards, as `lower_property_assign` does, or the object leaks.
+    let receiver_is_owning = ctx.value_is_owning_temporary(object);
     let value = lower_expr(ctx, &value_arg);
     let value = crate::ir_lower::stmt::contextualize_property_array_value(
         ctx,
@@ -175,6 +329,27 @@ pub(super) fn lower_reflection_property_set_value(
             ctx, &property_ty, value, expr.span,
         );
     }
+    if receiver_is_owning {
+        crate::ir_lower::ownership::release_if_owned(ctx, object, Some(expr.span));
+    }
+    Some(lower_null(ctx, expr))
+}
+
+/// Lowers a raw ReflectionProperty write to the reflected backing slot without hooks.
+pub(super) fn lower_reflection_property_set_raw_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    property: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let (object_arg, value_arg) = reflection_property_set_value_args(args)?;
+    crate::ir_lower::stmt::lower_raw_property_assign(
+        ctx,
+        &object_arg,
+        property,
+        &value_arg,
+        expr.span,
+    );
     Some(lower_null(ctx, expr))
 }
 
@@ -359,6 +534,12 @@ pub(super) fn reflection_property_static_set_value_args(args: &[Expr]) -> Option
     let args = reflection_class_new_instance_args(args);
     if args.iter().any(is_spread_arg) {
         return None;
+    }
+    // `setValue($value)`: php 8.3's deprecated one-argument form for a static property.
+    if let [value] = args.as_slice() {
+        if !matches!(value.kind, ExprKind::NamedArg { .. }) {
+            return Some((Expr::new(ExprKind::Null, value.span), value.clone()));
+        }
     }
     let (object, value) =
         reflection_class_static_property_regular_args(&args, "object", Some("value"))?;

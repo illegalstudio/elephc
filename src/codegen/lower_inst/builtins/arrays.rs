@@ -34,7 +34,8 @@ mod keys;
 mod search;
 mod shift;
 mod unshift;
-pub(in crate::codegen::lower_inst::builtins) mod values;
+mod unshift_dynamic;
+pub(in crate::codegen::lower_inst) mod values;
 mod basic;
 mod push;
 mod boxed_map_callback;
@@ -54,6 +55,8 @@ mod map_results;
 mod reduce_sets;
 mod misc_dispatch;
 mod mixed_array_argument_guard;
+mod pop_shift_dynamic;
+pub(in crate::codegen::lower_inst) mod union_type_guard;
 mod callback_builtins;
 mod multisort;
 mod sort_dispatch;
@@ -178,6 +181,59 @@ fn array_chunk_result_inner_hash_value_type(result_elem_ty: &PhpType) -> Result<
 /// Only `Int`, `Str`, and boxed `Mixed` elements can produce a PHP array key. Every other
 /// element type is reported with its own tag so the helper warns and skips each entry the way
 /// php-src does, instead of reading a float payload as a pointer.
+/// Tallies a gradual `array_count_values()` source, whose shape is known only at run time.
+///
+/// A hash goes to `__rt_hash_count_values`; an indexed array to `__rt_array_count_values` with
+/// the element tag its heap header carries (the `value_type` byte `emit_array_value_type_stamp`
+/// writes uses the helper's own tags: 0 int, 1 string, 7 boxed). Anything else is php's
+/// TypeError.
+fn emit_mixed_array_count_values(ctx: &mut FunctionContext<'_>, array: ValueId) -> Result<()> {
+    let hash_label = ctx.next_label("count_values_mixed_hash");
+    let not_array_label = ctx.next_label("count_values_mixed_not_array");
+    let done_label = ctx.next_label("count_values_mixed_done");
+    ctx.load_value_to_result(array)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #5");                              // runtime tag 5 = associative array
+            ctx.emitter.instruction(&format!("b.eq {}", hash_label));           // a hash takes the hash tally helper
+            ctx.emitter.instruction("cmp x0, #4");                              // runtime tag 4 = indexed array
+            ctx.emitter.instruction(&format!("b.ne {}", not_array_label));      // every other value is not an array
+            ctx.emitter.instruction("mov x0, x1");                              // pass the indexed array as the tally source
+            ctx.emitter.instruction("ldr x1, [x0, #-8]");                       // load the packed array kind word from the heap header
+            ctx.emitter.instruction("lsr x1, x1, #8");                          // move the value_type byte lane down
+            ctx.emitter.instruction("and x1, x1, #0x7f");                       // keep the element tag, dropping the persistent COW flag
+            ctx.emitter.instruction("bl __rt_array_count_values");              // tally the indexed array's elements
+            ctx.emitter.instruction(&format!("b {}", done_label));
+            ctx.emitter.label(&hash_label);
+            ctx.emitter.instruction("mov x0, x1");                              // pass the hash as the tally source
+            ctx.emitter.instruction("bl __rt_hash_count_values");               // tally the hash's values
+            ctx.emitter.instruction(&format!("b {}", done_label));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 5");                              // runtime tag 5 = associative array
+            ctx.emitter.instruction(&format!("je {}", hash_label));             // a hash takes the hash tally helper
+            ctx.emitter.instruction("cmp rax, 4");                              // runtime tag 4 = indexed array
+            ctx.emitter.instruction(&format!("jne {}", not_array_label));       // every other value is not an array
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");            // load the packed array kind word from the heap header
+            ctx.emitter.instruction("shr rsi, 8");                              // move the value_type byte lane down
+            ctx.emitter.instruction("and rsi, 0x7f");                           // keep the element tag, dropping the persistent COW flag
+            ctx.emitter.instruction("call __rt_array_count_values");            // tally the indexed array's elements
+            ctx.emitter.instruction(&format!("jmp {}", done_label));
+            ctx.emitter.label(&hash_label);
+            ctx.emitter.instruction("call __rt_hash_count_values");             // tally the hash's values (rdi already holds it)
+            ctx.emitter.instruction(&format!("jmp {}", done_label));
+        }
+    }
+    ctx.emitter.label(&not_array_label);
+    super::super::exceptions::emit_type_error(
+        ctx,
+        "array_count_values(): Argument #1 ($array) must be of type array",
+    );
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
 fn array_count_values_element_tag(source_ty: &PhpType) -> Result<u8> {
     match source_ty {
         PhpType::Array(elem) => runtime_value_tag("array_count_values", &elem.codegen_repr()),
@@ -241,6 +297,7 @@ fn emit_mixed_splice_replacement_insert(
     ctx: &mut FunctionContext<'_>,
     array: ValueId,
     replacement: &SpliceReplacement,
+    receiver_is_slot_address: bool,
 ) -> Result<()> {
     if !replacement.inserts_values() {
         return Ok(());
@@ -253,7 +310,7 @@ fn emit_mixed_splice_replacement_insert(
     abi::emit_push_reg_pair(ctx.emitter, removed_reg, at_reg);
     emit_splice_replacement_pointer(ctx, replacement)?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    ctx.load_value_to_reg(array, cell_reg)?;
+    load_mixed_splice_receiver_cell(ctx, array, cell_reg, receiver_is_slot_address)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("ldr x0, [x10, #8]");                       // read the converted indexed array out of the Mixed cell
@@ -269,7 +326,7 @@ fn emit_mixed_splice_replacement_insert(
         ctx.emitter,
         array_splice_insert_runtime_helper(replacement, &PhpType::Mixed),
     );
-    ctx.load_value_to_reg(array, cell_reg)?;
+    load_mixed_splice_receiver_cell(ctx, array, cell_reg, receiver_is_slot_address)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("str x0, [x10, #8]");                       // republish the possibly-relocated indexed array into the Mixed cell
@@ -286,6 +343,20 @@ fn emit_mixed_splice_replacement_insert(
     }
     abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
     abi::emit_release_temporary_stack(ctx.emitter, 32);
+    Ok(())
+}
+
+/// Loads a boxed gradual receiver cell, dereferencing an array-element place when required.
+fn load_mixed_splice_receiver_cell(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    cell_reg: &str,
+    receiver_is_slot_address: bool,
+) -> Result<()> {
+    ctx.load_value_to_reg(array, cell_reg)?;
+    if receiver_is_slot_address {
+        abi::emit_load_from_address(ctx.emitter, cell_reg, cell_reg, 0);
+    }
     Ok(())
 }
 
@@ -481,6 +552,10 @@ pub(crate) fn lower_array_count_values(
             ctx.emitter.instruction("mov rdi, rax");                            // pass the source hash pointer as the tally helper argument
         }
         abi::emit_call_label(ctx.emitter, "__rt_hash_count_values");
+        return store_if_result(ctx, inst);
+    }
+    if matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
+        emit_mixed_array_count_values(ctx, array)?;
         return store_if_result(ctx, inst);
     }
     let element_tag = array_count_values_element_tag(&source_ty)?;
@@ -688,7 +763,8 @@ fn resolve_slice_length_present_to_result(
 /// Reports whether the `array_slice`/`array_splice` length argument is absent at compile time.
 ///
 /// A missing operand and a statically `Void` operand both mean the PHP call omitted `$length` (or
-/// passed a literal `null`), which selects the "slice to the end of the array" behavior.
+/// passed a literal `null`), which selects the "slice to the end of the array" behavior. A tagged
+/// nullable scalar remains runtime-dependent and is handled by the presence/value materializers.
 fn slice_length_is_statically_absent(
     ctx: &mut FunctionContext<'_>,
     length: Option<ValueId>,
@@ -711,6 +787,20 @@ fn slice_like_length_operand(inst: &Instruction) -> Result<Option<ValueId>> {
         return Ok(Some(expect_operand(inst, 2)?));
     }
     Ok(None)
+}
+
+/// Returns the `$preserve_keys` operand of a slice-like call when it is not a compile-time literal.
+///
+/// The checker rejects a non-literal flag because it decides the result's static shape, so a
+/// non-literal operand here can only mean the checker and the backend disagree about this call.
+fn slice_like_non_literal_preserve_keys(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<Option<ValueId>> {
+    let Some(flag) = inst.operands.get(3).copied() else {
+        return Ok(None);
+    };
+    Ok(const_bool_operand(ctx, flag)?.is_none().then_some(flag))
 }
 
 /// Reads the literal `$preserve_keys` flag of a slice-like call over concrete array storage.
@@ -875,8 +965,9 @@ impl SpliceReplacement {
             if &inner == elem_ty && splice_insert_slot_is_supported(elem_ty) {
                 return Ok(Self::Array(replacement));
             }
-            // A heterogeneous receiver stores boxed Mixed cells, so a typed scalar replacement
-            // has to be boxed element by element before it lands in the payload.
+            // A heterogeneous receiver stores boxed Mixed cells, so every typed replacement
+            // payload has to be boxed element by element before it lands in the destination.
+            // `__rt_mixed_from_value` persists strings and retains refcounted children.
             if elem_ty == &PhpType::Mixed && splice_boxable_scalar_slot(&inner) {
                 let tag = runtime_value_tag("array_splice", &inner)?;
                 return Ok(Self::BoxedArray(replacement, tag));
@@ -937,17 +1028,15 @@ impl SpliceReplacement {
     }
 }
 
-/// Reports whether a replacement element type can be boxed one slot at a time into a Mixed cell.
+/// Reports whether a replacement element can be boxed one slot at a time into a Mixed cell.
 ///
-/// `__rt_mixed_from_value` stores the raw payload word without retaining it, so only the
-/// non-refcounted scalars whose slot IS the value qualify. `Str` qualifies too: the boxing helper
-/// reads its wider pointer/length slot and `__rt_mixed_from_value` persists the bytes itself, so
-/// the Mixed cell owns storage the replacement array still holds independently.
+/// Scalar slots are copied directly, string bytes are persisted, and refcounted payloads are
+/// retained by `__rt_mixed_from_value`, so the destination and replacement remain independent.
 fn splice_boxable_scalar_slot(elem_ty: &PhpType) -> bool {
     matches!(
         elem_ty,
         PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str
-    )
+    ) || elem_ty.is_refcounted()
 }
 
 /// Reports whether the splice insert helpers can move this element type's payload slots.

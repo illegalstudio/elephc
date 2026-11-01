@@ -464,6 +464,46 @@ pub(super) fn decl_class_mysqli_stmt() -> Stmt {
                     ),
                 ]),
         )
+        // php's `mysqli_stmt::result_metadata()`: the prepared statement's column metadata as a
+        // `mysqli_result` with no rows, or false when it produces no result set (Doctrine DBAL's
+        // mysqli `Result` reads its column names this way).
+        .method(
+            method("result_metadata")
+                .returns(t_union(vec![t_class("mysqli_result"), TypeExpr::False]))
+                .body(vec![
+                    s_if(
+                        e_binop(e_this_prop("stmt"), BinOp::Lt, e_int(0)),
+                        vec![
+                            s_expr(e_method_call(e_this(), "syntheticFailure", vec![e_int(2050), e_str("mysqli_stmt object is already closed"), e_str("HY000")])),
+                            s_return(e_bool(false)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_assign("_cols", e_call("elephc_pdo_column_count", vec![e_this_prop("stmt")])),
+                    s_if(
+                        e_binop(e_var("_cols"), BinOp::LtEq, e_int(0)),
+                        vec![s_return(e_bool(false))],
+                        vec![],
+                        None,
+                    ),
+                    s_assign("_names", e_array(vec![])),
+                    s_assign("_tables", e_array(vec![])),
+                    s_assign("_natives", e_array(vec![])),
+                    s_assign("_flags", e_array(vec![])),
+                    s_assign("_lens", e_array(vec![])),
+                    s_assign("_decimals", e_array(vec![])),
+                    s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_var("_cols"))), Some(s_expr(e_post_inc("_i"))), vec![
+                        s_array_push("_names", e_call("elephc_pdo_column_name", vec![e_this_prop("stmt"), e_var("_i")])),
+                        s_array_push("_tables", e_call("elephc_pdo_column_table_name", vec![e_this_prop("stmt"), e_var("_i")])),
+                        s_array_push("_natives", e_call("elephc_pdo_column_native_type", vec![e_this_prop("stmt"), e_var("_i")])),
+                        s_array_push("_flags", e_call("elephc_pdo_column_flags", vec![e_this_prop("stmt"), e_var("_i")])),
+                        s_array_push("_lens", e_call("elephc_pdo_column_len", vec![e_this_prop("stmt"), e_var("_i")])),
+                        s_array_push("_decimals", e_call("elephc_pdo_column_precision", vec![e_this_prop("stmt"), e_var("_i")])),
+                    ]),
+                    s_return(e_static_call("mysqli_result", "__elephcFromDrain", vec![e_array(vec![]), e_int(0), e_var("_names"), e_var("_tables"), e_var("_natives"), e_var("_flags"), e_var("_lens"), e_var("_decimals")])),
+                ]),
+        )
         .method(
             method("get_result")
                 .returns(t_union(vec![t_class("mysqli_result"), TypeExpr::False]))

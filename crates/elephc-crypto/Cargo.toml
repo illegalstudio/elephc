@@ -32,6 +32,7 @@ whirlpool = "0.10"
 crc32fast = "1"
 crc = "3"
 adler2 = "2"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 # Symmetric crypto for the openssl_encrypt()/openssl_decrypt() surface. AES,
 # block/stream traits, CTR, and GHASH are all pure-Rust and musl-friendly. GCM
@@ -43,3 +44,9 @@ cipher = "0.4"
 ctr = "0.9"
 ghash = "0.5"
 subtle = "2"
+
+# bcrypt for password_hash()/password_verify(); pure Rust, `$2y$` output like php's.
+bcrypt = "0.17"
+
+# libsodium-compatible sealed boxes (X25519 + XSalsa20-Poly1305) for sodium_crypto_box_*.
+crypto_box = { version = "0.9", default-features = false, features = ["salsa20", "seal", "getrandom"] }

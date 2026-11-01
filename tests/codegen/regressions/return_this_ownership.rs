@@ -68,6 +68,34 @@ echo "after=" . T::$alive;
     assert_eq!(out, "alive=1;v=3\nafter=0");
 }
 
+/// A factory forwarding a fluent `return $this` result releases the last temporary owner.
+#[test]
+fn test_factory_forwarded_return_this_discards_and_destructs_once() {
+    let out = compile_and_run(
+        r#"<?php
+class Forwarded {
+    public static int $alive = 0;
+    public function __construct() { Forwarded::$alive = Forwarded::$alive + 1; }
+    public function configure(): static { return $this; }
+    public function __destruct() { Forwarded::$alive = Forwarded::$alive - 1; }
+}
+class Factory {
+    public function create(): Forwarded {
+        $value = new Forwarded();
+        return $value->configure();
+    }
+}
+function run(): void {
+    (new Factory())->create();
+    echo "alive=" . Forwarded::$alive;
+}
+run();
+echo ";after=" . Forwarded::$alive;
+"#,
+    );
+    assert_eq!(out, "alive=0;after=0");
+}
+
 /// A chain whose receiver is an owning temporary that returns a NEW object each
 /// step releases every intermediate, so all objects are destructed (no leak).
 #[test]

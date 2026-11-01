@@ -471,6 +471,282 @@ echo date_diff(1, 2), "|", timezone_name_get(5);
     assert_eq!(out, "user:3|tz:5");
 }
 
+/// `is_countable()` accepts arrays and `Countable` implementations but rejects other values.
+#[test]
+fn test_is_countable_compatibility_helper() {
+    let out = compile_and_run(
+        r#"<?php
+class CountedValue implements Countable {
+    public function count(): int { return 1; }
+}
+var_dump(is_countable([]), is_countable(new CountedValue()), is_countable(new stdClass()), is_countable(1));
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nbool(true)\nbool(false)\nbool(false)\n"
+    );
+}
+
+
+/// `touch()` accepts a gradual timestamp, like every other builtin with a declared `int` parameter.
+///
+/// `time() + 100` is `PhpType::Mixed` in this checker, because PHP promotes an overflowing int
+/// addition to float. Every other builtin takes that value — `date('Y', time() + 100)`,
+/// `str_repeat()`, `substr()` all compile and run — because the contract's declared `int`
+/// parameter drives a boundary coercion before the call. `touch()` alone refused it, from a
+/// hand-written check that tested `PhpType::Int | PhpType::Void` directly and predates that path.
+///
+/// Symfony's `FilesystemCommonTrait::write()` writes `touch($tmp, $expiresAt ?: time() + 31556952)`,
+/// which is the whole of the cache's expiry handling.
+///
+/// The assertion reads the mtime back rather than trusting the return value: a coercion that
+/// produced the wrong integer would still return `true`.
+///
+/// Oracle: `php -n` prints the asserted lines.
+#[test]
+fn test_touch_accepts_a_gradual_timestamp() {
+    let out = compile_and_run(
+        r#"<?php
+$dir = sys_get_temp_dir() . '/elephc-touch-gradual';
+@mkdir($dir);
+$f = $dir . '/f.txt';
+file_put_contents($f, 'x');
+
+function stamp(string $f, ?int $expiresAt = null): string
+{
+    if (null !== $expiresAt) {
+        touch($f, $expiresAt ?: time() + 100);
+        return 'touched';
+    }
+    return 'skipped';
+}
+
+echo stamp($f), "\n";
+echo stamp($f, 1700000000), "\n";
+clearstatcache();
+echo filemtime($f), "\n";
+echo stamp($f, 0), "\n";
+clearstatcache();
+var_dump(filemtime($f) > 1700000000);
+unlink($f);
+rmdir($dir);
+"#,
+    );
+    assert_eq!(out, "skipped\ntouched\n1700000000\ntouched\nbool(true)\n");
+}
+
+
+/// `strncmp`/`strncasecmp` exist for INTERPRETED code, and return php's byte difference.
+///
+/// Both were AOT-only: the compiled backend had them, the Magician registry did not, so any
+/// interpreted caller died with `call to undefined function strncmp()`. Twig's
+/// `FilesystemLoader::findTemplate` calls `strncmp($name, '@', 1)` on every template lookup, and a
+/// compiled Symfony app loads its templates through the interpreter, so it rendered nothing.
+///
+/// THE MAGNITUDE IS OBSERVABLE and a sign-only result is a different function:
+/// `zend_binary_strncmp` returns `memcmp`'s value and falls back to the length difference, so php
+/// prints 46 for `strncmp('ns/x', '@', 1)` (`'n'` 110 minus `'@'` 64) and -32 for `('Abc','abc',3)`.
+///
+/// The fixture runs each case twice — compiled, then through `eval()` — because the two
+/// implementations are independent and only the second one was missing.
+///
+/// Oracle: `php -n` prints the asserted line.
+#[test]
+fn test_strncmp_is_available_to_interpreted_code_and_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+$cases = [['abc', 'abd', 2], ['abc', 'abd', 3], ['@ns', '@', 1], ['ns', '@', 1], ['ab', 'abc', 5], ['Abc', 'abc', 3], ['abc', 'abd', 0]];
+$compiled = '';
+foreach ($cases as [$a, $b, $n]) { $compiled .= strncmp($a, $b, $n) . '/' . strncasecmp($a, $b, $n) . ';'; }
+echo $compiled, "\n";
+eval('$r = ""; foreach ($cases as [$a, $b, $n]) { $r .= strncmp($a, $b, $n) . "/" . strncasecmp($a, $b, $n) . ";"; } echo $r, "\n";');
+"#,
+    );
+    let expected = "0/0;-1/-1;0/0;46/46;-1/-1;-32/0;0/0;\n";
+    assert_eq!(out, format!("{expected}{expected}"));
+}
+
+/// Verifies `is_callable()`'s `$syntax_only` and `&$callable_name` parameters against php 8.5.10.
+///
+/// The backend predicate takes the value alone and answers whether it can be CALLED.
+/// `$syntax_only` asks a different question -- whether the value has callable SHAPE -- and
+/// `symfony/http-kernel`'s `ServiceValueResolver` asks it (`is_callable($controller, true)`) before
+/// flattening `[$class, $method]` into `Class::method`. The two-argument call used to stop the
+/// whole build with "is_callable() takes exactly 1 argument".
+///
+/// Every line below was taken from reference php rather than reasoned about, because the rule is
+/// not "skip the existence check": an array needs exactly the keys 0 and 1 with a string at 1, an
+/// object still has to be invokable under `$syntax_only`, and `$callable_name` is written even
+/// when the answer is false -- as the literal `Array` for an array that does not conform.
+#[test]
+fn test_is_callable_reports_syntax_only_shape_and_the_callable_name() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public function m() {} public static function s() {} public function __invoke() {} }
+class D { public function m() {} }
+
+function probe($value): string
+{
+    $strict = null;
+    $syntax = null;
+    $a = is_callable($value, false, $strict);
+    $b = is_callable($value, true, $syntax);
+    return ($a ? 'T' : 'F') . ':' . $strict . '|' . ($b ? 'T' : 'F') . ':' . $syntax;
+}
+
+$o = new C();
+$d = new D();
+echo probe(''), "\n";
+echo probe('strlen'), "\n";
+echo probe('NoSuchFn'), "\n";
+echo probe('C::s'), "\n";
+echo probe('C::nope'), "\n";
+echo probe([$o, 'm']), "\n";
+echo probe([$o, 'nope']), "\n";
+echo probe(['C', 's']), "\n";
+echo probe(['C', 'nope']), "\n";
+echo probe(['NoCls', 'm']), "\n";
+echo probe([$o]), "\n";
+echo probe([$o, 'm', 'x']), "\n";
+echo probe([1, 2]), "\n";
+echo probe([$o, 2]), "\n";
+echo probe($o), "\n";
+echo probe($d), "\n";
+echo probe(42), "\n";
+echo probe(null), "\n";
+echo probe(true), "\n";
+echo probe(['a' => 1]), "\n";
+echo probe(['x' => $o, 'y' => 'm']), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "F:|T:\n",
+            "T:strlen|T:strlen\n",
+            "F:NoSuchFn|T:NoSuchFn\n",
+            "T:C::s|T:C::s\n",
+            "F:C::nope|T:C::nope\n",
+            "T:C::m|T:C::m\n",
+            "F:C::nope|T:C::nope\n",
+            "T:C::s|T:C::s\n",
+            "F:C::nope|T:C::nope\n",
+            "F:NoCls::m|T:NoCls::m\n",
+            "F:Array|F:Array\n",
+            "F:Array|F:Array\n",
+            "F:Array|F:Array\n",
+            "F:Array|F:Array\n",
+            "T:C::__invoke|T:C::__invoke\n",
+            "F:D::__invoke|F:D::__invoke\n",
+            "F:42|F:42\n",
+            "F:|F:\n",
+            "F:1|F:1\n",
+            "F:Array|F:Array\n",
+            "F:Array|F:Array\n",
+        )
+    );
+}
+
+/// Verifies a `callable` parameter accepts every shape php's `callable` accepts, arrays included.
+///
+/// `[$object, 'method']` and `['Class', 'method']` are two of the three shapes a callable HAS.
+/// elephc already resolved both in BUILTIN callback position, and refused them at a user-declared
+/// `callable` parameter -- `symfony/http-foundation`'s `SessionFactory(…, ?callable $usageReporter)`
+/// is handed exactly such a pair by the generated container, and that stopped the build.
+///
+/// Accepting the pair is only half of it: a `callable` parameter's storage is a DESCRIPTOR, and an
+/// array is a hash pointer. Relaxing the checker alone type-checked and then faulted on the first
+/// call through the parameter, so the argument binding emits `Op::NormalizeCallable` -- the same
+/// conversion the callable-array path already uses.
+#[test]
+fn test_a_callable_parameter_accepts_an_object_method_pair() {
+    let out = compile_and_run(
+        r#"<?php
+class Greeter
+{
+    public function hello(string $n): string { return "hello $n"; }
+    public static function shout(string $n): string { return strtoupper($n); }
+}
+
+function apply(callable $c, string $n): string
+{
+    return $c($n);
+}
+
+function applyNullable(?callable $c, string $n): string
+{
+    return $c === null ? "none" : $c($n);
+}
+
+$g = new Greeter();
+echo apply('strtoupper', 'a'), "\n";
+echo apply([$g, 'hello'], 'b'), "\n";
+echo apply(['Greeter', 'shout'], 'c'), "\n";
+echo apply('Greeter::shout', 'd'), "\n";
+echo apply(static fn (string $n): string => "fn $n", 'e'), "\n";
+echo applyNullable([$g, 'hello'], 'f'), "\n";
+echo applyNullable(null, 'g'), "\n";
+"#,
+    );
+    assert_eq!(out, "A\nhello b\nC\nD\nfn e\nhello f\nnone\n");
+}
+
+/// Verifies a forwarded constructor argument that cannot bind THROWS instead of refusing the build.
+///
+/// php exempts constructors from inheritance signature rules, so an overriding `__construct` may
+/// declare a different parameter list entirely and still forward positionally to
+/// `parent::__construct`, landing arguments in differently typed slots. That is loadable php: the
+/// `TypeError` arrives only if the path runs. `twig/twig`'s
+/// `ExtensionSet::convertInfixExpressionParser` is the shape -- its anonymous subclass declares
+/// `array $aliases` where the parent declares `?string $description` and forwards it -- and
+/// refusing it at compile time refused every program that merely CONTAINS Twig.
+///
+/// The message matches php 8.5.10 except for php's trailing `, called in <file> on line <n>`,
+/// which names the CALLER's file: the checker records the site before file attribution runs, so
+/// that clause is not available to it.
+#[test]
+fn test_a_forwarded_constructor_argument_mismatch_throws_at_the_call() {
+    let out = compile_and_run(
+        r#"<?php
+class Base
+{
+    public function __construct(
+        private string $name,
+        private ?string $description = null,
+        private array $aliases = [],
+    ) {
+    }
+}
+
+class Child extends Base
+{
+    public function __construct(string $name, array $aliases = [])
+    {
+        parent::__construct($name, $aliases);
+    }
+}
+
+echo "before\n";
+try {
+    $c = new Child('x', ['a']);
+    echo "constructed\n";
+} catch (\TypeError $e) {
+    echo get_class($e), ': ', $e->getMessage(), "\n";
+}
+echo "after\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "before\n",
+            "TypeError: Base::__construct(): Argument #2 ($description) must be of type ?string, array given\n",
+            "after\n",
+        )
+    );
+}
+
 /// `implode()` over a homogeneous float array joins each element in PHP's `precision = 14` text,
 /// for indexed and associative arrays, `join()`, a long separator, runtime values, exponents and
 /// infinities. The raw 8-byte doubles were read through the string-slot layout, and the call is
@@ -522,3 +798,34 @@ echo strtoupper(implode("x", [1.5, 2.0])) . "!" . "\n";
         out.stderr
     );
 }
+
+/// Verifies three shapes the backend used to refuse, each of which deferred a Symfony demo
+/// vendor file to the interpreter and forced a whole second compile: `unpack('H*name')`
+/// (league/uri `IPv6\Converter`), an integer `substr_replace()` replacement (Symfony's
+/// `HttpClientTrait`) and a runtime-name property read on a class the program never declares
+/// (`SimpleXMLElement` in the validator's `XmlFileLoader`), which now fails only when it runs.
+/// Expected output is php 8.5's.
+#[test]
+fn test_backend_refusals_that_forced_a_second_compile() {
+    let out = compile_and_run(
+        r#"<?php
+class Meta { public $p = null; public function set($v) { $this->p = $v; } }
+function load(Meta $m, \SimpleXMLElement $d): void {
+    if (\count($d->{'group-sequence-provider'}) > 0) {
+        $m->set($d->{'group-sequence-provider'}[0]->value ?: null);
+    }
+}
+$hex = (array) unpack('H*hex', (string) inet_pton('2001:db8::1'));
+echo implode(':', str_split(strtolower($hex['hex'] ?? ''), 4)), "\n";
+var_dump(unpack('H*', "\x01\xab"));
+echo substr_replace('Content-Length: 0', \strlen('abcdef'), 16), "|", substr_replace('xyz', 7, 1, 1), "\n";
+if ($argc > 5) { load(new Meta(), json_decode($argv[1])); }
+echo "ok\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "2001:0db8:0000:0000:0000:0000:0000:0001\narray(1) {\n  [1]=>\n  string(4) \"01ab\"\n}\nContent-Length: 6|x7z\nok\n"
+    );
+}
+

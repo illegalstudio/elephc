@@ -121,13 +121,82 @@ pub(in crate::interpreter) fn eval_int_value(
             ))?;
         }
     }
-    let integer = values.cast_int(value)?;
-    let bytes = values.string_bytes(integer);
-    let released = values.release(integer);
-    let bytes = bytes?;
+    let value = values.cast_int(value)?;
+    let word = values.raw_value_word(value);
+    let released = values.release(value);
+    let word = word?;
     released?;
-    std::str::from_utf8(&bytes)
-        .map_err(|_| EvalStatus::RuntimeFatal)?
-        .parse::<i64>()
-        .map_err(|_| EvalStatus::RuntimeFatal)
+    Ok(word as i64)
+}
+
+/// Coerces one already-evaluated argument to PHP string bytes, matching a declared `string`
+/// parameter's weak-typing boundary rather than a bare `(string)` cast.
+///
+/// `array` is never coercible to `string` at a function boundary (`php -n` 8.5.6 raises a
+/// catchable `TypeError` naming the parameter, worded exactly as an internal function does), so
+/// this rejects it before delegating every other tag to `RuntimeValueOps::string_bytes`, which
+/// already applies PHP's ordinary scalar-to-string and `Stringable` coercions.
+pub(in crate::interpreter) fn eval_require_string_arg(
+    value: RuntimeCellHandle,
+    function_name: &str,
+    position: usize,
+    param_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<u8>, EvalStatus> {
+    if matches!(values.type_tag(value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        let given = eval_given_type_spelling(value, values)?;
+        return eval_throw_type_error(
+            &format!(
+                "{function_name}(): Argument #{position} (${param_name}) must be of type string, {given} given"
+            ),
+            context,
+            values,
+        );
+    }
+    values.string_bytes(value)
+}
+
+/// Coerces one already-evaluated argument to PHP int, matching a declared `int` parameter's
+/// weak-typing boundary: bool/int/float/null cast silently, a NUMERIC string casts, and every
+/// other value -- most importantly a non-numeric string, matching `php -n` 8.5.6's own
+/// `zend_parse_arg_long_weak` refusal -- is a catchable `TypeError` naming the parameter.
+pub(in crate::interpreter) fn eval_require_int_arg(
+    value: RuntimeCellHandle,
+    function_name: &str,
+    position: usize,
+    param_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<i64, EvalStatus> {
+    match values.type_tag(value)? {
+        EVAL_TAG_INT | EVAL_TAG_FLOAT | EVAL_TAG_BOOL | EVAL_TAG_NULL => {
+            eval_int_value(value, values)
+        }
+        EVAL_TAG_STRING => {
+            let bytes = values.string_bytes(value)?;
+            if eval_is_numeric_string(&bytes) {
+                eval_int_value(value, values)
+            } else {
+                let given = eval_given_type_spelling(value, values)?;
+                eval_throw_type_error(
+                    &format!(
+                        "{function_name}(): Argument #{position} (${param_name}) must be of type int, {given} given"
+                    ),
+                    context,
+                    values,
+                )
+            }
+        }
+        _ => {
+            let given = eval_given_type_spelling(value, values)?;
+            eval_throw_type_error(
+                &format!(
+                    "{function_name}(): Argument #{position} (${param_name}) must be of type int, {given} given"
+                ),
+                context,
+                values,
+            )
+        }
+    }
 }

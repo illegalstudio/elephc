@@ -26,6 +26,19 @@ pub(crate) fn name_part_from_token(
     }
 }
 
+/// Returns one segment of a name that follows a namespace separator.
+///
+/// PHP 8 lexes a namespaced name as ONE token, so a reserved word is an ordinary segment
+/// anywhere after the first separator: `use Laravel\Prompts\Themes\Default\Renderer;` and
+/// `new App\List\Item()` are valid. A leading segment still follows the identifier rules.
+pub(crate) fn qualified_name_part_from_token(
+    token: &Token,
+    metadata: &TokenMetadata,
+) -> Option<String> {
+    name_part_from_token(token, metadata)
+        .or_else(|| crate::parser::keyword_name::bareword_name_from_token(token, metadata))
+}
+
 /// Returns whether the token at `pos` starts a PHP class-like name.
 pub(crate) fn name_starts_at(tokens: &[SpannedToken], pos: usize) -> bool {
     match tokens.get(pos) {
@@ -75,12 +88,18 @@ pub(crate) fn parse_name(
 
     let namespace_len = parts.len();
     loop {
-        match tokens.get(*pos) {
-            Some((token, metadata)) if name_part_from_token(token, metadata).is_some() => {
-                parts.push(
-                    name_part_from_token(token, metadata)
-                        .expect("name part was checked immediately above"),
-                );
+        // After a separator any reserved word is a segment (see `qualified_name_part_from_token`).
+        let after_separator = !parts.is_empty() || kind == NameKind::FullyQualified;
+        let part = tokens.get(*pos).and_then(|(token, metadata)| {
+            if after_separator {
+                qualified_name_part_from_token(token, metadata)
+            } else {
+                name_part_from_token(token, metadata)
+            }
+        });
+        match part {
+            Some(part) => {
+                parts.push(part);
                 *pos += 1;
             }
             _ if !relative && parts.len() == namespace_len => {

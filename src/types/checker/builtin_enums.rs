@@ -32,6 +32,25 @@ pub(crate) fn inject_builtin_enums(
     checker: &mut Checker,
     next_class_id: &mut u64,
 ) -> Result<(), CompileError> {
+    // `SortDirection` is php 8.6; under an older profile the name is free, and Symfony's
+    // polyfill-php86 declares it (`Resources/stubs/SortDirection.php`).
+    if sort_direction_is_builtin() {
+        inject_sort_direction(program, checker, next_class_id)?;
+    }
+    inject_property_hook_type(program, checker, next_class_id)
+}
+
+/// Whether the selected profile provides php 8.6's `SortDirection` (php 8.5 does not).
+fn sort_direction_is_builtin() -> bool {
+    crate::codegen_support::compile_php_version() >= crate::php_version::PhpVersion::Php86
+}
+
+/// Declares php 8.6's `SortDirection` unit enum.
+fn inject_sort_direction(
+    program: &Program,
+    checker: &mut Checker,
+    next_class_id: &mut u64,
+) -> Result<(), CompileError> {
     ensure_builtin_enum_name_available(program, checker, SORT_DIRECTION)?;
     insert_enum_metadata(
         SORT_DIRECTION,
@@ -60,7 +79,15 @@ pub(crate) fn inject_builtin_enums(
         checker,
         next_class_id,
     )?;
+    Ok(())
+}
 
+/// Declares `PropertyHookType` and the target-specific builtin enums.
+fn inject_property_hook_type(
+    program: &Program,
+    checker: &mut Checker,
+    next_class_id: &mut u64,
+) -> Result<(), CompileError> {
     ensure_builtin_enum_name_available(program, checker, PROPERTY_HOOK_TYPE)?;
     insert_enum_metadata(
         PROPERTY_HOOK_TYPE,
@@ -134,7 +161,7 @@ pub(crate) fn inject_builtin_enums(
 /// `declared_classes`: the prescan's duplicate check reads that set, and a user packed or extern
 /// class named like a builtin enum must keep the builtin redeclaration diagnostic.
 pub(crate) fn is_builtin_enum_name(checker: &Checker, name: &str) -> bool {
-    name == SORT_DIRECTION
+    (name == SORT_DIRECTION && sort_direction_is_builtin())
         || name == PROPERTY_HOOK_TYPE
         || (name == PCNTL_QOS_CLASS && pcntl_qos_class_is_builtin(checker))
 }

@@ -73,6 +73,8 @@ pub fn emit_phar_read(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fopen_maybe_phar ---");
     emitter.label_global("__rt_fopen_maybe_phar");
+    emit_php_stream_url_dispatch_aarch64(emitter);
+    emitter.label("__rt_fopen_maybe_phar_not_php");
     emitter.instruction("cmp x2, #7");                                          // filename at least "phar://" long?
     emitter.instruction("b.lt __rt_fopen_maybe_phar_plain");                    // branch when comparison is below target
     emitter.instruction("ldrb w9, [x1, #0]");                                   // 'p'
@@ -222,6 +224,8 @@ fn emit_phar_read_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fopen_maybe_phar ---");
     emitter.label_global("__rt_fopen_maybe_phar");
+    emit_php_stream_url_dispatch_x86_64(emitter);
+    emitter.label("__rt_fopen_maybe_phar_not_php_x86");
     emitter.instruction("cmp rdx, 7");                                          // filename at least "phar://" long?
     emitter.instruction("jl __rt_fopen_maybe_phar_plain_x86");                  // branch when comparison is below target
     emitter.instruction("cmp BYTE PTR [rax + 0], 0x70");                        // 'p'
@@ -342,6 +346,134 @@ mod tests {
             assert!(!assembly.contains("__rt_phar_read_asm_fallback_x86:"), "{target:?}");
             assert!(!assembly.contains("__rt_phar_inflate_raw:"), "{target:?}");
             assert!(!assembly.contains("__rt_phar_bzip2_decompress:"), "{target:?}");
+        }
+    }
+}
+
+/// What a `php://` stream URL opens: a standard descriptor or an anonymous temp file.
+#[derive(Clone, Copy)]
+enum PhpStreamTarget {
+    Fd(u8),
+    TempFile,
+}
+
+/// The `php://` names a runtime `fopen()` resolves, as the literal-path lowering does
+/// (`php_standard_stream_fd` / `is_php_memory_stream`): the same descriptors, the same temp file.
+const PHP_STREAM_NAMES: &[(&str, PhpStreamTarget)] = &[
+    ("stdin", PhpStreamTarget::Fd(0)),
+    ("input", PhpStreamTarget::Fd(0)),
+    ("stdout", PhpStreamTarget::Fd(1)),
+    ("output", PhpStreamTarget::Fd(1)),
+    ("stderr", PhpStreamTarget::Fd(2)),
+    ("memory", PhpStreamTarget::TempFile),
+    ("temp", PhpStreamTarget::TempFile),
+];
+
+/// Emits the ARM64 `php://` prefix check and name match at the head of `__rt_fopen_maybe_phar`.
+///
+/// A `php://` URL held in a variable used to reach the plain `open(2)` path and fail: only a
+/// LITERAL was recognized at compile time. Symfony's `AbstractDumper` opens
+/// `static::$defaultOutput` (`php://output`, `php://stdout`), so every Laravel boot warned
+/// `fopen(): Failed to open stream`. Falls through to `__rt_fopen_maybe_phar_not_php`.
+fn emit_php_stream_url_dispatch_aarch64(emitter: &mut Emitter) {
+    emitter.instruction("cmp x2, #6");                                          // filename at least "php://" long?
+    emitter.instruction("b.lt __rt_fopen_maybe_phar_not_php");                  // shorter names cannot be php:// streams
+    for (index, byte) in b"php://".iter().enumerate() {
+        emitter.instruction(&format!("ldrb w9, [x1, #{}]", index));             // load one byte of the php:// prefix
+        emitter.instruction(&format!("cmp w9, #{}", byte));                     // compare it with the expected prefix byte
+        emitter.instruction("b.ne __rt_fopen_maybe_phar_not_php");              // not a php:// URL
+    }
+    emitter.instruction("add x10, x1, #6");                                     // x10 = stream name after php://
+    emitter.instruction("sub x11, x2, #6");                                     // x11 = stream name length
+    for (name, target) in PHP_STREAM_NAMES {
+        let next = format!("__rt_fopen_php_stream_not_{}", name);
+        emitter.instruction(&format!("cmp x11, #{}", name.len()));              // does the name length match this stream?
+        emitter.instruction(&format!("b.ne {}", next));                         // try the next stream name
+        for (index, byte) in name.bytes().enumerate() {
+            emitter.instruction(&format!("ldrb w9, [x10, #{}]", index));        // load one stream-name byte
+            emitter.instruction(&format!("cmp w9, #{}", byte));                 // compare it with this stream's name
+            emitter.instruction(&format!("b.ne {}", next));                     // try the next stream name
+        }
+        emit_php_stream_target_aarch64(emitter, *target);
+        emitter.label(&next);
+    }
+    // `php://temp/maxmemory:NN` names the same temp stream.
+    emitter.instruction("cmp x11, #5");                                         // long enough for "temp/"?
+    emitter.instruction("b.lt __rt_fopen_maybe_phar_not_php");                  // no other php:// stream is recognized here
+    for (index, byte) in b"temp/".iter().enumerate() {
+        emitter.instruction(&format!("ldrb w9, [x10, #{}]", index));            // load one byte of the temp/ prefix
+        emitter.instruction(&format!("cmp w9, #{}", byte));                     // compare it with the temp/ prefix
+        emitter.instruction("b.ne __rt_fopen_maybe_phar_not_php");              // not a php://temp/ URL
+    }
+    emit_php_stream_target_aarch64(emitter, PhpStreamTarget::TempFile);
+}
+
+/// Emits the ARM64 result for one recognized `php://` stream.
+fn emit_php_stream_target_aarch64(emitter: &mut Emitter, target: PhpStreamTarget) {
+    match target {
+        PhpStreamTarget::Fd(fd) => {
+            // php opens a DUPLICATE of the standard descriptor, so releasing the stream (which
+            // closes it) leaves the process's own stdout in place for later output.
+            emitter.instruction("stp x29, x30, [sp, #-16]!");                   // save the frame pointer and return address around the C call
+            emitter.instruction("mov x29, sp");                                 // establish a frame for the C call
+            emitter.instruction(&format!("mov x0, #{}", fd));                   // the standard descriptor to duplicate
+            emitter.bl_c("dup");                                                // x0 = duplicated descriptor (-1 on failure)
+            emitter.instruction("ldp x29, x30, [sp], #16");                     // restore the frame pointer and return address
+            emitter.instruction("ret");                                         // return the descriptor to the fopen lowering
+        }
+        PhpStreamTarget::TempFile => {
+            emitter.instruction("b __rt_tmpfile");                              // tail-call the anonymous temp-file opener
+        }
+    }
+}
+
+/// Emits the x86_64 `php://` prefix check and name match at the head of `__rt_fopen_maybe_phar`.
+///
+/// See [`emit_php_stream_url_dispatch_aarch64`]. Falls through to
+/// `__rt_fopen_maybe_phar_not_php_x86`.
+fn emit_php_stream_url_dispatch_x86_64(emitter: &mut Emitter) {
+    emitter.instruction("cmp rdx, 6");                                          // filename at least "php://" long?
+    emitter.instruction("jl __rt_fopen_maybe_phar_not_php_x86");                // shorter names cannot be php:// streams
+    for (index, byte) in b"php://".iter().enumerate() {
+        emitter.instruction(&format!("cmp BYTE PTR [rax + {}], {}", index, byte)); // compare one byte of the php:// prefix
+        emitter.instruction("jne __rt_fopen_maybe_phar_not_php_x86");           // not a php:// URL
+    }
+    emitter.instruction("lea r10, [rax + 6]");                                  // r10 = stream name after php://
+    emitter.instruction("lea r11, [rdx - 6]");                                  // r11 = stream name length
+    for (name, target) in PHP_STREAM_NAMES {
+        let next = format!("__rt_fopen_php_stream_not_{}_x86", name);
+        emitter.instruction(&format!("cmp r11, {}", name.len()));               // does the name length match this stream?
+        emitter.instruction(&format!("jne {}", next));                          // try the next stream name
+        for (index, byte) in name.bytes().enumerate() {
+            emitter.instruction(&format!("cmp BYTE PTR [r10 + {}], {}", index, byte)); // compare one stream-name byte
+            emitter.instruction(&format!("jne {}", next));                      // try the next stream name
+        }
+        emit_php_stream_target_x86_64(emitter, *target);
+        emitter.label(&next);
+    }
+    // `php://temp/maxmemory:NN` names the same temp stream.
+    emitter.instruction("cmp r11, 5");                                          // long enough for "temp/"?
+    emitter.instruction("jl __rt_fopen_maybe_phar_not_php_x86");                // no other php:// stream is recognized here
+    for (index, byte) in b"temp/".iter().enumerate() {
+        emitter.instruction(&format!("cmp BYTE PTR [r10 + {}], {}", index, byte)); // compare one byte of the temp/ prefix
+        emitter.instruction("jne __rt_fopen_maybe_phar_not_php_x86");           // not a php://temp/ URL
+    }
+    emit_php_stream_target_x86_64(emitter, PhpStreamTarget::TempFile);
+}
+
+/// Emits the x86_64 result for one recognized `php://` stream.
+fn emit_php_stream_target_x86_64(emitter: &mut Emitter, target: PhpStreamTarget) {
+    match target {
+        PhpStreamTarget::Fd(fd) => {
+            // php opens a DUPLICATE of the standard descriptor; see the ARM64 arm.
+            emitter.instruction("sub rsp, 8");                                  // realign the stack to 16 bytes for the C call
+            emitter.instruction(&format!("mov edi, {}", fd));                   // the standard descriptor to duplicate
+            emitter.instruction("call dup");                                    // rax = duplicated descriptor (-1 on failure)
+            emitter.instruction("add rsp, 8");                                  // restore the caller's stack pointer
+            emitter.instruction("ret");                                         // return the descriptor to the fopen lowering
+        }
+        PhpStreamTarget::TempFile => {
+            emitter.instruction("jmp __rt_tmpfile");                            // tail-call the anonymous temp-file opener
         }
     }
 }

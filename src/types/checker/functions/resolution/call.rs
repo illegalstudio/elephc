@@ -41,6 +41,31 @@ impl Checker {
         })
     }
 
+    /// Returns true when a spread argument that lands in the variadic tail can carry string keys.
+    ///
+    /// `collect(...$hash)` into `function collect(...$args)` binds each string key as a named
+    /// extra, so the variadic slot must be able to hold a hash, exactly like the unknown named
+    /// argument case of [`Self::has_unknown_named_variadic_arg`]. Only a source typed as a hash or
+    /// as `iterable` is treated as keyed; a list-typed source stays a plain `array<T>` tail.
+    pub(crate) fn variadic_tail_spread_keeps_keys(
+        &mut self,
+        args: &[Expr],
+        regular_param_count: usize,
+        env: &TypeEnv,
+    ) -> bool {
+        args.iter().enumerate().any(|(index, arg)| {
+            index >= regular_param_count
+                && matches!(
+                    &arg.kind,
+                    ExprKind::Spread(inner)
+                        if matches!(
+                            self.infer_type(inner, env).map(|ty| ty.codegen_repr()),
+                            Ok(PhpType::AssocArray { .. } | PhpType::Iterable)
+                        )
+                )
+        })
+    }
+
     /// Resolves a function call by name, normalizes arguments (named, spread),
     /// validates arity and types, applies specialization if needed, and returns
     /// the function's return type.
@@ -92,6 +117,31 @@ impl Checker {
         CompileError::new(span, &format!("Undefined function: {}", name))
     }
 
+    /// Accepts an unresolved direct function call until runtime, matching PHP lookup timing.
+    ///
+    /// The checker still validates argument expressions so nested source errors remain visible;
+    /// EIR lowering later emits the PHP-compatible `Error` before evaluating those arguments.
+    fn try_late_bound_undefined_call(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        caller_env: &TypeEnv,
+    ) -> Result<Option<PhpType>, CompileError> {
+        if !crate::types::checker::builtins::is_late_bound_undefined_function(name) {
+            return Ok(None);
+        }
+        // A date/calendar alias called with the wrong number of arguments is a known function
+        // the resolver declined to rewrite, not an undefined one: php reports the arity
+        // (`gregoriantojd() expects exactly 3 arguments, 2 given`), never "undefined function".
+        if crate::name_resolver::date_procedural_alias_arity(name).is_some() {
+            return Ok(None);
+        }
+        // PHP resolves the function before evaluating its arguments. The lowering path therefore
+        // emits the runtime Error without lowering argument expressions or their side effects.
+        let _ = (args, caller_env);
+        Ok(Some(PhpType::Mixed))
+    }
+
     /// Checks a function call, including externs, declared functions, variants,
     /// builtins, call-argument normalization, and return-type inference.
     pub fn check_function_call(
@@ -136,12 +186,38 @@ impl Checker {
             return self.check_function_call(&instantiated, args, span, caller_env);
         }
 
+        // A PHPDoc function template keeps its plain declaration under the written name (php's
+        // symbol); the annotated reading lives in a hidden twin. A direct call by name may use
+        // the twin's instantiation: a free function cannot be overridden, so the call is
+        // statically resolved. Every other way to reach the function (string callable,
+        // reflection, `function_exists`) sees the plain declaration.
+        let twin = format!("{}{}", name, crate::generics::DOC_TWIN_SUFFIX);
+        if self
+            .fn_decls
+            .get(&twin)
+            .is_some_and(|decl| !decl.type_params.is_empty())
+        {
+            let instantiated = self.instantiate_generic_call(&twin, args, span, caller_env)?;
+            return self.check_function_call(&instantiated, args, span, caller_env);
+        }
+
         // `identity<int>(41)` — the type arguments were WRITTEN, and the parser put them in the
         // name. Decoding them back out of the name is what keeps one spelling: the same string
         // the inferred path builds with `instantiated_name`, and the same one every diagnostic
         // prints. The request is recorded on every call, exactly as the inferred path does, so
         // the splice fixpoint and the reachability pruner both see it.
-        if let Some((base, written)) = written_generic_call(name) {
+        if let Some((written_base, written)) = written_generic_call(name) {
+            // `id<int>(…)` on a PHPDoc function template names the hidden twin (see above).
+            let twin_base = format!("{}{}", written_base, crate::generics::DOC_TWIN_SUFFIX);
+            let base = if self
+                .fn_decls
+                .get(&twin_base)
+                .is_some_and(|decl| !decl.type_params.is_empty())
+            {
+                twin_base
+            } else {
+                written_base
+            };
             if self
                 .fn_decls
                 .get(base.as_str())
@@ -258,11 +334,15 @@ impl Checker {
             return Ok(PhpType::Mixed);
         }
 
-        let decl = self
-            .fn_decls
-            .get(name)
-            .cloned()
-            .ok_or_else(|| self.unresolved_function_call_error(name, span))?;
+        let decl = match self.fn_decls.get(name).cloned() {
+            Some(decl) => decl,
+            None => {
+                if let Some(mixed) = self.try_late_bound_undefined_call(name, args, caller_env)? {
+                    return Ok(mixed);
+                }
+                return Err(self.unresolved_function_call_error(name, span));
+            }
+        };
         let normalization_sig = FunctionSig {
             params: decl
                 .params
@@ -399,6 +479,9 @@ impl Checker {
                                 &format!("Function '{}' parameter ${}", name, decl.params[i]),
                             )?;
                         }
+                        // Storage, once validated: see `Checker::callable_param_storage`.
+                        let declared_ty =
+                            Self::callable_param_storage(declared_ty, &decl.body, &decl.params[i]);
                         param_types.push((decl.params[i].clone(), declared_ty));
                     } else if matches!(ty, PhpType::Never) {
                         let param_ty = decl
@@ -435,16 +518,18 @@ impl Checker {
                 }
                 if ty == PhpType::Callable {
                     if let Some(sig) = self.resolve_expr_callable_sig(arg, caller_env)? {
-                        self.callable_param_sigs.insert(
+                        self.record_callable_param_sig(
                             (name.to_string(), decl.params[arg_idx].clone()),
+                            arg.span,
                             sig,
                         );
                     }
                 }
                 if is_callable_array_type(&ty) {
                     if let Some(sig) = self.resolve_expr_callable_array_sig(arg, caller_env)? {
-                        self.callable_param_sigs.insert(
+                        self.record_callable_param_sig(
                             (name.to_string(), decl.params[arg_idx].clone()),
+                            arg.span,
                             sig,
                         );
                     }
@@ -470,13 +555,30 @@ impl Checker {
                     // The callee holds a reference to this local from here on, and it can
                     // escape, so the local is never kill/retype eligible in this body.
                     self.record_reference_alias_root(arg);
+                    // A by-reference parameter a named argument SKIPPED receives its own
+                    // declared default, which is no caller expression at all: php binds it to a
+                    // fresh variable (see `call_validation::is_injected_declared_default`).
+                    let injected_default = decl
+                        .defaults
+                        .get(arg_idx)
+                        .and_then(Option::as_ref)
+                        .is_some_and(|default| default.span == arg.span && default == arg);
                     let property_place = match declared_ty.as_ref() {
                         Some(expected_ty) => {
                             self.by_ref_property_place(arg, expected_ty, caller_env)?
                         }
                         None => false,
                     };
-                    if !property_place && !self.is_by_ref_argument_lvalue(arg, caller_env)? {
+                    if !injected_default
+                        && !property_place
+                        && !self.is_by_ref_argument_lvalue(arg, caller_env)?
+                        && !self.record_by_ref_call_result(arg)
+                    {
+                        let param_name = decl
+                            .params
+                            .get(arg_idx)
+                            .map(String::as_str)
+                            .unwrap_or("arg");
                         return Err(CompileError::new(
                             arg.span,
                             &format!(
@@ -487,6 +589,8 @@ impl Checker {
                     }
                 }
                 if let Some(declared_ty) = declared_ty {
+                    self.binding_position = arg_idx + 1;
+                    self.forget_definite_param_mismatch(arg);
                     // A tracked two-slot callable array crosses a declared `callable` boundary
                     // as the descriptor EIR lowering materializes for this exact argument. The
                     // already-resolved call validator applies the same exception; the first call
@@ -527,9 +631,25 @@ impl Checker {
                             supplied_reference,
                         )?;
                     }
-                    let specialized_ty =
-                        Self::specialize_generic_array_param_hint(&declared_ty, &ty);
-                    param_types.push((decl.params[arg_idx].clone(), specialized_ty));
+                    self.require_bound_param_arg_type(
+                        &declared_ty,
+                        &ty,
+                        arg,
+                        caller_env,
+                        &format!("Function '{}' parameter ${}", name, param_name),
+                        Some((name, decl.params[arg_idx].as_str())),
+                        decl.ref_params.get(arg_idx).copied().unwrap_or(false),
+                    )?;
+                    // Declared PHP types are stable contracts. In particular, a bare `array`
+                    // accepts both indexed and associative arrays across every call site.
+                    // Storage, once validated: a `callable` read as a value keeps the value
+                    // (`Checker::callable_param_storage`), as the declaration pass decided.
+                    let declared_ty = Self::callable_param_storage(
+                        declared_ty,
+                        &decl.body,
+                        &decl.params[arg_idx],
+                    );
+                    param_types.push((decl.params[arg_idx].clone(), declared_ty));
                     arg_idx += 1;
                     continue;
                 }
@@ -581,8 +701,10 @@ impl Checker {
                         false,
                     )?;
                 }
-                // Argument collected into the variadic parameter: enforce its declared element
-                // type (`int ...$xs`) against every passed argument, matching PHP.
+                // Argument collected into the variadic parameter: bind its declared element
+                // type (`int ...$xs`) against every passed argument using the same weak/strict
+                // rules as a regular declared parameter.
+                self.binding_position = 0;
                 if let Some(declared) = &decl.variadic_type {
                     let vname = decl.variadic.as_deref().unwrap_or_default();
                     let elem_ty = self.resolve_declared_param_type_hint(
@@ -590,20 +712,14 @@ impl Checker {
                         decl.span,
                         &format!("Function '{}' variadic parameter ${}", name, vname),
                     )?;
-                    self.require_compatible_arg_type(
+                    self.require_bound_param_arg_type(
                         &elem_ty,
                         &ty,
-                        arg.span,
+                        arg,
+                        caller_env,
                         &format!("Function '{}' variadic parameter ${}", name, vname),
-                    )?;
-                    // PHP applies `strict_types` to a variadic element exactly like a regular
-                    // declared parameter, so the strict rejection runs here too; the coercive
-                    // widenings `require_compatible_arg_type` allows are unchanged otherwise.
-                    self.require_strict_types_param_binding(
-                        &elem_ty,
-                        &ty,
-                        arg.span,
-                        &format!("Function '{}' variadic parameter ${}", name, vname),
+                        None,
+                        decl.variadic_by_ref,
                     )?;
                 }
                 arg_idx += 1;
@@ -655,12 +771,30 @@ impl Checker {
                     &format!("Variadic parameter ${}", vp),
                 )?;
                 param_types.push((vp.clone(), PhpType::Array(Box::new(elem_ty))));
-            } else if Self::has_unknown_named_variadic_arg(args, &decl.params) {
+            } else if Self::has_unknown_named_variadic_arg(args, &decl.params)
+                || self.variadic_tail_spread_keeps_keys(args, decl.params.len(), caller_env)
+            {
                 param_types.push((vp.clone(), PhpType::Iterable));
             } else {
                 let variadic_elem_ty = if args.len() > decl.params.len() {
-                    self.infer_type(&args[decl.params.len()], caller_env)
-                        .unwrap_or(PhpType::Int)
+                    // A real first element: record it, so a later call's respecialization joins
+                    // with it instead of discarding it as the `int` fallback (`w(1); w("s")`
+                    // handed the body "1"). A spread contributes its ELEMENTS' type.
+                    self.param_specialization_seen
+                        .insert((name.to_string(), decl.params.len()));
+                    let first = &args[decl.params.len()];
+                    match &first.kind {
+                        ExprKind::Spread(inner) => match self
+                            .infer_type(inner, caller_env)
+                            .unwrap_or(PhpType::Mixed)
+                            .codegen_repr()
+                        {
+                            PhpType::Array(elem) => *elem,
+                            PhpType::AssocArray { value, .. } => *value,
+                            _ => PhpType::Mixed,
+                        },
+                        _ => self.infer_type(first, caller_env).unwrap_or(PhpType::Int),
+                    }
                 } else {
                     PhpType::Int
                 };

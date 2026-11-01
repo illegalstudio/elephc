@@ -23,6 +23,12 @@ pub(super) fn lower_instanceof(
     expr: &Expr,
 ) -> LoweredValue {
     let mut value_operand = lower_expr(ctx, value);
+    if statically_known_instanceof_result(ctx, expr) == Some(false) {
+        if ctx.value_is_owning_temporary(value_operand) {
+            crate::ir_lower::ownership::release_if_owned(ctx, value_operand, Some(expr.span));
+        }
+        return lower_bool_literal(ctx, false, expr);
+    }
     let mut operands = vec![value_operand.value];
     // Set to the frame slot when the value operand is rooted across a dynamic
     // target evaluation that can unwind.
@@ -42,6 +48,19 @@ pub(super) fn lower_instanceof(
                 let target_operand = ctx.load_local("this", Some(expr.span));
                 operands.push(target_operand.value);
                 dynamic_target = Some(target_operand);
+                None
+            } else if name.as_str().trim_start_matches('\\') == "static" && ctx.current_class.is_some() {
+                // `$value instanceof static` in a STATIC method: there is no `$this` to take the
+                // class from, and the literal name "static" matched nothing, so the test was
+                // always false -- brick/math's `BigNumber::of()` never recognised a number already
+                // of the requested class. The called class answers it, as `static::class` does.
+                let called = Expr::new(
+                    ExprKind::ClassConstant {
+                        receiver: crate::parser::ast::StaticReceiver::Static,
+                    },
+                    expr.span,
+                );
+                operands.push(lower_expr(ctx, &called).value);
                 None
             } else {
                 Some(Immediate::Data(ctx.intern_class_name(&instanceof_target_name(ctx, name.as_str()))))
@@ -80,8 +99,64 @@ pub(super) fn lower_instanceof(
     result
 }
 
+/// Returns the closed-world result of a named `instanceof` whose target has no emitted metadata.
+///
+/// The left-hand value must still be evaluated by the caller. An earlier `eval()` disables the
+/// proof because runtime code may have declared the target class or interface. Negation is folded
+/// recursively so branch lowering can omit the unreachable arm without relying on IR passes.
+pub(in crate::ir_lower) fn statically_known_instanceof_result(
+    ctx: &LoweringContext<'_, '_>,
+    expr: &Expr,
+) -> Option<bool> {
+    if let ExprKind::Not(inner) = &expr.kind {
+        return statically_known_instanceof_result(ctx, inner).map(|value| !value);
+    }
+    let ExprKind::InstanceOf {
+        target: InstanceOfTarget::Name(name),
+        ..
+    } = &expr.kind
+    else {
+        return None;
+    };
+    // `eval_executed()` alone is a FLOW fact inside ONE function: it is false in a function that
+    // contains no `eval()` of its own, even when the program runs one elsewhere. The proof this
+    // guard protects is a CLOSED-WORLD claim about the whole program, so it needs the
+    // program-level answer too — the same one dynamic function resolution already consults.
+    //
+    // Symfony is the case: `FlattenException::createFromThrowable()` is compiled and asks
+    // `$e instanceof HttpExceptionInterface`, while that interface is autoloaded at runtime. The
+    // fold answered a hardcoded `false`, so every `NotFoundHttpException` lost its status code and
+    // Symfony rendered 500 where php renders 404.
+    if ctx.eval_executed() || ctx.can_resolve_runtime_dynamic_functions() {
+        return None;
+    }
+    // `static` names the late-static class, which only the running call knows. It is no entry in
+    // the class table, so looking it up here "proved" every `$x instanceof static` false.
+    if name.as_str().trim_start_matches('\\').eq_ignore_ascii_case("static") {
+        return None;
+    }
+    let target = instanceof_target_name(ctx, name.as_str());
+    if target
+        .trim_start_matches('\\')
+        .eq_ignore_ascii_case("Closure")
+    {
+        // `Closure` is a PHP intrinsic represented by a callable descriptor rather than a
+        // normal entry in the AOT class metadata registry. The backend has a dedicated tag-10
+        // check, so it must see this expression even when no type declaration referenced
+        // `Closure` while building the registry.
+        return None;
+    }
+    let known = ctx.classes.contains_key(&target)
+        || ctx.interfaces.contains_key(&target)
+        || ctx.enums.contains_key(&target);
+    (!known).then_some(false)
+}
+
 /// Resolves lexical `instanceof` target keywords to concrete class names when possible.
-pub(super) fn instanceof_target_name(ctx: &LoweringContext<'_, '_>, name: &str) -> String {
+fn instanceof_target_name(
+    ctx: &LoweringContext<'_, '_>,
+    name: &str,
+) -> String {
     match name.trim_start_matches('\\') {
         "self" => ctx.current_class.clone().unwrap_or_else(|| name.to_string()),
         "parent" => ctx
@@ -92,6 +167,95 @@ pub(super) fn instanceof_target_name(ctx: &LoweringContext<'_, '_>, name: &str) 
             .unwrap_or_else(|| name.to_string()),
         _ => name.to_string(),
     }
+}
+
+/// Returns the positive nominal local-type fact proven by one static `instanceof` branch.
+pub(in crate::ir_lower) fn instanceof_branch_local_type(
+    ctx: &LoweringContext<'_, '_>,
+    condition: &Expr,
+    branch_matches: bool,
+) -> Option<(String, PhpType)> {
+    let (name, target) = positive_instanceof_local(condition, branch_matches)?;
+    let class_name = instanceof_target_name(ctx, target);
+    if class_name.trim_start_matches('\\') == "static" {
+        return None;
+    }
+    // `instanceof` is an INTERSECTION: replacing the local's type with the target drops whatever
+    // the other half declared. Taking the target on its own here typed `$this` as the bare
+    // INTERFACE, and an interface has no properties -- the first `$this->context` read survived
+    // only because the checker had recorded a type for that exact span, and the SECOND one, where
+    // the checker's own narrowing had already lapsed, came back `Int` and was refused as a method
+    // receiver. Both sides now ask one module the same question.
+    let current_type = ctx.local_types.get(name).cloned().or_else(|| {
+        (name == "this")
+            .then(|| ctx.current_class.clone().map(PhpType::Object))
+            .flatten()
+    });
+    let narrowed = match current_type {
+        Some(PhpType::Object(current)) => crate::types::instanceof_intersection::
+            narrow_object_to_instanceof(ctx.classes, ctx.interfaces, &current, &class_name),
+        // A scalar or array local is never an instance of anything, so the branch is dead, and
+        // retyping its slot as an object only makes the dead read unloadable (Twig's compiled
+        // `($tmp = !$x) && $tmp instanceof Markup ? (string) $tmp : $tmp`). The checker keeps the
+        // same type on that edge (`stmt_check::narrowing`).
+        Some(
+            PhpType::Int
+            | PhpType::Float
+            | PhpType::Bool
+            | PhpType::False
+            | PhpType::Str
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. },
+        ) => return None,
+        _ => None,
+    };
+    Some((
+        name.to_string(),
+        narrowed.unwrap_or(PhpType::Object(class_name)),
+    ))
+}
+
+/// Extracts a local and named target when the selected branch proves an `instanceof` condition.
+fn positive_instanceof_local(condition: &Expr, branch_matches: bool) -> Option<(&str, &str)> {
+    if let ExprKind::Not(inner) = &condition.kind {
+        return positive_instanceof_local(inner, !branch_matches);
+    }
+    // `A && B` is true only when A is, so the TRUE branch of the whole condition carries every
+    // narrowing A proves. Without this, `if ($r instanceof StreamedResponse && $r->getCallback())`
+    // narrowed the right operand (see `lower_logical_binary`) but not the BODY, and the first call
+    // on the proven receiver inside the block was refused as an unknown method — Symfony's
+    // `HttpKernel::handle` calls `setCallback` there.
+    //
+    // Only the true side, and only for `&&`: a false `A && B` says nothing about A, and `||` on
+    // its true side says nothing either.
+    if let ExprKind::BinaryOp {
+        left,
+        op: crate::parser::ast::BinOp::And,
+        right,
+    } = &condition.kind
+    {
+        if branch_matches {
+            return positive_instanceof_local(left, true)
+                .or_else(|| positive_instanceof_local(right, true));
+        }
+        return None;
+    }
+    if !branch_matches {
+        return None;
+    }
+    let ExprKind::InstanceOf {
+        value,
+        target: InstanceOfTarget::Name(target),
+    } = &condition.kind
+    else {
+        return None;
+    };
+    let name = match &value.kind {
+        ExprKind::Variable(name) => name.as_str(),
+        ExprKind::This => "this",
+        _ => return None,
+    };
+    Some((name, target.as_str()))
 }
 
 /// Coerces a value to integer storage before integer-only operations.
@@ -106,6 +270,21 @@ pub(crate) fn coerce_to_int_at_span(
     span: Option<crate::span::Span>,
 ) -> LoweredValue {
     match value.ir_type {
+        IrType::I64
+            if matches!(
+                ctx.builder.value_php_type(value.value).codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_)
+            ) =>
+        {
+            ctx.emit_value(
+                Op::Move,
+                vec![value.value],
+                None,
+                PhpType::Int,
+                Op::Move.default_effects(),
+                span,
+            )
+        }
         IrType::I64 => value,
         IrType::F64 => ctx.emit_value(Op::FToI, vec![value.value], None, PhpType::Int, Op::FToI.default_effects(), span),
         IrType::Str => {
@@ -209,6 +388,25 @@ pub(crate) fn coerce_to_string_at_span(
             Op::ResourceToStr.default_effects(),
             span,
         );
+    }
+    // A boxed gradual value is physically one integer-sized cell even when its runtime payload
+    // is a string. Inspecting only `ir_type` would route that cell through `IToStr` and stringify
+    // its address. The PHP representation is authoritative at this boundary, so unwrap/cast the
+    // Mixed cell before considering the physical scalar register class.
+    if matches!(
+        ctx.builder.value_php_type(value.value).codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        let result = ctx.emit_value(
+            Op::Cast,
+            vec![value.value],
+            Some(Immediate::CastTarget(IrType::Str)),
+            PhpType::Str,
+            Op::Cast.default_effects(),
+            span,
+        );
+        release_coerced_source_if_owned(ctx, value, span);
+        return result;
     }
     match value.ir_type {
         IrType::Str => value,

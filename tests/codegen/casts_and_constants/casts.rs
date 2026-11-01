@@ -70,6 +70,19 @@ fn test_cast_int_from_bool() {
     assert_eq!(out, "1");
 }
 
+/// Verifies a concrete object cast follows PHP's fallback result of integer `1`; the runtime also
+/// emits the corresponding conversion warning on stderr.
+#[test]
+fn test_cast_int_from_object_returns_one() {
+    let out = compile_and_run(
+        r#"<?php
+class IntegerCastObject {}
+echo (int) new IntegerCastObject();
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
 /// Compiles `<?php echo (float)42;` and asserts stdout is `"42"` — int widens to float without truncation.
 #[test]
 fn test_cast_float_from_int() {
@@ -183,6 +196,83 @@ echo (string)$map["int"];
 "#,
     );
     assert_eq!(out, "3|27|10|1||42");
+}
+
+/// Verifies `(array)` casts from runtime `mixed` values link their fatal diagnostic data and
+/// preserve PHP's null, scalar, and indexed-array conversion shapes.
+#[test]
+fn test_array_cast_from_runtime_mixed_values() {
+    let out = compile_and_run(
+        r#"<?php
+function dump_array_cast(mixed $value): void {
+    $array = (array) $value;
+    echo count($array), ":";
+    foreach ($array as $item) {
+        echo $item, ",";
+    }
+    echo "|";
+}
+dump_array_cast(null);
+dump_array_cast(42);
+dump_array_cast("value");
+dump_array_cast([1, 2]);
+"#,
+    );
+    assert_eq!(out, "0:|1:42,|1:value,|2:1,2,|");
+}
+
+/// Verifies object casts preserve declared visibility keys, values, and dynamic properties.
+#[test]
+fn test_array_cast_from_object_preserves_php_property_shape() {
+    let out = compile_and_run(
+        r#"<?php
+class ParentCastShape {
+    private int $hidden = 1;
+    protected string $guarded = 'two';
+}
+
+class ChildCastShape extends ParentCastShape {
+    public bool $shown = true;
+    public int $missing;
+}
+
+$declared = (array) new ChildCastShape();
+$nul = chr(0);
+echo $declared[$nul . 'ParentCastShape' . $nul . 'hidden'], ':';
+echo $declared[$nul . '*' . $nul . 'guarded'], ':';
+echo $declared['shown'] ? 'yes' : 'no', ':', count($declared), '|';
+
+$source = ['name' => 'Ada', 'count' => 2];
+$dynamic = (array) ((object) $source);
+echo $dynamic['name'], ':', $dynamic['count'], '|';
+
+function exported_object_shape(object $value): array {
+    $data = [];
+    foreach ((array) $value as $key => $item) {
+        $data[$key] = $item;
+    }
+    return $data;
+}
+
+$typed = exported_object_shape((object) ['typed' => 'ok']);
+echo $typed['typed'];
+"#,
+    );
+    assert_eq!(out, "1:two:yes:3|Ada:2|ok");
+}
+
+/// Verifies that `(object)` creates an isolated stdClass view of associative-array entries.
+#[test]
+fn test_object_cast_from_assoc_array_isolated_from_source() {
+    let out = compile_and_run(
+        r#"<?php
+$source = ["name" => "array", "count" => 2];
+$object = (object) $source;
+$object->name = "object";
+echo get_class($object), "|", $source["name"], "|", $object->name, "|", $object->count;
+"#,
+    );
+    assert_eq!(out, "stdClass|array|object|2");
 }
 
 /// Compiles `<?php echo (integer)3.7;` and asserts stdout is `"3"` — (integer) is a PHP alias for (int).
@@ -439,4 +529,35 @@ echo "|", strlen($a) + strlen($b) + strlen($c);
 "#,
     );
     assert_eq!(out, "[S][T][42][1.5][1][raw]|4");
+}
+
+/// Verifies `(array)` of a returned `array<mixed>` keeps the array alive for its reader.
+///
+/// The cast is a pass-through for an array whose elements are already mixed, so the cast result
+/// IS the call's temporary. Releasing that temporary after the cast freed the array the cast had
+/// just returned: `foreach ((array) make(4) ...)` walked freed storage and warned that it was null
+/// once the allocator reused the block, and a stored copy counted as empty.
+#[test]
+fn test_array_cast_of_a_returned_mixed_array_keeps_it_alive() {
+    let out = compile_and_run(
+        r#"<?php
+function make(int $n): array {
+    $a = [];
+    for ($i = 0; $i < $n; $i++) {
+        $a[] = $i % 2 === 0 ? 'v' . $i : $i;
+    }
+    return $a;
+}
+$seen = [];
+foreach ((array) make(4) as $key => $value) {
+    $pad = [$key, $value, str_repeat('z', $key + 1)];
+    $seen[] = $key . '=' . $value . ':' . strlen($pad[2]);
+}
+echo implode(',', $seen), '|';
+$copy = (array) make(3);
+$other = make(5);
+echo count($copy), ':', implode('/', $copy), ':', count($other), "\n";
+"#,
+    );
+    assert_eq!(out, "0=v0:1,1=1:2,2=v2:3,3=3:4|3:v0/1/v2:5\n");
 }

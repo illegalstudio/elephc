@@ -1,6 +1,8 @@
 //! Purpose:
 //! Walks declaration member types and expressions through frontend substitution passes.
-//! Applies lexical magic-constant binding and generic type substitution to member children.
+//! Applies lexical magic-constant binding and generic type substitution to member children,
+//! including class constants' values, property defaults, method bodies, and promoted-property
+//! assignments.
 //!
 //! Called from:
 //! - `crate::magic_constants::walker::stmts` and trait binding passes.

@@ -18,7 +18,7 @@ eval_builtin! {
 use super::super::super::*;
 use super::super::collection_builder::EvalArrayBuilder;
 use super::super::{
-    eval_class_relation_name_exists, eval_resolved_class_metadata_name,
+    eval_class_relation_name_exists, eval_resolved_class_metadata_name, eval_same_class_metadata_name,
     eval_runtime_property_access_metadata, eval_runtime_string_array_to_vec,
 };
 use std::collections::HashSet;
@@ -66,6 +66,9 @@ pub(in crate::interpreter) fn eval_get_class_vars_result(
     let [target] = evaluated_args else {
         return Err(EvalStatus::RuntimeFatal);
     };
+    // Same process-wide class view as `get_class_methods()` (see there).
+    #[cfg(not(test))]
+    context.sync_global_eval_classes();
     let class_name = eval_resolved_class_metadata_name(*target, context, values)?;
     if context.has_class(&class_name) || context.has_enum(&class_name) {
         return eval_dynamic_class_vars_result(&class_name, context, values);
@@ -214,6 +217,7 @@ fn eval_runtime_class_var_entries(
     let declared_names = declared_names?;
     let mut entries = Vec::new();
     let mut emitted_keys = HashSet::new();
+    let listed_names: HashSet<String> = declared_names.iter().cloned().collect();
     for property_name in declared_names {
         if emitted_keys.contains(&property_name) {
             continue;
@@ -237,7 +241,56 @@ fn eval_runtime_class_var_entries(
         });
         emitted_keys.insert(property_name);
     }
+    eval_runtime_scope_private_class_var_entries(
+        class_name,
+        &listed_names,
+        &mut entries,
+        context,
+        values,
+    )?;
     Ok(entries)
+}
+
+/// Adds the calling scope's own private properties when that scope is an ancestor of `class_name`.
+///
+/// The compiled class's list is what reflection sees on it, which leaves out an ancestor's
+/// private properties. php still shows them to the ancestor's own scope, except a name the class
+/// redeclares, whose visible property is the class's own.
+fn eval_runtime_scope_private_class_var_entries(
+    class_name: &str,
+    listed_names: &HashSet<String>,
+    entries: &mut Vec<ClassVarEntry>,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let Some(scope) = context.current_class_scope().map(str::to_string) else {
+        return Ok(());
+    };
+    if eval_same_class_metadata_name(&scope, class_name) || !native_class_is_a(class_name, &scope, context) {
+        return Ok(());
+    }
+    let scope_handle = values.reflection_property_names(&scope)?;
+    let scope_names = eval_runtime_string_array_to_vec(scope_handle, values);
+    values.release(scope_handle)?;
+    for property_name in scope_names? {
+        if listed_names.contains(&property_name) {
+            continue;
+        }
+        let Some((declaring_class, visibility, is_static)) =
+            eval_runtime_property_access_metadata(&scope, &property_name, values)?
+        else {
+            continue;
+        };
+        if visibility != EvalVisibility::Private || !eval_same_class_metadata_name(&declaring_class, &scope) {
+            continue;
+        }
+        entries.push(ClassVarEntry {
+            name: property_name,
+            is_static,
+            default: ClassVarDefault::Native { runtime_class: scope.clone(), declaring_class },
+        });
+    }
+    Ok(())
 }
 
 /// Materializes one eval-declared property default for `get_class_vars()`.

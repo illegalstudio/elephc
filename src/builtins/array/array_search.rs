@@ -32,7 +32,10 @@ builtin! {
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
     let arr_ty = cx.checker.infer_type(&cx.args[1], cx.env)?;
-    if !matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+    if !matches!(
+        arr_ty,
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_)
+    ) {
         return Err(CompileError::new(
             cx.span,
             "array_search() second argument must be array",
@@ -42,6 +45,11 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         PhpType::AssocArray { key, .. } => {
             Ok(cx.checker.normalize_union_type(vec![*key, PhpType::False]))
         }
+        PhpType::Mixed | PhpType::Union(_) => Ok(cx.checker.normalize_union_type(vec![
+            PhpType::Int,
+            PhpType::Str,
+            PhpType::False,
+        ])),
         _ => Ok(PhpType::Union(vec![PhpType::Int, PhpType::False])),
     }
 }

@@ -17,7 +17,7 @@ fn declared_builtin_registry_derives_stream_metadata() {        assert_eq!(
         );
         assert_eq!(
             eval_declared_builtin_param_names("opendir"),
-            Some(["directory"].as_slice())
+            Some(["directory", "context"].as_slice())
         );
         assert_eq!(
             eval_declared_builtin_param_names("closedir"),
@@ -35,10 +35,14 @@ fn declared_builtin_registry_derives_stream_metadata() {        assert_eq!(
             eval_declared_builtin_param_names("tmpfile"),
             Some([].as_slice())
         );
+        // php's `fgets(resource $stream, ?int $length = null)`.
+        assert_eq!(
+            eval_declared_builtin_param_names("fgets"),
+            Some(["stream", "length"].as_slice())
+        );
         for name in [
             "fclose",
             "fgetc",
-            "fgets",
             "feof",
             "fflush",
             "fpassthru",
@@ -61,7 +65,8 @@ fn declared_builtin_registry_derives_stream_metadata() {        assert_eq!(
         );
         assert_eq!(
             eval_declared_builtin_param_names("fgetcsv"),
-            Some(["stream", "length", "separator"].as_slice())
+            // php 8.1+: `fgetcsv($stream, $length, $separator, $enclosure, $escape)`.
+            Some(["stream", "length", "separator", "enclosure", "escape"].as_slice())
         );
         assert_eq!(
             eval_declared_builtin_default_value("fgetcsv", 2),
@@ -85,7 +90,7 @@ fn declared_builtin_registry_derives_stream_metadata() {        assert_eq!(
         );
         assert_eq!(
             eval_declared_builtin_param_names("fwrite"),
-            Some(["stream", "data"].as_slice())
+            Some(["stream", "data", "length"].as_slice())
         );
         assert_eq!(
             eval_declared_builtin_param_names("fseek"),
@@ -178,4 +183,55 @@ fn declared_builtin_registry_derives_stream_metadata() {        assert_eq!(
             Some([].as_slice())
         );
 
+}
+
+/// `stream_socket_client` declares PHP's full six-parameter signature with its two out-parameters.
+///
+/// Reaching for `eval_declared_builtin_default_value` is the point, not decoration: building the
+/// registry is what MATERIALIZES each default, and a `DefaultSpec::Constant` (the obvious way to
+/// spell `$flags = STREAM_CLIENT_CONNECT`) panics there for any contract with an eval binding.
+/// Nothing refuses it at build time, so without this assertion the first `eval()` in a compiled
+/// program is where it surfaces -- as a fatal, at run time, in the user's process.
+#[test]
+fn declared_builtin_registry_derives_stream_socket_client_out_parameters() {
+    assert_eq!(
+        eval_declared_builtin_param_names("stream_socket_client"),
+        Some(
+            [
+                "address",
+                "error_code",
+                "error_message",
+                "timeout",
+                "flags",
+                "context",
+            ]
+            .as_slice()
+        )
+    );
+    assert_eq!(
+        eval_builtin_signature_shape("stream_socket_client").map(|shape| shape.by_ref_params),
+        Some(["error_code", "error_message"].as_slice())
+    );
+    // Every default must be a literal the interpreter can materialize on its own.
+    assert_eq!(
+        eval_declared_builtin_default_value("stream_socket_client", 1),
+        Some(EvalBuiltinDefaultValue::Null)
+    );
+    assert_eq!(
+        eval_declared_builtin_default_value("stream_socket_client", 2),
+        Some(EvalBuiltinDefaultValue::Null)
+    );
+    assert_eq!(
+        eval_declared_builtin_default_value("stream_socket_client", 3),
+        Some(EvalBuiltinDefaultValue::Null)
+    );
+    // `STREAM_CLIENT_CONNECT`, as its value: see the note on the contract's `flags` parameter.
+    assert_eq!(
+        eval_declared_builtin_default_value("stream_socket_client", 4),
+        Some(EvalBuiltinDefaultValue::Int(4))
+    );
+    assert_eq!(
+        eval_declared_builtin_default_value("stream_socket_client", 5),
+        Some(EvalBuiltinDefaultValue::Null)
+    );
 }

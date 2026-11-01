@@ -9,6 +9,7 @@
 //! - Constant lookup happens before name resolution, so namespace strings come from raw AST names.
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 use crate::names::{Name, NameKind};
 use crate::parser::ast::{Stmt, StmtKind, UseKind};
@@ -24,6 +25,35 @@ pub(super) struct ResolveState {
     pub(super) const_imports: HashMap<String, String>,
     /// Invocation-level symbols used to select `ifdef` branches in every physical file.
     pub(super) conditional_defines: HashSet<String>,
+    /// Canonical class-like name to the PHYSICAL file that declares it, recorded as each
+    /// include is loaded and therefore before its own includes are spliced into it.
+    ///
+    /// `Reflection*::getFileName()` needs the declaring file, not the file that happened to pull
+    /// the declaration in. Attribution done after splicing cannot tell them apart, so it is
+    /// collected here where the path is still known.
+    pub(super) declared_class_files: HashMap<String, String>,
+    /// Canonical function name to the physical file that declares it, same rule as above.
+    pub(super) declared_function_files: HashMap<String, String>,
+    /// Immutable source inputs remain shared when semantic resolver scopes are cloned.
+    pub(super) source_units: super::source_units::SourceUnitCollector,
+    /// Files the compiler read but did NOT take whole: a conditional declaration in them was
+    /// dropped rather than bound, mapped to the names it dropped.
+    ///
+    /// Reporting such a file as one the compiler included is a lie with teeth: the runtime skips
+    /// exactly those files, so the dropped declaration is made by nobody and the first call to it
+    /// fails with `Call to undefined function`. Every file on the include chain is recorded, not
+    /// just the one holding the declaration — a skipped ancestor never reaches its descendant.
+    /// SHARED across clones, like `source_units`, and for the same reason: `resolve_isolated`
+    /// clones the state for every control-structure branch so that include and constant EFFECTS
+    /// do not leak back. This is not an effect, it is a fact about the build — and a polyfill
+    /// writes its delegation as `if (\PHP_VERSION_ID >= 80100) { require …; }`, so a per-clone
+    /// field records the drop inside the branch and throws it away with the clone. MEASURED on a
+    /// four-file fixture: the same `require` at file scope reports `dropped=["probe_dc"]` and
+    /// inside an `if` reports `dropped=[]`.
+    pub(super) unbound_conditional_declaration_sources: SharedDeclarationFacts,
+    /// Names bound through the function-variant mechanism anywhere in this resolve, subtracted
+    /// from the dropped names before anything is concluded.
+    pub(super) bound_conditional_declaration_names: SharedNameSet,
 }
 
 impl ResolveState {
@@ -33,6 +63,53 @@ impl ResolveState {
             conditional_defines: defines.clone(),
             ..Self::default()
         }
+    }
+}
+
+/// A path-to-dropped-names map shared by every clone of one `ResolveState`.
+#[derive(Clone, Default)]
+pub(super) struct SharedDeclarationFacts(
+    std::sync::Arc<std::sync::Mutex<HashMap<PathBuf, Vec<String>>>>,
+);
+
+impl SharedDeclarationFacts {
+    /// Records names dropped while stripping `path`.
+    pub(super) fn record(&self, path: PathBuf, names: impl IntoIterator<Item = String>) {
+        let mut facts = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        facts.entry(path).or_default().extend(names);
+    }
+
+    /// Returns a copy of everything recorded so far.
+    pub(super) fn snapshot(&self) -> HashMap<PathBuf, Vec<String>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
+/// A name set shared by every clone of one `ResolveState`, same rule as `SharedDeclarationFacts`.
+#[derive(Clone, Default)]
+pub(super) struct SharedNameSet(std::sync::Arc<std::sync::Mutex<HashSet<String>>>);
+
+impl SharedNameSet {
+    /// Adds names bound through the function-variant mechanism.
+    pub(super) fn extend(&self, names: impl IntoIterator<Item = String>) {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .extend(names);
+    }
+
+    /// Returns a copy of everything recorded so far.
+    pub(super) fn snapshot(&self) -> HashSet<String> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 }
 

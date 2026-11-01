@@ -1399,3 +1399,49 @@ fn inliner_skips_mixed_direct_return_slot_paths() {
     assert!(c.instructions.iter().any(|i| i.op == Op::Call));
     assert!(validate_module(&module).is_ok());
 }
+
+/// Builds a const-returning function `name` with no parameters.
+fn make_const_function(name: &str, value: i64) -> Function {
+    let mut f = Function::new(name.to_string(), IrType::I64, PhpType::Int);
+    let mut b = Builder::new(&mut f);
+    let entry = b.create_named_block("entry", vec![]);
+    b.set_entry(entry);
+    b.position_at_end(entry);
+    let res = b.emit_const_i64(value);
+    b.terminate(Terminator::Return { value: Some(res) });
+    f
+}
+
+/// A user `function main()` and the entry function share the name `main`; a call to `main()`
+/// names the user function. The inliner's name table kept the LAST function carrying the name, the
+/// entry, so `f()` would have spliced in the entry's body (here: `return 7`) instead of 42.
+#[test]
+fn inliner_resolves_main_to_the_user_function_not_the_entry() {
+    let mut module = Module::new(Target::new(Platform::MacOS, Arch::AArch64));
+    module.add_function(make_const_function("main", 42));
+    let mut caller = Function::new("f".to_string(), IrType::I64, PhpType::Int);
+    {
+        let mut b = Builder::new(&mut caller);
+        let entry = b.create_named_block("entry", vec![]);
+        b.set_entry(entry);
+        b.position_at_end(entry);
+        let data_id = module.data.intern_function_name("main");
+        let call_res = b
+            .emit(Op::Call, vec![], Some(Immediate::Data(data_id)), IrType::I64, PhpType::Int, Ownership::NonHeap)
+            .unwrap();
+        b.terminate(Terminator::Return { value: Some(call_res) });
+    }
+    module.add_function(caller);
+    let mut entry = make_const_function("main", 7);
+    entry.flags.is_main = true;
+    module.add_function(entry);
+
+    assert!(inline_small_functions(&mut module));
+    validate_module(&module).unwrap();
+    let caller = module.functions.iter().find(|f| f.name == "f").expect("caller present");
+    assert!(caller.instructions.iter().all(|i| !matches!(i.op, Op::Call | Op::FunctionVariantCall)));
+    assert!(caller.instructions.iter().any(|i| matches!(i.immediate, Some(Immediate::I64(42)))),
+        "f() inlines the user main");
+    assert!(!caller.instructions.iter().any(|i| matches!(i.immediate, Some(Immediate::I64(7)))),
+        "f() never inlines the entry body");
+}

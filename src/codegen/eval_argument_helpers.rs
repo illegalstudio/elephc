@@ -9,9 +9,10 @@
 //! - Reads allocate nothing and retain nothing; the enclosing argument array roots every borrow.
 //! - Shape and bounds guards reject malformed bridge inputs before dereferencing an element.
 //! - Consuming intrinsic helpers acquire separate owners after argument staging succeeds.
+//! - Callable arguments are the exception to "retain nothing": the cast builds an owned
+//!   descriptor, which the bridge parks in a zeroed owner slot and releases after the call.
 
 use crate::codegen::{abi, emit::Emitter, platform::Arch};
-use crate::codegen_support::sentinels::emit_branch_if_null_container;
 use crate::intrinsics::IntrinsicCall;
 use crate::types::PhpType;
 
@@ -81,6 +82,102 @@ pub(super) fn emit_borrowed_string_arg(
     true
 }
 
+/// By-value `callable` parameters whose staged descriptor the bridge owns across the call.
+///
+/// The eval callable cast hands back an OWNED descriptor on every path: a runtime adapter
+/// around the eval callback, a receiver-bound descriptor for `[$obj, 'm']` or an invokable
+/// object, a retained AOT descriptor, or a static descriptor whose release is a no-op. A native
+/// callee borrows its `callable` arguments (an AOT caller releases the descriptor after the
+/// call), so the bridge must release each one once the call has returned or thrown. It did
+/// not: every `new C(fn …)` / `$o->m(fn …)` from eval leaked the adapter, the retained eval
+/// closure and its context (5 blocks; 3 for a string callable like `"is_int"`).
+pub(super) fn callable_arg_owner_params(params: &[PhpType], ref_params: &[bool]) -> Vec<usize> {
+    params
+        .iter()
+        .enumerate()
+        .filter(|(index, ty)| {
+            !ref_params.get(*index).copied().unwrap_or(false)
+                && ty.codegen_repr() == PhpType::Callable
+        })
+        .map(|(index, _)| index)
+        .collect()
+}
+
+/// Reserves one zeroed temporary-stack slot per owned callable argument descriptor.
+///
+/// Reserve BEFORE the by-reference cells and argument temporaries are pushed, so that once the
+/// call has popped those, the owner slots are the top of the temporary stack again.
+pub(super) fn emit_reserve_callable_arg_owners(emitter: &mut Emitter, count: usize) {
+    if count == 0 {
+        return;
+    }
+    abi::emit_reserve_temporary_stack(emitter, count * 16);
+    for index in 0..count {
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction(&format!("str xzr, [sp, #{}]", index * 16)); // start with no owned callable descriptor in this slot
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", index * 16)); // start with no owned callable descriptor in this slot
+            }
+        }
+    }
+}
+
+/// Records the cast callable descriptor (in the integer result register) in its owner slot.
+///
+/// `pushed_bytes` is everything pushed above the owner slots so far: the by-reference cells
+/// and the argument temporaries staged before this one.
+pub(super) fn emit_record_callable_arg_owner(
+    emitter: &mut Emitter,
+    owner_index: usize,
+    pushed_bytes: usize,
+) {
+    let result = abi::int_result_reg(emitter);
+    abi::emit_store_to_sp(emitter, result, pushed_bytes + owner_index * 16);
+}
+
+/// Records the descriptor for parameter `param_index` when the bridge owns it.
+pub(super) fn emit_record_callable_arg_owner_for_param(
+    emitter: &mut Emitter,
+    owners: &[usize],
+    param_index: usize,
+    pushed_bytes: usize,
+) {
+    if let Some(owner_index) = owners.iter().position(|index| *index == param_index) {
+        emit_record_callable_arg_owner(emitter, owner_index, pushed_bytes);
+    }
+}
+
+/// Releases every owned callable argument descriptor and pops the owner slots.
+///
+/// Runs on the normal and the throwing exit alike, after the by-reference cells are gone, so
+/// the owner slots are on top. `preserve_result` keeps a boxed method result across the calls.
+pub(super) fn emit_release_callable_arg_owners(
+    emitter: &mut Emitter,
+    count: usize,
+    preserve_result: bool,
+) {
+    if count == 0 {
+        return;
+    }
+    let result = abi::int_result_reg(emitter);
+    let base = if preserve_result {
+        abi::emit_push_reg(emitter, result);
+        16
+    } else {
+        0
+    };
+    for index in 0..count {
+        abi::emit_load_temporary_stack_slot(emitter, result, base + index * 16);
+        abi::emit_call_label(emitter, "__rt_callable_descriptor_release");
+    }
+    if preserve_result {
+        abi::emit_pop_reg(emitter, result);
+    }
+    abi::emit_release_temporary_stack(emitter, count * 16);
+}
+
 /// Transfers independent owners for staged boxed arguments consumed by an intrinsic helper.
 /// Call after fallible preparation and boundary installation, before materializing ABI registers.
 pub(super) fn emit_consumed_intrinsic_arguments(
@@ -112,44 +209,22 @@ pub(super) fn emit_borrowed_argument(
     result_frame_offset: usize,
     fail_label: &str,
 ) {
+    // The validation itself is the shared `__rt_eval_borrow_arg`: inline, it was 22
+    // instructions per parameter of every bridged method.
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction(&format!("ldr x0, [x29, #-{array_frame_offset}]")); // load the caller-owned argument array box
-            emitter.instruction(&format!("cbz x0, {fail_label}"));              // reject a missing argument array
-            emitter.instruction("ldr x9, [x0]");                                // read the normalized argument container tag
-            emitter.instruction("cmp x9, #4");                                  // normalized call arguments use indexed storage
-            emitter.instruction(&format!("b.ne {fail_label}"));                 // do not interpret hash or scalar payloads as indexed storage
-            emitter.instruction("ldr x0, [x0, #8]");                            // borrow the indexed payload rooted by the argument box
-            emit_branch_if_null_container(emitter, "x0", "x9", fail_label);
-            emitter.instruction("ldr x9, [x0, #-8]");                           // read the indexed element representation
-            emitter.instruction("ubfx x9, x9, #8, #7");                         // isolate the element value tag
-            emitter.instruction("cmp x9, #7");                                  // a borrowed argument must already be a boxed Mixed cell
-            emitter.instruction(&format!("b.ne {fail_label}"));                 // reject raw scalar element storage
-            abi::emit_load_int_immediate(emitter, "x10", index as i64);
-            emitter.instruction("ldr x9, [x0]");                                // read the number of bound arguments
-            emitter.instruction("cmp x10, x9");                                 // check the requested argument before loading its slot
-            emitter.instruction(&format!("b.hs {fail_label}"));                 // reject a missing argument without reading past the array
-            emitter.instruction("add x0, x0, #24");                             // address the packed Mixed pointer slots
-            emitter.instruction("ldr x0, [x0, x10, lsl #3]");                   // borrow the argument cell without incrementing its refcount
+            abi::emit_load_int_immediate(emitter, "x1", index as i64);
+            abi::emit_call_label(emitter, "__rt_eval_borrow_arg");
+            emitter.instruction(&format!("cbz x1, {fail_label}"));              // reject a missing or malformed argument
             emitter.instruction(&format!("str x0, [x29, #-{result_frame_offset}]")); // keep the borrow available for coercion and reference writeback
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {array_frame_offset}]")); // load the caller-owned argument array box
-            emitter.instruction("test rax, rax");                               // check whether an argument array exists
-            emitter.instruction(&format!("jz {fail_label}"));                   // reject a missing argument array
-            emitter.instruction("cmp QWORD PTR [rax], 4");                      // normalized call arguments use indexed storage
-            emitter.instruction(&format!("jne {fail_label}"));                  // do not interpret hash or scalar payloads as indexed storage
-            emitter.instruction("mov rax, QWORD PTR [rax + 8]");                // borrow the indexed payload rooted by the argument box
-            emit_branch_if_null_container(emitter, "rax", "r10", fail_label);
-            emitter.instruction("mov r10, QWORD PTR [rax - 8]");                // read the indexed element representation
-            emitter.instruction("shr r10, 8");                                  // shift the element value tag to the low bits
-            emitter.instruction("and r10, 127");                                // discard heap flags outside the value tag
-            emitter.instruction("cmp r10, 7");                                  // a borrowed argument must already be a boxed Mixed cell
-            emitter.instruction(&format!("jne {fail_label}"));                  // reject raw scalar element storage
-            abi::emit_load_int_immediate(emitter, "r11", index as i64);
-            emitter.instruction("cmp r11, QWORD PTR [rax]");                    // check the argument index against the logical length
-            emitter.instruction(&format!("jae {fail_label}"));                  // reject a missing argument without reading past the array
-            emitter.instruction("mov rax, QWORD PTR [rax + r11 * 8 + 24]");     // borrow the argument cell without incrementing its refcount
+            abi::emit_load_int_immediate(emitter, "rdi", index as i64);
+            abi::emit_call_label(emitter, "__rt_eval_borrow_arg");
+            emitter.instruction("test rdi, rdi");                               // did the shared borrow succeed?
+            emitter.instruction(&format!("jz {fail_label}"));                   // reject a missing or malformed argument
             emitter.instruction(&format!("mov QWORD PTR [rbp - {result_frame_offset}], rax")); // preserve the borrow for coercion and reference writeback
         }
     }
@@ -242,15 +317,12 @@ mod tests {
             assert!(!asm.contains("__elephc_eval_value_int"), "{name}");
             assert!(!asm.contains("__elephc_eval_value_array_get"), "{name}");
             assert!(!asm.contains("incref"), "{name}");
+            assert!(asm.contains("__rt_eval_borrow_arg"), "{name}");
             if target.arch == Arch::AArch64 {
-                assert!(asm.contains("cmp x9, #4"), "{name}");
-                assert!(asm.contains("cmp x9, #7"), "{name}");
-                assert!(asm.contains("b.hs invalid_arguments"), "{name}");
+                assert!(asm.contains("cbz x1, invalid_arguments"), "{name}");
                 assert!(asm.contains("str x0, [x29, #-40]"), "{name}");
             } else {
-                assert!(asm.contains("cmp QWORD PTR [rax], 4"), "{name}");
-                assert!(asm.contains("cmp r10, 7"), "{name}");
-                assert!(asm.contains("jae invalid_arguments"), "{name}");
+                assert!(asm.contains("jz invalid_arguments"), "{name}");
                 assert!(asm.contains("mov QWORD PTR [rbp - 40], rax"), "{name}");
             }
         }

@@ -682,6 +682,16 @@ return function_exists("crc32");"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 /// Verifies eval `hash_algos()` returns supported hash names through callable dispatch too.
+///
+/// The count is elephc's own supported SUBSET of PHP's list, not PHP's count: `php -n` 8.5.6
+/// reports 60 algorithms and every one of elephc's 29 is among them. The expectation was 28 and
+/// went stale when `xxh128` was appended, which is the whole failure — the four names this reads
+/// by index are unaffected.
+///
+/// The order divergence this docblock used to record is FIXED: all three lists now follow php's
+/// relative order. None of the indices asserted below ever sat at a transposed position, which is
+/// exactly why the fix needed its own test -- `hash_algos_are_in_phps_own_order` reads the
+/// positions that actually moved.
 #[test]
 fn execute_program_dispatches_hash_algos_builtin() {
     let program = parse_fragment(
@@ -701,8 +711,41 @@ return count($algos);"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "28:md2:sha256:crc:whirlpool:joaat:exists");
-    assert_eq!(values.get(result), FakeValue::Int(28));
+    assert_eq!(values.output, "29:md2:sha256:crc:whirlpool:joaat:exists");
+    assert_eq!(values.get(result), FakeValue::Int(29));
+}
+
+/// Verifies the two places elephc's `hash_algos()` order used to disagree with php's.
+///
+/// The first slice is `php -n` 8.5.6's own output for the same offsets, verbatim: every name up
+/// to `sha3-224` is one elephc supports, so the indices line up exactly. php orders
+/// `sha512/224, sha512/256, sha512`; elephc had `sha512` before its truncations.
+///
+/// The second slice is elephc's supported SUBSET, in php's relative order. It cannot be php's
+/// output at those offsets, because php has tiger, snefru and gost between `whirlpool` and
+/// `adler32` and elephc advertises none of them -- but php does order `adler32, crc32, crc32b,
+/// crc32c`, and elephc had `adler32` after the CRCs.
+///
+/// These are the positions that actually moved. The older test above reads 0, 5, 18 and 27,
+/// every one of which holds the same name before and after the fix, so it could not have failed
+/// either way.
+#[test]
+fn hash_algos_are_in_phps_own_order() {
+    let program = parse_fragment(
+        br#"$a = hash_algos();
+echo implode(",", array_slice($a, 6, 5)), ";";
+echo implode(",", array_slice($a, 18, 5));"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "sha384,sha512/224,sha512/256,sha512,sha3-224;whirlpool,adler32,crc32,crc32b,crc32c",
+    );
 }
 /// Verifies eval one-shot hash digest builtins use the crypto bridge and dispatch dynamically.
 #[test]

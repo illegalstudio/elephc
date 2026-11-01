@@ -157,3 +157,44 @@ fn generate_runtime_profile(heap_size: usize, target: Target, features: RuntimeF
     }
     output
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The labels the runtime defines more than once, in definition order.
+    fn duplicate_labels(asm: &str) -> Vec<String> {
+        let mut seen = std::collections::HashSet::new();
+        let mut duplicates = Vec::new();
+        for line in asm.lines() {
+            let Some(label) = line.trim().strip_suffix(':') else {
+                continue;
+            };
+            if label.is_empty()
+                || label.bytes().all(|byte| byte.is_ascii_digit())
+                || label.contains(char::is_whitespace)
+            {
+                continue;
+            }
+            if !seen.insert(label.to_string()) {
+                duplicates.push(label.to_string());
+            }
+        }
+        duplicates
+    }
+
+    /// The runtime defines each label once, for the leanest and the fullest feature sets on both
+    /// targets. Two helper families providing one routine (a merge keeping both implementations)
+    /// is an assembler error every compile hits; this names every such label at once.
+    #[test]
+    fn runtime_defines_each_label_once() {
+        for target in ["macos-aarch64", "linux-x86_64"] {
+            let target = Target::parse(target).expect("target");
+            for (name, features) in [("none", RuntimeFeatures::none()), ("all", RuntimeFeatures::all())] {
+                let asm = generate_runtime_with_features(8_388_608, target, features);
+                let duplicates = duplicate_labels(&asm);
+                assert!(duplicates.is_empty(), "{target:?} {name}: {duplicates:?}");
+            }
+        }
+    }
+}

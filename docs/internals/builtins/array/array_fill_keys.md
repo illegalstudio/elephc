@@ -2,7 +2,7 @@
 title: "array_fill_keys() - internals"
 description: "Compiler internals for array_fill_keys(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 11
+  order: 14
 ---
 
 ## `array_fill_keys()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_fill_keys.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_fill_keys.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -25,11 +25,13 @@ mod property_hook_analysis;
 mod traits;
 
 use super::cursor::*;
+use super::expressions::is_assignment_target;
 use super::state::*;
 use crate::errors::EvalParseError;
 use crate::eval_ir::{
     EvalArrayElement, EvalAttribute, EvalAttributeArg, EvalBinOp, EvalCallArg, EvalCatch, EvalClass,
     EvalClassConstant, EvalClassMethod, EvalClassProperty, EvalConst, EvalEnum,
+    EvalDestructureSlot, EvalDestructureTarget,
     EvalEnumBackingType, EvalEnumCase, EvalExpr, EvalInstanceOfTarget, EvalInterface,
     EvalInterfaceMethod, EvalInterfaceProperty, EvalParameterType, EvalParameterTypeVariant,
     EvalSourceLocation, EvalStmt, EvalSwitchCase, EvalTrait, EvalTraitAdaptation, EvalUnaryOp,
@@ -74,14 +76,77 @@ pub(super) enum EvalTypePosition {
 }
 
 impl Parser {
-    /// Parses one source statement, expanding `unset($a, $b)` to one statement per variable.
+    /// Parses one source statement, prefixing its source line when a file is being parsed.
+    ///
+    /// The single funnel every statement passes through -- top level, loop and branch bodies,
+    /// function and method bodies -- so one marker here reaches every statement list the
+    /// interpreter later walks, including the ones inside a declaration.
+    ///
+    /// A marker is skipped when the line has not moved, which is what keeps a `for (…) { … }`
+    /// written on one line from emitting one marker per clause.
     pub(super) fn parse_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        if !self.track_source_lines {
+            return self.parse_stmt_at_source_line();
+        }
+        let line = self.current_source_line();
+        let previous = self.last_source_line;
+        self.last_source_line = line;
+        let parsed = match self.parse_stmt_at_source_line() {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                self.last_source_line = previous;
+                return Err(error);
+            }
+        };
+        if parsed.is_empty() || line == previous {
+            return Ok(parsed);
+        }
+        let mut marked = Vec::with_capacity(parsed.len() + 1);
+        marked.push(EvalStmt::SourceLine(line));
+        marked.extend(parsed);
+        Ok(marked)
+    }
+
+    /// Returns the source line of the token the next statement starts at.
+    fn current_source_line(&self) -> i64 {
+        self.token_lines.get(self.pos).copied().unwrap_or(1)
+    }
+
+    /// Parses one source statement, expanding `unset($a, $b)` to one statement per variable.
+    fn parse_stmt_at_source_line(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        if let TokenKind::DocComment(doc_comment) = self.current() {
+            let doc_comment = doc_comment.clone();
+            self.advance();
+            return if matches!(self.current(), TokenKind::AttributeStart) {
+                self.parse_attributed_stmt_with_doc_comment(Some(doc_comment))
+            } else if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "interface")) {
+                // An interface's comment is reflected too (`getDocComment()`); it used to be
+                // consumed here and dropped.
+                self.parse_interface_decl_stmt_with_attributes_and_doc_comment(
+                    Vec::new(),
+                    Some(doc_comment),
+                )
+            } else if starts_doc_commented_declaration(self.current()) {
+                self.parse_class_decl_stmt_with_doc_comment(Some(doc_comment))
+            } else {
+                self.parse_stmt_at_source_line()
+            };
+        }
         if matches!(self.current(), TokenKind::AttributeStart) {
             return self.parse_attributed_stmt();
         }
-        // The empty statement. PHP accepts a lone `;` wherever a statement may stand
-        // (`echo 1;;`, `while (f());`), and a `?>` lexes as one: `echo 1; ?>X` is `echo 1; ;
-        // echo "X";`. It was refused here, so every eval'd close tag after a `;` failed.
+        if let TokenKind::InlineHtml(html) = self.current() {
+            let html = html.clone();
+            self.advance();
+            return Ok(vec![EvalStmt::Echo(EvalExpr::Const(
+                match String::from_utf8(html) {
+                    Ok(text) => EvalConst::String(text),
+                    Err(error) => EvalConst::Bytes(error.into_bytes()),
+                },
+            ))]);
+        }
+        // PHP's `;` is a statement of its own, and a closing tag emits one for the statement it
+        // terminates, so a `<?php } ?>` block ends with a semicolon that closes nothing.
         if matches!(self.current(), TokenKind::Semicolon) {
             self.advance();
             return Ok(Vec::new());
@@ -89,13 +154,26 @@ impl Parser {
         match self.current() {
             TokenKind::Ident(name) if ident_eq(name, "break") => {
                 self.advance();
-                self.expect_semicolon()?;
-                Ok(vec![EvalStmt::Break])
+                Ok(vec![EvalStmt::Break(self.parse_loop_control_level()?)])
             }
             TokenKind::Ident(name) if ident_eq(name, "continue") => {
                 self.advance();
+                Ok(vec![EvalStmt::Continue(self.parse_loop_control_level()?)])
+            }
+            TokenKind::Ident(name) if ident_eq(name, "goto") => {
+                self.advance();
+                let TokenKind::Ident(label) = self.current() else {
+                    return Err(EvalParseError::UnexpectedToken);
+                };
+                let label = label.clone();
+                self.advance();
                 self.expect_semicolon()?;
-                Ok(vec![EvalStmt::Continue])
+                Ok(vec![EvalStmt::Goto(label)])
+            }
+            TokenKind::Ident(name)
+                if ident_eq(name, "declare") && matches!(self.peek(), TokenKind::LParen) =>
+            {
+                self.parse_declare_stmt()
             }
             TokenKind::Ident(name) if ident_eq(name, "do") => self.parse_do_while_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "echo") => {
@@ -119,6 +197,7 @@ impl Parser {
             TokenKind::Ident(name) if ident_eq(name, "class") => self.parse_class_decl_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "enum") => self.parse_enum_decl_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "function") => self.parse_function_decl_stmt(),
+            TokenKind::Ident(name) if ident_eq(name, "declare") => self.parse_declare_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "global") => self.parse_global_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "if") => self.parse_if_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "interface") => {
@@ -137,6 +216,7 @@ impl Parser {
                 self.expect_semicolon()?;
                 Ok(vec![EvalStmt::Return(Some(expr))])
             }
+            TokenKind::Ident(name) if ident_eq(name, "yield") => self.parse_yield_stmt(),
             TokenKind::Ident(name)
                 if ident_eq(name, "static") && self.current_starts_static_property_assignment() =>
             {
@@ -159,6 +239,12 @@ impl Parser {
                 Err(EvalParseError::UnsupportedConstruct)
             }
             TokenKind::Ident(name) if ident_eq(name, "while") => self.parse_while_stmt(),
+            TokenKind::Ident(name) if matches!(self.peek(), TokenKind::Colon) => {
+                let label = name.clone();
+                self.advance();
+                self.advance();
+                Ok(vec![EvalStmt::Label(label)])
+            }
             TokenKind::Ident(name) if is_unsupported_statement_keyword(name) => {
                 Err(EvalParseError::UnsupportedConstruct)
             }
@@ -198,10 +284,19 @@ impl Parser {
             TokenKind::PlusPlus | TokenKind::MinusMinus => {
                 self.parse_prefix_inc_dec_stmt(true)
             }
+            TokenKind::LBracket if self.current_starts_array_destructure_assignment() => {
+                self.parse_array_destructure_stmt()
+            }
+            TokenKind::Ident(_)
+                if self.current_starts_list_destructure_pattern()
+                    && self.current_starts_array_destructure_assignment() =>
+            {
+                self.parse_array_destructure_stmt()
+            }
             TokenKind::DollarIdent(_) if matches!(self.peek(), TokenKind::Arrow) => {
                 self.parse_property_stmt(true)
             }
-            TokenKind::DollarIdent(name) if matches!(self.peek(), TokenKind::LBracket) => {
+            TokenKind::DollarIdent(name) if self.current_starts_array_set_stmt() => {
                 self.parse_array_set_stmt(name.clone())
             }
             TokenKind::DollarIdent(name)
@@ -238,8 +333,45 @@ impl Parser {
         }
     }
 
+    /// Parses PHP's optional positive `break`/`continue` nesting level.
+    fn parse_loop_control_level(&mut self) -> Result<u32, EvalParseError> {
+        let level = match self.current() {
+            TokenKind::Int(level) => {
+                if *level <= 0 || *level > u32::MAX as i64 {
+                    return Err(EvalParseError::UnexpectedToken);
+                }
+                let level = *level as u32;
+                self.advance();
+                level
+            }
+            _ => 1,
+        };
+        self.expect_semicolon()?;
+        Ok(level)
+    }
+
+    /// Parses one statement whose expression begins with `yield`.
+    ///
+    /// The yield forms themselves are parsed by the expression grammar, so `yield 1;` and
+    /// `$a = yield 1;` produce the same marker through the same code and cannot drift apart.
+    /// This exists only because a statement beginning with the keyword needs its own dispatch
+    /// arm; it consumes the terminating semicolon the expression parser leaves behind.
+    fn parse_yield_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        let expr = self.parse_expr()?;
+        self.expect_semicolon()?;
+        Ok(vec![EvalStmt::Expr(expr)])
+    }
+
     /// Parses one declaration preceded by PHP attribute groups.
     pub(super) fn parse_attributed_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.parse_attributed_stmt_with_doc_comment(None)
+    }
+
+    /// Parses an attributed declaration that a doc comment may precede.
+    pub(super) fn parse_attributed_stmt_with_doc_comment(
+        &mut self,
+        doc_comment: Option<String>,
+    ) -> Result<Vec<EvalStmt>, EvalParseError> {
         let attributes = self.parse_attribute_groups()?;
         match self.current() {
             TokenKind::Ident(name)
@@ -248,13 +380,13 @@ impl Parser {
                     || ident_eq(name, "readonly")
                     || ident_eq(name, "class") =>
             {
-                self.parse_class_decl_stmt_with_attributes(attributes)
+                self.parse_class_decl_stmt_with_attributes_and_doc_comment(attributes, doc_comment)
             }
             TokenKind::Ident(name) if ident_eq(name, "enum") => {
                 self.parse_enum_decl_stmt_with_attributes(attributes)
             }
             TokenKind::Ident(name) if ident_eq(name, "interface") => {
-                self.parse_interface_decl_stmt_with_attributes(attributes)
+                self.parse_interface_decl_stmt_with_attributes_and_doc_comment(attributes, doc_comment)
             }
             TokenKind::Ident(name) if ident_eq(name, "trait") => {
                 self.parse_trait_decl_stmt_with_attributes(attributes)
@@ -281,7 +413,11 @@ impl Parser {
         Ok(attributes)
     }
 
-    /// Parses one attribute name and optional literal positional/named arguments.
+    /// Parses one attribute name and optional positional/named arguments.
+    ///
+    /// Literals are folded here; any other constant expression is kept for reflection to
+    /// evaluate. An argument unpacking (`...$args`) or a non-constant expression (a variable, a
+    /// call) leaves the arguments unsupported.
     pub(super) fn parse_attribute(&mut self) -> Result<EvalAttribute, EvalParseError> {
         let name = self.parse_qualified_name()?;
         let name = self.resolve_class_name(name);
@@ -294,7 +430,18 @@ impl Parser {
                     if supported {
                         if call_arg.is_spread() {
                             supported = false;
-                        } else if let Some(arg) = eval_attribute_arg_from_expr(call_arg.value()) {
+                        } else if let Some(arg) =
+                            eval_attribute_arg_from_expr(call_arg.value()).or_else(|| {
+                                // A constant expression the parser cannot fold (a class constant,
+                                // a global constant) is kept as an expression for reflection to
+                                // evaluate, instead of dropping every argument of the attribute:
+                                // Symfony's `#[Route(requirements: ['page' =>
+                                // Requirement::POSITIVE_INT])]` made reflecting the controller
+                                // method fatal.
+                                eval_attribute_expr_is_constant(call_arg.value())
+                                    .then(|| EvalAttributeArg::Expr(Box::new(call_arg.value().clone())))
+                            })
+                        {
                             args.push(match call_arg.name() {
                                 Some(name) => EvalAttributeArg::Named {
                                     name: name.to_string(),
@@ -310,6 +457,12 @@ impl Parser {
                         break;
                     }
                     self.expect(TokenKind::Comma)?;
+                    // PHP's attribute argument list is an ordinary argument list, so a trailing
+                    // comma before the closing parenthesis is legal and common in a multi-line
+                    // `#[AsCommand(name: …, description: …,)]`.
+                    if self.consume(TokenKind::RParen) {
+                        break;
+                    }
                 }
             }
             supported.then_some(args)
@@ -357,7 +510,14 @@ impl Parser {
     /// Returns true when the current tokens form `++Class::$property` or `--Class::$property`.
     pub(super) fn current_starts_prefixed_static_property_inc_dec(&self) -> bool {
         matches!(self.current(), TokenKind::PlusPlus | TokenKind::MinusMinus)
-            && self.static_property_tokens_end(self.pos + 1).is_some()
+            && self
+                .static_property_tokens_end(self.pos + 1)
+                // `++self::$t["s"];` mutates an ELEMENT, not the property, and
+                // `EvalStmt::StaticPropertyIncDec` cannot say so. Declining here sends it to the
+                // general prefix path, which reads the whole lvalue and lowers a
+                // read-modify-write; taking it would consume `self::$t` and then demand a
+                // semicolon it cannot find.
+                .is_some_and(|end| !matches!(self.tokens.get(end), Some(TokenKind::LBracket)))
     }
 
     /// Returns true when the current tokens form `++$class::$property` or `--$class::$property`.
@@ -366,6 +526,8 @@ impl Parser {
             && matches!(self.tokens.get(self.pos + 1), Some(TokenKind::DollarIdent(_)))
             && matches!(self.tokens.get(self.pos + 2), Some(TokenKind::DoubleColon))
             && matches!(self.tokens.get(self.pos + 3), Some(TokenKind::DollarIdent(_)))
+            // Same reason as the literal-class form above: an indexed target is an element write.
+            && !matches!(self.tokens.get(self.pos + 4), Some(TokenKind::LBracket))
     }
 
     /// Returns true when the current tokens form `++$object->property` or `--$object->property`.
@@ -410,6 +572,86 @@ impl Parser {
                             .tokens
                             .get(cursor + 1)
                             .is_some_and(|token| assignment_op(token).is_some());
+                    }
+                }
+                Some(TokenKind::Eof) | None => return false,
+                _ => {}
+            }
+            cursor += 1;
+        }
+    }
+
+    /// Returns whether the current variable begins an indexed or nested array write statement.
+    fn current_starts_array_set_stmt(&self) -> bool {
+        let mut cursor = self.pos + 1;
+        loop {
+            if !matches!(self.tokens.get(cursor), Some(TokenKind::LBracket)) {
+                return false;
+            }
+            let mut depth = 0usize;
+            loop {
+                match self.tokens.get(cursor) {
+                    Some(TokenKind::LBracket) => depth += 1,
+                    Some(TokenKind::RBracket) => {
+                        depth = depth.saturating_sub(1);
+                        if depth == 0 {
+                            cursor += 1;
+                            break;
+                        }
+                    }
+                    Some(TokenKind::Eof) | None => return false,
+                    _ => {}
+                }
+                cursor += 1;
+            }
+            if matches!(self.tokens.get(cursor), Some(TokenKind::LBracket)) {
+                continue;
+            }
+            return self
+                .tokens
+                .get(cursor)
+                .is_some_and(|token| assignment_op(token).is_some())
+                || matches!(
+                    self.tokens.get(cursor),
+                    Some(TokenKind::QuestionQuestionEqual)
+                );
+        }
+    }
+
+    /// Returns true when the current bracketed target list is followed by `=`.
+    pub(in crate::parser) fn current_starts_array_destructure_assignment(&self) -> bool {
+        if self.current_starts_list_destructure_pattern() {
+            return self.destructure_pattern_is_assigned(
+                self.pos + 1,
+                &TokenKind::LParen,
+                &TokenKind::RParen,
+            );
+        }
+        self.destructure_pattern_is_assigned(self.pos, &TokenKind::LBracket, &TokenKind::RBracket)
+    }
+
+    /// Returns whether the tokens at `pos` open PHP's legacy `list(...)` destructuring spelling.
+    pub(in crate::parser) fn current_starts_list_destructure_pattern(&self) -> bool {
+        matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "list"))
+            && matches!(self.peek(), TokenKind::LParen)
+    }
+
+    /// Returns whether a delimited pattern starting at `pos` is followed by `=`.
+    fn destructure_pattern_is_assigned(
+        &self,
+        pos: usize,
+        open: &TokenKind,
+        close: &TokenKind,
+    ) -> bool {
+        let mut cursor = pos;
+        let mut depth = 0usize;
+        loop {
+            match self.tokens.get(cursor) {
+                Some(token) if token == open => depth += 1,
+                Some(token) if token == close => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return matches!(self.tokens.get(cursor + 1), Some(TokenKind::Equal));
                     }
                 }
                 Some(TokenKind::Eof) | None => return false,

@@ -59,6 +59,7 @@ fn stmt_uses_this(stmt: &Stmt) -> bool {
             expr_uses_this(target) || expr_uses_this(value)
         }
         StmtKind::PropertyAssign { object, value, .. }
+        | StmtKind::PropertyRefAssign { object, source: value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_uses_this(object) || expr_uses_this(value)
         }
@@ -72,6 +73,9 @@ fn stmt_uses_this(stmt: &Stmt) -> bool {
         | StmtKind::StaticPropertyArrayPush { value, .. } => expr_uses_this(value),
         StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             expr_uses_this(index) || expr_uses_this(value)
+        }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            expr_uses_this(index) || expr_uses_this(source)
         }
         StmtKind::If {
             condition,
@@ -121,7 +125,24 @@ fn stmt_uses_this(stmt: &Stmt) -> bool {
                 || catches.iter().any(|catch| body_uses_this(&catch.body))
                 || finally_body.as_deref().is_some_and(body_uses_this)
         }
-        StmtKind::NamespaceBlock { body, .. } => body_uses_this(body),
+        StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::Synthetic(body)
+        | StmtKind::IncludeOnceGuard { body, .. } => body_uses_this(body),
+        StmtKind::IfDef {
+            then_body,
+            else_body,
+            ..
+        } => body_uses_this(then_body) || else_body.as_deref().is_some_and(body_uses_this),
+        StmtKind::DynamicStaticPropertyWrite {
+            property,
+            index,
+            value,
+            ..
+        } => {
+            expr_uses_this(property)
+                || index.as_ref().is_some_and(expr_uses_this)
+                || expr_uses_this(value)
+        }
         StmtKind::FunctionDecl { .. }
         | StmtKind::ClassDecl { .. }
         | StmtKind::TraitDecl { .. }
@@ -199,6 +220,32 @@ fn expr_uses_this(expr: &Expr) -> bool {
         ExprKind::BufferNew { len, .. } => expr_uses_this(len),
         ExprKind::FirstClassCallable(target) => callable_target_uses_this(target),
         ExprKind::Closure { body, .. } => body_uses_this(body),
+        // Every other form that carries a sub-expression. Falling through to `false` for these
+        // left a generator closure's `yield $this->n` uncaptured, so its body read a null `$this`
+        // -- the shape symfony/console's `Table::buildTableRows()` returns its rows through.
+        ExprKind::Yield { key, value } => {
+            key.as_deref().is_some_and(expr_uses_this) || value.as_deref().is_some_and(expr_uses_this)
+        }
+        ExprKind::YieldFrom(inner)
+        | ExprKind::Clone(inner)
+        | ExprKind::ArrayReference(inner) => expr_uses_this(inner),
+        ExprKind::IncludeValue { path, .. } => expr_uses_this(path),
+        ExprKind::Pipe { value, callable } => expr_uses_this(value) || expr_uses_this(callable),
+        ExprKind::Assignment { target, value, prelude, .. } => {
+            expr_uses_this(target) || expr_uses_this(value) || body_uses_this(prelude)
+        }
+        ExprKind::NewDynamic { name_expr, args } => {
+            expr_uses_this(name_expr) || args.iter().any(expr_uses_this)
+        }
+        ExprKind::NewDynamicObject { class_name, args, .. } => {
+            expr_uses_this(class_name) || args.iter().any(expr_uses_this)
+        }
+        ExprKind::NullsafeDynamicMethodCall { object, method, args } => {
+            expr_uses_this(object) || expr_uses_this(method) || args.iter().any(expr_uses_this)
+        }
+        ExprKind::ObjectClassName { object } => expr_uses_this(object),
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => expr_uses_this(property),
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => expr_uses_this(receiver),
         _ => false,
     }
 }
@@ -245,6 +292,7 @@ fn stmt_must_not_use_this(stmt: &Stmt, span: Span) -> Result<(), CompileError> {
             expr_must_not_use_this(value, span)
         }
         StmtKind::PropertyAssign { object, value, .. }
+        | StmtKind::PropertyRefAssign { object, source: value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_must_not_use_this(object, span)?;
             expr_must_not_use_this(value, span)
@@ -264,6 +312,10 @@ fn stmt_must_not_use_this(stmt: &Stmt, span: Span) -> Result<(), CompileError> {
         StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             expr_must_not_use_this(index, span)?;
             expr_must_not_use_this(value, span)
+        }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            expr_must_not_use_this(index, span)?;
+            expr_must_not_use_this(source, span)
         }
         StmtKind::If {
             condition,

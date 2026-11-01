@@ -19,6 +19,8 @@ pub struct EvalInterface {
     constants: Vec<EvalClassConstant>,
     properties: Vec<EvalInterfaceProperty>,
     methods: Vec<EvalInterfaceMethod>,
+    /// The `/** ... */` block written before the declaration, for `getDocComment()`.
+    doc_comment: Option<String>,
 }
 
 impl PartialEq for EvalInterface {
@@ -69,6 +71,7 @@ impl EvalInterface {
             constants,
             properties,
             methods,
+            doc_comment: None,
         }
     }
 
@@ -88,6 +91,17 @@ impl EvalInterface {
     pub fn with_attributes(mut self, attributes: Vec<EvalAttribute>) -> Self {
         self.attributes = attributes;
         self
+    }
+
+    /// Returns a copy of this interface with its declaration doc comment attached.
+    pub fn with_doc_comment_option(mut self, doc_comment: Option<String>) -> Self {
+        self.doc_comment = doc_comment;
+        self
+    }
+
+    /// Returns the doc comment written before this interface's declaration, when present.
+    pub fn doc_comment(&self) -> Option<&str> {
+        self.doc_comment.as_deref()
     }
 
     /// Returns the original source spelling of this eval-declared interface name.
@@ -295,6 +309,8 @@ pub struct EvalInterfaceMethod {
     parameter_is_by_ref: Vec<bool>,
     parameter_is_variadic: Vec<bool>,
     return_type: Option<EvalParameterType>,
+    /// Whether the signature was declared `function &name()`, PHP's return-by-reference form.
+    returns_by_ref: bool,
 }
 
 impl PartialEq for EvalInterfaceMethod {
@@ -336,6 +352,7 @@ impl EvalInterfaceMethod {
             parameter_is_by_ref,
             parameter_is_variadic,
             return_type: None,
+            returns_by_ref: false,
         }
     }
 
@@ -401,6 +418,22 @@ impl EvalInterfaceMethod {
     pub fn with_return_type(mut self, return_type: Option<EvalParameterType>) -> Self {
         self.return_type = return_type;
         self
+    }
+
+    /// Returns a copy of this interface method marked as returning by reference.
+    ///
+    /// PHP's `function &name()`. It is recorded rather than dropped because an implementation
+    /// may ADD the `&` its interface does not require but may never REMOVE one it does:
+    /// `php -n` 8.5.6 refuses that with `Declaration of Bad::get() must be compatible with
+    /// & Ref::get()`.
+    pub const fn with_returns_by_ref(mut self, returns_by_ref: bool) -> Self {
+        self.returns_by_ref = returns_by_ref;
+        self
+    }
+
+    /// Returns whether this interface method was declared to return by reference.
+    pub const fn returns_by_ref(&self) -> bool {
+        self.returns_by_ref
     }
 
     /// Returns the PHP-visible method name.

@@ -41,7 +41,9 @@ pub(in crate::interpreter) fn eval_mkdir_declared_call(
             );
         }
         [path, permissions] => (path, permissions, None),
-        [path, permissions, recursive] => (path, permissions, Some(recursive)),
+        [path, permissions, recursive] | [path, permissions, recursive, _] => {
+            (path, permissions, Some(recursive))
+        }
         _ => return Err(EvalStatus::RuntimeFatal),
     };
     let path = eval_expr(path, context, scope, values)?;
@@ -54,6 +56,10 @@ pub(in crate::interpreter) fn eval_mkdir_declared_call(
         }
         None => false,
     };
+    // A fourth `$context` argument is accepted and ignored, as php does for plain paths.
+    if let Some(stream_context) = args.get(3) {
+        let _ = eval_expr(stream_context, context, scope, values)?;
+    }
     eval_mkdir_with_options(path, mode, recursive, context, values)
 }
 
@@ -69,7 +75,7 @@ pub(in crate::interpreter) fn eval_mkdir_declared_values_result(
             let mode = eval_int_value(*permissions, values)?;
             eval_mkdir_with_options(*path, mode, false, context, values)
         }
-        [path, permissions, recursive] => {
+        [path, permissions, recursive] | [path, permissions, recursive, _] => {
             let mode = eval_int_value(*permissions, values)?;
             let recursive = eval_int_value(*recursive, values)? != 0;
             eval_mkdir_with_options(*path, mode, recursive, context, values)

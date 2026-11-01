@@ -123,7 +123,10 @@ exerciseNamedStringPair(namedStringPair(...));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// A caller-frame catch observes destruction of callback-builtin input temporaries before its body.
+/// A caller-frame catch observes the callback-builtin input temporaries only through the trace.
+///
+/// php records every frame's arguments in the exception's trace (`zend.exception_ignore_args=Off`, also what `php -n` runs with), so an argument stays alive until the caught exception is released. The callback receives the object as
+/// an argument, so it is destroyed by `unset($error)` after the catch body (verified against php 8.5).
 #[test]
 fn test_core_callback_builtin_operand_scope_retires_before_same_frame_catch() {
     let out = compile_and_run_with_heap_debug(r#"<?php
@@ -133,7 +136,7 @@ try { array_all([new ScopedCallbackInput()], throwScopedCallback(...)); }
 catch (RuntimeException $error) { echo $error->getMessage(); unset($error); }
 "#);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "released|callback", "{}", out.stderr);
+    assert_eq!(out.stdout, "callbackreleased|", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 

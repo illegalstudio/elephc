@@ -20,6 +20,9 @@ mod not_serializable;
 #[path = "serialize/private_slot_shadowing.rs"]
 mod private_slot_shadowing;
 
+#[path = "serialize/hydration.rs"]
+mod hydration;
+
 /// Verifies `serialize()` formats each scalar type exactly like PHP's wire format.
 #[test]
 fn test_serialize_scalars_match_php_wire_format() {
@@ -497,6 +500,102 @@ echo serialize(["k" => new Point()]), "\n";
             "a:1:{s:1:\"k\";O:5:\"Point\":3:{s:1:\"x\";i:1;s:4:\"\0*\0y\";i:2;s:8:\"\0Point\0z\";i:3;}}\n",
         ),
     );
+}
+
+/// Verifies object ownership survives storage in an array property returned by a method before serialization.
+#[test]
+fn test_serialize_object_from_array_property_method_result() {
+    let out = compile_and_run(
+        r#"<?php
+class StoredEntry { public int $id = 7; }
+
+class ObjectRegistry {
+    private array $entries = [];
+
+    public function put(string $name, StoredEntry $entry): StoredEntry {
+        return $this->entries[$name] = $entry;
+    }
+
+    public function all(): array {
+        return $this->entries;
+    }
+}
+
+$registry = new ObjectRegistry();
+$entry = new StoredEntry();
+$registry->put("entry", $entry);
+unset($entry);
+echo serialize($registry->all());
+"#,
+    );
+    assert_eq!(out, "a:1:{s:5:\"entry\";O:11:\"StoredEntry\":1:{s:2:\"id\";i:7;}}");
+}
+
+/// Verifies a direct function retains its returned object parameter for the caller.
+#[test]
+fn test_serialize_returned_object_function_parameter_survives_caller_unset() {
+    let out = compile_and_run(
+        r#"<?php
+class ReturnEntry { public int $id = 7; }
+
+function relay_function(ReturnEntry $entry): ReturnEntry {
+    return $entry;
+}
+
+$functionEntry = new ReturnEntry();
+$functionResult = relay_function($functionEntry);
+unset($functionEntry);
+echo serialize($functionResult), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "O:11:\"ReturnEntry\":1:{s:2:\"id\";i:7;}\n",
+    );
+}
+
+/// Verifies a static method retains its returned object parameter for the caller.
+#[test]
+fn test_serialize_returned_object_static_method_parameter_survives_caller_unset() {
+    let out = compile_and_run(
+        r#"<?php
+class StaticReturnEntry { public int $id = 7; }
+
+class StaticRelay {
+    public static function relay(StaticReturnEntry $entry): StaticReturnEntry {
+        return $entry;
+    }
+}
+
+$entry = new StaticReturnEntry();
+$result = StaticRelay::relay($entry);
+unset($entry);
+echo serialize($result);
+"#,
+    );
+    assert_eq!(out, "O:17:\"StaticReturnEntry\":1:{s:2:\"id\";i:7;}");
+}
+
+/// Verifies an instance method retains its returned object parameter for the caller.
+#[test]
+fn test_serialize_returned_object_method_parameter_survives_caller_unset() {
+    let out = compile_and_run(
+        r#"<?php
+class MethodReturnEntry { public int $id = 7; }
+
+class InstanceRelay {
+    public function relay(MethodReturnEntry $entry): MethodReturnEntry {
+        return $entry;
+    }
+}
+
+$entry = new MethodReturnEntry();
+$result = (new InstanceRelay())->relay($entry);
+unset($entry);
+echo serialize($result);
+"#,
+    );
+    assert_eq!(out, "O:17:\"MethodReturnEntry\":1:{s:2:\"id\";i:7;}");
 }
 
 /// Verifies `unserialize()` reconstructs objects: a `Point` round-trips with a
@@ -1482,6 +1581,30 @@ echo serialize($arr), "\n";
     );
 }
 
+/// An `r:` back-reference is itself a numbered value: php gives every value but an `R:` the
+/// next index, so the object AFTER an `r:` is one further on. Both sides skipped it -- a second
+/// shared object serialized as `r:4` for php's `r:5`, and php's own `r:5` resolved to the wrong
+/// value, which failed the whole unserialize() of a Symfony debug container.
+#[test]
+fn test_object_back_reference_consumes_its_own_index() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public $n; public function __construct($n = 0) { $this->n = $n; } }
+$a = new A(1); $b = new A(2);
+$s = serialize([$a, $a, $b, $b, [$a, $b], $b]);
+echo $s, "\n";
+$u = unserialize($s);
+echo ($u[1] === $u[0] ? "s" : "d"), ($u[3] === $u[2] ? "s" : "d"), ($u[4][1] === $u[2] ? "s" : "d"), "\n";
+$php = unserialize('a:4:{i:0;O:1:"A":1:{s:1:"n";i:1;}i:1;r:2;i:2;O:1:"A":1:{s:1:"n";i:2;}i:3;r:5;}');
+echo $php[3]->n, $php[3] === $php[2] ? " same" : " diff", "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "a:6:{i:0;O:1:\"A\":1:{s:1:\"n\";i:1;}i:1;r:2;i:2;O:1:\"A\":1:{s:1:\"n\";i:2;}i:3;r:5;i:4;a:2:{i:0;r:2;i:1;r:5;}i:5;r:5;}\nsss\n2 same\n",
+    );
+}
+
 /// Verifies object boxes enter the value registry before their bodies are
 /// decoded, preserving direct self-references for both hydration paths.
 #[test]
@@ -1517,6 +1640,228 @@ echo get_class($value), "|", serialize($value);
         out,
         "__PHP_Incomplete_Class|O:7:\"Missing\":1:{s:4:\"self\";r:1;}",
     );
+}
+
+/// Verifies a `?int` / `int|null` property survives a `serialize()` → `unserialize()` round trip.
+///
+/// Such a slot is an inline `{payload, tag}` pair: writing only the payload back (the plain
+/// typed-scalar hydration arm) would leave the previous tag behind, so a `N;` on the wire read
+/// back as the integer `PHP_INT_MAX - 1`. The re-serialization proves the tag word, not just
+/// the payload, was restored.
+#[test]
+fn test_unserialize_restores_a_nullable_int_property_payload_and_tag() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public ?int $n = null; public ?int $v = 5; }
+$a = new A();
+$r = unserialize(serialize($a));
+var_dump($r);
+echo serialize($r), "\n";
+echo json_encode($r), "\n";
+var_dump($r == $a);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "object(A)#2 (2) {\n  [\"n\"]=>\n  NULL\n  [\"v\"]=>\n  int(5)\n}\n",
+            "O:1:\"A\":2:{s:1:\"n\";N;s:1:\"v\";i:5;}\n",
+            "{\"n\":null,\"v\":5}\n",
+            "bool(true)\n",
+        )
+    );
+}
+
+/// Verifies `unserialize()` hydrates a NULL into a boxed-Mixed property slot as a boxed cell.
+///
+/// The hydration path used to write the bare in-band `NULL_SENTINEL` into the slot instead — a
+/// shape no other producer of a Mixed property slot emits, since both the constructor's null
+/// default and `$o->p = null` store a cell. Every unguarded reader (`var_dump`, `===`, `isset`,
+/// the `(array)` cast, `json_encode`) dereferences that slot's low word on sight, so the
+/// sentinel was a segfault rather than a null; it also leaked the parsed box, which the caller
+/// transfers unconditionally.
+#[test]
+fn test_unserialize_hydrates_a_null_mixed_property_as_a_boxed_cell() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public $x = 1; public ?float $f = 1.5; }
+$o = new C();
+$o->x = null;
+$o->f = null;
+$r = unserialize(serialize($o));
+var_dump($r->x === null, $r->f === null, isset($r->x), isset($r->f), is_null($r->x));
+var_dump($r);
+echo json_encode($r), "\n";
+echo serialize($r), "\n";
+var_dump((array) $r);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "bool(true)\nbool(true)\nbool(false)\nbool(false)\nbool(true)\n",
+            "object(C)#2 (2) {\n  [\"x\"]=>\n  NULL\n  [\"f\"]=>\n  NULL\n}\n",
+            "{\"x\":null,\"f\":null}\n",
+            "O:1:\"C\":2:{s:1:\"x\";N;s:1:\"f\";N;}\n",
+            "array(2) {\n  [\"x\"]=>\n  NULL\n  [\"f\"]=>\n  NULL\n}\n",
+        )
+    );
+}
+
+/// Verifies an EVAL-DECLARED class unserializes into a real instance whose properties survive
+/// being read from a DIFFERENT eval context than the one that hydrated it.
+///
+/// The generated decoder can only build classes with a compiled layout, so a class the
+/// interpreter declared is hydrated by the eval bridge instead -- in the process-wide
+/// null-handle context, because the decoder has no context of its own. The read that follows
+/// routinely happens somewhere else: on a Symfony request the compiled DI container is
+/// interpreted, so every class it names is eval-declared and every method call on one runs in
+/// that file's own context. Without a cross-context answer the object arrived with its class
+/// intact and every slot empty, reported as "must not be accessed before initialization".
+#[test]
+fn test_unserialize_eval_declared_object_reads_back_in_another_context() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalHydrated {
+    private array $parameters;
+    private string $note = "none";
+    public function getParameters(): array { return $this->parameters; }
+    public function getNote(): string { return $this->note; }
+}');
+
+$payload = 'O:12:"EvalHydrated":2:{s:24:"' . "\0" . 'EvalHydrated' . "\0"
+    . 'parameters";a:2:{s:1:"a";i:1;s:1:"b";i:2;}s:18:"' . "\0" . 'EvalHydrated' . "\0"
+    . 'note";s:4:"kept";}';
+
+$GLOBALS['hydrated'] = unserialize($payload);
+echo get_class($GLOBALS['hydrated']), '|';
+eval('$parameters = $GLOBALS["hydrated"]->getParameters();
+echo count($parameters), ":", $parameters["a"], ":", $parameters["b"], "|",
+    $GLOBALS["hydrated"]->getNote();');
+"#,
+    );
+    assert_eq!(out, "EvalHydrated|2:1:2|kept");
+}
+
+/// Verifies an interpreted `unserialize()` restores a COMPILED class through its
+/// `__unserialize()` hook, handing it the payload -- here an interpreted object.
+///
+/// The interpreter wrote the payload keys as properties from outside the class instead, which
+/// lands nowhere for a protected property: Laravel's `UnsignedSerializableClosure` came back
+/// with a null `$serializable`, and every cached closure route died with "Call to a member
+/// function getClosure() on null".
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_eval_unserialize_calls_a_compiled_unserialize_hook() {
+    let out = compile_and_run(
+        r#"<?php
+class Wrapper {
+    protected $serializable;
+    public function __construct($s) { $this->serializable = $s; }
+    public function get() { return $this->serializable->get(); }
+    public function __serialize() { return ['serializable' => $this->serializable]; }
+    public function __unserialize($data) { $this->serializable = $data['serializable']; }
+}
+$code = 'class Inner { public $code; public function get() { return $this->code; }
+    public function __serialize() { return ["code" => $this->code]; }
+    public function __unserialize($data) { $this->code = $data["code"] . "?"; } }';
+eval($code);
+$payload = 'O:7:"Wrapper":1:{s:12:"serializable";O:5:"Inner":1:{s:4:"code";s:1:"x";}}';
+$read = 'return unserialize($payload)->get();';
+echo eval($read), "\n";
+"#,
+    );
+    assert_eq!(out, "x?\n");
+}
+
+/// `__unserialize($data)` declared WITHOUT a parameter type receives the parsed array: nested
+/// objects arrive as objects and `$data['key']` reads work. The runtime hands the user hook the bare
+/// hash it parsed, but an undeclared first parameter was boxed as `mixed` by the callee prologue,
+/// so the body read the hash header as a Mixed cell -- `gettype($data)` answered "string" and the
+/// nested `Inner` object reached `Wrapper::__unserialize` as null ("Cannot assign null to
+/// property of type Inner"). Laravel's `SerializableClosure` wrappers hit exactly this. Output is
+/// php 8.5's.
+#[test]
+fn test_unserialize_hook_without_a_parameter_type_gets_the_parsed_array() {
+    let out = compile_and_run(r#"<?php
+class Wrapper {
+    protected $serializable;
+    public function __construct($s) { $this->serializable = $s; }
+    public function get() { return $this->serializable->get(); }
+    public function __serialize() { return ['serializable' => $this->serializable]; }
+    public function __unserialize($data) { $this->serializable = $data['serializable']; }
+}
+class Inner {
+    public $code;
+    public function get() { return $this->code; }
+    public function __serialize() { return ['code' => $this->code]; }
+    public function __unserialize($data) { $this->code = $data['code'] . '!'; }
+}
+class Plain {
+    public $a = 1;
+    public $b = [1, 2];
+    public function __unserialize(array $data): void { $this->a = $data['a'] + 10; $this->b = $data['b']; }
+    public function __serialize(): array { return ['a' => $this->a, 'b' => $this->b]; }
+}
+$i = new Inner();
+$i->code = 'x';
+$s = serialize(new Wrapper($i));
+echo $s, "\n";
+echo unserialize($s)->get(), "\n";
+echo gettype(unserialize(serialize(new Inner()))->code), "\n";
+$p = unserialize(serialize(new Plain()));
+echo $p->a, json_encode($p->b), "\n";
+"#);
+    assert_eq!(
+        out,
+        "O:7:\"Wrapper\":1:{s:12:\"serializable\";O:5:\"Inner\":1:{s:4:\"code\";s:1:\"x\";}}\nx!\nstring\n11[1,2]\n"
+    );
+}
+
+/// Verifies handing an eval-declared object to a compiled property whose type was inferred from
+/// the compiled call sites no longer faults the process.
+///
+/// `unserialize()` of a wire naming an eval-declared class hydrates that class in the interpreter
+/// and gives the compiled `__unserialize($data)` a boxed object it did not construct. Writing it
+/// into `Wrapper::$serializable` -- inferred as `Inner` from `new Wrapper($inner)` -- runs the
+/// nominal property guard, whose native fallback read the object from a register the interpreter
+/// bridge call had just clobbered: a segfault in `__rt_exception_matches`. The guard reloads
+/// the payload, and the object is admitted as php admits it (the property is untyped): the eval
+/// class's own `__unserialize()` runs, so the foreign wire answers `x?`.
+#[test]
+fn test_unserialize_eval_class_into_inferred_property_runs_its_hook() {
+    let out = compile_and_run(
+        r##"<?php
+class Wrapper {
+    protected $serializable;
+    public function __construct($s) { $this->serializable = $s; }
+    public function get() { return $this->serializable->get(); }
+    public function __serialize() { return ['serializable' => $this->serializable]; }
+    public function __unserialize($data) { $this->serializable = $data['serializable']; }
+}
+class Inner {
+    public $code;
+    public function get() { return $this->code; }
+    public function __serialize() { return ['code' => $this->code]; }
+    public function __unserialize($data) { $this->code = $data['code'] . '!'; }
+}
+$i = new Inner();
+$i->code = 'x';
+$s = serialize(new Wrapper($i));
+echo unserialize($s)->get(), "\n";
+$code = 'class EInner { public $code; public function get() { return $this->code; } public function __serialize() { return ["code" => $this->code]; } public function __unserialize($data) { $this->code = $data["code"] . "?"; } }';
+eval($code);
+$foreign = str_replace('O:5:"Inner"', 'O:6:"EInner"', $s);
+try {
+    echo unserialize($foreign)->get(), "\n";
+} catch (TypeError $e) {
+    echo "refused\n";
+}
+echo "alive\n";
+"##,
+    );
+    assert_eq!(out, "x!\nx?\nalive\n");
 }
 
 /// `unserialize()` of a null into a boxed-Mixed property (untyped, `?string`, `?float`) stores the
@@ -1954,4 +2299,105 @@ var_dump(unserialize('x:1;'));
     assert!(out.stderr.contains("Error at offset 11 of 11 bytes"), "{}", out.stderr);
     assert!(out.stderr.contains("Error at offset 13 of 13 bytes"), "{}", out.stderr);
     assert!(out.stderr.contains("Error at offset 0 of 4 bytes"), "{}", out.stderr);
+}
+
+/// An object `unserialize()` builds from a `stdClass` wire form keeps its properties and a
+/// real property hash: `__rt_new_by_name` used to hand back a declared-slot object with a null
+/// hash, so the properties were dropped and `json_encode()` dereferenced the null hash (exit 139).
+#[test]
+fn test_unserialize_stdclass_keeps_properties_and_json_encodes() {
+    let out = compile_and_run(
+        r#"<?php
+$u = unserialize('O:8:"stdClass":2:{s:1:"a";i:1;s:1:"b";s:1:"x";}');
+echo json_encode($u), "\n";
+echo $u->a, $u->b, "\n";
+$u->c = 3;
+echo json_encode($u), "\n";
+$w = unserialize('a:1:{i:0;O:8:"stdClass":0:{}}');
+echo json_encode($w), "\n";
+"#,
+    );
+    assert_eq!(out, "{\"a\":1,\"b\":\"x\"}\n1x\n{\"a\":1,\"b\":\"x\",\"c\":3}\n[{}]\n");
+}
+
+/// `R:N` naming a scalar resolves to an equal value instead of failing the whole `unserialize()`.
+/// php makes both slots one PHP reference; elephc cannot share a scalar slot, so the `R:` slot
+/// holds an equal copy (value semantics). The `R:` takes no index of its own, so the string after
+/// it still lands on php's next index, and lowercase `r:` still refuses a non-object target.
+#[test]
+fn test_unserialize_reference_back_reference_to_scalar() {
+    let out = compile_and_run(
+        r#"<?php
+foreach ([
+    'a:2:{i:0;s:1:"x";i:1;R:2;}',
+    'a:2:{i:0;i:7;i:1;R:2;}',
+    'a:3:{i:0;d:1.5;i:1;N;i:2;R:3;}',
+    'a:3:{i:0;b:1;i:1;R:2;i:2;s:1:"z";}',
+    'a:3:{i:0;i:1;i:1;R:2;i:2;R:2;}',
+    'a:2:{i:0;a:1:{i:0;s:2:"hi";}i:1;R:3;}',
+] as $wire) {
+    echo json_encode(unserialize($wire)), "\n";
+}
+var_dump(@unserialize('a:2:{i:0;s:1:"x";i:1;r:2;}'));
+"#,
+    );
+    assert_eq!(
+        out,
+        "[\"x\",\"x\"]\n[7,7]\n[1.5,null,null]\n[true,true,\"z\"]\n[1,1,1]\n[[\"hi\"],\"hi\"]\nbool(false)\n"
+    );
+}
+
+/// The eval interpreter's `serialize()`/`unserialize()` implement php's `r:`/`R:` numbering:
+/// a repeated object serializes as `r:<n>;`, a round trip reproduces the bytes and the object
+/// identities, and `R:` onto a scalar resolves to an equal value. (A back-reference to an
+/// enclosing object still under construction is not resolvable yet and is not covered.)
+#[test]
+fn test_eval_serialize_unserialize_back_references() {
+    let out = compile_and_run(
+        r#"<?php
+eval('
+$o = new stdClass;
+echo serialize([$o, $o]), "\n";
+$o->self = $o;
+echo serialize($o), "\n";
+class P { public $x = 1; public $y; }
+$p = new P; $q = new P;
+$s = serialize(["k" => $p, "again" => $p, 3 => $q, "z" => "s", "w" => $q]);
+echo $s, "\n";
+$u = unserialize($s);
+echo serialize($u) === $s ? "round trip ok" : "round trip DIFF", "\n";
+var_dump($u["k"] === $u["again"], $u[3] === $u["w"], $u["k"] === $u[3]);
+echo json_encode(unserialize(\'a:2:{i:0;s:1:"x";i:1;R:2;}\')), "\n";
+var_dump(@unserialize(\'a:2:{i:0;s:1:"x";i:1;r:2;}\'));
+');
+"#,
+    );
+    assert_eq!(
+        out,
+        "a:2:{i:0;O:8:\"stdClass\":0:{}i:1;r:2;}\n\
+         O:8:\"stdClass\":1:{s:4:\"self\";r:1;}\n\
+         a:5:{s:1:\"k\";O:1:\"P\":2:{s:1:\"x\";i:1;s:1:\"y\";N;}s:5:\"again\";r:2;i:3;O:1:\"P\":2:{s:1:\"x\";i:1;s:1:\"y\";N;}s:1:\"z\";s:1:\"s\";s:1:\"w\";r:6;}\n\
+         round trip ok\nbool(true)\nbool(true)\nbool(false)\n[\"x\",\"x\"]\nbool(false)\n"
+    );
+}
+
+/// `serialize()` writes a stdClass's dynamic properties. Its properties live in the per-instance
+/// hash, not in declared rows, and the row walk wrote `O:8:"stdClass":0:{}` for every one of them
+/// -- a casted array, a decoded JSON object and an empty stdClass included.
+#[test]
+fn test_serialize_writes_stdclass_dynamic_properties() {
+    let out = compile_and_run(
+        r#"<?php
+$o = new stdClass; $o->a = 1; $o->b = "x"; echo serialize($o), "\n";
+$p = (object)["k" => [1, 2]]; echo serialize($p), "\n";
+echo serialize(json_decode('{"q":1}')), "\n";
+echo serialize(new stdClass), "\n";
+$s = serialize([$o, $o]); echo $s, "\n";
+$u = unserialize($s); echo $u[0]->b, $u[0] === $u[1] ? " same" : " diff", "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "O:8:\"stdClass\":2:{s:1:\"a\";i:1;s:1:\"b\";s:1:\"x\";}\nO:8:\"stdClass\":1:{s:1:\"k\";a:2:{i:0;i:1;i:1;i:2;}}\nO:8:\"stdClass\":1:{s:1:\"q\";i:1;}\nO:8:\"stdClass\":0:{}\na:2:{i:0;O:8:\"stdClass\":2:{s:1:\"a\";i:1;s:1:\"b\";s:1:\"x\";}i:1;r:2;}\nx same\n"
+    );
 }

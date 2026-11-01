@@ -114,6 +114,47 @@ fn test_dynamic_static_call_literal_method() {
     assert_eq!(out, "built");
 }
 
+/// Verifies a non-null `string|null` class name is unboxed before dynamic static dispatch.
+#[test]
+fn test_dynamic_static_call_from_nullable_class_string() {
+    let out = compile_and_run(
+        r#"<?php
+class NullableDynamicStaticTarget {
+    public static function getProvidedTypes(): string { return "resolved"; }
+}
+
+class NullableDynamicStaticDefinition {
+    public function getClass(): ?string { return NullableDynamicStaticTarget::class; }
+}
+
+class NullableDynamicStaticReflection {
+    public function isSubclassOf(string $interface): bool { return true; }
+}
+
+class NullableDynamicStaticContainer {
+    public function getDefinition(string $id): NullableDynamicStaticDefinition {
+        return new NullableDynamicStaticDefinition();
+    }
+
+    public function getReflectionClass(string $class): NullableDynamicStaticReflection {
+        return new NullableDynamicStaticReflection();
+    }
+}
+
+$container = new NullableDynamicStaticContainer();
+foreach (["service" => []] as $id => $tags) {
+    if (!$r = $container->getReflectionClass($class = $container->getDefinition($id)->getClass())) {
+        echo "missing";
+    } elseif (!$r->isSubclassOf("Interface")) {
+        echo "invalid";
+    }
+    echo $class::getProvidedTypes();
+}
+"#,
+    );
+    assert_eq!(out, "resolved");
+}
+
 /// Verifies that `$cls::$method(args)` (both dynamic) dispatches a static method with arguments.
 #[test]
 fn test_dynamic_static_call_dynamic_method_with_args() {
@@ -144,6 +185,27 @@ fn test_static_and_instance_calls_unaffected() {
         ",
     );
     assert_eq!(out, "isT");
+}
+
+/// Verifies a descendant-only method receives its declared default when called through a base
+/// type that does not itself declare the method.
+#[test]
+fn test_subtype_only_method_call_materializes_default_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+class BaseNode {}
+class ChildNode extends BaseNode {
+    public function configure(string $name, bool $remove = false): string {
+        return $name . ($remove ? ':remove' : ':keep');
+    }
+}
+function configure_base(BaseNode $node): string {
+    return $node->configure('option');
+}
+echo configure_base(new ChildNode());
+"#,
+    );
+    assert_eq!(out, "option:keep");
 }
 
 /// Compiles and runs the checked-in `examples/dynamic-dispatch/main.php` fixture, covering
@@ -195,6 +257,21 @@ fn test_dynamic_static_call_on_literal_class_with_args() {
         ",
     );
     assert_eq!(out, "9");
+}
+
+/// Verifies `self::$method(...)` dispatches dynamically from the current class scope.
+#[test]
+fn test_dynamic_static_call_on_self_receiver() {
+    let out = compile_and_run(
+        "<?php
+        class Router {
+            public static function target(string $value): string { return 'self:' . $value; }
+            public static function dispatch(string $method): string { return self::$method('ok'); }
+        }
+        echo Router::dispatch('target');
+        ",
+    );
+    assert_eq!(out, "self:ok");
 }
 
 /// Regression: a function with *no* return type annotation whose body returns a

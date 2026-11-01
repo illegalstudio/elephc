@@ -2,19 +2,20 @@
 title: "fgets()"
 description: "Gets line from file pointer."
 sidebar:
-  order: 319
+  order: 330
 ---
 
 ## fgets()
 
 ```php
-function fgets(resource $stream): mixed
+function fgets(resource $stream, int $length = null): mixed
 ```
 
 Gets line from file pointer.
 
 **Parameters**:
 - `$stream` (`resource`)
+- `$length` (`int`), default `null`, optional
 
 **Returns**: `mixed`
 

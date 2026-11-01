@@ -214,6 +214,6 @@ fn xml_set_element_handler_rejects_extra_required_parameters_after_an_unpack() {
 fn xml_set_element_handler_rejects_handlers_inside_a_dynamic_unpack() {
     expect_xml_error(
         "<?php $p = xml_parser_create(); $tail = [function ($parser, $name, $attributes) { echo $name; }, null]; xml_set_element_handler($p, ...$tail);",
-        "xml_set_element_handler() takes exactly 3 arguments",
+        "xml_set_element_handler() cannot take a spread argument",
     );
 }

@@ -1018,6 +1018,19 @@ echo $a->format("Y-m-d"), "|", $b->format("Y-m-d H:i:s"), "|", $c->format("H:i")
     assert_eq!(out, "1999-03-05|2001-09-09 01:46:40|12:00|2024-03-15");
 }
 
+/// Verifies weak call sites coerce an integer timestamp into createFromFormat's string parameter.
+#[test]
+fn test_create_from_format_weak_integer_string_coercion() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set('UTC');
+$date = DateTimeImmutable::createFromFormat('U', 0);
+echo $date->format('U');
+"#,
+    );
+    assert_eq!(out, "0");
+}
+
 /// Verifies `createFromFormat` returns `false` when the subject does not match the format, and that
 /// the `=== false` check works on the result.
 #[test]
@@ -1030,6 +1043,24 @@ echo ($bad === false) ? "false" : "??";
 "#,
     );
     assert_eq!(out, "false");
+}
+
+/// Verifies the declared literal-false failure type narrows an assignment-bound parse result.
+#[test]
+fn test_create_from_format_assignment_guard_narrows_success_type() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+function parseRequired(string $value): DateTimeImmutable {
+    if (false === $date = DateTimeImmutable::createFromFormat("!Y-m-d", $value)) {
+        throw new RuntimeException("invalid date");
+    }
+    return $date;
+}
+echo parseRequired("2024-03-15")->format("Y-m-d");
+"#,
+    );
+    assert_eq!(out, "2024-03-15");
 }
 
 /// Verifies the timezone format specifiers `O` (`+hhmm`), `P` (`+hh:mm`), `Z` (offset in seconds),
@@ -1182,7 +1213,7 @@ echo "|", $iv->f;
     );
     assert_eq!(
         out,
-        "123456|12:00:00.123456|12:00:00.123|12:00:00 u|123456|2025-03-04.000007|654321|0"
+        "123456|12:00:00.123456|12:00:00.123|12:00:00 u|0|2025-03-04.000007|654321|0"
     );
 }
 
@@ -2234,6 +2265,49 @@ echo $d->format("H:i"), " ", $d->getTimezone()->getName(), " ", $d->getTimestamp
 "#,
     );
     assert_eq!(out, "12:00 Europe/Paris 1718445600|08:00 America/New_York");
+}
+
+/// `date_create()` / `date_create_immutable()` answer `false` for a string they cannot parse,
+/// where the class constructor throws `DateMalformedStringException`. The alias was desugared to
+/// `new DateTime(...)`, so `date_create('bogus')` threw. A parseable string still yields an object
+/// the result of which methods can be called on, and the timezone argument is honoured. php 8.5.
+#[test]
+fn test_date_create_returns_false_for_an_unparseable_string() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+var_dump(date_create('bogus'));
+var_dump(date_create_immutable('not a date at all'));
+$d = date_create('2020-01-02 03:04:05');
+$p = date_create('2020-01-02', new DateTimeZone('Europe/Paris'));
+$i = date_create_immutable('2021-02-03 04:05:06');
+echo $d->format('c'), "|", $p->format('c'), "|", $i->format('c'), "|", get_class($i), "\n";
+try {
+    new DateTime('bogus');
+} catch (Exception $e) {
+    echo get_class($e), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nbool(false)\n2020-01-02T03:04:05+00:00|2020-01-02T00:00:00+01:00|2021-02-03T04:05:06+00:00|DateTimeImmutable\nDateMalformedStringException\n"
+    );
+}
+
+/// `date_create()` reached through a computed name in interpreted code answers `false` for an
+/// unparseable string exactly like the compiled alias: the eval alias table dispatches to the same
+/// `__elephc_date_create` factory, so the two worlds agree. php 8.5.
+#[test]
+fn test_eval_date_create_returns_false_for_an_unparseable_string() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$code = 'var_dump(date_create("bogus")); $d = date_create("2020-01-02 03:04:05"); echo $d->format("c"), "\n";';
+eval($code);
+"#,
+    );
+    assert_eq!(out, "bool(false)\n2020-01-02T03:04:05+00:00\n");
 }
 
 /// `date_time_set($datetime, $hour, $minute, $second, $microsecond)` now accepts the optional fifth

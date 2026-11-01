@@ -40,7 +40,11 @@ pub(super) fn check_array_assign(
     // PHP auto-vivifies an undefined variable on `$a[$k] = ...`: the write creates an
     // array (associative for a string key, indexed for an integer key). Mirror that
     // instead of rejecting the target, exactly as the append form already does.
-    let Some(arr_ty) = env.get(array).cloned() else {
+    let Some(arr_ty) = env
+        .get(array)
+        .cloned()
+        .or_else(|| crate::globals_array::is_alias(array).then_some(PhpType::Mixed))
+    else {
         let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
         let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
         let key_ty = normalized_array_key_type(index, idx_ty);
@@ -58,6 +62,12 @@ pub(super) fn check_array_assign(
     let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     super::locals::update_callable_assignment_metadata(checker, array, value, &val_ty, env)?;
+    // Same storage-over-narrowing rule as `check_array_push`: an indexed element write moves the
+    // slot's contents, so the ELEMENT TYPE it contributes has to describe the slot. Only the array
+    // element merges below read it — the string-offset, `buffer<T>` and `ArrayAccess` arms are
+    // acceptance CHECKS against a declared element type, and they must keep judging the value the
+    // program actually wrote rather than the representation it is carried in.
+    let element_val_ty = checker.stored_element_type(value, val_ty.clone());
     if arr_ty == PhpType::Str {
         return check_string_offset_assign(array, index, &idx_ty, value, span);
     }
@@ -100,12 +110,12 @@ pub(super) fn check_array_assign(
                 merge_array_key_types(PhpType::Int, normalized_idx_ty)
             };
             let merged_value = if matches!(elem_ty.as_ref(), PhpType::Never) {
-                val_ty
-            } else if elem_ty.as_ref() == &val_ty {
+                element_val_ty.clone()
+            } else if elem_ty.as_ref() == &element_val_ty {
                 *elem_ty.clone()
             } else {
                 checker
-                    .merge_array_element_type(elem_ty, &val_ty)
+                    .merge_array_element_type(elem_ty, &element_val_ty)
                     .unwrap_or(PhpType::Mixed)
             };
             env.insert(
@@ -120,9 +130,9 @@ pub(super) fn check_array_assign(
                 array.to_string(),
                 PhpType::Array(Box::new(PhpType::Mixed)),
             );
-        } else if **elem_ty != val_ty {
+        } else if **elem_ty != element_val_ty {
             let merged_ty = checker
-                .merge_array_element_type(elem_ty, &val_ty)
+                .merge_array_element_type(elem_ty, &element_val_ty)
                 .unwrap_or(PhpType::Mixed);
             // A DECLARED element type (`array<int> $a = …`) is a contract, exactly like a
             // declared scalar local: widening it here would silently rewrite the array's
@@ -147,7 +157,7 @@ pub(super) fn check_array_assign(
             *key.clone(),
             normalized_array_key_type(index, idx_ty),
         );
-        let merged_value = if **existing_value == val_ty {
+        let merged_value = if **existing_value == element_val_ty {
             *existing_value.clone()
         } else {
             // Pointers and `null` share the pointer word (`?ptr<T>` values).
@@ -353,6 +363,7 @@ pub(super) fn check_nested_array_assign(
     {
         checker.infer_type_with_assignment_effects(value, env)?;
     }
+    widen_nested_root_storage(checker, target, env);
     match arr_ty {
         PhpType::Mixed => Ok(()),
         PhpType::Array(_) | PhpType::AssocArray { .. } => Ok(()),
@@ -450,6 +461,51 @@ fn check_promoted_nested_update_value(
     }
 }
 
+/// Widens the root local or `$this->property` of a nested write to generic array storage.
+///
+/// A chain such as `$map[$first][$second] = $value` autovivifies an inner array. The checker must
+/// expose that inner container to subsequent reads and `foreach` bindings even though its exact
+/// indexed-or-hash shape depends on runtime keys. Object roots retain the same refinement only for
+/// untyped `$this` properties; declared property contracts remain authoritative.
+fn widen_nested_root_storage(checker: &mut Checker, target: &Expr, env: &mut TypeEnv) {
+    let mut current = target;
+    loop {
+        match &current.kind {
+            ExprKind::ArrayAccess { array, .. } => current = array,
+            ExprKind::Variable(name) => {
+                // Only an array (or a name nothing has bound yet) is widened: an `ArrayAccess`
+                // object or a `mixed` root keeps its own type, since the inner container it
+                // hands back is not this local's storage.
+                if matches!(
+                    env.get(name),
+                    None | Some(PhpType::Array(_)) | Some(PhpType::AssocArray { .. })
+                ) {
+                    env.insert(
+                        name.clone(),
+                        PhpType::Array(Box::new(PhpType::Mixed)),
+                    );
+                }
+                return;
+            }
+            ExprKind::PropertyAccess { object, property }
+                if matches!(&object.kind, ExprKind::This) =>
+            {
+                let Some(class_name) = checker.current_class.clone() else {
+                    return;
+                };
+                super::properties::refine_object_property_type(
+                    checker,
+                    &class_name,
+                    property,
+                    &PhpType::Array(Box::new(PhpType::Mixed)),
+                );
+                return;
+            }
+            _ => return,
+        }
+    }
+}
+
 /// Validates and updates the type environment for `$array[] = $value` (push) assignments.
 ///
 /// Type-checks the value, then merges it into the element type of the array.
@@ -472,7 +528,11 @@ pub(super) fn check_array_push(
     // PHP 8 auto-vivifies an undefined variable on `$a[] = ...`: the append creates an
     // empty array and stores the value. Mirror that here instead of rejecting the write;
     // the generic Mixed element keeps subsequent pushes of other types representable.
-    let Some(arr_ty) = env.get(array).cloned() else {
+    let Some(arr_ty) = env
+        .get(array)
+        .cloned()
+        .or_else(|| crate::globals_array::is_alias(array).then_some(PhpType::Mixed))
+    else {
         let _ = checker.infer_type_with_assignment_effects(value, env)?;
         env.insert(array.to_string(), PhpType::Array(Box::new(PhpType::Mixed)));
         return Ok(());
@@ -483,10 +543,15 @@ pub(super) fn check_array_push(
     if arr_ty == PhpType::Str && !array.starts_with(NESTED_APPEND_TEMP_PREFIX) {
         return Err(CompileError::new(span, "[] operator not supported for strings"));
     }
+    // The element type is the value's STORAGE, not its narrowed PHP type: a push moves whatever
+    // the slot holds, and the array's element type is what decides how the payload is read back
+    // — here and, through the body's inferred return type, in every caller. The `ArrayAccess`
+    // arm below keeps the inferred type: it judges the receiver, not an element representation.
+    let element_val_ty = checker.stored_element_type(value, val_ty.clone());
     if let PhpType::Array(elem_ty) = &arr_ty {
-        if **elem_ty != val_ty {
+        if **elem_ty != element_val_ty {
             let merged_ty = checker
-                .merge_array_element_type(elem_ty, &val_ty)
+                .merge_array_element_type(elem_ty, &element_val_ty)
                 .unwrap_or(PhpType::Mixed);
             env.insert(array.to_string(), PhpType::Array(Box::new(merged_ty)));
         }
@@ -496,7 +561,7 @@ pub(super) fn check_array_push(
     } = &arr_ty
     {
         let merged_key = merge_array_key_types(*key.clone(), PhpType::Int);
-        let merged_value = if **existing_value == val_ty {
+        let merged_value = if **existing_value == element_val_ty {
             *existing_value.clone()
         } else {
             // Pointers and `null` share the pointer word, as in the keyed write above.

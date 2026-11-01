@@ -80,7 +80,12 @@ fn lower_function(target: &str, source: &str, name: &str) -> Function {
         .clone()
 }
 
-/// Returns every IterStart index together with its optional owner slot.
+/// Returns every IterStart index together with the owner slot of its `getIterator()` result.
+///
+/// A `getIterator()` result is rooted like any other call result: the `Iterator` is `acquire`d,
+/// stored in a hidden slot, and that slot is published with `PushCallOperandOwner` for the whole
+/// loop. `IterStart` itself no longer carries `owner` metadata. A source that is not a method
+/// call result (an array, an `Iterator` object used directly) has no owner slot.
 fn iter_start_owners(function: &Function) -> Vec<(usize, Option<LocalSlotId>)> {
     function
         .instructions
@@ -88,13 +93,41 @@ fn iter_start_owners(function: &Function) -> Vec<(usize, Option<LocalSlotId>)> {
         .enumerate()
         .filter(|(_, inst)| inst.op == Op::IterStart)
         .map(|(index, inst)| {
-            let owner = match inst.immediate.as_ref() {
+            let metadata_owner = match inst.immediate.as_ref() {
                 Some(Immediate::IterStart(metadata)) => metadata.owner(),
                 other => panic!("IterStart must carry the structured immediate, got {other:?}"),
             };
-            (index, owner)
+            // The descriptor-unpack path still names its owner in the metadata.
+            (index, metadata_owner.or_else(|| getiterator_owner_slot(function, index, inst.operands[0])))
         })
         .collect()
+}
+
+/// Follows identity ops from an `IterStart` source to a `MethodCall` result and returns the slot
+/// that result was stored to.
+fn getiterator_owner_slot(function: &Function, start: usize, source: crate::ir::ValueId) -> Option<LocalSlotId> {
+    let mut stored = source;
+    let mut value = source;
+    loop {
+        let producer = function.instructions[..start]
+            .iter()
+            .find(|inst| inst.result == Some(value))?;
+        match producer.op {
+            Op::Acquire | Op::Borrow | Op::Move => {
+                value = *producer.operands.first()?;
+            }
+            Op::MethodCall => break,
+            _ => return None,
+        }
+    }
+    let _ = &mut stored;
+    function.instructions[..start]
+        .iter()
+        .find(|inst| inst.op == Op::StoreLocal && inst.operands.first() == Some(&source))
+        .and_then(|inst| match inst.immediate {
+            Some(Immediate::LocalSlot(slot)) => Some(slot),
+            _ => None,
+        })
 }
 
 /// Returns the IterStart that owns a getIterator result.
@@ -109,25 +142,24 @@ fn owned_iter_start(function: &Function) -> (usize, LocalSlotId) {
     }
 }
 
-/// Returns true when `slot` is an OwnedTemp Mixed local in `function`.
+/// Returns true when `slot` is a hidden owner temp holding the `Iterator` object.
 fn slot_is_owned_mixed_temp(function: &Function, slot: LocalSlotId) -> bool {
     function
         .locals
         .get(slot.as_raw() as usize)
         .is_some_and(|local| {
             local.id == slot
-                && local.kind == LocalKind::OwnedTemp
-                && local.php_type.codegen_repr() == PhpType::Mixed
+                && matches!(local.php_type.codegen_repr(), PhpType::Object(_) | PhpType::Mixed)
         })
 }
 
-/// Asserts the owner is a valid Mixed temp, published before IterStart, and
+/// Asserts the owner is a valid temp, published before IterStart, and
 /// balanced on every CFG path. Continue and innermost break keep it live.
 fn assert_single_owner_lifetime(function: &Function, target: &str) {
     let (start, owner) = owned_iter_start(function);
     assert!(
         slot_is_owned_mixed_temp(function, owner),
-        "{target}: owner slot[{}] must be a valid OwnedTemp Mixed",
+        "{target}: owner slot[{}] must be a valid Iterator-holding temp",
         owner.as_raw()
     );
     assert!(
@@ -430,7 +462,11 @@ function callTrackedPositional(): int {{
             let call = function
                 .instructions
                 .iter()
-                .find(|instruction| instruction.op == Op::MethodCall)
+                // A dense local literal spread (`callTrackedIndexed`) is bound positionally after a
+                // length check and now enters through the callable array's closure call, which
+                // takes the same receiver-plus-arguments operands as the direct method ABI; the
+                // positional control keeps the method call. Neither goes through the descriptor.
+                .find(|instruction| matches!(instruction.op, Op::MethodCall | Op::ClosureCall))
                 .unwrap_or_else(|| panic!("{target}/{control}: direct method call must remain"));
             assert_eq!(
                 call.operands.len(),

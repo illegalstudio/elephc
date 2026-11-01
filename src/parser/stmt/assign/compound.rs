@@ -105,6 +105,9 @@ fn parse_ref_assign(
     span: Span,
 ) -> Result<Stmt, CompileError> {
     *pos += 1;
+    if let Some(stmt) = try_parse_reference_append_source(tokens, pos, &target, span)? {
+        return Ok(stmt);
+    }
     let source = parse_expr(tokens, pos)?;
     if !is_valid_reference_source(&source.kind) {
         return Err(CompileError::new(
@@ -116,16 +119,129 @@ fn parse_ref_assign(
     Ok(Stmt::new(StmtKind::RefAssign { target, source }, span))
 }
 
+/// Parses `$target =& $array[]` by sharing a fresh temporary cell with the appended slot.
+///
+/// The temporary avoids evaluating the append target twice and avoids mutating any cell that
+/// `target` might have referenced before it is rebound. Existing append-by-reference lowering
+/// then owns container growth, nested write-back, copy-on-write, and target-specific storage.
+fn try_parse_reference_append_source(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    target: &str,
+    span: Span,
+) -> Result<Option<Stmt>, CompileError> {
+    let source_start = *pos;
+    let mut paren_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    let mut brace_depth = 0usize;
+    let mut cursor = source_start;
+    let semicolon = loop {
+        let Some((token, _)) = tokens.get(cursor) else {
+            return Ok(None);
+        };
+        match token {
+            Token::LParen => paren_depth += 1,
+            Token::RParen => paren_depth = paren_depth.saturating_sub(1),
+            Token::LBracket => bracket_depth += 1,
+            Token::RBracket => bracket_depth = bracket_depth.saturating_sub(1),
+            Token::LBrace => brace_depth += 1,
+            Token::RBrace => brace_depth = brace_depth.saturating_sub(1),
+            Token::Semicolon if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+                break cursor;
+            }
+            _ => {}
+        }
+        cursor += 1;
+    };
+    if semicolon < source_start + 2
+        || tokens[semicolon - 2].0 != Token::LBracket
+        || tokens[semicolon - 1].0 != Token::RBracket
+    {
+        return Ok(None);
+    }
+
+    let source_tokens = &tokens[source_start..semicolon - 2];
+    let mut source_pos = 0usize;
+    let append_target = parse_expr(source_tokens, &mut source_pos)?;
+    if source_pos != source_tokens.len() {
+        return Err(CompileError::new(span, "Invalid reference append target"));
+    }
+
+    let temp = format!(
+        "__elephc_ref_append_{}_{}_{}",
+        span.line, span.col, source_start
+    );
+    let temp_expr = Expr::new(ExprKind::Variable(temp.clone()), span);
+    // EVERY EXECUTION MUST GET A FRESH REFERENCE, NOT A FRESH NAME. The temp is named after its
+    // SOURCE POSITION, so a `$x = &$arr[];` inside a loop reuses one local — and `$temp = null`
+    // on an already-reference-bound local writes THROUGH the existing cell instead of rebinding.
+    // Every element appended by that loop then aliased ONE cell, so the array ended up holding
+    // the last iteration's value in every slot:
+    //
+    //     foreach ([1, 2, 3] as $i) { $c = &$opt[]; $c = $i; }   // [3, 3, 3], not [1, 2, 3]
+    //
+    // `unset()` is what breaks a reference binding in PHP and in this compiler alike: the IR's
+    // `UnsetLocal` drops the slot from the ref-cell dataflow state, so the NEXT execution's
+    // promotion allocates a new cell.
+    //
+    // IT HAS TO COME LAST, after the bind, not first. Lowering walks this block ONCE, and
+    // `unset_local` only emits `Op::UnsetLocal` for a name that is ref-bound AT LOWERING TIME —
+    // before the append, the temp is not bound yet, so a leading `unset` lowered to nothing and
+    // the loop still shared one cell. After the bind it is bound, the op is emitted, and the
+    // target keeps the cell because the alias took its own reference on it.
+    //
+    // Symfony's `EventDispatcher::optimizeListeners` is why this matters: it builds
+    // `$closure = &$this->optimized[$eventName][]` once per listener, so a shared cell left every
+    // event dispatching its LAST listener over and over — which 404s every route in a Symfony app,
+    // because `RouterListener` is never the last one.
+    let unbind = Stmt::new(
+        StmtKind::ExprStmt(Expr::new(
+            ExprKind::FunctionCall {
+                name: crate::names::Name::unqualified("unset"),
+                args: vec![temp_expr.clone()],
+            },
+            span,
+        )),
+        span,
+    );
+    let init = Stmt::new(
+        StmtKind::Assign {
+            name: temp.clone(),
+            value: Expr::new(ExprKind::Null, span),
+        },
+        span,
+    );
+    let append = super::postfix::assignment_target_append_stmt(
+        append_target,
+        Expr::new(ExprKind::ArrayReference(Box::new(temp_expr.clone())), span),
+        span,
+    )?;
+    let bind = Stmt::new(
+        StmtKind::RefAssign {
+            target: target.to_string(),
+            source: temp_expr,
+        },
+        span,
+    );
+    *pos = semicolon + 1;
+    Ok(Some(Stmt::new(
+        StmtKind::Synthetic(vec![init, append, bind, unbind]),
+        span,
+    )))
+}
+
 /// Returns true when an expression is a legal source for `$x = &<source>`.
 ///
 /// PHP allows aliasing variables, array elements, object properties, and the
 /// results of calls that return by reference. Other expressions are rejected.
-fn is_valid_reference_source(kind: &ExprKind) -> bool {
+pub(crate) fn is_valid_reference_source(kind: &ExprKind) -> bool {
     matches!(
         kind,
         ExprKind::Variable(_)
             | ExprKind::ArrayAccess { .. }
             | ExprKind::PropertyAccess { .. }
+            | ExprKind::DynamicPropertyAccess { .. }
+            | ExprKind::StaticPropertyAccess { .. }
             | ExprKind::FunctionCall { .. }
             | ExprKind::MethodCall { .. }
             | ExprKind::StaticMethodCall { .. }

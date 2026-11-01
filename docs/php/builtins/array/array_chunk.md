@@ -2,7 +2,7 @@
 title: "array_chunk()"
 description: "Splits an array into chunks of the given size."
 sidebar:
-  order: 3
+  order: 4
 ---
 
 ## array_chunk()

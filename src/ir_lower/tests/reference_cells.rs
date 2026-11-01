@@ -99,7 +99,10 @@ write_ref($outer[0]["k"]);
             .enumerate()
             .filter(|(_, instruction)| instruction.op == Op::LoadArrayElemRefCell)
             .collect::<Vec<_>>();
-        assert!(references.len() >= 4, "{name}: repeated and nested references");
+        // Two references to the SAME element of a flat array are still real reference cells.
+        // (A reference into a NESTED element is lowered by fetching the container for write,
+        // passing the element and writing it back after the call; see the end of this test.)
+        assert!(references.len() >= 2, "{name}: repeated references");
 
         let receiver_load = |reference: &crate::ir::Instruction| {
             let receiver = reference.operands[0];
@@ -129,21 +132,16 @@ write_ref($outer[0]["k"]);
             "{name}: the second reference must reload after the first publishes its COW result"
         );
 
-        let inner = references
-            .iter()
-            .find(|(_, reference)| receiver_load(reference).op == Op::LoadRefCell)
-            .expect("nested inner reference");
-        let outer = references[..references
-            .iter()
-            .position(|candidate| candidate.0 == inner.0)
-            .expect("inner position")]
-            .iter()
-            .rev()
-            .find(|(_, reference)| receiver_load(reference).op == Op::LoadLocal)
-            .expect("nested outer reference");
+        // The nested `write_ref($outer[0]["k"])` is a real reference cell on the element too
+        // (the callee may keep it, as `keep($outer[0]["k"])` does), so it never goes through a
+        // hidden copy of the container that is written back after the call.
         assert!(
-            outer.0 < inner.0,
-            "{name}: the outer cell must be published before the inner receiver is loaded"
+            main.instructions.iter().filter(|inst| inst.op == Op::ElemRefCell).count() >= 2,
+            "{name}: the nested element is a chain of reference cells"
+        );
+        assert!(
+            !main.instructions.iter().any(|inst| inst.op == Op::ArrayGetForWrite),
+            "{name}: no container copy with write-back for the nested reference"
         );
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
@@ -311,10 +309,16 @@ unset($callback);
         }).expect("native reference call");
         let call_offset = caller_asm.find(call).unwrap();
         let before = &caller_asm[..call_offset];
-        assert_eq!(before.matches("__rt_reference_cell_new").count(), 2, "{name}");
-        assert!(before.contains("__rt_cleanup_call_operand_owner"), "{name}");
+        // The omitted `array &$left = []` / `array &$right = [7]` defaults each get a managed
+        // cell. The closure the callee returns binds them with `use (&...)` and takes its own
+        // lease, so the caller's lease is retired after the call instead of being a persistent
+        // heap cell that is never freed.
+        assert_eq!(before.matches("__rt_reference_cell_new").count(), 2, "{name}: one managed cell per omitted default");
+        // The record link is the out-of-line `__rt_call_operand_link_owner` helper (the cleanup callback it installs lives in the runtime, not in user asm).
+        assert!(before.contains("__rt_call_operand_link_owner") || before.contains("__rt_call_operand_push_owner"), "{name}");
         let after = &caller_asm[call_offset..];
-        assert!(after.contains("__rt_reference_cell_release"), "{name}");
+        assert!(after.contains("__rt_reference_cell_release"), "{name}: the caller retires its cell leases");
+        assert!(after.contains("op=release_local_slot"), "{name}: the default arrays are released after the call");
     }
 }
 

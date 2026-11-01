@@ -2,7 +2,7 @@
 title: "array_reduce()"
 description: "Iteratively reduces an array to a single value using a callback function."
 sidebar:
-  order: 34
+  order: 40
 ---
 
 ## array_reduce()

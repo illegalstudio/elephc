@@ -24,7 +24,11 @@ builtin! {
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
     let principal_ty = cx.checker.infer_type(&cx.args[1], cx.env)?;
-    if !matches!(principal_ty, PhpType::Int | PhpType::Str) {
+    // A gradual principal is dispatched on its runtime tag, which raises php's TypeError.
+    if !matches!(
+        principal_ty.codegen_repr(),
+        PhpType::Int | PhpType::Str | PhpType::Mixed | PhpType::Union(_)
+    ) {
         return Err(CompileError::new(
             cx.args[1].span,
             &format!("{}() owner/group must be int or string", cx.name),

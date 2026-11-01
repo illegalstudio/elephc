@@ -5,8 +5,8 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - The check hook validates that all flag/depth arguments are integers, reporting
-//!   each type error at the offending argument's span (not the call span).
+//! - The check hook validates known flag/depth argument types while allowing gradual
+//!   values to cross the integer boundary through the shared runtime coercion path.
 
 use crate::builtins::semantics::{
     runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,
@@ -33,14 +33,14 @@ fn eir_result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
     PhpType::Mixed
 }
 
-/// Validates that all flag and depth arguments are integers.
+/// Validates known flag and depth argument types and defers gradual values to runtime coercion.
 ///
 /// Reports type errors at the span of the offending argument, not the call span.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
     for extra in &cx.args[1..] {
         let ty = cx.checker.infer_type(extra, cx.env)?;
-        if ty != PhpType::Int {
+        if !matches!(ty, PhpType::Int | PhpType::Mixed) {
             return Err(CompileError::new(
                 extra.span,
                 "json_encode() flags and depth must be integers",

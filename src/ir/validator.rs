@@ -35,6 +35,9 @@ pub enum ValidationError {
     BlockMissingTerminator(BlockId),
     UnknownBlock(BlockId),
     UnknownInstruction(InstId),
+    UnknownSource(crate::ir::SourceId),
+    InvalidDeclarationName(crate::ir::DataId),
+    UnresolvedSource(std::path::PathBuf),
     UnknownValue(ValueId),
     DuplicateInstructionInBlocks(InstId),
     ValueDefMismatch(ValueId),
@@ -48,6 +51,13 @@ pub enum ValidationError {
         inst: InstId,
         expected: &'static str,
         actual: usize,
+        /// The instruction's opcode and source position, so a backend gap names the PHP line it
+        /// came from instead of only an `InstId` the reader cannot look up.
+        ///
+        /// `LoweringError` renders this enum with `{:?}`, so anything a reader needs has to be
+        /// IN the value. Finding the construct behind one of these used to mean re-running the
+        /// compiler under a temporary `eprintln!`.
+        at: Option<String>,
     },
     OperandTypeMismatch {
         inst: InstId,
@@ -110,6 +120,22 @@ pub fn validate_module(module: &Module) -> Result<(), ValidationError> {
         .chain(module.runtime_callable_invokers.iter())
     {
         validate_function(function)?;
+        for inst in &function.instructions {
+            if let Some(Immediate::Source(id)) = &inst.immediate {
+                if module.source_catalog().and_then(|catalog| catalog.get(*id)).is_none() {
+                    return Err(ValidationError::UnknownSource(*id));
+                }
+            }
+            if let Some(Immediate::ClassLikeActivation(activation)) = &inst.immediate {
+                let (source, name) = (&activation.source, &activation.name);
+                if module.source_catalog().and_then(|catalog| catalog.get(*source)).is_none() {
+                    return Err(ValidationError::UnknownSource(*source));
+                }
+                if module.data.strings.get(name.as_raw() as usize).is_none_or(|name| name.is_empty()) {
+                    return Err(ValidationError::InvalidDeclarationName(*name));
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -248,7 +274,7 @@ fn validate_instruction_placement(function: &Function) -> Result<(), ValidationE
 /// Validates instruction operands, result metadata, immediates, effects, and dominance.
 fn validate_instructions(
     function: &Function,
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
+    dominators: &Dominators,
 ) -> Result<(), ValidationError> {
     for block in &function.blocks {
         for (index, inst_id) in block.instructions.iter().enumerate() {
@@ -565,18 +591,34 @@ fn validate_instruction_immediate(
 ) -> Result<(), ValidationError> {
     use Immediate as Imm;
     use Op::*;
+    if let Some(Imm::UnresolvedSource(path)) = &inst.immediate {
+        return Err(ValidationError::UnresolvedSource((**path).clone()));
+    }
     match inst.op {
         ConstI64 => require_immediate(inst_id, inst, "i64", |imm| matches!(imm, Imm::I64(_))),
+        ClassLikeActivate => require_immediate(inst_id, inst, "declaration site", |imm| {
+            matches!(imm, Imm::ClassLikeActivation(_))
+        }),
         ConstF64 => require_immediate(inst_id, inst, "f64", |imm| matches!(imm, Imm::F64(_))),
         ConstBool => require_immediate(inst_id, inst, "bool", |imm| matches!(imm, Imm::Bool(_))),
-        ConstStr | ConstClassName | DataAddr | Warn | IncludeOnceMark | IncludeOnceGuard
-        | FunctionVariantMark | FunctionVariantDispatch | LoadPropRefCell
+        IncludeOnceMark | IncludeOnceGuard => {
+            require_immediate(inst_id, inst, "source id", |imm| matches!(imm, Imm::Source(_)))
+        }
+        IncludeFrameEnter | IncludeFrameExit => require_immediate(
+            inst_id,
+            inst,
+            "include frame",
+            |imm| matches!(imm, Imm::IncludeFrame(_)),
+        ),
+        ConstStr | ConstClassName | ClosureScopeClassName | DataAddr | Warn
+        | FunctionVariantMark | FunctionVariantDispatch | LoadPropRefCell | BindPropRefCell
         | LoadPropRefCellChecked
         | LoadStaticPropertyRefCell
         | EvalFunctionCallArray | EvalFunctionExists | EvalClassExists | EvalConstantExists
         | EvalConstantFetch
         | EvalStaticMethodCall
         | EnumBackingStringToInt
+        | ArgumentStringToInt
         | EnumBackingMixedToInt
         | PackedFieldMixedToInt
         | PackedFieldMixedToFloat
@@ -607,8 +649,13 @@ fn validate_instruction_immediate(
         StrAppend | LoadLocal | StoreLocal | UnsetLocal | ZeroLocalSlot | LoadRefCell | StoreRefCell
         | ReleaseLocalRefCell | AcquireRefCell
         | ReleaseLocalSlot | PushCallOperandOwner | PopCallOperandOwner
-        | LoadStaticLocal | StoreStaticLocal | InitStaticLocal | StaticLocalUninitialized
-        | InvokerRefArg => require_immediate(inst_id, inst, "local slot", |imm| {
+        | LoadStaticLocal | StoreStaticLocal | InitStaticLocal | StaticLocalUninitialized => require_immediate(inst_id, inst, "local slot", |imm| {
+            matches!(imm, Imm::LocalSlot(_))
+        }),
+        InvokerRefArg => require_immediate(inst_id, inst, "local slot or global name", |imm| {
+            matches!(imm, Imm::LocalSlot(_) | Imm::GlobalName(_))
+        }),
+        ArrayLocalRefCell => require_immediate(inst_id, inst, "local slot", |imm| {
             matches!(imm, Imm::LocalSlot(_))
         }),
         BindRefCellPtr => require_immediate(inst_id, inst, "reference alias slot or alias/owner pair", |imm| {
@@ -617,7 +664,7 @@ fn validate_instruction_immediate(
         PromoteLocalRefCell | AliasLocalRefCell | RetainLocalRefCell | AdoptRefCellPtr => require_immediate(inst_id, inst, "local slot pair", |imm| {
             matches!(imm, Imm::LocalSlotPair { .. })
         }),
-        EvalScopeGet | EvalScopeSet => require_immediate(inst_id, inst, "global name", |imm| {
+        EvalScopeGet | EvalScopeSet | GlobalRefCell | UnsetGlobal => require_immediate(inst_id, inst, "global name", |imm| {
             matches!(imm, Imm::GlobalName(_))
         }),
         ICmp | FCmp | PhpRelCmp => require_immediate(inst_id, inst, "comparison predicate", |imm| {
@@ -629,8 +676,8 @@ fn validate_instruction_immediate(
         ICheckedNumericChainToInt => {
             require_immediate(inst_id, inst, "checked numeric chain", |imm| {
                 matches!(imm, Imm::CheckedNumericChain(chain) if !chain.operations().is_empty()
-                    && chain.operations().iter()
-                        .all(|op| !matches!(op, crate::ir::MixedNumericOp::Pow)))
+                    && chain.operations().iter().copied()
+                        .all(crate::ir_passes::checked_numeric_chain::is_checked_chain_operation))
             })
         }
         StrIncDec => require_immediate(inst_id, inst, "increment delta", |imm| {
@@ -668,7 +715,14 @@ fn validate_instruction_immediate(
                 Err(ValidationError::UnexpectedImmediate(inst_id))
             }
         }
-        HashGetForWrite | HashSet | ArraySetMixedKey => {
+        HashSet => {
+            if matches!(inst.immediate, None | Some(Imm::Bool(true) | Imm::InPlacePropertyWrite)) {
+                Ok(())
+            } else {
+                Err(ValidationError::UnexpectedImmediate(inst_id))
+            }
+        }
+        HashGetForWrite | ArraySetMixedKey => {
             if matches!(inst.immediate, None | Some(Imm::Bool(true))) {
                 Ok(())
             } else {
@@ -730,7 +784,7 @@ fn validate_instruction_operands(
     inst_index: u32,
     _inst_id: InstId,
     inst: &Instruction,
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
+    dominators: &Dominators,
 ) -> Result<(), ValidationError> {
     for operand in &inst.operands {
         validate_use(function, *operand, block, Some(inst_index), dominators)?;
@@ -747,17 +801,18 @@ fn validate_opcode_rules(
     use Op::*;
     match inst.op {
         ConstI64 | ConstBool | ConstNull => check_count(inst_id, inst, 0, "0"),
-        ConstF64 | ConstStr | ConstClassName | ConstEnumCase | LoadCalledClassId | DataAddr | ArrayNew | HashNew
-        | CallableArrayNew | GeneratorNew | InvokerRefArg
+        ConstF64 | ConstStr | ConstClassName | ClosureScopeClassName | ConstEnumCase | LoadCalledClassId | DataAddr | ArrayNew | HashNew
+        | CallableArrayNew | GeneratorNew | InvokerRefArg | ArrayLocalRefCell
         | ErrorSuppressBegin | ErrorSuppressEnd | TryPushHandler | TryPopHandler
         | CatchCurrent | CatchBind | FinallyEnter | FinallyExit | IncludeOnceMark
-        | IncludeOnceGuard | FunctionVariantMark | FunctionVariantDispatch | EvalFunctionExists
-        | EvalClassExists | EvalConstantExists | EvalConstantFetch | ConcatReset | GcCollect
-        | Nop => {
+        | IncludeOnceGuard | IncludeFrameEnter | IncludeFrameExit | ClassLikeActivate
+        | FunctionVariantMark | FunctionVariantDispatch | EvalFunctionExists
+        | EvalConstantExists | EvalConstantFetch | ConcatReset | GcCollect | Nop => {
             check_count(inst_id, inst, 0, "0")
         }
         // Memory-usage selectors carry the optional `$real_usage` flag as their one operand.
         GcControl => check_count_at_most(inst_id, inst, 1, "0 or 1"),
+        EvalClassExists => check_count_at_most(inst_id, inst, 1, "0 or 1"),
         CoreBuiltin => {
             let Some(Immediate::I64(selector)) = inst.immediate.as_ref() else {
                 return Ok(());
@@ -799,7 +854,7 @@ fn validate_opcode_rules(
         IAdd | ISub | IMul | IDiv | ISDiv | ISMod | IPow | IBitAnd | IBitOr | IBitXor
         | IShl | IShrA => check_binary(function, inst_id, inst, IrType::I64, "I64"),
         ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedAddToInt | ICheckedSubToInt
-        | ICheckedMulToInt | ICheckedPow => {
+        | ICheckedMulToInt | ICheckedPow | ICheckedDiv => {
             check_binary(function, inst_id, inst, IrType::I64, "I64")
         }
         ICheckedNumericChainToInt => check_checked_numeric_chain(function, inst_id, inst),
@@ -808,6 +863,16 @@ fn validate_opcode_rules(
         // The operand is either a concrete `Str` payload or a boxed Mixed cell, so only
         // the arity is pinned here; the backend dispatches on the operand's EIR type.
         StrIncDec => check_count(inst_id, inst, 1, "1"),
+        ObjectClassId => check_heap_unary(
+            function,
+            inst_id,
+            inst,
+            IrHeapKind::Object,
+            "Heap(Object)",
+        ),
+        // Runtime class names can arrive as a concrete string or a boxed Mixed string. The
+        // backend validates the storage representation before invoking its lookup helper.
+        ClassNameToId => check_count(inst_id, inst, 1, "1"),
         INeg | IBitNot => check_unary(function, inst_id, inst, IrType::I64, "I64"),
         FNeg => check_unary(function, inst_id, inst, IrType::F64, "F64"),
         ICmp => check_binary(function, inst_id, inst, IrType::I64, "I64"),
@@ -827,8 +892,14 @@ fn validate_opcode_rules(
         StrToI | StrToF | StrToNumber | StrLen | StrPersist => {
             check_unary(function, inst_id, inst, IrType::Str, "Str")
         }
-        StrAppend | StrConcat | StrEq | StrCmp | StrLooseEq => {
+        StrAppend | StrConcat | StrBitAnd | StrBitOr | StrBitXor | StrEq | StrCmp | StrLooseEq => {
             check_binary(function, inst_id, inst, IrType::Str, "Str")
+        }
+        StrSetOffset => {
+            check_count(inst_id, inst, 3, "3")?;
+            check_operand_type(function, inst_id, inst, 0, IrType::Str, "Str")?;
+            check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")?;
+            check_operand_type(function, inst_id, inst, 2, IrType::Str, "Str")
         }
         StrCharAt => {
             check_count(inst_id, inst, 2, "2")?;
@@ -839,6 +910,8 @@ fn validate_opcode_rules(
         LoadLocal
         | LoadRefCell
         | LoadGlobal
+        | GlobalRefCell
+        | UnsetGlobal
         | LoadStaticLocal
         | StaticLocalUninitialized
         | LoadStaticProperty
@@ -870,11 +943,19 @@ fn validate_opcode_rules(
         | ThrowNamedParameterOverwrite | PtrCheckNonnull => {
             check_count(inst_id, inst, 1, "1")
         }
+        LoadDynamicStaticProperty => {
+            check_count(inst_id, inst, 1, "1")?;
+            check_operand_type(function, inst_id, inst, 0, IrType::Str, "Str")
+        }
+        StoreDynamicStaticProperty => {
+            check_count(inst_id, inst, 2, "2")?;
+            check_operand_type(function, inst_id, inst, 0, IrType::Str, "Str")
+        }
         ReleaseUnlessAliases => {
             check_count(inst_id, inst, 2, "2")
         }
         MixedTagOf | MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat
-        | MixedCastString => {
+        | MixedCastString | MixedToHash => {
             check_heap_unary(function, inst_id, inst, IrHeapKind::Mixed, "Heap(Mixed)")
         }
         ArrayUnion => check_binary(
@@ -896,10 +977,13 @@ fn validate_opcode_rules(
         HashSpread => check_binary(function, inst_id, inst, IrType::Heap(IrHeapKind::Hash), "Heap(Hash)"),
         ArrayLen | ArrayGet | ArrayGetSilent | ArrayIsset | ArrayElemAddr | ArraySet | ArrayPush | ArrayEnsureUnique
         | ArrayToPointerWords
-        | ArrayCloneShallow | ArrayToHash | ArraySetMixedKey | ArrayGetMixedKey
-        | ArrayGetMixedKeySilent => {
+        | ArrayCloneShallow | ArraySetMixedKey | ArrayGetMixedKey
+        | ArrayGetMixedKeySilent | ArrayGetMixedKeyForWrite => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Array, "Heap(Array)")
         }
+        // ArrayToHash normalizes either supported PHP array storage kind. An in-place PHP array
+        // operation can change packed/hash storage without changing the source-level array type.
+        ArrayToHash => check_array_to_hash(function, inst_id, inst),
         // Typed fetch-for-write reads require an already integer-coerced key. Mixed-result
         // nested parents instead use the storage-aware runtime reader, which accepts string
         // and boxed keys on an indexed or runtime-promoted receiver.
@@ -963,7 +1047,12 @@ fn validate_opcode_rules(
             )
         }
         HashLen | HashGet | HashGetSilent | HashIsset | HashSet | HashAppend | HashEnsureUnique
-        | HashCloneShallow | DescriptorArgSet | DescriptorArgKeyExists => {
+        | HashCloneShallow | DescriptorArgSet | DescriptorArgKeyExists | HashRefElement => {
+            check_first_heap(function, inst_id, inst, IrHeapKind::Hash, "Heap(Hash)")
+        }
+        ElemRefCell => check_count(inst_id, inst, 2, "2"),
+        HashBindRefElement => {
+            check_count(inst_id, inst, 3, "3")?;
             check_first_heap(function, inst_id, inst, IrHeapKind::Hash, "Heap(Hash)")
         }
         // `SlotDetach` is the one array op that accepts either storage: it nulls `container[key]`
@@ -990,6 +1079,9 @@ fn validate_opcode_rules(
         IterCurrentValueRef => check_count(inst_id, inst, 1, "1"),
         IterEnd => validate_iter_end(function, inst_id, inst),
         ArrayKeyExists | OffsetExists => check_count_at_least(inst_id, inst, 1, "at least 1"),
+        // `DynamicPropUnset` takes the receiver plus the runtime name: `PropUnset` names its
+        // property in an immediate, so it takes one operand, and the count is what pins that.
+        DynamicPropUnset | DynamicPropRefCell | BindPropRefCell => check_count(inst_id, inst, 2, "2"),
         BufferLen | BufferGet | BufferSet | BufferFree => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Buffer, "Heap(Buffer)")
         }
@@ -1024,18 +1116,20 @@ fn validate_opcode_rules(
         }
         PropSet => check_count(inst_id, inst, 2, "2"),
         PropUnset => check_count(inst_id, inst, 1, "1"),
-        // The receiver plus the runtime name. `PropUnset` names its property in an immediate, so
-        // it takes one operand; this op takes the name as a VALUE, which is the whole difference
-        // between the two, and the count is what pins it.
-        DynamicPropUnset => check_count(inst_id, inst, 2, "2"),
         CallablePtr
         | NormalizeCallable
+        | ReflectionMaterialize
+        | ReflRowLookup
         | PdoAdapterAddr
         | DynamicClassHasConstructor
         | DynamicClassIsAbstract
         | DynamicPdoStatementClassStatus
         | DynamicPdoCalledClassStatus => check_count(inst_id, inst, 1, "1"),
         DynamicPdoStatementConstructorCall => check_count(inst_id, inst, 3, "3"),
+        ReflectionFillMembers | ReflWord | ReflPoolStr | ReflAt => check_count(inst_id, inst, 2, "2"),
+        ReflCallableName => check_count(inst_id, inst, 1, "1"),
+        ObjectHandleReserve | ObjectHandleUnpend => check_count(inst_id, inst, 0, "0"),
+        ObjectHandlePend => check_count(inst_id, inst, 1, "1"),
         DynamicPdoStatementInitialize => check_count(inst_id, inst, 5, "5"),
         RuntimeCall => validate_typed_runtime_call(function, inst_id, inst),
         IterStart => validate_iter_start(function, inst_id, inst),
@@ -1214,6 +1308,7 @@ fn validate_typed_runtime_call(
                     inst: inst_id,
                     expected: "typed runtime signature",
                     actual: inst.operands.len(),
+                    at: runtime_call_location(function, inst, target),
                 });
             }
             for (index, expected) in parameters.iter().copied().enumerate() {
@@ -1242,6 +1337,7 @@ fn validate_typed_runtime_call(
                     inst: inst_id,
                     expected: "registry runtime signature",
                     actual,
+                    at: runtime_call_location(function, inst, target),
                 });
             }
         }
@@ -1317,6 +1413,30 @@ fn check_hash_array_union(
     )
 }
 
+/// Validates the single PHP array operand accepted by `ArrayToHash`.
+fn check_array_to_hash(
+    function: &Function,
+    inst_id: InstId,
+    inst: &Instruction,
+) -> Result<(), ValidationError> {
+    check_count(inst_id, inst, 1, "1")?;
+    let operand = inst.operands[0];
+    let actual = function
+        .value(operand)
+        .ok_or(ValidationError::UnknownValue(operand))?
+        .ir_type;
+    if matches!(actual, IrType::Heap(IrHeapKind::Array | IrHeapKind::Hash)) {
+        Ok(())
+    } else {
+        Err(ValidationError::OperandTypeMismatch {
+            inst: inst_id,
+            operand,
+            expected: "Heap(Array)|Heap(Hash)",
+            actual,
+        })
+    }
+}
+
 /// Validates one exact operand count.
 fn check_count(
     inst_id: InstId,
@@ -1331,6 +1451,7 @@ fn check_count(
             inst: inst_id,
             expected: expected_label,
             actual: inst.operands.len(),
+            at: instruction_location(inst),
         })
     }
 }
@@ -1349,6 +1470,7 @@ fn check_count_at_least(
             inst: inst_id,
             expected: expected_label,
             actual: inst.operands.len(),
+            at: instruction_location(inst),
         })
     }
 }
@@ -1367,6 +1489,7 @@ fn check_count_at_most(
             inst: inst_id,
             expected: expected_label,
             actual: inst.operands.len(),
+            at: instruction_location(inst),
         })
     }
 }
@@ -1473,6 +1596,7 @@ fn check_first_heap(
             inst: inst_id,
             expected: "at least 1",
             actual: 0,
+            at: instruction_location(inst),
         });
     };
     let actual = function
@@ -1494,7 +1618,7 @@ fn check_first_heap(
 /// Validates all block terminators and their CFG edge argument contracts.
 fn validate_terminators(
     function: &Function,
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
+    dominators: &Dominators,
 ) -> Result<(), ValidationError> {
     for block in &function.blocks {
         let Some(term) = &block.terminator else {
@@ -1565,7 +1689,7 @@ fn validate_switch_case(
     function: &Function,
     source_block: BlockId,
     case: &SwitchCase,
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
+    dominators: &Dominators,
 ) -> Result<(), ValidationError> {
     validate_branch_args(function, case.target, &case.args)?;
     validate_terminator_uses(function, source_block, &case.args, dominators)
@@ -1582,7 +1706,7 @@ fn validate_return(
     function: &Function,
     block: BlockId,
     value: Option<ValueId>,
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
+    dominators: &Dominators,
 ) -> Result<(), ValidationError> {
     if matches!(function.return_php_type, PhpType::Never) {
         return Err(ValidationError::NeverFunctionReturns);
@@ -1631,7 +1755,7 @@ fn validate_terminator_uses(
     function: &Function,
     block: BlockId,
     values: &[ValueId],
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
+    dominators: &Dominators,
 ) -> Result<(), ValidationError> {
     for value in values {
         validate_use(function, *value, block, None, dominators)?;
@@ -1708,7 +1832,7 @@ fn validate_use(
     value: ValueId,
     use_block: BlockId,
     use_inst_index: Option<u32>,
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
+    dominators: &Dominators,
 ) -> Result<(), ValidationError> {
     let Some(value_ref) = function.value(value) else {
         return Err(ValidationError::UnknownValue(value));
@@ -1720,10 +1844,9 @@ fn validate_use(
     // prospective predecessor terminates. Cross-block dominance has no executable meaning there,
     // including when the definition also belongs to a dead continuation. Keep checking IDs, types,
     // and same-block ordering so malformed instructions still fail validation.
-    let use_is_unreachable = use_block != function.entry
-        && dominators
-            .get(&use_block)
-            .is_some_and(|set| set.len() == 1 && set.contains(&use_block));
+    // (An unreachable block carries only itself as a dominator, so the entry does not dominate it.)
+    let use_is_unreachable =
+        use_block != function.entry && !dominators.dominates(function.entry, use_block);
     let definition_block = match value_ref.def {
         ValueDef::BlockParam { block, .. } | ValueDef::Instruction { block, .. } => block,
     };
@@ -1745,27 +1868,20 @@ fn definition_dominates_use(
     def: ValueDef,
     use_block: BlockId,
     use_inst_index: Option<u32>,
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
+    dominators: &Dominators,
 ) -> bool {
     match def {
         ValueDef::BlockParam { block, .. } => {
-            block == use_block
-                || dominators
-                    .get(&use_block)
-                    .map(|set| set.contains(&block))
-                    .unwrap_or(false)
+            block == use_block || dominators.dominates(block, use_block)
         }
         ValueDef::Instruction { block, index, .. } if block == use_block => use_inst_index
             .map(|use_index| index < use_index)
             .unwrap_or(true),
-        ValueDef::Instruction { block, .. } => dominators
-            .get(&use_block)
-            .map(|set| set.contains(&block))
-            .unwrap_or(false),
+        ValueDef::Instruction { block, .. } => dominators.dominates(block, use_block),
     }
 }
 
-/// Computes simple iterative dominator sets for the function CFG.
+/// Computes iterative dominator sets in reachable CFG reverse postorder.
 ///
 /// Only predecessors reachable from the entry are intersected. An unreachable
 /// block carries no real control flow from the entry, so including it as a
@@ -1777,30 +1893,50 @@ fn definition_dominates_use(
 /// a later pass forwards into the loop. Unreachable blocks themselves resolve
 /// to `{self}`. Validation skips cross-block dominance for their uses while
 /// still rejecting same-block use-before-definition.
-fn compute_dominators(function: &Function) -> HashMap<BlockId, HashSet<BlockId>> {
+fn compute_dominators(function: &Function) -> Dominators {
     let predecessors = compute_predecessors(function);
-    let reachable = reachable_from_entry(function, &predecessors);
+    let reverse_postorder = reachable_reverse_postorder(function, &predecessors);
+    let reachable: HashSet<BlockId> = reverse_postorder
+        .iter()
+        .map(|index| BlockId::from_raw(*index as u32))
+        .collect();
     let block_count = function.blocks.len();
     let all_blocks = full_block_bitset(block_count);
-    let mut dominators = vec![all_blocks.clone(); block_count];
     let entry_index = function.entry.as_raw() as usize;
-    dominators[entry_index] = empty_block_bitset(block_count);
-    set_block_bit(&mut dominators[entry_index], entry_index);
-    let predecessor_indices = reachable_predecessor_indices(function, &predecessors, &reachable);
-
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for (block_index, block) in function.blocks.iter().enumerate() {
-            if block.id == function.entry {
-                continue;
-            }
-            let mut next = if predecessor_indices[block_index].is_empty() {
-                empty_block_bitset(block_count)
+    let mut dominators: Vec<Vec<u64>> = function
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(index, block)| {
+            if index == entry_index || !reachable.contains(&block.id) {
+                let mut singleton = empty_block_bitset(block_count);
+                set_block_bit(&mut singleton, index);
+                singleton
             } else {
                 all_blocks.clone()
-            };
-            for pred_index in &predecessor_indices[block_index] {
+            }
+        })
+        .collect();
+    let predecessor_indices = reachable_predecessor_indices(function, &predecessors, &reachable);
+
+    #[cfg(test)]
+    let mut sweeps = 0;
+    let mut changed = true;
+    while changed {
+        #[cfg(test)]
+        {
+            sweeps += 1;
+        }
+        changed = false;
+        // Block ids need not follow control flow. Visiting them numerically required one full
+        // sweep per backward-numbered edge on a linear CFG; RPO propagates that chain at once.
+        for &block_index in reverse_postorder.iter().skip(1) {
+            let predecessors = &predecessor_indices[block_index];
+            let mut next = predecessors
+                .first()
+                .map(|index| dominators[*index].clone())
+                .unwrap_or_else(|| empty_block_bitset(block_count));
+            for pred_index in predecessors.iter().skip(1) {
                 bitset_and_assign(&mut next, &dominators[*pred_index]);
             }
             set_block_bit(&mut next, block_index);
@@ -1810,7 +1946,11 @@ fn compute_dominators(function: &Function) -> HashMap<BlockId, HashSet<BlockId>>
             }
         }
     }
-    dominator_bitsets_to_map(function, &dominators)
+    Dominators {
+        bitsets: dominators,
+        #[cfg(test)]
+        sweeps,
+    }
 }
 
 /// Converts reachable predecessor block ids into dense block indices for bitset dominator scans.
@@ -1873,22 +2013,59 @@ fn bitset_and_assign(left: &mut [u64], right: &[u64]) {
     }
 }
 
-/// Converts dense dominator bitsets back to the validator's public block-id map.
-fn dominator_bitsets_to_map(
-    function: &Function,
-    dominators: &[Vec<u64>],
-) -> HashMap<BlockId, HashSet<BlockId>> {
-    let mut map = HashMap::with_capacity(function.blocks.len());
-    for (block_index, block) in function.blocks.iter().enumerate() {
-        let mut set = HashSet::new();
-        for (candidate_index, candidate) in function.blocks.iter().enumerate() {
-            if block_bit_is_set(&dominators[block_index], candidate_index) {
-                set.insert(candidate.id);
-            }
-        }
-        map.insert(block.id, set);
+/// Dominator sets for one function, kept as the dense per-block bitsets the fixed point
+/// already computes.
+///
+/// The fixed point below produces one `Vec<u64>` bitset per block, indexed by block index;
+/// `validate_function_shape` has already proven `blocks[i].id == BlockId::from_raw(i)` before
+/// `compute_dominators` runs, so a block id IS its bitset index. The validator only ever asks
+/// one question of this structure — "does A dominate B?" — which the bitset answers with one
+/// bounds-checked load and a shift.
+///
+/// This used to be materialized into a `HashMap<BlockId, HashSet<BlockId>>` by walking every
+/// (block, candidate) pair, i.e. O(blocks^2) SipHash insertions per validated function, on a
+/// path `validate_lowered_module` takes unconditionally in release. The map was never mutated
+/// and never iterated: only `definition_dominates_use` read it, one membership test at a time.
+struct Dominators {
+    /// One dominator bitset per block, addressed by block index.
+    bitsets: Vec<Vec<u64>>,
+    /// Fixed-point sweeps, retained only for deterministic scheduling regressions.
+    #[cfg(test)]
+    sweeps: usize,
+}
+
+impl Dominators {
+    /// Returns whether `candidate` is in `block`'s dominator set.
+    ///
+    /// Out-of-range ids answer `false` on both sides, which is exactly what the
+    /// `HashMap::get(..).map(|set| set.contains(..)).unwrap_or(false)` chain this replaces did:
+    /// the map only ever held keys for real blocks, and a set only ever held real block ids
+    /// (`set_block_bit` is called only with in-range indices, and the trailing bits of the last
+    /// word are masked out of `full_block_bitset`, so a padding bit is never set).
+    fn dominates(&self, candidate: BlockId, block: BlockId) -> bool {
+        self.bitsets
+            .get(block.as_raw() as usize)
+            .is_some_and(|bits| block_bit_is_set(bits, candidate.as_raw() as usize))
     }
-    map
+
+    /// Materializes the block-id map this analysis used to return.
+    ///
+    /// Test-only: it exists so the bitset accessor can be differentially compared against the
+    /// shape it replaced, on the same function, for every (block, candidate) pair.
+    #[cfg(test)]
+    fn to_block_id_map(&self, function: &Function) -> HashMap<BlockId, HashSet<BlockId>> {
+        let mut map = HashMap::with_capacity(function.blocks.len());
+        for (block_index, block) in function.blocks.iter().enumerate() {
+            let mut set = HashSet::new();
+            for (candidate_index, candidate) in function.blocks.iter().enumerate() {
+                if block_bit_is_set(&self.bitsets[block_index], candidate_index) {
+                    set.insert(candidate.id);
+                }
+            }
+            map.insert(block.id, set);
+        }
+        map
+    }
 }
 
 /// Returns whether a block index is present in a dominator bitset.
@@ -1899,10 +2076,54 @@ fn block_bit_is_set(bits: &[u64], block_index: usize) -> bool {
         .is_some_and(|word_bits| (word_bits & (1_u64 << bit)) != 0)
 }
 
+/// Traverses the validator's graph, including its implicit exception-handler edges.
+///
+/// The optimizer's terminator-only CFG omits these handler edges, so its RPO is not interchangeable
+/// with this traversal. Deriving successors from the same predecessor table keeps reachability
+/// and dominance on exactly one edge set. The explicit DFS stack also handles deeply nested CFGs
+/// without consuming the Rust call stack. Invalid destination ids remain for terminator validation
+/// to diagnose, as in the former reachability fixed point.
+fn reachable_reverse_postorder(
+    function: &Function,
+    predecessors: &HashMap<BlockId, Vec<BlockId>>,
+) -> Vec<usize> {
+    let block_count = function.blocks.len();
+    let mut successors = vec![Vec::new(); block_count];
+    for (index, block) in function.blocks.iter().enumerate() {
+        if let Some(preds) = predecessors.get(&block.id) {
+            for pred in preds {
+                if let Some(targets) = successors.get_mut(pred.as_raw() as usize) {
+                    targets.push(index);
+                }
+            }
+        }
+    }
+    let entry = function.entry.as_raw() as usize;
+    let mut visited = vec![false; block_count];
+    visited[entry] = true;
+    let mut stack = vec![(entry, 0)];
+    let mut postorder = Vec::with_capacity(block_count);
+    while let Some((block, next)) = stack.last_mut() {
+        if let Some(&target) = successors[*block].get(*next) {
+            *next += 1;
+            if !visited[target] {
+                visited[target] = true;
+                stack.push((target, 0));
+            }
+        } else {
+            postorder.push(*block);
+            stack.pop();
+        }
+    }
+    postorder.reverse();
+    postorder
+}
+
 /// Computes the set of blocks reachable from the entry over the same edge set as
 /// `compute_predecessors` (terminator successors plus implicit exception-handler
 /// edges): a block is reachable when it is the entry or any of its predecessors
 /// is reachable. Iterates to a fixed point.
+#[cfg(test)]
 fn reachable_from_entry(
     function: &Function,
     predecessors: &HashMap<BlockId, Vec<BlockId>>,
@@ -1997,6 +2218,386 @@ fn ownership_compatible(ir_type: IrType, php_type: &PhpType, ownership: Ownershi
         !matches!(ownership, Ownership::NonHeap)
     } else {
         matches!(ownership, Ownership::NonHeap)
+    }
+}
+
+/// Describes an instruction for a diagnostic: its opcode plus the source position it came from.
+///
+/// `LoweringError` renders `ValidationError` with `{:?}`, so a validation failure shows only what
+/// the value itself carries. An `InstId` alone identifies nothing a reader can act on; the opcode
+/// and the PHP `line:col` are what turn a backend gap into a construct they can go and look at.
+fn instruction_location(inst: &Instruction) -> Option<String> {
+    let span = inst.span?;
+    Some(format!("{} at {}:{}", inst.op.name(), span.line, span.col))
+}
+
+/// Like [`instruction_location`], and also names the runtime call's target.
+///
+/// `runtime_call` says nothing about WHICH runtime function disagreed about its operand count,
+/// and that is the whole question when one of them fails.
+fn runtime_call_location(
+    function: &Function,
+    inst: &Instruction,
+    target: crate::ir::RuntimeCallTarget,
+) -> Option<String> {
+    let base = instruction_location(inst).unwrap_or_else(|| inst.op.name().to_string());
+    // The enclosing function is named for the same reason the checker records a declaration: an
+    // `Instruction` carries a `Span` with no file, and after include/autoload expansion a bare
+    // `line:col` is shared by every spliced file. The function name is what a reader can find.
+    Some(format!("{base} -> {target:?} in {}", function.name))
+}
+
+#[cfg(test)]
+mod dominator_bitset_tests {
+    use super::*;
+    use crate::ir::Builder;
+
+    /// Builds a linear CFG whose block ids run against execution order after its entry.
+    fn reverse_linear(block_count: usize) -> Function {
+        assert!(block_count >= 2);
+        let mut function = Function::new("reverse_linear".to_string(), IrType::I64, PhpType::Int);
+        {
+            let mut builder = Builder::new(&mut function);
+            let blocks: Vec<_> = (0..block_count)
+                .map(|index| builder.create_named_block(&format!("b{index}"), vec![]))
+                .collect();
+            builder.set_entry(blocks[0]);
+            for index in 0..block_count {
+                builder.position_at_end(blocks[index]);
+                if index == 1 {
+                    let result = builder.emit_const_i64(0);
+                    builder.terminate(Terminator::Return { value: Some(result) });
+                } else {
+                    let next = if index == 0 { block_count - 1 } else { index - 1 };
+                    builder.terminate(Terminator::Br { target: blocks[next], args: vec![] });
+                }
+            }
+        }
+        function
+    }
+
+    /// Independent set-based fixed point, deliberately kept in block-id order as an oracle.
+    fn reference_dominator_sets(function: &Function) -> Vec<HashSet<BlockId>> {
+        let predecessors = compute_predecessors(function);
+        let reachable = reachable_from_entry(function, &predecessors);
+        let all: HashSet<_> = function.blocks.iter().map(|block| block.id).collect();
+        let mut sets = vec![all; function.blocks.len()];
+        sets[function.entry.as_raw() as usize] = HashSet::from([function.entry]);
+        loop {
+            let mut changed = false;
+            for block in &function.blocks {
+                if block.id == function.entry {
+                    continue;
+                }
+                let mut preds = predecessors
+                    .get(&block.id)
+                    .into_iter()
+                    .flatten()
+                    .filter(|pred| reachable.contains(pred));
+                let mut next = preds
+                    .next()
+                    .map(|pred| sets[pred.as_raw() as usize].clone())
+                    .unwrap_or_default();
+                for pred in preds {
+                    next.retain(|candidate| sets[pred.as_raw() as usize].contains(candidate));
+                }
+                next.insert(block.id);
+                let index = block.id.as_raw() as usize;
+                if sets[index] != next {
+                    sets[index] = next;
+                    changed = true;
+                }
+            }
+            if !changed {
+                return sets;
+            }
+        }
+    }
+
+    /// Compares every dominance query, including unknown ids, against the independent oracle.
+    fn assert_reference_agrees(function: &Function) {
+        let reference = reference_dominator_sets(function);
+        let actual = compute_dominators(function);
+        for block in &function.blocks {
+            for candidate in &function.blocks {
+                assert_eq!(
+                    actual.dominates(candidate.id, block.id),
+                    reference[block.id.as_raw() as usize].contains(&candidate.id),
+                    "{}: {:?} dominates {:?}",
+                    function.name,
+                    candidate.id,
+                    block.id
+                );
+            }
+        }
+        let absent = BlockId::from_raw(function.blocks.len() as u32);
+        assert!(!actual.dominates(absent, function.entry));
+        assert!(!actual.dominates(function.entry, absent));
+        assert!(!actual.dominates(absent, absent));
+    }
+
+    /// Builds small deterministic CFGs, with cycles, dead islands and nonzero entry ids.
+    fn generated_cfg(seed: u32, handlers: bool) -> Function {
+        let block_count = 1 + seed as usize % 24;
+        let mut state = seed.wrapping_add(1);
+        let mut next = || {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            state
+        };
+        let mut function = Function::new(format!("generated_{seed}_{handlers}"), IrType::Void, PhpType::Void);
+        {
+            let mut builder = Builder::new(&mut function);
+            let blocks: Vec<_> = (0..block_count)
+                .map(|index| builder.create_named_block(&format!("b{index}"), vec![]))
+                .collect();
+            let entry = blocks[next() as usize % block_count];
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let cond = builder.emit_const_i64(1);
+            for (index, block) in blocks.iter().enumerate() {
+                builder.position_at_end(*block);
+                if handlers && index % 3 == 0 {
+                    let handler = blocks[next() as usize % block_count];
+                    builder.emit(
+                        Op::TryPushHandler,
+                        vec![],
+                        Some(Immediate::I64(i64::from(handler.as_raw()))),
+                        IrType::Void,
+                        PhpType::Void,
+                        Ownership::NonHeap,
+                    );
+                }
+                let choice = next();
+                let target = blocks[next() as usize % block_count];
+                let terminator = match choice % 3 {
+                    0 => Terminator::Return { value: None },
+                    1 => Terminator::Br { target, args: vec![] },
+                    _ => Terminator::CondBr {
+                        cond,
+                        then_target: target,
+                        then_args: vec![],
+                        else_target: blocks[next() as usize % block_count],
+                        else_args: vec![],
+                    },
+                };
+                builder.terminate(terminator);
+            }
+        }
+        function
+    }
+
+    /// Scheduling must not change dominance on reducible or irreducible graphs.
+    #[test]
+    fn reverse_postorder_matches_set_oracle_on_generated_cfgs() {
+        for seed in 0..256 {
+            let function = generated_cfg(seed, false);
+            assert_reference_agrees(&function);
+            validate_function(&function).unwrap();
+        }
+    }
+
+    /// Implicit exception edges participate in both reachability and dominance, even in cycles.
+    #[test]
+    fn reverse_postorder_matches_set_oracle_with_exception_edges() {
+        for seed in 0..256 {
+            assert_reference_agrees(&generated_cfg(seed, true));
+        }
+    }
+
+    /// Validator work must follow CFG order rather than require one sweep per block id.
+    #[test]
+    fn reverse_linear_cfg_converges_in_two_sweeps() {
+        let function = reverse_linear(256);
+        let dominators = compute_dominators(&function);
+        assert!(dominators.dominates(BlockId::from_raw(255), BlockId::from_raw(1)));
+        assert!(
+            dominators.sweeps <= 2,
+            "reverse linear CFG required {} sweeps",
+            dominators.sweeps
+        );
+        validate_function(&function).unwrap();
+    }
+
+    /// Runs one bounded profiler workload; no wall-clock assertion depends on machine load.
+    #[test]
+    #[ignore = "manual paired validator scheduling measurement"]
+    fn profile_reverse_linear_dominators() {
+        let function = reverse_linear(2048);
+        let start = std::time::Instant::now();
+        let dominators = std::hint::black_box(compute_dominators(&function));
+        let elapsed = start.elapsed();
+        assert!(dominators.dominates(BlockId::from_raw(2047), BlockId::from_raw(1)));
+        eprintln!(
+            "validator_profile blocks=2048 sweeps={} elapsed_us={}",
+            dominators.sweeps,
+            elapsed.as_micros()
+        );
+    }
+
+    /// Asserts the bitset accessor and the block-id map it replaced answer identically for
+    /// every ordered pair of blocks in `function`.
+    fn assert_old_and_new_agree(function: &Function) {
+        let dominators = compute_dominators(function);
+        let map = dominators.to_block_id_map(function);
+        for block in &function.blocks {
+            for candidate in &function.blocks {
+                let old = map
+                    .get(&block.id)
+                    .map(|set| set.contains(&candidate.id))
+                    .unwrap_or(false);
+                let new = dominators.dominates(candidate.id, block.id);
+                assert_eq!(
+                    old, new,
+                    "dominates({:?}, {:?}) disagrees with the block-id map",
+                    candidate.id, block.id
+                );
+            }
+        }
+        // An id past the last block answers false on both sides, as the map lookup did.
+        let past_end = BlockId::from_raw(function.blocks.len() as u32);
+        assert!(!dominators.dominates(past_end, function.entry));
+        assert!(!dominators.dominates(function.entry, past_end));
+    }
+
+    /// Builds a four-block diamond: `entry` branches to `then`/`els`, both branch to `merge`.
+    fn diamond() -> Function {
+        let mut function = Function::new("diamond".to_string(), IrType::I64, PhpType::Int);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", vec![]);
+            let then_block = builder.create_named_block("then", vec![]);
+            let else_block = builder.create_named_block("els", vec![]);
+            let merge = builder.create_named_block("merge", vec![]);
+            builder.set_entry(entry);
+
+            builder.position_at_end(entry);
+            let cond = builder.emit_const_i64(1);
+            builder.terminate(Terminator::CondBr {
+                cond,
+                then_target: then_block,
+                then_args: vec![],
+                else_target: else_block,
+                else_args: vec![],
+            });
+
+            builder.position_at_end(then_block);
+            builder.terminate(Terminator::Br {
+                target: merge,
+                args: vec![],
+            });
+
+            builder.position_at_end(else_block);
+            builder.terminate(Terminator::Br {
+                target: merge,
+                args: vec![],
+            });
+
+            builder.position_at_end(merge);
+            let result = builder.emit_const_i64(0);
+            builder.terminate(Terminator::Return {
+                value: Some(result),
+            });
+        }
+        function
+    }
+
+    /// Builds a four-block loop: `entry -> header`, `header -> body | exit`, `body -> header`.
+    fn loop_with_backedge() -> Function {
+        let mut function = Function::new("looped".to_string(), IrType::I64, PhpType::Int);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", vec![]);
+            let header = builder.create_named_block("header", vec![]);
+            let body = builder.create_named_block("body", vec![]);
+            let exit = builder.create_named_block("exit", vec![]);
+            builder.set_entry(entry);
+
+            builder.position_at_end(entry);
+            builder.terminate(Terminator::Br {
+                target: header,
+                args: vec![],
+            });
+
+            builder.position_at_end(header);
+            let cond = builder.emit_const_i64(1);
+            builder.terminate(Terminator::CondBr {
+                cond,
+                then_target: body,
+                then_args: vec![],
+                else_target: exit,
+                else_args: vec![],
+            });
+
+            builder.position_at_end(body);
+            builder.terminate(Terminator::Br {
+                target: header,
+                args: vec![],
+            });
+
+            builder.position_at_end(exit);
+            let result = builder.emit_const_i64(0);
+            builder.terminate(Terminator::Return {
+                value: Some(result),
+            });
+        }
+        function
+    }
+
+    /// Pins the diamond's dominance facts so the differential comparison cannot pass by both
+    /// sides being wrong in the same way.
+    #[test]
+    fn diamond_dominance_facts_are_pinned() {
+        let function = diamond();
+        let dominators = compute_dominators(&function);
+        let entry = function.blocks[0].id;
+        let then_block = function.blocks[1].id;
+        let else_block = function.blocks[2].id;
+        let merge = function.blocks[3].id;
+        assert!(dominators.dominates(entry, merge), "entry dominates the merge");
+        assert!(dominators.dominates(merge, merge), "dominance is reflexive");
+        assert!(
+            !dominators.dominates(then_block, merge),
+            "one arm never dominates the merge"
+        );
+        assert!(
+            !dominators.dominates(else_block, merge),
+            "one arm never dominates the merge"
+        );
+        assert!(
+            !dominators.dominates(merge, entry),
+            "a successor never dominates the entry"
+        );
+    }
+
+    /// The bitset accessor answers exactly what the materialized map answered, on a diamond.
+    #[test]
+    fn diamond_dominance_matches_the_block_id_map() {
+        assert_old_and_new_agree(&diamond());
+    }
+
+    /// The bitset accessor answers exactly what the materialized map answered, on a loop whose
+    /// back edge exercises the fixed point's intersection step.
+    #[test]
+    fn loop_dominance_matches_the_block_id_map() {
+        let function = loop_with_backedge();
+        assert_old_and_new_agree(&function);
+        let dominators = compute_dominators(&function);
+        let entry = function.blocks[0].id;
+        let header = function.blocks[1].id;
+        let body = function.blocks[2].id;
+        let exit = function.blocks[3].id;
+        assert!(
+            dominators.dominates(entry, body),
+            "the entry dominates the loop body"
+        );
+        assert!(
+            dominators.dominates(header, exit),
+            "the header dominates the loop exit"
+        );
+        assert!(
+            !dominators.dominates(body, header),
+            "the back edge does not dominate the header"
+        );
     }
 }
 

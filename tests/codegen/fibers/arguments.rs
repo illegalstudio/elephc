@@ -9,6 +9,24 @@
 
 use super::*;
 
+/// Verifies generic Mixed dispatch never references synthetic Fiber method symbols.
+#[test]
+fn test_mixed_constructor_dispatch_skips_runtime_only_fiber_declaration() {
+    let source = r#"<?php
+function invoke_constructor(mixed $object, mixed $argument): mixed {
+    return $object->__construct($argument);
+}
+"#;
+    let dir = make_cli_test_dir("elephc_mixed_constructor_runtime_only_fiber");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        !user_asm.contains("_method___Fiber____u__u_construct"),
+        "runtime-only declarations must not create unresolved generic method calls"
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
 /// Verifies that `$f->start($a, $b)` forwards two `mixed` arguments to the fiber
 /// closure's parameters and formats them correctly.
 #[test]
@@ -688,4 +706,45 @@ echo "should-not-reach";
         "control should not return after the guard fault, stdout was: {}",
         out.stdout
     );
+}
+
+/// Verifies boxed values cross `start()`, `suspend()` and `resume()` with one owner each, and that
+/// a Fiber releases its `start()` arguments.
+///
+/// `resume()` and `suspend()` hand their value to the other side, which receives it owned. A value
+/// that already was a box reached the runtime still owned by the caller, so `Fiber::suspend($x * 2)`
+/// released it twice: the fiber's `return $x + $y` then read a recycled cell and answered `10`
+/// for `5 + 10`, under `--heap-debug` "bad refcount". And no Fiber ever released the boxed
+/// arguments `start()` stored on it: one leaked block per `$fiber->start($x)`.
+#[test]
+fn test_fiber_transfers_boxed_values_without_double_release_or_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function boxed(int $n): mixed { return $n > 100 ? "big" : $n * 3; }
+$a = new Fiber(function (int $x): int { $y = Fiber::suspend($x * 2); return $x + $y; });
+$a->start(5); $a->resume(10);
+echo "a=", $a->getReturn(), "\n";
+$f = new Fiber(function (mixed $x): mixed {
+    $y = Fiber::suspend(boxed($x));
+    $z = Fiber::suspend([$x, $y]);
+    return [$x, $y, $z];
+});
+$m = boxed(2);
+echo "s=", json_encode($f->start($m)), "\n";
+echo "t=", json_encode($f->resume(boxed(4))), "\n";
+$f->resume(boxed(500));
+echo "ret=", json_encode($f->getReturn()), " m=", json_encode($m), "\n";
+$sum = 0;
+for ($k = 0; $k < 20; $k++) {
+    $g = new Fiber(function (int $x): int { $y = Fiber::suspend($x * 2); return $x + $y; });
+    $sum += $g->start($k);
+    $g->resume(1);
+    $sum += $g->getReturn();
+}
+echo "sum=", $sum, "\n";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "a=15\ns=18\nt=[6,12]\nret=[6,12,\"big\"] m=6\nsum=590\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

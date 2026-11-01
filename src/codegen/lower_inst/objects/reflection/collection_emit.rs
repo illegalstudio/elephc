@@ -117,8 +117,7 @@ pub(super) fn emit_reflection_class_array(ctx: &mut FunctionContext<'_>, names: 
     );
     for name in names {
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-        let metadata = reflection_class_metadata_for_name(ctx, name)?;
-        emit_reflection_owner_object(ctx, "ReflectionClass", &metadata)?;
+        emit_full_reflection_class_object(ctx, name)?;
         emit_reflection_class_hash_insert(ctx, name);
     }
     Ok(())
@@ -306,6 +305,9 @@ pub(super) fn emit_reflection_static_property_array(
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         let symbol = static_property_symbol(&member.declaring_class_name, &member.name);
         abi::emit_load_symbol_to_result(ctx.emitter, &symbol, &member.php_type);
+        // The slot keeps its value: the snapshot takes its own reference (a string is copied by
+        // the boxing). Sharing the slot's reference let the reflector free the static's value.
+        abi::emit_incref_if_refcounted(ctx.emitter, &member.php_type.codegen_repr());
         emit_box_current_value_as_mixed(ctx.emitter, &crate::types::mixed_box_php_type(&member.php_type));
         emit_reflection_static_property_hash_insert(ctx, &member.name);
         if let Some(skip_label) = skip_label {
@@ -349,4 +351,3 @@ pub(super) fn emit_skip_if_static_property_uninitialized(
     }
     Some(skip_label)
 }
-

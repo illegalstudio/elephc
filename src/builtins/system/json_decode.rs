@@ -46,7 +46,10 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     }
     for extra in cx.args.iter().skip(2) {
         let ty = cx.checker.infer_type(extra, cx.env)?;
-        if ty != PhpType::Int {
+        // A boxed `mixed` depth/flags (an untyped `$flags = 0` parameter) is cast to int when the
+        // call is lowered: Laravel's `Filesystem::json($path, $flags = 0)` and
+        // `JsonResponse::getData($assoc = false, $depth = 512)` forward theirs as written.
+        if ty != PhpType::Int && !matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
             return Err(CompileError::new(
                 extra.span,
                 "json_decode() depth and flags must be integers",

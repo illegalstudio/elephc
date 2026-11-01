@@ -296,11 +296,96 @@ pub(super) fn builtin_reflection_class_is_subclass_of_method() -> ClassMethod {
                 },
                 dummy_span,
             ),
+            Stmt::new(
+                StmtKind::Assign {
+                    name: "ancestor".to_string(),
+                    value: reflection_this_property("__parent_class", dummy_span),
+                },
+                dummy_span,
+            ),
+            reflection_parent_chain_walk(dummy_span),
             Stmt::new(StmtKind::Return(false_bool()), dummy_span),
         ],
         span: dummy_span,
         attributes: Vec::new(),
     }
+}
+
+/// Walks `$this->__parent_class` upwards, returning true when one of them is `$target`.
+///
+/// The `__parent_names` loop above only answers on a reflection object that CODEGEN materialized:
+/// a reflection built through the eval bridge
+/// (`codegen::eval_reflection_owner_helpers::reflection_owner_layout`) fills `__interface_names`,
+/// `__trait_names`, `__method_names`, `__property_names` and `__parent_class`, but there is no
+/// `__parent_names` slot in its argument ABI, so that array stays at its `[]` default.
+///
+/// The visible consequence was a `ReflectionClass::isSubclassOf()` that answered differently
+/// depending on the SPELLING of its receiver: on a local the call is routed to the interpreter and
+/// answers from the interpreter's own class table, while on a typed parameter it runs this body and
+/// read the empty array. MEASURED with `class PChild extends PBase`:
+///
+/// ```text
+///     $r->isSubclassOf(PBase::class)                              true
+///     f($r) where f(\ReflectionClass $r) => $r->isSubclassOf(...)  false
+/// ```
+///
+/// and the interface arm answered true in both, because its slot IS filled. Symfony's
+/// `AddConsoleCommandPass` asks the question inside
+/// `registerCommand(ContainerBuilder $c, \ReflectionClass $reflection, …)`, so every console
+/// command was refused as "not a subclass of Command".
+///
+/// `__parent_class` is filled on BOTH paths -- by the bridge above and by
+/// `lower_inst::objects::reflection::member_properties_emit::emit_reflection_parent_class_property`
+/// -- so walking it answers for either, and it holds `false` at the top of a hierarchy, which ends
+/// the loop.
+fn reflection_parent_chain_walk(dummy_span: crate::span::Span) -> Stmt {
+    let ancestor = variable_expr("ancestor", dummy_span);
+    let ancestor_name = Expr::new(
+        ExprKind::MethodCall {
+            object: Box::new(ancestor.clone()),
+            method: "getName".to_string(),
+            args: Vec::new(),
+        },
+        dummy_span,
+    );
+    let ancestor_parent = Expr::new(
+        ExprKind::MethodCall {
+            object: Box::new(ancestor.clone()),
+            method: "getParentClass".to_string(),
+            args: Vec::new(),
+        },
+        dummy_span,
+    );
+    let ancestor_matches = binary_expr(
+        strtolower_call(ancestor_name, dummy_span),
+        BinOp::Eq,
+        variable_expr("target", dummy_span),
+        dummy_span,
+    );
+    Stmt::new(
+        StmtKind::While {
+            condition: ancestor.clone(),
+            body: vec![
+                Stmt::new(
+                    StmtKind::If {
+                        condition: ancestor_matches,
+                        then_body: vec![Stmt::new(StmtKind::Return(true_bool()), dummy_span)],
+                        elseif_clauses: Vec::new(),
+                        else_body: None,
+                    },
+                    dummy_span,
+                ),
+                Stmt::new(
+                    StmtKind::Assign {
+                        name: "ancestor".to_string(),
+                        value: ancestor_parent,
+                    },
+                    dummy_span,
+                ),
+            ],
+        },
+        dummy_span,
+    )
 }
 
 /// Returns `ReflectionClass::isInstance()` backed by PHP's class relation predicate.

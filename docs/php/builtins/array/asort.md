@@ -2,19 +2,20 @@
 title: "asort()"
 description: "Sorts an array and maintains index association."
 sidebar:
-  order: 51
+  order: 61
 ---
 
 ## asort()
 
 ```php
-function asort(array $array): bool
+function asort(array $array, int $flags = 0): bool
 ```
 
 Sorts an array and maintains index association.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
+- `$flags` (`int`), default `0`, optional
 
 **Returns**: `bool`
 

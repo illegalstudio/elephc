@@ -75,7 +75,7 @@ pub(in crate::interpreter) fn eval_settype_direct_args(
                 if var_target.is_some() {
                     return Err(EvalStatus::RuntimeFatal);
                 }
-                let (value, target) = eval_call_arg_value(arg.value(), context, scope, values)?;
+                let (value, target) = eval_direct_ref_arg_value(arg.value(), context, scope, values)?;
                 let target = target.ok_or(EvalStatus::RuntimeFatal)?;
                 var_target = Some((value, target));
             }

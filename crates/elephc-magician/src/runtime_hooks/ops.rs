@@ -19,6 +19,7 @@ use crate::eval_ir::EvalBinOp;
 use crate::interpreter::RuntimeValueOps;
 use crate::value::{RuntimeCell, RuntimeCellHandle};
 
+mod aot_memo;
 mod collection_calls;
 mod construction_raw;
 mod lifecycle_scalars;
@@ -46,6 +47,11 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         self.call_instance_operator(object, method, args)
     }
 
+    /// Moves the generated runtime's realpath cache epoch.
+    fn filesystem_paths_changed(&mut self) {
+        unsafe { super::externs::__rt_realpath_cache_invalidate() };
+    }
+
     /// Marks the canonical cell and native inventory closed after Magician released its handle.
     fn resource_closed(&mut self, resource: RuntimeCellHandle) -> Result<(), EvalStatus> {
         unsafe { __elephc_eval_resource_state(resource.as_ptr(), -1); }
@@ -55,6 +61,27 @@ impl RuntimeValueOps for ElephcRuntimeOps {
     /// Keeps trigger_error's precise level and avoids redispatching default formatted text.
     fn warning_unhandled(&mut self, message: &str) -> Result<(), EvalStatus> {
         unsafe { __elephc_eval_warning_raw(message.as_ptr(), message.len() as u64); }
+        Ok(())
+    }
+
+    /// Writes the native record the compiled program's `error_get_last()` reads.
+    fn record_last_error(
+        &mut self,
+        level: i64,
+        message: &str,
+        file: &str,
+        line: i64,
+    ) -> Result<(), EvalStatus> {
+        unsafe {
+            __elephc_eval_record_last_error(
+                level,
+                message.as_ptr(),
+                message.len() as u64,
+                file.as_ptr(),
+                file.len() as u64,
+                line,
+            );
+        }
         Ok(())
     }
 
@@ -231,6 +258,18 @@ impl RuntimeValueOps for ElephcRuntimeOps {
     impl_construction_raw_ops!();
     impl_lifecycle_scalar_ops!();
     impl_numeric_string_ops!();
+
+    /// Reads the compiled runtime's heap counters so eval reports the program's real heap.
+    fn memory_usage_bytes(&mut self, peak: bool, real_usage: bool) -> Result<i64, EvalStatus> {
+        let flag = i64::from(real_usage);
+        Ok(unsafe {
+            if peak {
+                __elephc_eval_memory_get_peak_usage(flag)
+            } else {
+                __elephc_eval_memory_get_usage(flag)
+            }
+        })
+    }
 
     /// Retains the original boxed handler stored in the compiled runtime's PCNTL table.
     fn pcntl_aot_signal_handler(

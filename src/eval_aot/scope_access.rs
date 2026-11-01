@@ -179,6 +179,7 @@ pub(super) fn collect_stmt_scope_access(stmt: &Stmt, access: &mut EvalScopeAcces
             access.creates_unknown_vars = true;
         }
         StmtKind::PropertyAssign { object, value, .. }
+        | StmtKind::PropertyRefAssign { object, source: value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             collect_expr_scope_access(object, access);
             collect_expr_scope_access(value, access);
@@ -201,7 +202,24 @@ pub(super) fn collect_stmt_scope_access(stmt: &Stmt, access: &mut EvalScopeAcces
             collect_expr_scope_access(index, access);
             collect_expr_scope_access(value, access);
         }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            collect_expr_scope_access(index, access);
+            collect_expr_scope_access(source, access);
+        }
+        StmtKind::DynamicStaticPropertyWrite {
+            property,
+            index,
+            value,
+            ..
+        } => {
+            collect_expr_scope_access(property, access);
+            if let Some(index) = index {
+                collect_expr_scope_access(index, access);
+            }
+            collect_expr_scope_access(value, access);
+        }
         StmtKind::Include { path, .. } => collect_expr_scope_access(path, access),
+        StmtKind::ClassLikeActivate { .. } => {}
     }
 }
 
@@ -225,6 +243,9 @@ pub(super) fn collect_expr_scope_access(expr: &Expr, access: &mut EvalScopeAcces
         | ExprKind::ScopedConstantAccess { .. }
         | ExprKind::MagicConstant(_) => {}
         ExprKind::ObjectClassName { object } => collect_expr_scope_access(object, access),
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => {
+            collect_expr_scope_access(receiver, access)
+        }
         ExprKind::Variable(name)
         | ExprKind::PreIncrement(name)
         | ExprKind::PostIncrement(name)
@@ -252,6 +273,7 @@ pub(super) fn collect_expr_scope_access(expr: &Expr, access: &mut EvalScopeAcces
             }
         }
         ExprKind::Negate(inner)
+        | ExprKind::ArrayReference(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
@@ -431,6 +453,9 @@ pub(super) fn collect_expr_scope_access(expr: &Expr, access: &mut EvalScopeAcces
             }
         }
         ExprKind::StaticPropertyAccess { .. } | ExprKind::This => {}
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+            collect_expr_scope_access(property, access);
+        }
         ExprKind::BufferNew { len, .. } => collect_expr_scope_access(len, access),
         ExprKind::FirstClassCallable(target) => {
             collect_callable_target_scope_access(target, access)

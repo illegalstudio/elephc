@@ -47,6 +47,11 @@ echo "strtolower: " . strtolower($str) . "\n";
 echo "strtoupper: " . strtoupper($str) . "\n";
 echo "ucfirst: " . ucfirst("hello") . "\n";
 echo "lcfirst: " . lcfirst("HELLO") . "\n";
+// strtoupper()/strtolower() only change ASCII letters; the mbstring pair applies full
+// Unicode case mapping (ß expands to SS) and lowercases a word-final sigma to ς
+echo "mb_strtoupper: " . mb_strtoupper("straße café") . "\n";
+echo "mb_strtolower: " . mb_strtolower("ΟΔΥΣΣΕΥΣ") . "\n";
+echo "mb_strtoupper(latin1): " . bin2hex(mb_strtoupper("\xe9t\xe9", "ISO-8859-1")) . "\n";
 
 // Unicode product names and compact display labels
 $product = "Straße 東京";

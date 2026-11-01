@@ -98,9 +98,10 @@ echo $explicit->first + 1, "|", strtoupper($explicit->second), "|",
     assert_eq!(compile_and_run(source), "8|SEVEN|EIGHT|9");
 }
 
-/// Constructor inference checks declared bounds before native execution in both PHP modes.
+/// A constructor's PHPDoc `@template` is not adopted: a violating argument runs as php runs it
+/// in both PHP modes, with no fallback to written types because nothing was read.
 #[test]
-fn test_generic_constructors_enforce_docblock_bounds() {
+fn test_generic_constructors_tolerate_docblock_bounds() {
     let source = r#"<?php
 class Box {
     /**
@@ -110,9 +111,12 @@ class Box {
     public function __construct($value) {}
 }
 new Box("seven");
+echo "built";
 "#;
+    // php never reads the bound, so `new Box("seven")` runs.
     for flags in [&[][..], &["--strict-php"][..]] {
-        let error = compile_cli_file_with_flags_expect_failure(source, flags);
-        assert!(error.contains("<T>") && error.contains("does not satisfy"), "{error}");
+        let notes = compile_cli_file_with_flags_capturing_stderr(source, flags);
+        assert!(!notes.contains("is compiled with its written types"), "{flags:?}: {notes}");
+        assert_eq!(compile_cli_file_and_run_with_flags(source, flags), "built", "{flags:?}");
     }
 }

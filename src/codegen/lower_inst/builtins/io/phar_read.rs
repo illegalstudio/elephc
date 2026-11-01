@@ -30,8 +30,43 @@ pub(crate) fn lower_file_get_contents(
     require_absent_stream_context(ctx, inst, 2, "file_get_contents")?;
     let range = FileReadRange::from_operands(ctx, inst, 3, 4)?;
     range.emit_negative_length_guard(ctx, FILE_GET_CONTENTS_NEGATIVE_LENGTH_MESSAGE)?;
-    emit_file_get_contents_bytes(ctx, inst, range.is_active())?;
-    range.emit(ctx, "file_get_contents")?;
+    let path = expect_operand(inst, 0)?;
+    let literal = optional_const_string_operand(ctx, path)?;
+    if literal.as_deref().is_some_and(|path| path.eq_ignore_ascii_case("php://stdin")) {
+        load_string_to_result(ctx, path, "file_get_contents filename")?;
+        range.emit_stdin_arguments(ctx)?;
+        abi::emit_call_label(ctx.emitter, "__rt_file_get_contents_stdin");
+    } else if literal.is_none() {
+        // Probe once after filename evaluation. Non-stdin reads retain their original URL path
+        // and range handling; in particular, no integer conversion is repeated by the probe.
+        publish_dynamic_phar_function_pointers(ctx);
+        load_string_to_result(ctx, path, "file_get_contents filename")?;
+        abi::emit_call_label(ctx.emitter, "__rt_is_php_stdin");
+        let ordinary = ctx.next_label("fgc_not_stdin");
+        let done = ctx.next_label("fgc_stdin_done");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cbz x3, {ordinary}"));        // an ordinary URL keeps its unchanged filename pair
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("test rdi, rdi");                       // inspect the pure URL probe result
+                ctx.emitter.instruction(&format!("jz {ordinary}"));             // an ordinary URL keeps its unchanged filename pair
+            }
+        }
+        range.emit_stdin_arguments(ctx)?;
+        abi::emit_call_label(ctx.emitter, "__rt_file_get_contents_stdin");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.emitter.instruction(&format!("b {done}")),     // the stream reader already applied its range
+            Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {done}")),    // the stream reader already applied its range
+        }
+        ctx.emitter.label(&ordinary);
+        abi::emit_call_label(ctx.emitter, "__rt_file_get_contents_maybe_url");
+        range.emit(ctx, "file_get_contents")?;
+        ctx.emitter.label(&done);
+    } else {
+        emit_file_get_contents_bytes(ctx, inst, range.is_active())?;
+        range.emit(ctx, "file_get_contents")?;
+    }
     box_owned_string_or_false_result(ctx, "fgc");
     store_if_result(ctx, inst)
 }
@@ -150,6 +185,32 @@ struct FileReadRange {
 }
 
 impl FileReadRange {
+    /// Passes a stream's range before reading, so a byte cap cannot consume the remaining input.
+    fn emit_stdin_arguments(&self, ctx: &mut FunctionContext<'_>) -> Result<()> {
+        let (ptr, len) = abi::string_result_regs(ctx.emitter);
+        abi::emit_push_reg_pair(ctx.emitter, ptr, len);
+        self.resolve_offset(ctx, "file_get_contents")?;
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        self.resolve_length_present(ctx)?;
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        self.resolve_length(ctx, "file_get_contents")?;
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x4, x0");                          // pass the resolved byte cap
+                abi::emit_pop_reg(ctx.emitter, "x5");
+                abi::emit_pop_reg(ctx.emitter, "x3");
+                abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rsi, rax");                        // pass the resolved byte cap
+                abi::emit_pop_reg(ctx.emitter, "rcx");
+                abi::emit_pop_reg(ctx.emitter, "rdi");
+                abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+            }
+        }
+        Ok(())
+    }
+
     /// Reads the optional `$offset`/`$length` operands at the given positions.
     fn from_operands(
         ctx: &mut FunctionContext<'_>,
@@ -295,9 +356,29 @@ impl FileReadRange {
     }
 }
 
+/// Returns whether this link carries the PHAR bridge, zlib and bzip2.
+///
+/// Publishing an entry point takes the extern's ADDRESS, so the link fails when the libraries
+/// are absent. The Mixed-callable ladder emits stream builtin wrappers for programs that never
+/// name them, and their libraries come only from `phar_archive` (a named PHAR use) or
+/// `descriptor_invoker` (`link_requirements_for_runtime_features`). Without either, the slots stay
+/// null and the runtime reader fails closed on a `phar://` URL.
+///
+/// Only those ladder wrappers are gated. A stream call the PROGRAM writes carries its own
+/// `elephc_phar` link requirement from the checker, whatever the runtime features say: gating it
+/// too left `fopen("phar://" . $p, ...)` with null slots and every runtime-path PHAR read empty.
+pub(super) fn dynamic_phar_libraries_linked(ctx: &FunctionContext<'_>) -> bool {
+    let features = ctx.module.required_runtime_features;
+    let in_callable_wrapper = ctx.function.name.contains("_callable_builtin_");
+    !in_callable_wrapper || features.phar_archive || features.descriptor_invoker
+}
+
 /// Publishes bridge/decompressor entry points into runtime slots used by
 /// dynamic `phar://` reads.
 pub(super) fn publish_dynamic_phar_function_pointers(ctx: &mut FunctionContext<'_>) {
+    if !dynamic_phar_libraries_linked(ctx) {
+        return;
+    }
     const ENTRIES: &[(&str, &str)] = &[
         ("elephc_phar_extract_url", "_elephc_phar_extract_url_fn"),
         ("inflateInit2_", "_phar_zlib_inflate_init2_fn"),
@@ -364,6 +445,9 @@ pub(super) fn publish_phar_write_function_pointer(ctx: &mut FunctionContext<'_>)
 
 /// Publishes the native PHAR writer bridge used by runtime-built phar:// URLs.
 pub(super) fn publish_dynamic_phar_write_function_pointer(ctx: &mut FunctionContext<'_>) {
+    if !dynamic_phar_libraries_linked(ctx) {
+        return;
+    }
     const ENTRIES: &[(&str, &str)] = &[
         ("elephc_phar_put_url", "_elephc_phar_put_url_fn"),
         (

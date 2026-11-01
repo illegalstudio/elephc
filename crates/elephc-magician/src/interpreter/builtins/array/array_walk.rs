@@ -35,7 +35,20 @@ pub(in crate::interpreter) fn eval_builtin_array_walk_call(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let (array, array_target, callback) =
         eval_array_walk_direct_args(args, context, scope, values)?;
-    eval_array_walk_ref_result_from_scope(array, array_target, callback, Some(scope), context, values)
+    let result = eval_array_walk_ref_result_from_scope(
+        array,
+        array_target,
+        callback,
+        Some(scope),
+        context,
+        values,
+    );
+    // An evaluated callback expression (a closure literal in the call) is this call's owner;
+    // a borrowed variable read is not.
+    if !callback.is_borrowed() {
+        values.release(callback)?;
+    }
+    result
 }
 
 /// Evaluates and binds direct `array_walk()` arguments in PHP source order.
@@ -113,29 +126,41 @@ fn eval_array_walk_ref_result_from_scope(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let callback = eval_callable_with_optional_scope(callback, context, lexical_scope, values)?;
+    // A callable array's receiver read (`[$object, 'method']`) is an owner the dispatch
+    // borrows for the whole walk; `with_values` releases it once, after the last callback.
     callback.with_values(context, values, |callback, context, values| {
         let len = values.array_len(array)?;
         for position in 0..len {
             let current_array = eval_reference_target_value(&array_target, context, values)?;
             let key = values.array_iter_key(current_array, position)?;
             let value = values.array_get(current_array, key)?;
+            let reference_key =
+                eval_array_reference_key(key, values)?.ok_or(EvalStatus::RuntimeFatal)?;
             let ref_target = EvalReferenceTarget::NestedArrayElement {
                 array_target: Box::new(array_target.clone()),
-                index: key,
+                index: reference_key,
             };
             let args = vec![
                 EvaluatedCallArg {
                     name: None,
-                    value,
+                    value: value.borrowed(),
                     ref_target: Some(ref_target),
                 },
                 EvaluatedCallArg {
                     name: None,
-                    value: key,
+                    value: key.borrowed(),
                     ref_target: None,
                 },
             ];
-            let _ = eval_evaluated_callable_with_call_array_args(&callback, args, context, values)?;
+            let result = eval_evaluated_callable_with_call_array_args(&callback, args, context, values)?;
+            values.release(result)?;
+            values.release(key)?;
+            values.release(value)?;
+            // Re-read each round because the callback may write the array through `&$value`;
+            // an owned read of it is this round's to release.
+            if !current_array.is_borrowed() {
+                values.release(current_array)?;
+            }
         }
         values.bool_value(true)
     })
@@ -160,12 +185,19 @@ fn eval_array_walk_result_from_scope(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let callback = eval_callable_with_optional_scope(callback, context, lexical_scope, values)?;
+    // A callable array's receiver read (`[$object, 'method']`) is an owner the dispatch
+    // borrows for the whole walk; `with_values` releases it once, after the last callback.
     callback.with_values(context, values, |callback, context, values| {
         let len = values.array_len(array)?;
         for position in 0..len {
             let key = values.array_iter_key(array, position)?;
             let value = values.array_get(array, key)?;
-            let _ = eval_evaluated_callable_with_values(&callback, vec![value, key], context, values)?;
+            let result =
+                eval_evaluated_callable_with_values(&callback, vec![value, key], context, values)?;
+            // The callback's result and this iteration's key and value reads are owned here.
+            values.release(result)?;
+            values.release(key)?;
+            values.release(value)?;
         }
         values.bool_value(true)
     })

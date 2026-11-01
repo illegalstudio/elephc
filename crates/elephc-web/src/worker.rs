@@ -150,13 +150,23 @@ const GZIP_MIN_LEN: usize = 256;
 /// Serves HTTP on `listen` (host:port) in this worker process. Builds a
 /// current-thread tokio runtime and loops accepting connections, serving each
 /// with the PHP handler per `WorkerConfig`.
-pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
-    serve_inner::<false>(listen, handler, cfg);
+pub fn serve(
+    listen: &str,
+    handler: extern "C" fn(),
+    cfg: WorkerConfig,
+    inherited_listener: Option<std::os::fd::RawFd>,
+) {
+    serve_inner::<false>(listen, handler, cfg, inherited_listener);
 }
 
 /// Serves with cooperative signal draining for a bootstrapped application worker.
-pub(crate) fn serve_application(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
-    serve_inner::<true>(listen, handler, cfg);
+pub(crate) fn serve_application(
+    listen: &str,
+    handler: extern "C" fn(),
+    cfg: WorkerConfig,
+    inherited_listener: Option<std::os::fd::RawFd>,
+) {
+    serve_inner::<true>(listen, handler, cfg, inherited_listener);
 }
 
 /// Polls application shutdown without constructing timers in the legacy specialization.
@@ -166,7 +176,12 @@ async fn application_tick<const APPLICATION: bool>() {
 }
 
 /// Shares HTTP transport while compiling application-only signal checks out of the default path.
-fn serve_inner<const APPLICATION: bool>(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
+fn serve_inner<const APPLICATION: bool>(
+    listen: &str,
+    handler: extern "C" fn(),
+    cfg: WorkerConfig,
+    inherited_listener: Option<std::os::fd::RawFd>,
+) {
     let WorkerConfig {
         max_body,
         max_requests,
@@ -191,12 +206,24 @@ fn serve_inner<const APPLICATION: bool>(listen: &str, handler: extern "C" fn(), 
             std::process::exit(1);
         }
     };
-    let std_listener = match reuseport_listener(addr) {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("elephc-web: failed to bind {}: {}", addr, e);
-            std::process::exit(1);
-        }
+    // A descriptor handed down by the master is already bound and listening: adopting it is
+    // what makes every worker accept from ONE queue on platforms where SO_REUSEPORT does not
+    // distribute. Without one, each worker binds its own SO_REUSEPORT socket as before.
+    let std_listener = match inherited_listener {
+        Some(fd) => match unsafe { crate::shared_listener::adopt(fd) } {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("elephc-web: failed to adopt the inherited listener: {}", e);
+                std::process::exit(1);
+            }
+        },
+        None => match reuseport_listener(addr) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("elephc-web: failed to bind {}: {}", addr, e);
+                std::process::exit(1);
+            }
+        },
     };
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -407,7 +434,7 @@ fn serve_inner<const APPLICATION: bool>(listen: &str, handler: extern "C" fn(), 
                     probe_route::profile_request_kind(0);
                     probe_route::clear();
                     let status = request_state::take_status();
-                    let mut resp_headers = request_state::take_headers();
+                    let mut resp_headers = request_state::take_headers_for_send();
                     // Propagate the session id through same-origin URLs / forms when
                     // `session.use_trans_sid` is active (no-op otherwise). Runs on the
                     // plaintext body, before the gzip decision below.
@@ -530,9 +557,11 @@ fn run_handler(handler: extern "C" fn()) -> Vec<u8> {
     if secs > 0 {
         unsafe { libc::alarm(secs); }
     }
+    crate::request_env::capture_baseline();
     handler();
     if secs > 0 {
         unsafe { libc::alarm(0); }
     }
+    crate::request_env::restore_baseline();
     request_state::take_body()
 }

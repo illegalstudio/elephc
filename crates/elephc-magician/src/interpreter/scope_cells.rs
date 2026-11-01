@@ -7,9 +7,13 @@
 //! Key details:
 //! - Global aliases redirect through `ElephcEvalContext` while local aliases stay in the materialized eval scope.
 //! - PHP superglobals resolve through the same global scope from every scope, as if each scope
-//!   had declared them `global`, but only while an `eval()` call is executing, when the frame
-//!   that installed that scope is known to be alive; otherwise they stay local.
+//!   had declared them `global`, whether or not an `eval()` call is executing: a function from
+//!   a runtime-loaded file that compiled code calls back reads the request's `$_SERVER` too.
 //! - Replaced owned cells are released by callers through existing scope APIs.
+//! - Php's request superglobals behave like an automatic `global $name;` in EVERY scope, on every
+//!   mention -- unlike an explicit `global` statement, this is not a one-time bind: a name in
+//!   `REQUEST_SUPERGLOBAL_NAMES` redirects to the context's global scope even where no `global`
+//!   statement was ever written and even after a local `unset()` of that name in this scope.
 
 use super::*;
 
@@ -19,14 +23,20 @@ pub(in crate::interpreter) const EVAL_SUPERGLOBALS: [&str; 8] =
 
 /// Returns the global scope a superglobal named `name` resolves through, when one is reachable.
 ///
-/// `None` for any other name, outside an executing `eval()` call (a callback can run in a
-/// retained context whose global scope has already been freed), or when no global scope is
-/// installed; the superglobal then resolves in the current scope.
+/// `None` for any other name, or when no global scope is installed; the superglobal then
+/// resolves in the current scope.
+///
+/// Not gated on an executing `eval()` call. It once was, because a callback could run in a
+/// context retained past the frame whose global scope it pointed at; here that frame hands
+/// the scope to the retained context instead of freeing it
+/// (`ElephcEvalContext::retain_global_scope_for_request`), so the pointer outlives the frame.
+/// The gate also left writes ungated (`update_scope_cell`), so a superglobal written outside
+/// an eval call landed in the global scope and was then read back from the local one.
 pub(in crate::interpreter) fn eval_superglobal_global_scope(
     context: &ElephcEvalContext,
     name: &str,
 ) -> Option<*mut ElephcEvalScope> {
-    if !EVAL_SUPERGLOBALS.contains(&name) || !context.in_eval_execution() {
+    if !EVAL_SUPERGLOBALS.contains(&name) {
         return None;
     }
     context.global_scope_ptr()
@@ -62,12 +72,38 @@ fn eval_superglobal_scope(
         .filter(|global| *global != scope as *const ElephcEvalScope as *mut ElephcEvalScope)
 }
 
+/// Returns the effective global-alias target for a name: an explicit `global` alias first, then a
+/// superglobal's own name, matching php's implicit per-mention auto-global fetch.
+///
+/// Context-free form of `eval_global_target`, kept for the call sites that already hold the
+/// scope but not an execution-state check.
+pub(in crate::interpreter) fn effective_global_alias_target<'a>(
+    scope: &'a ElephcEvalScope,
+    name: &'a str,
+) -> Option<&'a str> {
+    scope
+        .global_alias_target(name)
+        .or_else(|| EVAL_SUPERGLOBALS.contains(&name).then_some(name))
+}
+
 /// Returns the eval-visible entry for a variable, following `global` aliases.
 pub(in crate::interpreter) fn scope_entry(
     context: &ElephcEvalContext,
     scope: &ElephcEvalScope,
     name: &str,
 ) -> Option<ScopeEntry> {
+    // A `static` reads from its slot every time, not from a copy taken when the activation
+    // started: php keeps ONE slot per function, so a frame must see what a deeper frame wrote.
+    if let Some(slot) = scope.static_alias_slot(name) {
+        let slot = slot.to_string();
+        // BORROWED, whatever the slot's own flags say. The slot OWNS the cell and keeps it after
+        // the activation ends; the activation only borrows it. Handing the slot's entry back
+        // verbatim reported `Owned`, so the activation's cleanup released a cell the slot still
+        // held -- which the counting fixture catches as `reached count -1`.
+        return unsafe { context.static_scope_ptr().as_ref() }
+            .and_then(|statics| statics.visible_cell(&slot))
+            .map(|cell| ScopeEntry::present(cell, ScopeCellOwnership::Borrowed, 0));
+    }
     let Some(global_name) = eval_global_target(context, scope, name) else {
         return scope.entry(name);
     };
@@ -184,13 +220,31 @@ fn update_scope_cell(
     name: String,
     update: impl FnOnce(&mut ElephcEvalScope, String) -> Vec<RuntimeCellHandle>,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+    // A write to a `static` lands in the slot, so the next read -- in this frame, in a recursive
+    // one, or in a later call -- sees it. The displaced cell is handed back for release exactly
+    // as the scope would have done.
+    if let Some(slot) = scope.static_alias_slot(&name).map(str::to_string) {
+        let Some(statics) = (unsafe { context.static_scope_ptr().as_mut() }) else {
+            return Err(EvalStatus::RuntimeFatal);
+        };
+        return Ok(update(statics, slot));
+    }
     if let Some(global) = eval_superglobal_scope(context, scope, &name) {
         let global = unsafe { global.as_mut() }.ok_or(EvalStatus::RuntimeFatal)?;
         return Ok(update(global, name));
     }
-    if let Some(global_name) = scope.global_alias_target(&name).map(str::to_string) {
+    if let Some(global_name) = effective_global_alias_target(scope, &name).map(str::to_string) {
         let Some(global_scope) = context.global_scope_ptr() else {
-            return Err(EvalStatus::RuntimeFatal);
+            // An explicit `global $x;` already validated a global scope exists before it could
+            // ever mark this alias (see `execute_global_stmt`), so reaching here with no scope
+            // pointer is a genuine fatal for it. A superglobal name carries no such guarantee --
+            // nothing declared it -- so with no established global scope at all it degrades to an
+            // ordinary local write rather than failing a statement php would never refuse.
+            return if scope.global_alias_target(&name).is_some() {
+                Err(EvalStatus::RuntimeFatal)
+            } else {
+                Ok(update(scope, name))
+            };
         };
         let current_scope = scope as *mut ElephcEvalScope;
         if global_scope == current_scope {
@@ -226,8 +280,14 @@ pub(in crate::interpreter) fn set_reference_alias(
             context.bind_local_reference_types(reference, &types);
         }
     }
-    if let Some(global_name) = scope.global_alias_target(source).map(str::to_string) {
+    let source_reference_target = scope.reference_target(source).cloned();
+    // A superglobal source (`$session = &$_SESSION`) is a global alias too: the target names the
+    // global itself. Only explicit `global` aliases were recognized, so the reference was made
+    // between two LOCAL entries and died with the scope -- Symfony's session storage binds every
+    // bag to an element of that local, and each later write to a bag failed.
+    if let Some(global_name) = effective_global_alias_target(scope, source).map(str::to_string) {
         scope.mark_global_alias_to(target.to_string(), global_name);
+        scope.remove_reference_target(target);
         return Ok(Vec::new());
     }
     if eval_superglobal_scope(context, scope, source).is_some() {
@@ -241,7 +301,13 @@ pub(in crate::interpreter) fn set_reference_alias(
             |entry| Ok((entry.cell(), entry.flags().ownership)),
         )?;
     if values.is_reference(cell)? { context.bind_local_reference_types(cell, &types); }
-    Ok(scope.set_reference(target.to_string(), source.to_string(), cell, ownership))
+    let replaced = scope.set_reference(target.to_string(), source.to_string(), cell, ownership);
+    if let Some(source_reference_target) = source_reference_target {
+        scope.set_reference_target(target.to_string(), source_reference_target);
+    } else {
+        scope.remove_reference_target(target);
+    }
+    Ok(replaced)
 }
 
 /// Unsets a variable, removing only the local alias when the name is a `global` alias.
@@ -263,6 +329,9 @@ pub(in crate::interpreter) fn unset_scope_cell(
     if let Some(global) = eval_superglobal_scope(context, scope, &name) {
         return unsafe { global.as_mut() }?.unset_respecting_references(name);
     }
+    // `unset($x)` on a static breaks the local binding, exactly as it does for a global; the slot
+    // itself keeps its value for the next call, which is what php does.
+    scope.clear_static_alias(&name);
     scope.unset_respecting_references(name)
 }
 
@@ -289,7 +358,8 @@ pub(in crate::interpreter) fn finish_activation_scope(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut cleanup = Ok(());
-    for value in scope.drain_owned_cells() {
+    let drained = scope.drain_owned_cells();
+    for value in drained {
         if let Err(status) = eval_release_value(context, values, value) {
             cleanup = Err(status);
         }

@@ -28,14 +28,14 @@ pub(in crate::interpreter) fn eval_iterator_to_array_declared_call(
 /// Dispatches evaluated-argument eval calls for the `iterator_to_array` array builtin.
 pub(in crate::interpreter) fn eval_iterator_to_array_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
-    _context: &mut ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match evaluated_args {
-        [iterator] => eval_iterator_to_array_result(*iterator, true, values),
+        [iterator] => eval_iterator_to_array_result(*iterator, true, context, values),
         [iterator, preserve_keys] => {
             let preserve_keys = values.truthy(*preserve_keys)?;
-            eval_iterator_to_array_result(*iterator, preserve_keys, values)
+            eval_iterator_to_array_result(*iterator, preserve_keys, context, values)
         }
         _ => Err(EvalStatus::RuntimeFatal),
     }
@@ -51,13 +51,13 @@ pub(in crate::interpreter) fn eval_builtin_iterator_to_array(
     match args {
         [iterator] => {
             let iterator = eval_expr(iterator, context, scope, values)?;
-            eval_iterator_to_array_result(iterator, true, values)
+            eval_iterator_to_array_result(iterator, true, context, values)
         }
         [iterator, preserve_keys] => {
             let iterator = eval_expr(iterator, context, scope, values)?;
             let preserve_keys = eval_expr(preserve_keys, context, scope, values)?;
             let preserve_keys = values.truthy(preserve_keys)?;
-            eval_iterator_to_array_result(iterator, preserve_keys, values)
+            eval_iterator_to_array_result(iterator, preserve_keys, context, values)
         }
         _ => Err(EvalStatus::RuntimeFatal),
     }
@@ -67,10 +67,25 @@ pub(in crate::interpreter) fn eval_builtin_iterator_to_array(
 pub(in crate::interpreter) fn eval_iterator_to_array_result(
     iterator: RuntimeCellHandle,
     preserve_keys: bool,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if !matches!(values.type_tag(iterator)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
-        return Err(EvalStatus::RuntimeFatal);
+        // `iterator_to_array()` takes any Traversable, which is most of the point of it. The
+        // array-literal spread already knows how to drain one -- a generator, an `Iterator`, an
+        // `IteratorAggregate` -- so this reads the same entries rather than a second walker.
+        let entries = eval_spread_source_entries(iterator, context, values)?;
+        let mut result = values.assoc_new(entries.len())?;
+        for (position, (key, value)) in entries.into_iter().enumerate() {
+            if preserve_keys {
+                result = values.array_set(result, key, value)?;
+            } else {
+                values.release(key)?;
+                let key = values.int(position as i64)?;
+                result = values.array_set(result, key, value)?;
+            }
+        }
+        return Ok(result);
     }
     if preserve_keys {
         return eval_array_copy_preserve_keys(iterator, values);

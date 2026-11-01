@@ -50,8 +50,26 @@ pub(in crate::codegen::lower_inst) fn lower_prop_set(ctx: &mut FunctionContext<'
     if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Mixed) {
         return lower_mixed_named_prop_set(ctx, object, value, &property, inst);
     }
+    if matches!(
+        ctx.value_php_type(object)?.codegen_repr(),
+        PhpType::Object(class_name) if class_name.trim_start_matches('\\').is_empty()
+    ) {
+        return lower_generic_object_prop_set(ctx, object, value, &property, inst);
+    }
     if object_is_builtin_stdclass(ctx, object)? {
         return lower_stdclass_prop_set(ctx, object, value, &property);
+    }
+    // A receiver whose class the closed world does not contain. Its layout cannot be resolved,
+    // but the write is not unlowerable: the class can only come into existence at run time, and
+    // the by-name path already used for an untyped object receiver resolves it there.
+    //
+    // The shape is ordinary framework code. Symfony's `CacheAttributeListener` declares
+    // `processAttributeBeforeController(Cache $cache, …)` and assigns `$cache->if`; nothing
+    // constructs a `Cache` statically — instances only ever arrive through
+    // `ReflectionAttribute::newInstance()` — so the class is absent from the module while the
+    // method around it is compiled. Refusing the write made the whole listener uncompilable.
+    if object_class_is_absent_from_module(ctx, object)? {
+        return lower_generic_object_prop_set(ctx, object, value, &property, inst);
     }
     if let Some(plan) = dynamic_property_runtime_plan_for_object(
         ctx,
@@ -309,8 +327,23 @@ pub(super) fn lower_mixed_named_prop_set(
 ) -> Result<()> {
     let candidates = declared_mixed_named_property_set_candidates(ctx, value, property, inst)?;
     if candidates.is_empty() {
-        return lower_mixed_prop_set(ctx, object, value, property);
+        return lower_mixed_prop_set(ctx, object, value, property, inst);
     }
+    // Every class that merely ACCEPTS the name into its own hash would otherwise contribute an
+    // identical inline arm (probe, deprecation, `__rt_hash_set`) at every site: a Symfony build
+    // carried 35,608 of them in `VarCloner::doClone` alone. Those classes share one table-driven
+    // block (`emit_table_dynamic_hash_write`); only the classes this site must keep away from it
+    // still get an explicit comparison.
+    if try_lower_outlined_named_mixed_prop_set(ctx, inst, object, value, property, candidates.len())? {
+        return Ok(());
+    }
+    let (candidates, table_routed) =
+        split_table_routed_dynamic_hash_candidates(ctx, candidates, property);
+    let table_misses = if table_routed.is_empty() {
+        Vec::new()
+    } else {
+        table_addressable_classes_outside(ctx, &candidates, &table_routed)
+    };
     let done_label = ctx.next_label("mixed_named_prop_set_done");
     let miss_label = ctx.next_label("mixed_named_prop_set_miss");
     let match_labels = candidates
@@ -332,7 +365,16 @@ pub(super) fn lower_mixed_named_prop_set(
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
         emit_branch_if_stacked_object_class_matches(ctx, candidate.class_id, 0, label);
     }
-    abi::emit_jump(ctx.emitter, &miss_label);
+    for class_id in &table_misses {
+        emit_branch_if_stacked_object_class_matches(ctx, *class_id, 0, &miss_label);
+    }
+    if table_routed.is_empty() {
+        abi::emit_jump(ctx.emitter, &miss_label);
+    } else {
+        emit_table_dynamic_hash_write(ctx, value, property, &miss_label)?;
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
 
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
         ctx.emitter.label(label);
@@ -345,6 +387,14 @@ pub(super) fn lower_mixed_named_prop_set(
                 emit_refined_untyped_tag_guarded_store(ctx, value, slot, message, 0, 16, &done_label)?;
             }
             MixedPropertyWriteAction::Slot(slot) => {
+                super::readonly_guard::emit_readonly_slot_guard(
+                    ctx,
+                    slot,
+                    false,
+                    super::readonly_guard::GuardReceiver::Stack(0),
+                    16,
+                )?;
+                emit_refined_scalar_slot_guard(ctx, value, slot, 16)?;
                 let base_reg = abi::symbol_scratch_reg(ctx.emitter);
                 abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 0);
                 emit_hook_aware_property_store(ctx, value, slot, base_reg)?;
@@ -380,9 +430,214 @@ pub(super) fn lower_mixed_named_prop_set(
 
     ctx.emitter.label(&miss_label);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
-    lower_mixed_prop_set(ctx, object, value, property)?;
+    // Every explicit arm above ends the write (store, refusal or hash write), so a receiver of one
+    // of those classes never reaches this fallback.
+    let answered = candidates
+        .iter()
+        .map(|candidate| candidate.class_id)
+        .collect::<Vec<_>>();
+    super::named_property_writes::lower_mixed_prop_set_excluding(
+        ctx, object, value, property, inst, &answered,
+    )?;
     ctx.emitter.label(&done_label);
     Ok(())
+}
+
+/// Splits off the dynamic-hash arms the `_class_dyn_hash_rows` table answers exactly.
+///
+/// An arm qualifies when its class does not declare the name at all (so no scope rule can turn
+/// it into a mangled private) and its hash offset is the one the table records. Anything else
+/// keeps its explicit arm. Returns `(explicit candidates, table-routed class ids)`.
+fn split_table_routed_dynamic_hash_candidates(
+    ctx: &FunctionContext<'_>,
+    candidates: Vec<MixedPropertyWriteCandidate>,
+    property: &str,
+) -> (Vec<MixedPropertyWriteCandidate>, Vec<u64>) {
+    let mut explicit = Vec::new();
+    let mut routed = Vec::new();
+    for candidate in candidates {
+        let table_answers = match &candidate.action {
+            MixedPropertyWriteAction::DynamicHash {
+                class_name,
+                hash_offset,
+            } => ctx.module.class_infos.get(class_name).is_some_and(|info| {
+                info.dynamic_property_hash_is_name_addressable()
+                    && !info.properties.iter().any(|(declared, _)| declared == property)
+                    && *hash_offset
+                        == super::allocation_clone::dynamic_property_hash_offset(
+                            info.properties.len(),
+                        )
+            }),
+            _ => false,
+        };
+        if table_answers {
+            routed.push(candidate.class_id);
+        } else {
+            explicit.push(candidate);
+        }
+    }
+    (explicit, routed)
+}
+
+/// Lists the classes the table would route into a hash write that this site must NOT write:
+/// name-addressable classes that are neither explicit arms nor table-routed here (an accessor
+/// owner, say). Each gets an explicit jump to the miss path ahead of the table block.
+fn table_addressable_classes_outside(
+    ctx: &FunctionContext<'_>,
+    explicit: &[MixedPropertyWriteCandidate],
+    routed: &[u64],
+) -> Vec<u64> {
+    let routed = routed.iter().copied().collect::<std::collections::HashSet<_>>();
+    let explicit = explicit
+        .iter()
+        .map(|candidate| candidate.class_id)
+        .collect::<std::collections::HashSet<_>>();
+    let mut ids = ctx
+        .module
+        .class_infos
+        .iter()
+        .filter(|(name, info)| {
+            info.dynamic_property_hash_is_name_addressable()
+                && !crate::types::checker::builtin_stdclass::is_stdclass(name)
+                && !routed.contains(&info.class_id)
+                && !explicit.contains(&info.class_id)
+        })
+        .map(|(_, info)| info.class_id)
+        .collect::<Vec<_>>();
+    ids.sort_unstable();
+    ids
+}
+
+/// Writes a literal-name dynamic property through the receiver class's `_class_dyn_hash_rows`
+/// row: the per-instance hash offset, then php's creation deprecation when the row flags it.
+///
+/// Expects the unboxed receiver at `[sp]` and leaves the stack as it found it. A class id outside
+/// the table, or a row without a hash, goes to `miss_label` with only the receiver stacked, which
+/// is where an unmatched class has always gone.
+fn emit_table_dynamic_hash_write(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    property: &str,
+    miss_label: &str,
+) -> Result<()> {
+    let have_row = ctx.next_label("table_dyn_prop_row");
+    let skip_deprecation = ctx.next_label("table_dyn_prop_no_deprecation");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 0);
+            ctx.emitter.instruction("ldr x10, [x9]");                           // load the receiver's runtime class id
+            abi::emit_symbol_address(ctx.emitter, "x11", "_class_name_count");
+            ctx.emitter.instruction("ldr x11, [x11]");                          // load the dense class table bound
+            ctx.emitter.instruction("cmp x10, x11");                            // ids outside the table have no row
+            ctx.emitter.instruction(&format!("b.hs {}", miss_label));           // leave them to the miss path
+            abi::emit_symbol_address(ctx.emitter, "x11", "_class_dyn_hash_rows");
+            ctx.emitter.instruction("add x11, x11, x10, lsl #4");               // address the class's 16-byte row
+            ctx.emitter.instruction("ldp x12, x13, [x11]");                     // load the hash offset and the deprecation flag
+            ctx.emitter.instruction(&format!("cbnz x12, {}", have_row));        // a class with an addressable hash takes the write
+            ctx.emitter.instruction(&format!("b {}", miss_label));              // no hash: the miss path answers
+            ctx.emitter.label(&have_row);
+            ctx.emitter.instruction("stp x12, x13, [sp, #-16]!");               // keep the row across the helper calls
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", 0);
+            ctx.emitter.instruction("mov r10, QWORD PTR [r11]");                // load the receiver's runtime class id
+            ctx.emitter.instruction("cmp r10, QWORD PTR [rip + _class_name_count]"); // ids outside the table have no row
+            ctx.emitter.instruction(&format!("jae {}", miss_label));            // leave them to the miss path
+            ctx.emitter.instruction("lea r11, [rip + _class_dyn_hash_rows]");   // materialize the row table base
+            ctx.emitter.instruction("shl r10, 4");                              // scale the class id to its 16-byte row
+            ctx.emitter.instruction("mov r9, QWORD PTR [r11 + r10]");           // load the hash offset
+            ctx.emitter.instruction("test r9, r9");                             // does this class have an addressable hash?
+            ctx.emitter.instruction(&format!("jnz {}", have_row));              // a class with one takes the write
+            ctx.emitter.instruction(&format!("jmp {}", miss_label));            // no hash: the miss path answers
+            ctx.emitter.label(&have_row);
+            ctx.emitter.instruction("mov r10, QWORD PTR [r11 + r10 + 8]");      // load the deprecation flag
+            ctx.emitter.instruction("sub rsp, 16");                             // keep the row across the helper calls
+            ctx.emitter.instruction("mov QWORD PTR [rsp], r9");                 // row word 0: the hash offset
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], r10");            // row word 1: the deprecation flag
+        }
+    }
+    // Stack: [sp] = hash offset, [sp + 8] = deprecation flag, [sp + 16] = receiver.
+    let (key_label, key_len) = ctx.data.add_string(property.as_bytes());
+    let target = ctx.emitter.target;
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 8);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &skip_deprecation);
+    emit_table_row_hash_to_first_arg(ctx);
+    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(target, 1), &key_label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 2), key_len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+    super::named_property_writes::emit_branch_if_hash_entry_found(ctx, &skip_deprecation);
+    super::emit_property_warning_fragment(ctx, b"Deprecated: Creation of dynamic property ", false);
+    let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+    abi::emit_load_temporary_stack_slot(ctx.emitter, &result_reg, 16);
+    super::super::runtime_class_messages::emit_runtime_class_name_to_string_result(
+        ctx,
+        &result_reg,
+        "object",
+    );
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        let (name_ptr, name_len) = abi::string_result_regs(ctx.emitter);
+        ctx.emitter.instruction(&format!("mov rdi, {}", name_ptr));             // pass the class name to the diagnostic fragment
+        ctx.emitter.instruction(&format!("mov rsi, {}", name_len));             // pass its length
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+    super::emit_property_warning_fragment(
+        ctx,
+        format!("::${} is deprecated\n", property).as_bytes(),
+        true,
+    );
+    ctx.emitter.label(&skip_deprecation);
+
+    let value_ty = ctx.value_php_type(value)?.codegen_repr();
+    super::named_property_writes::materialize_dynamic_property_mixed_value(ctx, value, &value_ty)?;
+    // The row reload below uses the scratch registers, so the boxed value waits on the stack.
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    emit_table_row_hash_to_first_arg_at(ctx, 16);
+    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(target, 1), &key_label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 2), key_len as i64);
+    abi::emit_pop_reg(ctx.emitter, abi::int_arg_reg_name(target, 3));
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 4), 0);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(target, 5),
+        runtime_value_tag(&PhpType::Mixed) as i64,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+    // The helper can reallocate, so the fresh table is stored back through the row's offset.
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [sp, #16]");                       // reload the receiver
+            ctx.emitter.instruction("ldr x10, [sp]");                           // reload the hash offset
+            ctx.emitter.instruction("str x0, [x9, x10]");                       // publish the possibly-moved hash
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r11, QWORD PTR [rsp + 16]");           // reload the receiver
+            ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                // reload the hash offset
+            ctx.emitter.instruction("mov QWORD PTR [r11 + r10], rax");          // publish the possibly-moved hash
+        }
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    Ok(())
+}
+
+/// Loads `receiver->hash` into the first argument register from the stacked table row.
+fn emit_table_row_hash_to_first_arg(ctx: &mut FunctionContext<'_>) {
+    emit_table_row_hash_to_first_arg_at(ctx, 0);
+}
+
+/// Same, with `extra` bytes pushed above the row since it was stacked.
+fn emit_table_row_hash_to_first_arg_at(ctx: &mut FunctionContext<'_>, extra: usize) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("ldr x9, [sp, #{}]", 16 + extra)); // reload the receiver
+            ctx.emitter.instruction(&format!("ldr x10, [sp, #{}]", extra));     // reload the hash offset
+            ctx.emitter.instruction("ldr x0, [x9, x10]");                       // pass the receiver's dynamic-property hash
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", 16 + extra)); // reload the receiver
+            ctx.emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", extra));      // reload the hash offset
+            ctx.emitter.instruction("mov rdi, QWORD PTR [r11 + r10]");          // pass the receiver's dynamic-property hash
+        }
+    }
 }
 
 /// One class-id arm of a Mixed-receiver property WRITE dispatch.
@@ -469,6 +724,13 @@ fn emit_runtime_name_stacked_write_arm(
                     return Ok(());
                 }
                 ensure_property_value_supported(ctx, slot, value, &value_ty, inst)?;
+                super::readonly_guard::emit_readonly_slot_guard(
+                    ctx,
+                    slot,
+                    false,
+                    super::readonly_guard::GuardReceiver::Stack(16),
+                    32,
+                )?;
                 let base_reg = abi::symbol_scratch_reg(ctx.emitter);
                 abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 16);
                 emit_hook_aware_property_store(ctx, value, slot, base_reg)?;
@@ -521,7 +783,7 @@ fn emit_runtime_name_stacked_write_arm(
                 abi::emit_jump(ctx.emitter, done_label);
                 Ok(())
             }
-            PropertyRuntimeAction::MagicGet => Err(CodegenIrError::invalid_module(
+            PropertyRuntimeAction::MagicGet | PropertyRuntimeAction::DynamicHashThenMagicGet { .. } => Err(CodegenIrError::invalid_module(
                 "runtime property write resolved to a magic getter",
             )),
             PropertyRuntimeAction::Refuse { .. } => Err(CodegenIrError::invalid_module(
@@ -585,7 +847,7 @@ fn declared_mixed_named_property_set_candidates(
 /// A refusal arm still carries the slot: it is what the ladder compares the runtime class id and
 /// the property name against. The store simply never runs, so the value type is not checked for
 /// it either, which keeps a refused write from being silently dropped for an unrelated reason.
-fn mixed_property_write_candidate(
+pub(super) fn mixed_property_write_candidate(
     ctx: &FunctionContext<'_>,
     class_name: &str,
     property: &str,
@@ -659,7 +921,7 @@ fn mixed_property_write_candidate(
                 message,
             }
         }
-        PropertyRuntimeAction::MagicGet | PropertyRuntimeAction::MagicDeferred => return Ok(None),
+        PropertyRuntimeAction::MagicGet | PropertyRuntimeAction::DynamicHashThenMagicGet { .. } | PropertyRuntimeAction::MagicDeferred => return Ok(None),
     };
     Ok(Some(MixedPropertyWriteCandidate {
         class_id,
@@ -687,10 +949,68 @@ fn refined_untyped_mixed_write_refusal(
     ) {
         return None;
     }
-    Some(format!(
+    // A scalar or string slot copies its payload OUT of the boxed cell (the store unboxes and
+    // guards the runtime tag), so a boxed value never replaces the slot's representation: only
+    // container and object pointers are refused. `$o->v = 7` through a `use (&$o)` capture, where
+    // `Box::$v = 1` is refined to `int`, is the ordinary shape this used to turn into a fatal.
+    if matches!(
+        slot.php_type.codegen_repr(),
+        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str
+    ) {
+        return None;
+    }
+    Some(refined_untyped_refusal_message(slot))
+}
+
+/// The diagnostic raised when a boxed value cannot be stored in a refined untyped slot.
+fn refined_untyped_refusal_message(slot: &PropertySlot) -> String {
+    format!(
         "Unsupported dynamic property write: runtime Mixed value cannot be stored safely in the refined untyped property {}::${}",
         slot.class_name, slot.property
-    ))
+    )
+}
+
+/// Lets a boxed value into a refined untyped SCALAR slot only when its runtime tag is the slot's own.
+///
+/// The store copies the payload out of the box, which is exact for a matching tag and a silent
+/// coercion for any other (`"x"` into an `int` slot became `0`). php would simply keep the string,
+/// which this slot cannot represent, so a mismatching tag takes the same refusal a container slot
+/// takes. `stacked_bytes` is the temporary stack the arm still holds, released before the raise.
+fn emit_refined_scalar_slot_guard(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    slot: &PropertySlot,
+    stacked_bytes: usize,
+) -> Result<()> {
+    if slot.is_declared {
+        return Ok(());
+    }
+    let expected = match slot.php_type.codegen_repr() {
+        PhpType::Int => 0,
+        PhpType::Str => 1,
+        PhpType::Float => 2,
+        PhpType::Bool => 3,
+        _ => return Ok(()),
+    };
+    if !matches!(
+        ctx.value_ir_type(value)?,
+        crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed)
+    ) {
+        return Ok(());
+    }
+    let accepted = ctx.next_label("refined_scalar_slot_accepted");
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    super::super::enums::emit_mixed_tag_branch(
+        ctx,
+        abi::int_result_reg(ctx.emitter),
+        expected,
+        &accepted,
+    );
+    abi::emit_release_temporary_stack(ctx.emitter, stacked_bytes);
+    super::super::exceptions::emit_error(ctx, &refined_untyped_refusal_message(slot));
+    ctx.emitter.label(&accepted);
+    Ok(())
 }
 
 /// The runtime value tags a refined untyped slot can store as-is.
@@ -1267,9 +1587,23 @@ pub(super) fn lower_runtime_mixed_prop_set(
     value: ValueId,
     inst: &Instruction,
 ) -> Result<()> {
+    if try_lower_outlined_mixed_prop_set(ctx, object, property_value, value, inst)? {
+        return Ok(());
+    }
+    // Inside a scoped shared helper only the pairs this scope resolves differently are probed;
+    // everything else is the global helper's answer.
+    let delegate = outlined_helper_delegate(ctx, SET_PREFIX);
+    let only = if delegate.is_some() {
+        Some(scope_overrides_write(ctx, value, inst)?.ok_or_else(|| {
+            CodegenIrError::invalid_module("scoped dynamic-write helper without overrides")
+        })?)
+    } else {
+        None
+    };
     ensure_runtime_dynamic_property_name(ctx, property_value, inst)?;
     let write_kind = PropertyAccessKind::RuntimeWrite;
-    let candidates = declared_mixed_property_set_candidates(ctx, value, write_kind, inst)?;
+    let candidates =
+        declared_mixed_property_set_candidates(ctx, value, write_kind, inst, only.as_ref())?;
     let done_label = ctx.next_label("mixed_dyn_prop_set_done");
     let miss_label = ctx.next_label("mixed_dyn_prop_set_miss");
     let stdclass_label = ctx.next_label("mixed_dyn_prop_set_stdclass");
@@ -1285,7 +1619,7 @@ pub(super) fn lower_runtime_mixed_prop_set(
     // A runtime name a class does not DECLARE still belongs in that class's own per-instance
     // hash. The declared (class, name) probes above run first, so a name the class declares keeps
     // its declared answer, and only the rest reach this per-CLASS arm.
-    let hash_arms = mixed_class_hash_arms(ctx, "", &[])?;
+    let hash_arms = if delegate.is_some() { Vec::new() } else { mixed_class_hash_arms(ctx, "", &[])? };
     let hash_labels = hash_arms
         .iter()
         .map(|arm| {
@@ -1295,7 +1629,7 @@ pub(super) fn lower_runtime_mixed_prop_set(
             ))
         })
         .collect::<Vec<_>>();
-    let magic_arms = runtime_magic_set_arms(ctx)?;
+    let magic_arms = if delegate.is_some() { Vec::new() } else { runtime_magic_set_arms(ctx)? };
     let magic_labels = magic_arms
         .iter()
         .map(|arm| {
@@ -1314,21 +1648,54 @@ pub(super) fn lower_runtime_mixed_prop_set(
     ctx.load_string_value_to_regs(property_value, ptr_reg, len_reg)?;
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
 
-    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
-        emit_branch_if_mixed_dynamic_property_candidate_matches(
-            ctx,
-            candidate.class_id,
-            &candidate.property,
-            label,
-        );
+    let class_names = ctx
+        .module
+        .class_infos
+        .iter()
+        .map(|(name, info)| (info.class_id, name.clone()))
+        .collect::<crate::fast_hash::FastMap<_, _>>();
+    let arm_entries = candidates
+        .iter()
+        .map(|candidate| {
+            (candidate.class_id, candidate.property.as_str(), write_arm_key(ctx, &class_names, candidate))
+        })
+        .collect::<Vec<_>>();
+    let groups = super::arm_groups::group_arms(ctx, &arm_entries);
+    if std::env::var_os("ELEPHC_ARM_STATS").is_some() {
+        eprintln!("ARMGROUPS candidates={} arms={}", candidates.len(), groups.len());
     }
+    let no_match_label = ctx.next_label("mixed_dyn_prop_set_no_match");
+    // A visibility refusal that composes its text from the receiver's class has no per-name code:
+    // every such arm branches to ONE tail per visibility word.
+    let refusal_tails = [
+        ("private", ctx.next_label("mixed_dyn_prop_set_refuse_private")),
+        ("protected", ctx.next_label("mixed_dyn_prop_set_refuse_protected")),
+    ];
+    let mut refusal_tail_used = [false; 2];
+    for group in &groups {
+        let target = match group.representative {
+            Some(index) => match dynamic_refusal_visibility(&class_names, &candidates[index]) {
+                Some(visibility) => {
+                    let tail = refusal_tails.iter().position(|(word, _)| *word == visibility).unwrap_or(0);
+                    refusal_tail_used[tail] = true;
+                    &refusal_tails[tail].1
+                }
+                None => &match_labels[index],
+            },
+            None => &no_match_label,
+        };
+        emit_branch_if_mixed_dynamic_property_group_matches(ctx, group, target);
+    }
+    ctx.emitter.label(&no_match_label);
     for (arm, label) in magic_arms.iter().zip(magic_labels.iter()) {
         emit_branch_if_stacked_object_class_matches(ctx, arm.class_id, 16, label);
     }
     for (arm, label) in hash_arms.iter().zip(hash_labels.iter()) {
         emit_branch_if_stacked_object_class_matches(ctx, arm.class_id, 16, label);
     }
-    emit_branch_if_stacked_object_is_stdclass(ctx, 16, &stdclass_label);
+    if delegate.is_none() {
+        emit_branch_if_stacked_object_is_stdclass(ctx, 16, &stdclass_label);
+    }
     abi::emit_jump(ctx.emitter, &miss_label);
 
     for (arm, label) in magic_arms.iter().zip(magic_labels.iter()) {
@@ -1366,7 +1733,22 @@ pub(super) fn lower_runtime_mixed_prop_set(
         abi::emit_jump(ctx.emitter, &done_label);
     }
 
-    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+    let mut arm_needed = vec![false; candidates.len()];
+    for group in &groups {
+        if let Some(index) = group.representative {
+            arm_needed[index] = dynamic_refusal_visibility(&class_names, &candidates[index]).is_none();
+        }
+    }
+    for ((word, label), used) in refusal_tails.iter().zip(refusal_tail_used) {
+        if used {
+            ctx.emitter.label(label);
+            super::closure_scope_gate::emit_scope_refusal(ctx, word);
+        }
+    }
+    for ((candidate, label), needed) in candidates.iter().zip(match_labels.iter()).zip(arm_needed) {
+        if !needed {
+            continue;
+        }
         ctx.emitter.label(label);
         match &candidate.action {
             MixedPropertyWriteAction::Refuse(message) => {
@@ -1377,6 +1759,18 @@ pub(super) fn lower_runtime_mixed_prop_set(
                 emit_refined_untyped_tag_guarded_store(ctx, value, slot, message, 16, 32, &done_label)?;
             }
             MixedPropertyWriteAction::Slot(slot) => {
+                // The arm answers a whole subtree, so its diagnostics name the declaring class.
+                let mut slot = slot.clone();
+                slot.class_name = message_class_for_slot(ctx, &slot);
+                let slot = &slot;
+                super::readonly_guard::emit_readonly_slot_guard(
+                    ctx,
+                    slot,
+                    false,
+                    super::readonly_guard::GuardReceiver::Stack(16),
+                    32,
+                )?;
+                emit_refined_scalar_slot_guard(ctx, value, slot, 32)?;
                 let base_reg = abi::symbol_scratch_reg(ctx.emitter);
                 abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 16);
                 emit_hook_aware_property_store(ctx, value, slot, base_reg)?;
@@ -1430,14 +1824,19 @@ pub(super) fn lower_runtime_mixed_prop_set(
         }
     }
 
-    ctx.emitter.label(&stdclass_label);
-    let value_ty = ctx.value_php_type(value)?.codegen_repr();
-    emit_runtime_stdclass_set_for_stacked_name_after_eval_probe(ctx, value, &value_ty, 16, 0, 32)?;
-    abi::emit_release_temporary_stack(ctx.emitter, 32);
-    abi::emit_jump(ctx.emitter, &done_label);
+    if delegate.is_none() {
+        ctx.emitter.label(&stdclass_label);
+        let value_ty = ctx.value_php_type(value)?.codegen_repr();
+        emit_runtime_stdclass_set_for_stacked_name_after_eval_probe(ctx, value, &value_ty, 16, 0, 32)?;
+        abi::emit_release_temporary_stack(ctx.emitter, 32);
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
 
     ctx.emitter.label(&miss_label);
     abi::emit_release_temporary_stack(ctx.emitter, 32);
+    if let Some(base_label) = &delegate {
+        emit_delegate_call_to_global_helper(ctx, object, property_value, Some(value), base_label)?;
+    }
     ctx.emitter.label(&done_label);
     Ok(())
 }
@@ -1448,6 +1847,7 @@ pub(super) fn declared_mixed_property_set_candidates(
     value: ValueId,
     write_kind: PropertyAccessKind,
     inst: &Instruction,
+    only: Option<&crate::fast_hash::FastSet<(String, String)>>,
 ) -> Result<Vec<MixedPropertyWriteCandidate>> {
     let value_ty = ctx.value_php_type(value)?;
     let mut candidates = Vec::new();
@@ -1458,6 +1858,9 @@ pub(super) fn declared_mixed_property_set_candidates(
             continue;
         }
         for (property, _) in &class_info.properties {
+            if only.is_some_and(|only| !only.contains(&(class_name.clone(), property.clone()))) {
+                continue;
+            }
             let Some(candidate) = mixed_property_write_candidate(
                 ctx,
                 class_name,
@@ -1535,6 +1938,192 @@ pub(super) fn emit_branch_if_mixed_dynamic_property_candidate_matches(
     }
     emit_branch_if_dynamic_name_matches(ctx, property, matched_label);
     ctx.emitter.label(&next_label);
+}
+
+/// The key under which a write arm may be merged with its parent class's arm.
+///
+/// A slot store depends on the slot alone, so every subclass that inherits the slot unchanged
+/// shares it. The other actions name the RUNTIME class in their text or their hash offset, so they
+/// key on the class id and never merge.
+fn write_arm_key(
+    ctx: &FunctionContext<'_>,
+    class_names: &crate::fast_hash::FastMap<u64, String>,
+    candidate: &MixedPropertyWriteCandidate,
+) -> String {
+    if let Some(visibility) = dynamic_refusal_visibility(class_names, candidate) {
+        return format!("refuse-dynamic|{}|{}", visibility, candidate.property);
+    }
+    match &candidate.action {
+        MixedPropertyWriteAction::Slot(slot) => format!(
+            "slot{}|{}|{}|{:?}|{}|{}|{}|{}",
+            super::readonly_guard::readonly_key(ctx, slot),
+            message_class_for_slot(ctx, slot),
+            slot.property,
+            slot.php_type,
+            slot.offset,
+            slot.is_declared,
+            slot.is_packed,
+            slot.is_reference
+        ),
+        MixedPropertyWriteAction::Refuse(message) => format!("refuse|{}|{}", candidate.class_id, message),
+        // Refuses unless the stored tag matches, otherwise writes the slot: it depends on both the
+        // slot and the message, and the message names the runtime class, so it never merges.
+        MixedPropertyWriteAction::RefuseUnlessTagMatches { slot, message } => format!(
+            "refuse-unless-tag|{}|{}|{}|{}",
+            candidate.class_id, slot.offset, slot.property, message
+        ),
+        MixedPropertyWriteAction::DynamicHash { .. } => format!("hash|{}", candidate.class_id),
+        MixedPropertyWriteAction::MagicSetRecursiveRefusal { .. } => format!("magic|{}", candidate.class_id),
+    }
+}
+
+/// The class php names in a typed-property `TypeError`: the class that DECLARES the property.
+///
+/// php prints `Cannot assign string to property A::$n of type int` for a `B extends A` receiver;
+/// the slot carries the receiver's own name, which made every subclass arm differ from its
+/// parent's. A name with more than one physical slot (a shadowed private) keeps the slot's class,
+/// since the name-keyed declaring-class table cannot say which slot the arm stores into.
+pub(super) fn message_class_for_slot(ctx: &FunctionContext<'_>, slot: &PropertySlot) -> String {
+    let Some(info) = ctx.module.class_infos.get(&slot.class_name) else {
+        return slot.class_name.clone();
+    };
+    if info.properties.iter().filter(|(name, _)| *name == slot.property).count() != 1 {
+        return slot.class_name.clone();
+    }
+    info.property_declaring_classes
+        .get(&slot.property)
+        .cloned()
+        .unwrap_or_else(|| slot.class_name.clone())
+}
+
+/// The visibility word of a refusal whose text is exactly php's
+/// `Cannot access <visibility> property <RuntimeClass>::$<name>` for this arm's own class.
+///
+/// Such an arm can be emitted by composing the message from the RECEIVER's class name at run time
+/// (`emit_scope_refusal`), so it no longer names its class and a whole subtree shares it.
+fn dynamic_refusal_visibility(
+    class_names: &crate::fast_hash::FastMap<u64, String>,
+    candidate: &MixedPropertyWriteCandidate,
+) -> Option<&'static str> {
+    let MixedPropertyWriteAction::Refuse(message) = &candidate.action else {
+        return None;
+    };
+    refusal_message_visibility(class_names, candidate.class_id, &candidate.property, message)
+}
+
+/// The visibility word when `message` is php's refusal for exactly this class and property.
+pub(super) fn refusal_message_visibility(
+    class_names: &crate::fast_hash::FastMap<u64, String>,
+    class_id: u64,
+    property: &str,
+    message: &str,
+) -> Option<&'static str> {
+    let class_name = class_names.get(&class_id)?;
+    ["private", "protected"].into_iter().find(|visibility| {
+        message == format!("Cannot access {} property {}::${}", visibility, class_name, property)
+    })
+}
+
+/// The key under which a removal arm may share its body with another class's arm.
+///
+/// A slot removal depends only on the slot's offset and storage type, a hash removal only on the
+/// hash offset, and a visibility refusal composed from the receiver's class on the visibility
+/// word, so every class whose arm has the same key shares one body.
+fn unset_arm_key(
+    ctx: &FunctionContext<'_>,
+    class_names: &crate::fast_hash::FastMap<u64, String>,
+    candidate: &MixedPropertyUnsetCandidate,
+) -> String {
+    match &candidate.action {
+        PropertyRuntimeAction::Slot(slot) => {
+            if unset_unsupported_slot_reason(ctx, slot).is_some() {
+                return format!("unsupported|{}|{}", candidate.class_id, slot.property);
+            }
+            format!(
+                "slot{}|{:?}|{:?}|{}|{}|{}|{}|{}",
+                super::readonly_guard::readonly_key(ctx, slot),
+                slot.property,
+                slot.release_type(),
+                slot.php_type,
+                slot.offset,
+                slot.is_declared,
+                slot.is_packed,
+                slot.is_reference
+            )
+        }
+        PropertyRuntimeAction::Refuse { message } => {
+            let property = candidate.property.as_deref().unwrap_or("");
+            match refusal_message_visibility(class_names, candidate.class_id, property, message) {
+                Some(visibility) => format!("refuse-dynamic|{}", visibility),
+                None => format!("refuse|{}|{}", candidate.class_id, message),
+            }
+        }
+        PropertyRuntimeAction::DynamicHash { hash_offset, .. } => format!("hash|{}", hash_offset),
+        PropertyRuntimeAction::DynamicMissing { .. }
+        | PropertyRuntimeAction::MagicDeferred
+        | PropertyRuntimeAction::MagicGet | PropertyRuntimeAction::DynamicHashThenMagicGet { .. } => "noop".to_string(),
+    }
+}
+
+/// Branches to `matched_label` when the stacked receiver's class falls under the group's class and
+/// the runtime name is the group's property.
+///
+/// A leaf class is the plain exact test. A class with subclasses tests the NAME first and then asks
+/// the shared matcher whether the receiver extends the class; the arm sits behind every deeper arm
+/// of the same name, so the first match is the receiver's nearest top ancestor.
+pub(super) fn emit_branch_if_mixed_dynamic_property_group_matches(
+    ctx: &mut FunctionContext<'_>,
+    group: &super::arm_groups::ArmGroup,
+    matched_label: &str,
+) {
+    if !group.subtree {
+        emit_branch_if_mixed_dynamic_property_candidate_matches(
+            ctx,
+            group.class_id,
+            &group.property,
+            matched_label,
+        );
+        return;
+    }
+    let next_label = ctx.next_label("mixed_dyn_prop_set_subtree_next");
+    emit_branch_if_dynamic_name_differs(ctx, &group.property, &next_label);
+    let object_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, object_arg, 16);
+    super::instanceof_helpers::emit_match_call(ctx, group.class_id, 0, "__rt_exception_matches");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbnz x0, {}", matched_label));    // the receiver extends the group's class
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // test the subtree matcher result
+            ctx.emitter.instruction(&format!("jne {}", matched_label));         // the receiver extends the group's class
+        }
+    }
+    ctx.emitter.label(&next_label);
+}
+
+/// Branches to `differs_label` when the stacked runtime name is not `property`.
+fn emit_branch_if_dynamic_name_differs(ctx: &mut FunctionContext<'_>, property: &str, differs_label: &str) {
+    let (label, len) = ctx.data.add_string(property.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x2", 8);
+            abi::emit_symbol_address(ctx.emitter, "x3", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x4", len as i64);
+            ctx.emitter.instruction("bl __rt_str_eq");                          // compare the runtime property name against this group's property
+            ctx.emitter.instruction(&format!("cbz x0, {}", differs_label));     // another name: try the next arm
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 8);
+            abi::emit_symbol_address(ctx.emitter, "rdx", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rcx", len as i64);
+            ctx.emitter.instruction("call __rt_str_eq");                        // compare the runtime property name against this group's property
+            ctx.emitter.instruction("test rax, rax");                           // check whether the runtime string comparison matched
+            ctx.emitter.instruction(&format!("je {}", differs_label));          // another name: try the next arm
+        }
+    }
 }
 
 /// Branches when a stacked object payload is a stdClass instance.
@@ -1635,14 +2224,13 @@ fn emit_runtime_stdclass_set_for_stacked_name_after_eval_probe(
     );
     // php decides visibility from the WRITING function's lexical class; a free function has none.
     let scope = ctx.lexical_class().unwrap_or_default().to_owned();
-    let (scope_label, scope_len) = ctx.data.add_string(scope.as_bytes());
     abi::emit_load_temporary_stack_slot(ctx.emitter, arg0, object_stack_offset + 32);
     abi::emit_load_temporary_stack_slot(ctx.emitter, arg1, name_stack_offset + 32);
     abi::emit_load_temporary_stack_slot(ctx.emitter, arg2, name_stack_offset + 40);
     // One block carries both: word 0 is the Throwable slot, word 2 the value cell pushed above.
     abi::emit_temporary_stack_address(ctx.emitter, arg3, 0);
-    abi::emit_symbol_address(ctx.emitter, arg4, &scope_label);
-    abi::emit_load_int_immediate(ctx.emitter, arg5, scope_len as i64);
+    // A closure `Closure::bind` rebound at run time writes under its BOUND scope instead.
+    crate::codegen::lower_inst::builtins::eval::emit_effective_scope_name(ctx, &scope, arg4, arg5)?;
     let symbol = target.extern_symbol("__elephc_eval_dynamic_object_property_set");
     abi::emit_call_label(ctx.emitter, &symbol);
     abi::emit_branch_if_int_result_zero(ctx.emitter, &plain);
@@ -1804,7 +2392,7 @@ pub(super) fn lower_named_prop_unset(
         return Ok(());
     }
     let slot = resolve_property_slot(ctx, object, property, inst)?;
-    if let Some(reason) = unset_unsupported_slot_reason(&slot) {
+    if let Some(reason) = unset_unsupported_slot_reason(ctx, &slot) {
         return Err(CodegenIrError::unsupported(format!(
             "unset() of {} {}::${}",
             reason, slot.class_name, slot.property
@@ -1831,12 +2419,19 @@ pub(super) fn emit_dynamic_plan_unset(
 ) -> Result<()> {
     match &arm.action {
         PropertyRuntimeAction::Slot(slot) => {
-            if let Some(reason) = unset_unsupported_slot_reason(slot) {
+            if let Some(reason) = unset_unsupported_slot_reason(ctx, slot) {
                 return Err(CodegenIrError::unsupported(format!(
                     "unset() of {} {}::${}",
                     reason, slot.class_name, slot.property
                 )));
             }
+            super::readonly_guard::emit_readonly_slot_guard(
+                ctx,
+                slot,
+                true,
+                super::readonly_guard::GuardReceiver::Value(object),
+                0,
+            )?;
             let base_reg = abi::symbol_scratch_reg(ctx.emitter);
             ctx.load_value_to_reg(object, base_reg)?;
             detach_and_release_unset_property_value(ctx, slot, base_reg);
@@ -1851,7 +2446,7 @@ pub(super) fn emit_dynamic_plan_unset(
         // A DIRECT name never reaches this arm: `crate::ir_lower::expr::unset` peels a runtime
         // class declaring `__unset` off and calls the accessor there. `MagicGet` is a read-only
         // answer and cannot be built for an unset, but it removes nothing either way.
-        PropertyRuntimeAction::MagicDeferred | PropertyRuntimeAction::MagicGet => Ok(()),
+        PropertyRuntimeAction::MagicDeferred | PropertyRuntimeAction::MagicGet | PropertyRuntimeAction::DynamicHashThenMagicGet { .. } => Ok(()),
         PropertyRuntimeAction::Refuse { .. } => Err(CodegenIrError::invalid_module(
             "property dispatch handed a refusal arm to its action emitter",
         )),
@@ -1871,16 +2466,30 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_prop_unset_runtime(
 ) -> Result<()> {
     let object = expect_operand(inst, 0)?;
     let property_value = expect_operand(inst, 1)?;
-    if let Some(property) = const_string_operand(ctx, property_value)? {
-        let property = property.to_string();
-        return lower_named_prop_unset(ctx, object, &property, inst);
+    // A named property of a BOXED receiver (`unset($record->uuid)` over an untyped closure
+    // parameter, laravel's `DatabaseUuidFailedJobProvider::all()`) has no static class for the
+    // by-name path to resolve; the runtime-class ladder below takes the literal as its name.
+    let boxed_receiver = matches!(
+        ctx.value_php_type(object)?.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    );
+    if !boxed_receiver {
+        if let Some(property) = const_string_operand(ctx, property_value)? {
+            let property = property.to_string();
+            return lower_named_prop_unset(ctx, object, &property, inst);
+        }
     }
     match ctx.value_php_type(object)?.codegen_repr() {
+        // A receiver typed only `object` names no class: dispatch on its runtime class id, as a
+        // boxed receiver does.
+        PhpType::Object(class_name) if class_name.trim_start_matches('\\').is_empty() => {
+            lower_runtime_mixed_prop_unset(ctx, object, property_value, inst, true)
+        }
         PhpType::Object(class_name) => {
             lower_runtime_object_prop_unset(ctx, object, property_value, &class_name, inst)
         }
         PhpType::Mixed | PhpType::Union(_) => {
-            lower_runtime_mixed_prop_unset(ctx, object, property_value, inst)
+            lower_runtime_mixed_prop_unset(ctx, object, property_value, inst, false)
         }
         object_ty => Err(CodegenIrError::unsupported(format!(
             "{} for receiver PHP type {:?}",
@@ -2070,9 +2679,21 @@ fn lower_runtime_mixed_prop_unset(
     object: ValueId,
     property_value: ValueId,
     inst: &Instruction,
+    generic_object: bool,
 ) -> Result<()> {
+    if !generic_object && try_lower_outlined_mixed_prop_unset(ctx, object, property_value, inst)? {
+        return Ok(());
+    }
+    let delegate = outlined_helper_delegate(ctx, UNSET_PREFIX);
+    let only = if delegate.is_some() {
+        Some(scope_overrides_unset(ctx, inst)?.ok_or_else(|| {
+            CodegenIrError::invalid_module("scoped dynamic-unset helper without overrides")
+        })?)
+    } else {
+        None
+    };
     ensure_runtime_dynamic_property_name(ctx, property_value, inst)?;
-    let candidates = declared_mixed_property_unset_candidates(ctx, inst)?;
+    let candidates = declared_mixed_property_unset_candidates(ctx, inst, only.as_ref())?;
     let done_label = ctx.next_label("mixed_dyn_prop_unset_done");
     let miss_label = ctx.next_label("mixed_dyn_prop_unset_miss");
     let stdclass_label = ctx.next_label("mixed_dyn_prop_unset_stdclass");
@@ -2086,11 +2707,36 @@ fn lower_runtime_mixed_prop_unset(
             ))
         })
         .collect::<Vec<_>>();
+    // Arms with the same key run the same code, so they share the first one's label and body.
+    let class_names = ctx
+        .module
+        .class_infos
+        .iter()
+        .map(|(name, info)| (info.class_id, name.clone()))
+        .collect::<crate::fast_hash::FastMap<_, _>>();
+    let mut first_for_key: crate::fast_hash::FastMap<String, usize> = Default::default();
+    let mut arm_owner = Vec::with_capacity(candidates.len());
+    for (index, candidate) in candidates.iter().enumerate() {
+        let key = if std::env::var_os("ELEPHC_NO_ARM_GROUPS").is_some() {
+            format!("unique|{index}")
+        } else {
+            unset_arm_key(ctx, &class_names, candidate)
+        };
+        arm_owner.push(*first_for_key.entry(key).or_insert(index));
+    }
+    let match_labels = arm_owner.iter().map(|owner| match_labels[*owner].clone()).collect::<Vec<_>>();
 
-    ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    emit_branch_if_mixed_unboxed_not_object(ctx, &done_label);
-    push_mixed_unboxed_object_payload(ctx);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, result_reg)?;
+    if generic_object {
+        // An `object`-typed receiver is already the payload; only a null one is skipped.
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &done_label);
+        abi::emit_push_reg(ctx.emitter, result_reg);
+    } else {
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        emit_branch_if_mixed_unboxed_not_object(ctx, &done_label);
+        push_mixed_unboxed_object_payload(ctx);
+    }
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     ctx.load_string_value_to_regs(property_value, ptr_reg, len_reg)?;
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
@@ -2112,24 +2758,44 @@ fn lower_runtime_mixed_prop_unset(
             emit_branch_if_stacked_object_class_matches(ctx, candidate.class_id, 16, label);
         }
     }
-    emit_branch_if_stacked_object_is_stdclass(ctx, 16, &stdclass_label);
+    if delegate.is_none() {
+        emit_branch_if_stacked_object_is_stdclass(ctx, 16, &stdclass_label);
+    }
     abi::emit_jump(ctx.emitter, &miss_label);
 
-    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+    for (index, (candidate, label)) in candidates.iter().zip(match_labels.iter()).enumerate() {
+        if arm_owner[index] != index {
+            continue;
+        }
         ctx.emitter.label(label);
+        if let PropertyRuntimeAction::Refuse { message } = &candidate.action {
+            let property = candidate.property.as_deref().unwrap_or("");
+            if let Some(visibility) =
+                refusal_message_visibility(&class_names, candidate.class_id, property, message)
+            {
+                // Composes the text from the receiver's own class name, releasing the block.
+                super::closure_scope_gate::emit_scope_refusal(ctx, visibility);
+                continue;
+            }
+        }
         emit_mixed_runtime_name_unset_arm(ctx, candidate, &done_label)?;
     }
 
-    ctx.emitter.label(&stdclass_label);
-    // stdClass keeps every property in the hash the header points at, which is the layout of a
-    // class with no declared slots at all.
-    lower_runtime_stacked_prop_unset(ctx, dynamic_property_hash_offset(0), 16, 0, 32)?;
-    abi::emit_jump(ctx.emitter, &done_label);
+    if delegate.is_none() {
+        ctx.emitter.label(&stdclass_label);
+        // stdClass keeps every property in the hash the header points at, which is the layout of a
+        // class with no declared slots at all.
+        lower_runtime_stacked_prop_unset(ctx, dynamic_property_hash_offset(0), 16, 0, 32)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
 
     ctx.emitter.label(&miss_label);
     // A runtime class this module never enumerated cannot have a hash this ladder can address,
     // and php's `unset()` of a property that was never created removes nothing.
     abi::emit_release_temporary_stack(ctx.emitter, 32);
+    if let Some(base_label) = &delegate {
+        emit_delegate_call_to_global_helper(ctx, object, property_value, None, base_label)?;
+    }
     ctx.emitter.label(&done_label);
     Ok(())
 }
@@ -2148,12 +2814,29 @@ fn emit_mixed_runtime_name_unset_arm(
         // and this scope resolves the name to it. No ancestor's private slot is reachable here:
         // such a name resolves to `DynamicHash` or `DynamicMissing` instead.
         PropertyRuntimeAction::Slot(slot) => {
-            if let Some(reason) = unset_unsupported_slot_reason(slot) {
-                return Err(CodegenIrError::unsupported(format!(
-                    "unset() of {} {}::${}",
+            // The name is only known at run time, so this arm is one of every class declaring
+            // SOME property, and the checker could not widen a slot it never saw named
+            // (`property_unset_destinations`). A slot that cannot hold the removed state raises
+            // when this arm actually runs instead of refusing the whole file at compile time:
+            // Symfony's DeepClone hydrators `unset($object->$name)` only typed properties of the
+            // class they hydrate, yet the refusal on `ClassNotFoundError::$code` handed DeepClone
+            // and everything depending on it to the interpreter.
+            if let Some(reason) = unset_unsupported_slot_reason(ctx, slot) {
+                let message = format!(
+                    "Cannot unset {} {}::${} in compiled code",
                     reason, slot.class_name, slot.property
-                )));
+                );
+                abi::emit_release_temporary_stack(ctx.emitter, 32);
+                super::super::exceptions::emit_error(ctx, &message);
+                return Ok(());
             }
+            super::readonly_guard::emit_readonly_slot_guard(
+                ctx,
+                slot,
+                true,
+                super::readonly_guard::GuardReceiver::Stack(16),
+                32,
+            )?;
             let base_reg = abi::symbol_scratch_reg(ctx.emitter).to_string();
             abi::emit_load_temporary_stack_slot(ctx.emitter, &base_reg, 16);
             detach_and_release_unset_property_value(ctx, slot, &base_reg);
@@ -2177,7 +2860,7 @@ fn emit_mixed_runtime_name_unset_arm(
         // this phase either, and php's accessor removes nothing from storage in any case.
         PropertyRuntimeAction::DynamicMissing { .. }
         | PropertyRuntimeAction::MagicDeferred
-        | PropertyRuntimeAction::MagicGet => {
+        | PropertyRuntimeAction::MagicGet | PropertyRuntimeAction::DynamicHashThenMagicGet { .. } => {
             abi::emit_release_temporary_stack(ctx.emitter, 32);
             abi::emit_jump(ctx.emitter, done_label);
         }
@@ -2196,6 +2879,34 @@ fn detach_and_release_unset_property_value(
     slot: &PropertySlot,
     base_reg: &str,
 ) {
+    // A by-reference slot holds a reference CELL that its alias still shares. `unset()` breaks
+    // the reference -- the alias keeps its value -- and leaves the property uninitialized: drop
+    // this slot's share of the cell (exactly as rebinding it does) and give the slot a fresh
+    // owned cell marked uninitialized, so a later write lands in the object, not in the alias.
+    if slot.is_reference {
+        abi::emit_push_reg(ctx.emitter, base_reg);
+        abi::emit_load_from_address(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            base_reg,
+            slot.offset,
+        );
+        abi::emit_release_local_ref_cell(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            &slot.php_type,
+        );
+        abi::emit_pop_reg(ctx.emitter, base_reg);
+        super::allocation_clone::emit_owned_reference_property_cell(
+            ctx,
+            base_reg,
+            slot.offset,
+            &slot.php_type,
+            true,
+        );
+        abi::emit_store_zero_to_address(ctx.emitter, base_reg, slot.offset + 8);
+        return;
+    }
     let prop_ty = slot.php_type.codegen_repr();
     let releases_value =
         matches!(prop_ty, PhpType::Str | PhpType::Callable) || prop_ty.is_refcounted();
@@ -2242,6 +2953,7 @@ struct MixedPropertyUnsetCandidate {
 fn declared_mixed_property_unset_candidates(
     ctx: &FunctionContext<'_>,
     inst: &Instruction,
+    only: Option<&crate::fast_hash::FastSet<(String, String)>>,
 ) -> Result<Vec<MixedPropertyUnsetCandidate>> {
     let mut candidates = Vec::new();
     for (class_name, class_info) in &ctx.module.class_infos {
@@ -2249,6 +2961,9 @@ fn declared_mixed_property_unset_candidates(
             continue;
         }
         for (property, _) in &class_info.properties {
+            if only.is_some_and(|only| !only.contains(&(class_name.clone(), property.clone()))) {
+                continue;
+            }
             let Ok(action) = resolve_property_runtime_action(
                 ctx,
                 class_name,
@@ -2267,6 +2982,9 @@ fn declared_mixed_property_unset_candidates(
         // The empty name stands for "a name this class does not declare", which is exactly what
         // the class-only arm answers, and it is the same key the known-receiver miss path asks
         // the offset for.
+        if only.is_some() {
+            continue;
+        }
         if let Some(hash_offset) = dynamic_property_hash_offset_for_class(ctx, class_name, "")? {
             candidates.push(MixedPropertyUnsetCandidate {
                 class_id: class_info.class_id,
@@ -2284,4 +3002,138 @@ fn declared_mixed_property_unset_candidates(
             .then_with(|| left.property.cmp(&right.property))
     });
     Ok(candidates)
+}
+
+/// Branches to the label of the candidate whose class id and property name match the stacked
+/// receiver and runtime name, and falls through when none does.
+///
+/// The candidates span every declared property of the whole program: thousands for a framework.
+/// Checking them one after another made each write through `ReflectionProperty::setRawValue()`
+/// walk half of them on average, and Symfony's `Request` sets its properties that way on every
+/// request. The receiver's class is chosen first, by a binary search over the candidates' class
+/// ids, and names are compared only against that class's own candidates, in their given order.
+pub(super) fn emit_mixed_dynamic_property_candidate_dispatch(
+    ctx: &mut FunctionContext<'_>,
+    candidates: &[MixedPropertyCandidate],
+    matched_labels: &[String],
+) {
+    let mut classes: std::collections::BTreeMap<u64, Vec<usize>> = std::collections::BTreeMap::new();
+    for (index, candidate) in candidates.iter().enumerate() {
+        classes.entry(candidate.class_id).or_default().push(index);
+    }
+    if classes.is_empty() {
+        return;
+    }
+    let classes = classes.into_iter().collect::<Vec<_>>();
+    let no_match_label = ctx.next_label("mixed_dyn_prop_no_match");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 16);
+            ctx.emitter.instruction("ldr x10, [x9]");                           // x10 = receiver class id, live through the class search
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", 16);
+            ctx.emitter.instruction("mov r10, QWORD PTR [r11]");                // r10 = receiver class id, live through the class search
+        }
+    }
+    emit_candidate_class_search(ctx, &classes, candidates, matched_labels, &no_match_label);
+    ctx.emitter.label(&no_match_label);
+}
+
+/// Emits the binary search over `classes` (sorted by class id) for the receiver class id held in
+/// x10/r10. Nothing in the search calls out, so the id stays in its register until a class is
+/// found. Small ranges are compared one class at a time.
+fn emit_candidate_class_search(
+    ctx: &mut FunctionContext<'_>,
+    classes: &[(u64, Vec<usize>)],
+    candidates: &[MixedPropertyCandidate],
+    matched_labels: &[String],
+    no_match_label: &str,
+) {
+    if classes.len() <= 3 {
+        for (class_id, members) in classes {
+            let next_label = ctx.next_label("mixed_dyn_prop_class_next");
+            emit_compare_receiver_class_id(ctx, *class_id);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => ctx.emitter.instruction(&format!("b.ne {}", next_label)), // try the next class
+                Arch::X86_64 => ctx.emitter.instruction(&format!("jne {}", next_label)),   // try the next class
+            }
+            emit_candidate_class_names(ctx, members, candidates, matched_labels, no_match_label);
+            ctx.emitter.label(&next_label);
+        }
+        abi::emit_jump(ctx.emitter, no_match_label);
+        return;
+    }
+    let middle = classes.len() / 2;
+    let (class_id, members) = &classes[middle];
+    let lower_label = ctx.next_label("mixed_dyn_prop_class_lower");
+    let upper_label = ctx.next_label("mixed_dyn_prop_class_upper");
+    emit_compare_receiver_class_id(ctx, *class_id);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("b.lo {}", lower_label));          // the receiver's class id sorts below this class
+            ctx.emitter.instruction(&format!("b.hi {}", upper_label));          // the receiver's class id sorts above this class
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("jb {}", lower_label));            // the receiver's class id sorts below this class
+            ctx.emitter.instruction(&format!("ja {}", upper_label));            // the receiver's class id sorts above this class
+        }
+    }
+    emit_candidate_class_names(ctx, members, candidates, matched_labels, no_match_label);
+    ctx.emitter.label(&lower_label);
+    emit_candidate_class_search(ctx, &classes[..middle], candidates, matched_labels, no_match_label);
+    ctx.emitter.label(&upper_label);
+    emit_candidate_class_search(ctx, &classes[middle + 1..], candidates, matched_labels, no_match_label);
+}
+
+/// Compares the receiver class id held in x10/r10 with `class_id`.
+fn emit_compare_receiver_class_id(ctx: &mut FunctionContext<'_>, class_id: u64) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x11", class_id as i64);
+            ctx.emitter.instruction("cmp x10, x11");                            // compare the receiver class id with this class
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "r12", class_id as i64);
+            ctx.emitter.instruction("cmp r10, r12");                            // compare the receiver class id with this class
+        }
+    }
+}
+
+/// Compares the runtime name with each candidate of the receiver's class, then gives up: no
+/// other class's candidate can match a receiver of this class.
+fn emit_candidate_class_names(
+    ctx: &mut FunctionContext<'_>,
+    members: &[usize],
+    candidates: &[MixedPropertyCandidate],
+    matched_labels: &[String],
+    no_match_label: &str,
+) {
+    for &index in members {
+        emit_branch_if_dynamic_name_matches(ctx, &candidates[index].slot.property, &matched_labels[index]);
+    }
+    abi::emit_jump(ctx.emitter, no_match_label);
+}
+
+/// Reports whether a receiver names a class the compiled module does not contain.
+///
+/// A named class missing from `class_infos` has no layout to resolve, so every slot-based path
+/// below would refuse it. It is NOT a broken program: PHP resolves a parameter's declared class
+/// only when an operation needs its metadata, so a class that nothing constructs statically is
+/// absent from the closed world while the code around it still compiles.
+///
+/// `stdClass` and the empty "some object" spelling are handled by their own paths above and are
+/// deliberately not reported here.
+fn object_class_is_absent_from_module(
+    ctx: &FunctionContext<'_>,
+    object: ValueId,
+) -> Result<bool> {
+    let PhpType::Object(class_name) = ctx.value_php_type(object)?.codegen_repr() else {
+        return Ok(false);
+    };
+    let normalized = class_name.trim_start_matches('\\');
+    if normalized.is_empty() {
+        return Ok(false);
+    }
+    Ok(!ctx.module.class_infos.contains_key(normalized))
 }

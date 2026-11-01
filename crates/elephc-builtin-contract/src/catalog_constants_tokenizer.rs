@@ -14,7 +14,7 @@ const fn token(name: &'static str, value: i64) -> ConstantContract {
     ConstantContract {
         id: BuiltinId::from_canonical_name(name), name, module: PhpModule::Tokenizer,
         since: None, value: ConstValue::Int(value), route: ConstantRoute::Predefined,
-        extension: false, internal: false,
+        extension: false, internal: false, target_support: None,
     }
 }
 

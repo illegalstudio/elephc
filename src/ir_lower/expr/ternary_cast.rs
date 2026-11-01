@@ -41,6 +41,11 @@ pub(super) fn lower_ternary_with_destination(
     expr: &Expr,
     destination: Option<&PhpType>,
 ) -> LoweredValue {
+    if let Some(result) = statically_known_instanceof_result(ctx, condition) {
+        let condition_value = lower_expr(ctx, condition);
+        let _ = ctx.truthy_consuming(condition_value, Some(condition.span));
+        return lower_expr(ctx, if result { then_expr } else { else_expr });
+    }
     let then_block = ctx.builder.create_named_block("ternary.then", Vec::new());
     let else_block = ctx.builder.create_named_block("ternary.else", Vec::new());
     lower_condition(ctx, condition, then_block, else_block);
@@ -56,14 +61,32 @@ pub(super) fn lower_ternary_with_destination(
 
     ctx.builder.position_at_end(then_block);
     ctx.restore_initialized_slots(split_initialized.clone());
-    store_branch_into_temp(ctx, &temp_name, result_type.clone(), then_expr, expr.span, destination);
+    store_ternary_branch(
+        ctx,
+        condition,
+        true,
+        &temp_name,
+        result_type.clone(),
+        then_expr,
+        expr.span,
+        destination,
+    );
     let then_reachable = !ctx.builder.insertion_block_is_terminated();
     let then_initialized = ctx.initialized_slots_snapshot();
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(else_block);
     ctx.restore_initialized_slots(split_initialized.clone());
-    store_branch_into_temp(ctx, &temp_name, result_type, else_expr, expr.span, destination);
+    store_ternary_branch(
+        ctx,
+        condition,
+        false,
+        &temp_name,
+        result_type,
+        else_expr,
+        expr.span,
+        destination,
+    );
     let else_reachable = !ctx.builder.insertion_block_is_terminated();
     let else_initialized = ctx.initialized_slots_snapshot();
     branch_to(ctx, merge);
@@ -97,7 +120,36 @@ fn store_branch_into_temp(
             let value = lower_expr_for_destination(ctx, branch, destination);
             store_value_into_temp(ctx, temp_name, temp_type, value, span);
         }
-        _ => store_expr_into_temp(ctx, temp_name, temp_type, branch, span),
+        _ => super::lazy_branches::store_branch_expr_into_temp(ctx, temp_name, temp_type, branch, span),
+    }
+}
+
+/// Stores one ternary arm while keeping its condition-derived nominal fact branch-local.
+#[allow(clippy::too_many_arguments)]
+fn store_ternary_branch(
+    ctx: &mut LoweringContext<'_, '_>,
+    condition: &Expr,
+    branch_matches: bool,
+    temp_name: &str,
+    result_type: PhpType,
+    branch_expr: &Expr,
+    span: Span,
+    destination: Option<&PhpType>,
+) {
+    let narrowing = crate::ir_lower::expr::instanceof_branch_local_type(
+        ctx,
+        condition,
+        branch_matches,
+    );
+    let previous = narrowing
+        .as_ref()
+        .map(|(name, _)| (name.clone(), ctx.local_type(name)));
+    if let Some((name, ty)) = narrowing {
+        ctx.set_local_logical_type(&name, ty);
+    }
+    store_branch_into_temp(ctx, temp_name, result_type, branch_expr, span, destination);
+    if let Some((name, ty)) = previous {
+        ctx.set_local_logical_type(&name, ty);
     }
 }
 
@@ -138,6 +190,41 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
         return normalize_missing_string_value(ctx, value, expr);
     }
     let source_type = ctx.builder.value_php_type(value.value);
+    // `(array)` of an `array<mixed>` is that same array: the backend passes the pointer through
+    // without retaining it. Wrapping an owned temporary in the cast and then releasing the source
+    // below freed the array the cast had just returned, so `foreach ((array) f() as ...)` walked
+    // freed storage -- null once the allocator handed the block to the next allocation.
+    if matches!(target, CastType::Array)
+        && matches!(source_type.codegen_repr(), PhpType::Array(ref element) if element.codegen_repr() == PhpType::Mixed)
+    {
+        return value;
+    }
+    // `(array) $scalar` is the one-element list `[$scalar]`. The backend's array cast rebuilds a
+    // boxed `array<mixed>` from a boxed runtime value, so a statically typed scalar is boxed
+    // first -- doctrine/dbal's `array_merge((array) $this->getName(), $columns)` over a `string`
+    // getter was refused ("array cast for PHP type Str") and interpreted the whole class. The
+    // result keeps the checker's `array<mixed>` type, not the `mixed` a runtime-typed source gets.
+    if matches!(target, CastType::Array)
+        && matches!(
+            source_type.codegen_repr(),
+            PhpType::Str | PhpType::Int | PhpType::Float | PhpType::Bool
+        )
+    {
+        let boxed = ctx.box_value_as_mixed(value, PhpType::Mixed, Some(expr.span));
+        // `__rt_array_from_mixed` always builds a fresh array, so the result is a sole owner.
+        let result = ctx.emit_owned_value(
+            Op::Cast,
+            vec![boxed.value],
+            Some(Immediate::CastTarget(IrType::Heap(IrHeapKind::Array))),
+            PhpType::Array(Box::new(PhpType::Mixed)),
+            Op::Cast.default_effects(),
+            Some(expr.span),
+        );
+        if ctx.value_is_owning_temporary(boxed) {
+            crate::ir_lower::ownership::release_if_owned(ctx, boxed, Some(expr.span));
+        }
+        return result;
+    }
     let php_type = cast_php_type(target, &source_type);
     let result = ctx.emit_value(
         Op::Cast,

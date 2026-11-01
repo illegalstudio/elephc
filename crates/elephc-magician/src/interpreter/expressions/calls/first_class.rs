@@ -42,20 +42,65 @@ pub(in crate::interpreter) fn eval_function_callable_expr(
     )
 }
 
-/// Materializes an invokable-object first-class callable as a PHP `Closure` object.
+/// Materializes an `EXPR(...)` first-class callable as a PHP `Closure` object.
+///
+/// This parses for any parenthesized target the language does not already special-case as a
+/// plain function name, `$obj->method`, or `Class::method` -- so `EXPR` can evaluate to an
+/// object, a Closure already sitting in a variable, an array callable, or a string callable, and
+/// only the RUNTIME VALUE says which. `EXPR(...)` is `Closure::fromCallable(EXPR)` resolved at
+/// creation time, so this defers to the same normalization `Closure::fromCallable()` uses
+/// (`eval_callable_from_scope`) instead of assuming `EXPR` always denotes an object with
+/// `__invoke`: wrapping every value in an `InvokableObject { object }` target regardless of what
+/// it held made a Closure-valued variable produce a target whose "object" was itself a closure
+/// vessel, so dispatching it asked the runtime for that vessel's native class -- the placeholder
+/// `stdClass`, never `Closure` -- and made an array or string callable a target the dispatcher
+/// has no case for at all.
 pub(in crate::interpreter) fn eval_invokable_callable_expr(
     object: &EvalExpr,
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    with_eval_operands(&[object], context, scope, values, |args, context, _, values| {
-        let object = args[0].borrowed();
-        eval_invokable_object_precheck(object, context, values)?;
-        eval_closure_object_expr(
-            EvalClosureObjectTarget::InvokableObject { object }, context, values,
-        )
+    with_eval_operands(&[object], context, scope, values, |args, context, scope, values| {
+        eval_first_class_callable_from_value(args[0].borrowed(), context, scope, values)
     })
+}
+
+/// Normalizes an already evaluated `EXPR(...)` first-class-callable value into its `Closure`.
+///
+/// Mirrors `Closure::fromCallable()`'s dispatch: an object reuses its own stored closure target
+/// when it already has one (a Closure held in a variable), or its `__invoke` method otherwise; an
+/// array or string callable resolves the function/method it names; and a value that denotes no
+/// callable at all refuses with PHP's "not callable" diagnostic instead of returning a wrong
+/// object.
+fn eval_first_class_callable_from_value(
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    scope: &ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    // A value that already IS a Closure is its own first-class callable: PHP hands back the same
+    // instance, signature and all. Re-wrapping a compiled closure's descriptor made a new
+    // Closure whose reflection had no parameters -- `new ReflectionFunction($callable(...))` in
+    // Symfony's `AttributeAutoconfigurationPass` then saw every configurator as arity 0.
+    if values.type_tag(value)? == EVAL_TAG_CALLABLE
+        || (values.type_tag(value)? == EVAL_TAG_OBJECT
+            && values
+                .object_identity(value)
+                .is_ok_and(|identity| context.closure_object_target(identity).is_some()))
+    {
+        return values.retain(value);
+    }
+    let callable = match eval_callable_from_scope(value, context, scope, values) {
+        Ok(callable) => callable,
+        Err(EvalStatus::UnsupportedConstruct) if values.type_tag(value)? == EVAL_TAG_OBJECT => {
+            eval_invokable_object_precheck(value, context, values)?;
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        Err(status) => return Err(status),
+    };
+    let target = eval_closure_object_target_from_callable(callable.into_callable_transferring_receiver());
+    eval_closure_object_from_target(target, context, values)
 }
 
 /// Materializes an object method first-class callable and records captured AOT bridge scope.
@@ -123,12 +168,16 @@ fn eval_method_callable_target(
                 values,
             );
         }
+        // The Closure keeps the scope it was created in: access was checked above, and a later
+        // call from outside the class (compiled `($this->factory)(...)` on a container's
+        // `$this->getService(...)`) must reach the protected method all the same. Dispatch runs
+        // the call under this class scope (`with_closure_method_scope`).
         return Ok(EvalClosureObjectTarget::ObjectMethod {
             object,
             method: method_name,
             called_class: Some(called_class_name),
             native_class: None,
-            bridge_scope: None,
+            bridge_scope: Some(declaring_class),
         });
     }
     if let Some(parent) = context.class_native_parent_name(&called_class_name) {

@@ -104,6 +104,24 @@ fn test_by_ref_builtin_invalidates_its_argument() {
     );
 }
 
+/// `extract()` may create or replace any caller local, so no constant fact survives it.
+#[test]
+fn test_extract_invalidates_all_local_facts() {
+    let program = vec![
+        Stmt::assign("name", Expr::string_lit("kept")),
+        call_stmt("extract", vec![Expr::var("context")]),
+        Stmt::echo(Expr::var("name")),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[2],
+        Stmt::echo(Expr::var("name")),
+        "extract() can overwrite a caller local selected by a runtime array key"
+    );
+}
+
 /// An unfolded array read can invoke a warning handler that writes globals.
 #[test]
 fn test_array_read_invalidates_top_level_facts() {

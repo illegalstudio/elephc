@@ -52,12 +52,15 @@ pub(super) fn object_name_satisfies_interface_for_ir(
 }
 
 /// Returns whether a lowered class implements an interface, following parents.
-pub(super) fn class_implements_interface_for_ir(
+pub(in crate::ir_lower) fn class_implements_interface_for_ir(
     ctx: &LoweringContext<'_, '_>,
     class_name: &str,
     interface_name: &str,
 ) -> bool {
-    let interface_key = php_symbol_key(interface_name.trim_start_matches('\\'));
+    // `php_symbol_key` is `to_ascii_lowercase`, so an equality between two of its results is
+    // `eq_ignore_ascii_case` with a `String` allocated per candidate. This predicate runs per
+    // parent hop per interface per call, and the recursion below multiplied that again.
+    let wanted = interface_name.trim_start_matches('\\');
     let mut current = Some(class_name.trim_start_matches('\\'));
     while let Some(candidate) = current {
         let Some(info) = ctx.classes.get(candidate) else {
@@ -68,7 +71,7 @@ pub(super) fn class_implements_interface_for_ir(
             .iter()
             .any(|interface| {
                 let interface = interface.trim_start_matches('\\');
-                php_symbol_key(interface) == interface_key
+                interface.eq_ignore_ascii_case(wanted)
                     || interface_extends_interface_for_ir(ctx, interface, interface_name)
             })
         {
@@ -85,9 +88,8 @@ pub(super) fn interface_extends_interface_for_ir(
     interface_name: &str,
     ancestor_name: &str,
 ) -> bool {
-    if php_symbol_key(interface_name.trim_start_matches('\\'))
-        == php_symbol_key(ancestor_name.trim_start_matches('\\'))
-    {
+    let ancestor = ancestor_name.trim_start_matches('\\');
+    if interface_name.trim_start_matches('\\').eq_ignore_ascii_case(ancestor) {
         return true;
     }
     let Some(info) = ctx.interfaces.get(interface_name.trim_start_matches('\\')) else {
@@ -95,7 +97,7 @@ pub(super) fn interface_extends_interface_for_ir(
     };
     info.parents.iter().any(|parent| {
         let parent = parent.trim_start_matches('\\');
-        php_symbol_key(parent) == php_symbol_key(ancestor_name.trim_start_matches('\\'))
+        parent.eq_ignore_ascii_case(ancestor)
             || interface_extends_interface_for_ir(ctx, parent, ancestor_name)
     })
 }
@@ -139,4 +141,3 @@ pub(super) fn interface_method_return_type_for_ir(
     }
     None
 }
-

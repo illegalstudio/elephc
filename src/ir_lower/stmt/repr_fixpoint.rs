@@ -221,6 +221,10 @@ fn discovered_conversions(
 pub(in crate::ir_lower) fn conversion_op(entry: &PhpType, target: &PhpType) -> Option<Op> {
     match array_storage_conversion(Some(entry), target)? {
         PhpType::Array(_) => Some(Op::ArrayToMixed),
+        // A hash entering as a hash only boxes its values; a packed array becomes one.
+        PhpType::AssocArray { .. } if matches!(entry.codegen_repr(), PhpType::AssocArray { .. }) => {
+            Some(Op::HashToMixed)
+        }
         PhpType::AssocArray { .. } => Some(Op::ArrayToHash),
         _ => None,
     }
@@ -232,9 +236,11 @@ pub(in crate::ir_lower) fn conversion_op(entry: &PhpType, target: &PhpType) -> O
 /// retains the payload. Hoisted conversions preserve those ownership rules: consuming helpers
 /// use `store_mutated_local`, and boxing uses normal replacement cleanup without cursor reset.
 ///
-/// Both helpers are idempotent on an already-converted array: `__rt_array_to_mixed` re-stamps a
-/// Mixed array without re-boxing it, and `Op::ArrayToHash` reuses a hash payload as-is — so a
-/// canonicalization inside an outer loop stays correct on every iteration.
+/// The helpers are idempotent on an already-converted array — `__rt_array_to_mixed` re-stamps a
+/// Mixed array without re-boxing it, `Op::ArrayToHash` reuses a hash payload as-is, and
+/// `__rt_hash_to_mixed` leaves already-boxed entries boxed — so a canonicalization inside an outer
+/// loop stays correct on every iteration. `HashToMixed`, like `ArrayToHash`, consumes its input
+/// (its COW boundary returns the replacement owner), so `store_mutated_local` publishes it.
 fn canonicalize_array_locals(
     ctx: &mut LoweringContext<'_, '_>,
     conversions: &[(String, PhpType)],
@@ -253,14 +259,20 @@ fn canonicalize_array_locals(
             continue;
         };
         let array = ctx.load_local(name, Some(span));
-        let converted = ctx.emit_value(
-            op,
-            vec![array.value],
-            None,
-            target.clone(),
-            op.default_effects(),
-            Some(span),
-        );
+        // `ArrayToHash` builds a new hash, so it must consume the slot's array (see
+        // `emit_local_array_to_hash_move`); `ArrayToMixed` converts in place.
+        let converted = if op == Op::ArrayToHash {
+            ctx.emit_local_array_to_hash_move(name, array, target.clone(), span)
+        } else {
+            ctx.emit_value(
+                op,
+                vec![array.value],
+                None,
+                target.clone(),
+                op.default_effects(),
+                Some(span),
+            )
+        };
         if op == Op::ArrayToHash {
             // Keep the established raw pointer frame, as the ordinary promotion does.
             ctx.store_retyped_container_local(name, converted, target.clone(), Some(span));
@@ -299,6 +311,17 @@ fn canonicalize_array_locals(
 /// A local reached only through an ALIAS (`$r = &$m`) is not covered, and does not need to be:
 /// `local_slot_is_convertible_here` excludes ref-bound and global-storage locals from the candidates
 /// in the first place.
+/// Whether a synthetic body is the parser's nested-append desugar (`$a[$k][] = $v`): its
+/// read / push / write-back triple starts by assigning a `NESTED_APPEND_TEMP_PREFIX` temporary.
+fn is_nested_append_group(body: &[Stmt]) -> bool {
+    body.len() >= 3
+        && matches!(
+            &body[body.len() - 3].kind,
+            StmtKind::Assign { name, .. }
+                if name.starts_with(crate::parser::ast::NESTED_APPEND_TEMP_PREFIX)
+        )
+}
+
 fn may_convert_array_local(stmt: &Stmt, candidates: &[String]) -> bool {
     let mut scan = ConversionScan::new(candidates);
     scan.stmt(stmt);
@@ -438,6 +461,12 @@ impl<'a> ConversionScan<'a> {
                 self.expr(object);
                 self.expr(value);
             }
+            StmtKind::PropertyRefAssign { object, property: _, source } => {
+                self.hiding();
+                self.mutation();
+                self.expr(object);
+                self.expr(source);
+            }
             StmtKind::PropertyArrayPush { object, property: _, value } => {
                 self.mutation();
                 self.expr(object);
@@ -462,22 +491,53 @@ impl<'a> ConversionScan<'a> {
                 self.expr(index);
                 self.expr(value);
             }
+            StmtKind::StaticPropertyElementRefAssign {
+                receiver: _,
+                property: _,
+                index,
+                source,
+            } => {
+                self.mutation();
+                self.expr(index);
+                self.expr(source);
+            }
+            StmtKind::DynamicStaticPropertyWrite {
+                property,
+                index,
+                value,
+                ..
+            } => {
+                self.mutation();
+                self.expr(property);
+                if let Some(index) = index {
+                    self.expr(index);
+                }
+                self.expr(value);
+            }
             StmtKind::Include { path, once: _, required: _ } => {
                 // A residual include runs arbitrary code in the caller's scope; treat conservatively.
                 self.hiding();
                 self.mutation();
                 self.expr(path);
             }
-            StmtKind::IncludeOnceGuard { label: _, body } => {
+            StmtKind::IncludeOnceGuard { body, .. } => {
                 // A once-guard executes its body conditionally.
                 self.hiding();
                 self.mutation();
                 self.block(body);
             }
-            // A synthetic block (e.g. the nested-append desugaring) is straight-line in itself; any
-            // branching it contains is discovered by walking its body.
+            // A synthetic block is straight-line in itself, and any branching it contains is
+            // discovered by walking its body -- EXCEPT the nested-append group, whose LOWERING
+            // (`nested_append`) splits on whether the bucket exists and vivifies it in one arm
+            // only. That arm can convert the container (`$a = [[1], [2]]; $a[1][] = 7;` widened
+            // `$a` to `array<mixed>` there), and the other arm then read the unconverted array as
+            // boxed cells: `$a[0]` came back as `float(2.0E-323)`. Marking it hiding makes the
+            // region hoist that conversion ahead of the split.
             StmtKind::Synthetic(body) => {
                 self.mutation();
+                if is_nested_append_group(body) {
+                    self.hiding();
+                }
                 self.block(body);
             }
             StmtKind::Echo(expr) | StmtKind::Throw(expr) | StmtKind::ExprStmt(expr) => {
@@ -581,6 +641,7 @@ impl<'a> ConversionScan<'a> {
             | StmtKind::TraitDecl { .. }
             | StmtKind::ExternFunctionDecl { .. }
             | StmtKind::ExternClassDecl { .. }
+            | StmtKind::ClassLikeActivate { .. }
             | StmtKind::ExternGlobalDecl { .. } => {}
         }
     }
@@ -752,6 +813,7 @@ impl<'a> ConversionScan<'a> {
                 }
             }
             ExprKind::Negate(inner)
+            | ExprKind::ArrayReference(inner)
             | ExprKind::Not(inner)
             | ExprKind::BitNot(inner)
             | ExprKind::Throw(inner)
@@ -834,6 +896,8 @@ impl<'a> ConversionScan<'a> {
             | ExprKind::ClassConstant { .. }
             | ExprKind::ScopedConstantAccess { .. }
             | ExprKind::MagicConstant(_) => {}
+            ExprKind::DynamicStaticPropertyAccess { property, .. } => self.expr(property),
+            ExprKind::DynamicScopedConstantAccess { receiver, .. } => self.expr(receiver),
         }
     }
 

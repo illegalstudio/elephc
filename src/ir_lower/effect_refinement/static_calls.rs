@@ -9,7 +9,7 @@
 //! - `static` includes concrete implementations even on abstract classes; eval keeps bridge effects.
 
 use super::{
-    call_argument_coercion_effects, callable_key, class_is_same_or_subclass,
+    call_argument_coercion_effects, callable_key,
     literal_parameter_guard_effects, php_symbol_key, resolved_callable_effects,
     Effects, Function, Immediate, Op, RefinementContext,
 };
@@ -30,8 +30,9 @@ pub(super) fn static_call_effects(
         _ => receiver,
     };
     let class_key = php_symbol_key(class_name);
-    let (class_name, class) = context.classes.iter()
-        .find(|(name, _)| php_symbol_key(name) == class_key)?;
+    // The symbol-key index replaces a linear scan over every class per static call site.
+    let (class_name, class) = context.classes
+        .get_key_value(context.index.by_symbol_key.get(&class_key)?)?;
     let method_key = php_symbol_key(method);
     if receiver != "static" {
         return implementation_effects(function, instruction, context, class, &method_key,
@@ -98,4 +99,28 @@ fn implementation_effects(
         };
     let target = callable_key(&format!("{implementation}::{method}"));
     resolved_callable_effects(function, instruction, &target, parameter_offset, context)
+}
+
+/// Returns whether `candidate` is `base` or inherits from it through its parent chain.
+///
+/// Unlike the refinement's concrete-descendant index this also visits abstract classes,
+/// whose abstract static slots must stay observable to a `static::` call.
+fn class_is_same_or_subclass(
+    classes: &crate::fast_hash::FastMap<String, crate::types::ClassInfo>,
+    candidate: &str,
+    base: &str,
+) -> bool {
+    let mut current = Some(candidate);
+    let mut hops = 0usize;
+    while let Some(class_name) = current {
+        if class_name == base {
+            return true;
+        }
+        hops += 1;
+        if hops > classes.len() {
+            return false;
+        }
+        current = classes.get(class_name).and_then(|class| class.parent.as_deref());
+    }
+    false
 }

@@ -199,13 +199,32 @@ pub(in crate::interpreter) fn eval_array_push_unshift_declared_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if args.len() < 2 || !eval_call_args_are_plain_positional(args) {
+    // Spread arguments are fine -- `array_push($all, ...$messages)` is how Laravel's MessageBag
+    // flattens -- but a named argument is not: php refuses it for a variadic parameter.
+    if args.len() < 2 || args.iter().any(|arg| arg.name().is_some()) || args[0].is_spread() {
         return Err(EvalStatus::RuntimeFatal);
     }
     let (array, target) = super::mutation::eval_array_mutation_lvalue_arg(&args[0], context, scope, values)?;
     let mut inserted = Vec::with_capacity(args.len() - 1);
     for arg in &args[1..] {
-        inserted.push(eval_expr(arg.value(), context, scope, values)?);
+        if !arg.is_spread() {
+            inserted.push(eval_expr(arg.value(), context, scope, values)?);
+            continue;
+        }
+        let spread = eval_expr(arg.value(), context, scope, values)?;
+        let spread = if values.type_tag(spread)? == EVAL_TAG_OBJECT {
+            crate::interpreter::array_literals::eval_spread_traversable_array(spread, context, values)?
+        } else {
+            spread
+        };
+        if !matches!(values.type_tag(spread)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        for position in 0..values.array_len(spread)? {
+            let key = values.array_iter_key(spread, position)?;
+            // `array_get` answers an owned cell, which the rebuilt array then takes over.
+            inserted.push(values.array_get(spread, key)?);
+        }
     }
 
     let replacement = eval_array_push_unshift_replacement(name, array, &inserted, values)?;

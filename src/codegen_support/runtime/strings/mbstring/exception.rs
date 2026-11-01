@@ -54,8 +54,7 @@ fn aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldp x1, x2, [sp, #32]");                               // borrow the complete binary exception message
     emitter.instruction("bl __rt_str_persist");                                 // copy message bytes into native runtime ownership
     emitter.instruction("stp x1, x2, [sp, #56]");                               // retain the owned string while allocating its Throwable
-    emitter.instruction("mov x0, #56");                                         // request the canonical compact Throwable payload
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate one object that will own the message and previous chain
+    crate::codegen_support::throwable_layout::emit_allocate(emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
     emitter.instruction("mov x9, #6");                                          // select the compact native object heap kind
     emitter.instruction("str x9, [x0, #-8]");                                   // stamp the allocation before registering its PHP handle
     emitter.instruction("bl __rt_object_handle_acquire");                       // assign the Throwable its native object identity
@@ -66,7 +65,7 @@ fn aarch64(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [x0, #24]");                                  // initialize the exception code to zero
     crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "x0");
     emitter.instruction("ldr x9, [sp, #16]");                                   // consume the previously completed chain
-    emitter.instruction("str x9, [x0, #40]");                                   // make the earlier error the new Throwable's previous owner
+    emitter.instruction(&format!("str x9, [x0, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET));                                   // make the earlier error the new Throwable's previous owner
     emitter.instruction("str x0, [sp, #16]");                                   // retain the new complete chain until validated publication
     emitter.instruction("ldr x9, [sp, #8]");                                    // recover the completed record index
     emitter.instruction("add x9, x9, #1");                                      // advance after ownership has transferred successfully
@@ -123,8 +122,7 @@ fn x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_str_persist");                               // copy bytes into native runtime ownership
     emitter.instruction("mov QWORD PTR [rsp + 56], rax");                       // retain the native-owned message across object allocation
     emitter.instruction("mov QWORD PTR [rsp + 64], rdx");                       // retain its complete byte length
-    emitter.instruction("mov rax, 56");                                         // request the canonical compact Throwable payload
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the owner of this message and previous chain
+    crate::codegen_support::throwable_layout::emit_allocate(emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
     emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // select the canonical compact object heap marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the allocation before binding its PHP identity
     emitter.instruction("call __rt_object_handle_acquire");                     // assign the Throwable a native object handle
@@ -137,7 +135,7 @@ fn x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rax + 24], 0");                         // initialize the exception code to zero
     crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "rax");
     emitter.instruction("mov r10, QWORD PTR [rsp + 16]");                       // consume the earlier completed chain's sole owner
-    emitter.instruction("mov QWORD PTR [rax + 40], r10");                       // retain every earlier exception as previous
+    emitter.instruction(&format!("mov QWORD PTR [rax + {}], r10", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET));                       // retain every earlier exception as previous
     emitter.instruction("mov QWORD PTR [rsp + 16], rax");                       // retain this complete chain until final publication
     emitter.instruction("add QWORD PTR [rsp + 8], 1");                          // advance only after message and previous ownership transfer
     emitter.instruction("jmp __rt_mbstring_exception_next");                    // construct each later error in observable order

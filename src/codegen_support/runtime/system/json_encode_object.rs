@@ -9,10 +9,11 @@
 //! - Public-property walking and JsonSerializable dispatch depend on emitted per-class JSON descriptors.
 //! - A serializer returning its enum receiver walks its persistent properties once.
 
+use crate::codegen_support::sentinels::emit_deref_reference_property_slot;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::abi;
-use crate::codegen_support::sentinels::emit_resolve_tagged_scalar_property_tag;
+use crate::codegen_support::sentinels::{emit_resolve_prop_desc_tag, emit_resolve_tagged_scalar_property_tag};
 
 /// __rt_json_encode_object: encode a PHP object instance as JSON.
 ///
@@ -28,15 +29,16 @@ use crate::codegen_support::sentinels::emit_resolve_tagged_scalar_property_tag;
 /// Output:
 ///   ARM64: x1 = ptr in concat_buf, x2 = length
 ///   x86_64: rax = ptr, rdx = length
-pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
+pub(crate) fn emit_json_encode_object(emitter: &mut Emitter, eval_bridge: bool) {
     if emitter.target.arch == Arch::X86_64 {
-        emit_json_encode_object_linux_x86_64(emitter);
+        emit_json_encode_object_linux_x86_64(emitter, eval_bridge);
         return;
     }
 
+    emit_dynamic_tail_wrapper_aarch64(emitter);
     emitter.blank();
-    emitter.comment("--- runtime: json_encode_object ---");
-    emitter.label_global("__rt_json_encode_object");
+    emitter.comment("--- runtime: json_encode_object (declared properties) ---");
+    emitter.label_global("__rt_json_encode_object_decl");
     super::json_encode_enum::emit_dispatch(emitter);
 
     // -- set up stack frame --
@@ -69,6 +71,22 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_strbuf_init");                                 // open the buffer at the current scratch offset
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer the helper call clobbered
 
+    if eval_bridge {
+        // An object the interpreter declared carries the generic wrapper's class id, which may
+        // not even index the descriptor table, and whose descriptor would know no
+        // `jsonSerialize()` and no properties. Ask the bridge before the descriptor lookup: the
+        // thunk below stands in for the descriptor's method target and hands back what the
+        // interpreter would encode, which the shared tail then encodes as the serialized value.
+        emitter.instruction("ldr x0, [sp, #0]");                                // pass the object identity to the owner probe
+        let probe = emitter.target.extern_symbol("__elephc_eval_object_has_dynamic_owner");
+        abi::emit_call_label(emitter, &probe);
+        emitter.instruction("cbz x0, __rt_json_obj_native_descriptor");         // a native object keeps its descriptor
+        abi::emit_symbol_address(emitter, "x14", "__rt_json_eval_serialize_thunk");
+        emitter.instruction("str xzr, [sp, #56]");                              // the bridge thunk already returns a boxed Mixed cell
+        emitter.instruction("b __rt_json_obj_have_target");                     // dispatch through the interpreter-backed target
+        emitter.label("__rt_json_obj_native_descriptor");
+        emitter.instruction("ldr x0, [sp, #0]");                                // reload the object pointer for the class-id read
+    }
     // -- bounds-check the class id and resolve the JSON descriptor --
     emitter.instruction("ldr x12, [x0]");                                       // load class_id from the object header
     crate::codegen_support::abi::emit_symbol_address(emitter, "x13", "_class_gc_desc_count");
@@ -82,10 +100,12 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
 
     // -- check the JsonSerializable flag --
     emitter.instruction("ldr x12, [x13]");                                      // load the class JSON descriptor flags word
+    emitter.instruction("str x12, [sp, #56]");                                  // keep the flags: bits 8..15 name jsonSerialize()'s raw return shape
     emitter.instruction("tst x12, #1");                                         // is JsonSerializable bit set on the descriptor?
     emitter.instruction("b.eq __rt_json_obj_walk_props");                       // ordinary classes walk public properties directly
     emitter.instruction("ldr x14, [x13, #8]");                                  // load the jsonSerialize method symbol from the descriptor
     emitter.instruction("cbz x14, __rt_json_obj_walk_props");                   // missing method targets fall through to the property walker
+    emitter.label("__rt_json_obj_have_target");
     emitter.instruction("str x14, [sp, #32]");                                  // park the jsonSerialize target across helper calls that clobber x14
     // The user method's body resets _concat_off and writes scratch at the
     // beginning of concat_buf, which would trash any caller prefix already
@@ -111,7 +131,7 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x9]");                                       // capture the outer JSON depth limit before user code can change it
     emitter.instruction("str x10, [sp, #72]");                                  // save _json_depth_limit across jsonSerialize()
     emitter.instruction("str xzr, [sp, #40]");                                  // default the saved prefix heap pointer to null for empty prefixes
-    emitter.instruction("ldr x10, [sp, #24]");                                  // recover the prefix length after saving unrelated JSON state
+    emitter.instruction("ldr x10, [sp, #24]");                                  // reload the prefix length: x10 still holds _json_depth_limit, and a zero limit skipped the copy while a non-zero one persisted that many bytes
     emitter.instruction("cbz x10, __rt_json_obj_jsonserialize_invoke");         // skip the prefix copy when there is no caller-visible prefix to preserve
     crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_concat_buf");
     emitter.instruction("mov x2, x10");                                         // copy the prefix length into the str_persist length register
@@ -120,7 +140,39 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.label("__rt_json_obj_jsonserialize_invoke");
     emitter.instruction("ldr x0, [sp, #0]");                                    // restore the receiver object pointer for the method call
     emitter.instruction("ldr x14, [sp, #32]");                                  // reload the saved jsonSerialize method target
-    emitter.instruction("blr x14");                                             // invoke jsonSerialize on the receiver and capture the boxed mixed result
+    emitter.instruction("blr x14");                                             // invoke jsonSerialize on the receiver and capture its result
+    // -- box a raw return (`jsonSerialize(): string`, `: array`, ...) like a Mixed one --
+    emitter.instruction("ldr x9, [sp, #56]");                                   // reload the descriptor flags word
+    emitter.instruction("ubfx x9, x9, #8, #8");                                 // extract the raw return tag + 1 (0 = already boxed)
+    emitter.instruction("cbz x9, __rt_json_obj_jsonserialize_boxed");           // a Mixed return is already the cell to encode
+    emitter.instruction("sub x9, x9, #1");                                      // recover the runtime value tag of the raw return
+    emitter.instruction("cmp x9, #1");                                          // a string return already sits in x1/x2
+    emitter.instruction("b.eq __rt_json_obj_jsonserialize_box");                // box the string pair as returned
+    emitter.instruction("cmp x9, #2");                                          // a float return sits in d0
+    emitter.instruction("b.ne __rt_json_obj_jsonserialize_word");               // every other shape is one word in x0
+    emitter.instruction("fmov x1, d0");                                         // move the float bits into the payload register
+    emitter.instruction("b __rt_json_obj_jsonserialize_box");                   // box the float
+    emitter.label("__rt_json_obj_jsonserialize_word");
+    emitter.instruction("mov x1, x0");                                          // the one-word payload (int, bool, container, object)
+    emitter.label("__rt_json_obj_jsonserialize_box");
+    emitter.instruction("stp x9, x1, [sp, #56]");                               // keep the tag and payload to give the method's own reference back
+    emitter.instruction("mov x0, x9");                                          // value tag argument for the boxing helper
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the raw value (it retains or persists its own copy)
+    emitter.instruction("str x0, [sp, #48]");                                   // park the fresh box
+    emitter.instruction("ldp x9, x10, [sp, #56]");                              // reload the raw tag and payload
+    emitter.instruction("cmp x9, #1");                                          // a returned string is the call's own copy
+    emitter.instruction("b.ne __rt_json_obj_jsonserialize_not_string");
+    emitter.instruction("mov x0, x10");                                         // the method's string; the box persisted its own copy
+    emitter.instruction("bl __rt_heap_free_safe");                              // validated free: scratch or static strings are left alone
+    emitter.instruction("b __rt_json_obj_jsonserialize_released");
+    emitter.label("__rt_json_obj_jsonserialize_not_string");
+    emitter.instruction("cmp x9, #4");                                          // containers and objects carry the method's reference
+    emitter.instruction("b.lo __rt_json_obj_jsonserialize_released");           // scalars own nothing to give back
+    emitter.instruction("mov x0, x10");                                         // the method's returned container/object
+    emitter.instruction("bl __rt_decref_any");                                  // the box holds its own reference now
+    emitter.label("__rt_json_obj_jsonserialize_released");
+    emitter.instruction("ldr x0, [sp, #48]");                                   // the boxed value to encode
+    emitter.label("__rt_json_obj_jsonserialize_boxed");
     emitter.instruction("str x0, [sp, #48]");                                   // park the boxed mixed return value across the prefix-restore loop
     // Copy the heap-owned prefix back into concat_buf[0..prefix_len].
     emitter.instruction("ldr x10, [sp, #24]");                                  // reload the saved prefix length
@@ -181,12 +233,26 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.label("__rt_json_obj_jsonserialize_mixed");
     emitter.instruction("ldr x0, [sp, #48]");                                   // reload a non-self result for ordinary recursive encoding
     emitter.instruction("bl __rt_json_encode_mixed");                           // encode the boxed mixed return value as JSON
-    emitter.instruction("stp x1, x2, [sp, #32]");                               // checkpoint the encoded result slice across depth cleanup
-    emitter.instruction("bl __rt_json_depth_exit");                             // balance object entry after recursive result encoding
-    emitter.instruction("ldp x1, x2, [sp, #32]");                               // restore the encoded result slice after cleanup
+    // Save the (x1, x2) result across the depth-exit helper call.
+    emitter.instruction("stp x1, x2, [sp, #32]");                               // checkpoint the encoded result slice across __rt_json_depth_exit
+    emitter.instruction("ldr x0, [sp, #48]");                                   // the serialized value's box: jsonSerialize() returned it owned
+    emitter.instruction("bl __rt_decref_mixed");                                // its JSON text is already in concat_buf
+    emitter.instruction("bl __rt_json_depth_exit");                             // decrement _json_active_depth so a sibling encoder can re-enter cleanly
+    emitter.instruction("ldp x1, x2, [sp, #32]");                               // restore the encoded result slice after the helper call
     emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address after JsonSerializable encoding
     emitter.instruction("add sp, sp, #160");                                    // deallocate the object encoder scratch frame
     emitter.instruction("ret");                                                 // return the JSON encoded result produced by mixed encoding
+
+    if eval_bridge {
+        // jsonSerialize() stand-in for an interpreter-owned object: x0 = object, returns the
+        // boxed Mixed value to encode in x0 (null when the interpreter cannot answer).
+        emitter.label("__rt_json_eval_serialize_thunk");
+        emitter.instruction("stp x29, x30, [sp, #-16]!");                       // preserve the encoder's frame across the bridge call
+        let serialize = emitter.target.extern_symbol("__elephc_eval_json_serialize");
+        abi::emit_call_label(emitter, &serialize);
+        emitter.instruction("ldp x29, x30, [sp], #16");                         // restore the encoder's frame
+        emitter.instruction("ret");                                             // return the boxed value like a compiled jsonSerialize()
+    }
 
     // -- empty object fallback (missing class id) --
     emitter.label("__rt_json_obj_open_only");
@@ -299,6 +365,10 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     // for the high word to avoid clobbering the caller's x19.
     emitter.instruction("ldr x14, [x9]");                                       // load the property low payload word
     emitter.instruction("ldr x15, [x9, #8]");                                   // load the property high payload word without clobbering caller x19
+    emitter.instruction("ldr x17, [sp, #56]");                                  // reload the descriptor tag before it is dispatched on
+    emit_deref_reference_property_slot(emitter, "x17", "x14", "x15", "x9");
+    emit_resolve_prop_desc_tag(emitter, "x17", "x15", "x9");
+    emitter.instruction("str x17, [sp, #56]");                                  // save the tag the slot actually carries back over the descriptor tag
     emitter.instruction("str x14, [sp, #64]");                                  // save the property low payload across the encoder dispatch
     emitter.instruction("str x15, [sp, #72]");                                  // save the property high payload across the encoder dispatch
 
@@ -434,10 +504,11 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
 ///
 /// Called from:
 /// - `emit_json_encode_object` when `emitter.target.arch == Arch::X86_64`.
-fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
+fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool) {
+    emit_dynamic_tail_wrapper_x86_64(emitter);
     emitter.blank();
-    emitter.comment("--- runtime: json_encode_object ---");
-    emitter.label_global("__rt_json_encode_object");
+    emitter.comment("--- runtime: json_encode_object (declared properties) ---");
+    emitter.label_global("__rt_json_encode_object_decl");
     super::json_encode_enum::emit_dispatch(emitter);
 
     // Stack layout (rbp-relative, 128 bytes reserved):
@@ -464,6 +535,19 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rdi, [rbp - 128]");                                // address of the output-buffer descriptor
     emitter.instruction("call __rt_strbuf_init");                               // open the buffer at the current scratch offset
 
+    if eval_bridge {
+        // See the AArch64 emitter: an interpreter-owned object is answered by the bridge, before
+        // its wrapper class id is used to index the descriptor table.
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                    // pass the object identity to the owner probe
+        let probe = emitter.target.extern_symbol("__elephc_eval_object_has_dynamic_owner");
+        abi::emit_call_label(emitter, &probe);
+        emitter.instruction("test rax, rax");                                   // does the interpreter own this object?
+        emitter.instruction("jz __rt_json_obj_native_descriptor_x");            // a native object keeps its descriptor
+        abi::emit_symbol_address(emitter, "rdx", "__rt_json_eval_serialize_thunk");
+        emitter.instruction("mov QWORD PTR [rbp - 16], 0");                     // the bridge thunk already returns a boxed Mixed cell
+        emitter.instruction("jmp __rt_json_obj_have_target_x");                 // dispatch through the interpreter-backed target
+        emitter.label("__rt_json_obj_native_descriptor_x");
+    }
     // Bounds-check the class id and resolve the JSON descriptor.
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the receiver for descriptor lookup
     emitter.instruction("mov rcx, QWORD PTR [rax]");                            // load class_id from the object header
@@ -476,11 +560,13 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
 
     // Check the JsonSerializable flag.
     emitter.instruction("mov rcx, QWORD PTR [rdi]");                            // load the class JSON descriptor flags word
+    emitter.instruction("mov QWORD PTR [rbp - 16], rcx");                       // keep the flags (the jsonSerialize path never reads the output start)
     emitter.instruction("test rcx, 1");                                         // is JsonSerializable bit set?
     emitter.instruction("je __rt_json_obj_walk_props_x");                       // ordinary classes walk public properties directly
     emitter.instruction("mov rdx, QWORD PTR [rdi + 8]");                        // load the jsonSerialize method symbol from the descriptor
     emitter.instruction("test rdx, rdx");                                       // is the method target populated?
     emitter.instruction("je __rt_json_obj_walk_props_x");                       // missing method targets fall through to the property walker
+    emitter.label("__rt_json_obj_have_target_x");
     emitter.instruction("mov QWORD PTR [rbp - 56], rdx");                       // park the jsonSerialize target across helper calls that clobber rdx
     // The user method's body resets _concat_off and writes scratch at the
     // beginning of concat_buf, which would trash any caller prefix already
@@ -499,7 +585,7 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "r10", "_json_depth_limit", 0);       // capture the outer JSON depth limit before user code can change it
     emitter.instruction("mov QWORD PTR [rbp - 96], r10");                       // save _json_depth_limit across jsonSerialize()
     emitter.instruction("mov QWORD PTR [rbp - 64], 0");                         // default the saved prefix heap pointer to null for empty prefixes
-    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // recover the prefix length after saving unrelated JSON state
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the prefix length: r10 still holds _json_depth_limit, and a zero limit skipped the copy while a non-zero one persisted that many bytes
     emitter.instruction("test r10, r10");                                       // is there any caller-visible prefix to preserve?
     emitter.instruction("jz __rt_json_obj_jsonserialize_invoke_x");             // skip the prefix copy when the prefix is empty
     abi::emit_symbol_address(emitter, "rax", "_concat_buf");                    // materialize the concat-buffer base for the str_persist input
@@ -509,7 +595,44 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_json_obj_jsonserialize_invoke_x");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // restore the receiver object pointer as the SysV $this argument
     emitter.instruction("mov rdx, QWORD PTR [rbp - 56]");                       // reload the saved jsonSerialize method target
-    emitter.instruction("call rdx");                                            // invoke jsonSerialize on the receiver and capture the boxed mixed result
+    emitter.instruction("call rdx");                                            // invoke jsonSerialize on the receiver and capture its result
+    // -- box a raw return (`jsonSerialize(): string`, `: array`, ...) like a Mixed one --
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the descriptor flags word
+    emitter.instruction("shr r10, 8");                                          // move the raw return tag + 1 to the low byte
+    emitter.instruction("and r10, 255");                                        // isolate it (0 = already boxed)
+    emitter.instruction("jz __rt_json_obj_jsonserialize_boxed_x");              // a Mixed return is already the cell to encode
+    emitter.instruction("sub r10, 1");                                          // recover the runtime value tag of the raw return
+    emitter.instruction("cmp r10, 1");                                          // a string return sits in rax/rdx
+    emitter.instruction("jne __rt_json_obj_jsonserialize_not_str_x");
+    emitter.instruction("mov rdi, rax");                                        // string pointer as the payload low word
+    emitter.instruction("mov rsi, rdx");                                        // string length as the payload high word
+    emitter.instruction("jmp __rt_json_obj_jsonserialize_box_x");               // box the string pair
+    emitter.label("__rt_json_obj_jsonserialize_not_str_x");
+    emitter.instruction("cmp r10, 2");                                          // a float return sits in xmm0
+    emitter.instruction("jne __rt_json_obj_jsonserialize_word_x");
+    emitter.instruction("movq rdi, xmm0");                                      // move the float bits into the payload register
+    emitter.instruction("jmp __rt_json_obj_jsonserialize_box_x");               // box the float
+    emitter.label("__rt_json_obj_jsonserialize_word_x");
+    emitter.instruction("mov rdi, rax");                                        // the one-word payload (int, bool, container, object)
+    emitter.label("__rt_json_obj_jsonserialize_box_x");
+    emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // keep the raw tag to give the method's own reference back
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // keep the raw payload for the same release
+    emitter.instruction("mov rax, r10");                                        // value tag argument for the boxing helper
+    emitter.instruction("call __rt_mixed_from_value");                          // box the raw value (it retains or persists its own copy)
+    emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // park the fresh box
+    emitter.instruction("cmp QWORD PTR [rbp - 16], 1");                         // a returned string is the call's own copy
+    emitter.instruction("jne __rt_json_obj_jsonserialize_not_string_x");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // the method's string; the box persisted its own copy
+    emitter.instruction("call __rt_heap_free_safe");                            // validated free: scratch or static strings are left alone
+    emitter.instruction("jmp __rt_json_obj_jsonserialize_released_x");
+    emitter.label("__rt_json_obj_jsonserialize_not_string_x");
+    emitter.instruction("cmp QWORD PTR [rbp - 16], 4");                         // containers and objects carry the method's reference
+    emitter.instruction("jb __rt_json_obj_jsonserialize_released_x");           // scalars own nothing to give back
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // the method's returned container/object
+    emitter.instruction("call __rt_decref_any");                                // the box holds its own reference now
+    emitter.label("__rt_json_obj_jsonserialize_released_x");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // the boxed value to encode
+    emitter.label("__rt_json_obj_jsonserialize_boxed_x");
     emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // park the boxed mixed return value across the prefix-restore loop
     // Copy the heap-owned prefix back into concat_buf[0..prefix_len].
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the saved prefix length
@@ -568,6 +691,8 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     // Save the (rax, rdx) result across __rt_json_depth_exit.
     emitter.instruction("mov QWORD PTR [rbp - 120], rax");                      // checkpoint the encoded result pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // checkpoint the encoded result length
+    emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // the serialized value's box: jsonSerialize() returned it owned
+    emitter.instruction("call __rt_decref_mixed");                              // its JSON text is already in concat_buf
     emitter.instruction("call __rt_json_depth_exit");                           // decrement _json_active_depth so a sibling encoder can re-enter cleanly
     emitter.instruction("mov rax, QWORD PTR [rbp - 120]");                      // restore the encoded result pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // restore the encoded result length
@@ -575,6 +700,17 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the encoded result produced by mixed encoding
 
+    if eval_bridge {
+        // jsonSerialize() stand-in for an interpreter-owned object: rdi = object, returns the
+        // boxed Mixed value to encode in rax (null when the interpreter cannot answer).
+        emitter.label("__rt_json_eval_serialize_thunk");
+        emitter.instruction("push rbp");                                        // preserve the encoder's frame pointer
+        emitter.instruction("mov rbp, rsp");                                    // align the stack for the bridge call
+        let serialize = emitter.target.extern_symbol("__elephc_eval_json_serialize");
+        abi::emit_call_label(emitter, &serialize);
+        emitter.instruction("pop rbp");                                         // restore the encoder's frame pointer
+        emitter.instruction("ret");                                             // return the boxed value like a compiled jsonSerialize()
+    }
     emitter.label("__rt_json_obj_open_only_x");
     emitter.instruction("lea rdi, [rbp - 128]");                                // address of the output-buffer descriptor
     emitter.instruction("mov esi, 2");                                          // room for the empty object literal
@@ -666,6 +802,10 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rax, rcx");                                        // resolve the absolute address of the property slot
     emitter.instruction("mov rdx, QWORD PTR [rax]");                            // load the property low payload word
     emitter.instruction("mov rsi, QWORD PTR [rax + 8]");                        // load the property high payload word
+    emitter.instruction("mov r9, QWORD PTR [rbp - 64]");                        // reload the descriptor tag before it is dispatched on
+    emit_deref_reference_property_slot(emitter, "r9", "rdx", "rsi", "rcx");
+    emit_resolve_prop_desc_tag(emitter, "r9", "rsi", "rcx");
+    emitter.instruction("mov QWORD PTR [rbp - 64], r9");                        // save the tag the slot actually carries back over the descriptor tag
     emitter.instruction("mov QWORD PTR [rbp - 72], rdx");                       // save the property low payload across the encoder dispatch
     emitter.instruction("mov QWORD PTR [rbp - 80], rsi");                       // save the property high payload across the encoder dispatch
 
@@ -766,4 +906,108 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // unwind the encoder scratch frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the encoded object slice in the standard string registers
+}
+
+/// Emits the `__rt_json_encode_object` entry that routes an instance with live dynamic
+/// properties through the object-to-hash projection, and every other instance to the
+/// descriptor walker.
+///
+/// PHP encodes an object's public properties followed by its dynamic ones. The descriptor walker
+/// knows only the declared rows, so a property created on an `#[AllowDynamicProperties]` instance
+/// (`$o->fresh = 1`) vanished from the output. `__rt_object_to_hash` in non-cast mode and global
+/// scope is exactly the public-plus-dynamic projection `get_object_vars()` returns, and the
+/// stdClass encoder renders a hash as `{...}`. A `JsonSerializable` class keeps its method, and an
+/// instance whose tail is absent or empty keeps the walker, so only the case that was wrong changes.
+fn emit_dynamic_tail_wrapper_aarch64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: json_encode_object (dynamic-property entry) ---");
+    emitter.label_global("__rt_json_encode_object");
+    emitter.instruction("ldr x12, [x0]");                                       // load class_id from the object header
+    abi::emit_symbol_address(emitter, "x13", "_class_gc_desc_count");
+    emitter.instruction("ldr x13, [x13]");                                      // load the number of registered class descriptors
+    emitter.instruction("cmp x12, x13");                                        // is the class id a registered one?
+    emitter.instruction("b.hs __rt_json_encode_object_miss");                   // unknown ids keep the descriptor walker
+    abi::emit_symbol_address(emitter, "x13", "_class_json_desc_ptrs");
+    emitter.instruction("ldr x13, [x13, x12, lsl #3]");                         // load the JSON descriptor of this class
+    emitter.instruction("cbz x13, __rt_json_encode_object_miss");               // a class without a descriptor keeps the walker
+    emitter.instruction("ldr x14, [x13]");                                      // load the descriptor flags word
+    emitter.instruction("tst x14, #1");                                         // JsonSerializable classes dispatch to their method
+    emitter.instruction("b.ne __rt_json_encode_object_miss");                   // keep the walker, which owns that dispatch
+    abi::emit_symbol_address(emitter, "x11", "_class_object_dynamic_prop_flags");
+    emitter.instruction("ldr x11, [x11, x12, lsl #3]");                         // does this class reserve a dynamic-property tail?
+    emitter.instruction("cbz x11, __rt_json_encode_object_miss");               // no tail means no dynamic properties
+    abi::emit_symbol_address(emitter, "x11", "_class_object_payload_sizes");
+    emitter.instruction("ldr x11, [x11, x12, lsl #3]");                         // load the exact object payload size
+    emitter.instruction("sub x11, x11, #8");                                    // the dynamic-property hash occupies the final word
+    emitter.instruction("ldr x1, [x0, x11]");                                   // load the borrowed dynamic-property hash
+    emitter.instruction("cbz x1, __rt_json_encode_object_miss");                // never written: keep the walker
+    emitter.instruction("ldr x9, [x1]");                                        // load the dynamic hash entry count
+    emitter.instruction("cbz x9, __rt_json_encode_object_miss");                // emptied: keep the walker
+    emitter.instruction("sub sp, sp, #48");                                     // reserve the wrapper frame
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #32");                                    // establish the wrapper frame pointer
+    emitter.instruction("mov x1, #0");                                          // non-cast mode: visible names, not mangled keys
+    emitter.instruction("mov x2, #-1");                                         // global scope: public properties only
+    emitter.instruction("bl __rt_object_to_hash");                              // project public and dynamic properties into a fresh hash
+    emitter.instruction("str x0, [sp, #0]");                                    // keep the owned projection for its release
+    emitter.instruction("bl __rt_json_encode_stdclass");                        // encode the projection as a JSON object
+    emitter.instruction("str x1, [sp, #8]");                                    // keep the encoded string pointer across the release
+    emitter.instruction("str x2, [sp, #16]");                                   // keep the encoded string length across the release
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the projection
+    emitter.instruction("bl __rt_decref_any");                                  // release the temporary projection
+    emitter.instruction("ldr x1, [sp, #8]");                                    // restore the encoded string pointer
+    emitter.instruction("ldr x2, [sp, #16]");                                   // restore the encoded string length
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the wrapper frame
+    emitter.instruction("ret");                                                 // return the encoded object
+    emitter.label("__rt_json_encode_object_miss");
+    emitter.instruction("b __rt_json_encode_object_decl");                    // no live dynamic properties: the descriptor walker encodes the object
+}
+
+/// x86_64 twin of [`emit_dynamic_tail_wrapper_aarch64`].
+fn emit_dynamic_tail_wrapper_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: json_encode_object (dynamic-property entry) ---");
+    emitter.label_global("__rt_json_encode_object");
+    emitter.instruction("mov r10, QWORD PTR [rax]");                            // load class_id from the object header
+    abi::emit_symbol_address(emitter, "r11", "_class_gc_desc_count");
+    emitter.instruction("cmp r10, QWORD PTR [r11]");                            // is the class id a registered one?
+    emitter.instruction("jae __rt_json_encode_object_miss_x");                    // unknown ids keep the descriptor walker
+    abi::emit_symbol_address(emitter, "r11", "_class_json_desc_ptrs");
+    emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // load the JSON descriptor of this class
+    emitter.instruction("test r11, r11");                                       // does the class have a descriptor?
+    emitter.instruction("jz __rt_json_encode_object_miss_x");                     // a class without a descriptor keeps the walker
+    emitter.instruction("test QWORD PTR [r11], 1");                             // JsonSerializable classes dispatch to their method
+    emitter.instruction("jnz __rt_json_encode_object_miss_x");                    // keep the walker, which owns that dispatch
+    abi::emit_symbol_address(emitter, "r11", "_class_object_dynamic_prop_flags");
+    emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // does this class reserve a dynamic-property tail?
+    emitter.instruction("test r11, r11");                                       // test the tail flag
+    emitter.instruction("jz __rt_json_encode_object_miss_x");                     // no tail means no dynamic properties
+    abi::emit_symbol_address(emitter, "r11", "_class_object_payload_sizes");
+    emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // load the exact object payload size
+    emitter.instruction("sub r11, 8");                                          // the dynamic-property hash occupies the final word
+    emitter.instruction("mov r11, QWORD PTR [rax + r11]");                      // load the borrowed dynamic-property hash
+    emitter.instruction("test r11, r11");                                       // has the lazy hash been allocated?
+    emitter.instruction("jz __rt_json_encode_object_miss_x");                     // never written: keep the walker
+    emitter.instruction("cmp QWORD PTR [r11], 0");                              // does the hash hold any entry?
+    emitter.instruction("je __rt_json_encode_object_miss_x");                     // emptied: keep the walker
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the wrapper frame
+    emitter.instruction("sub rsp, 32");                                         // reserve the projection and result slots
+    emitter.instruction("mov rdx, 0");                                          // non-cast mode: visible names, not mangled keys
+    emitter.instruction("mov rcx, -1");                                         // global scope: public properties only
+    abi::emit_call_label(emitter, "__rt_object_to_hash");                       // project public and dynamic properties into a fresh hash
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // keep the owned projection for its release
+    abi::emit_call_label(emitter, "__rt_json_encode_stdclass");                 // encode the projection as a JSON object
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // keep the encoded string pointer across the release
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // keep the encoded string length across the release
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the projection
+    abi::emit_call_label(emitter, "__rt_decref_any");                           // release the temporary projection
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // restore the encoded string pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // restore the encoded string length
+    emitter.instruction("mov rsp, rbp");                                        // release the wrapper frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the encoded object
+    emitter.label("__rt_json_encode_object_miss_x");
+    emitter.instruction("jmp __rt_json_encode_object_decl");                   // no live dynamic properties: the descriptor walker encodes the object
 }

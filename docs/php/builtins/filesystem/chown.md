@@ -2,20 +2,20 @@
 title: "chown()"
 description: "Changes file owner."
 sidebar:
-  order: 261
+  order: 272
 ---
 
 ## chown()
 
 ```php
-function chown(string $filename, string $user): bool
+function chown(string $filename, string|int $user): bool
 ```
 
 Changes file owner.
 
 **Parameters**:
 - `$filename` (`string`)
-- `$user` (`string`)
+- `$user` (`string|int`)
 
 **Returns**: `bool`
 

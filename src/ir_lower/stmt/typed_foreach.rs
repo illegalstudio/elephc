@@ -129,6 +129,34 @@ fn coerce_declared_array_storage(
     )
 }
 
+/// Coerces a value stored into a declared PROPERTY slot (instance or static).
+///
+/// Identical to `coerce_typed_assign_value`, except that a `Closure`-typed slot fed from a
+/// `Mixed` value takes a guarded unbox: php raises a TypeError for `self::$make = 5` on a
+/// `\Closure $make`, and the plain unbox stored the int as a callable descriptor.
+pub(in crate::ir_lower) fn coerce_property_assign_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    php_type: &PhpType,
+    span: Span,
+) -> LoweredValue {
+    let target = php_type.codegen_repr();
+    if target == PhpType::Callable
+        && ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Mixed
+    {
+        let effects = Op::mixed_unbox_effects(&target);
+        return ctx.emit_owned_value(
+            Op::MixedUnbox,
+            vec![value.value],
+            Some(Immediate::I64(10)),
+            target,
+            effects,
+            Some(span),
+        );
+    }
+    coerce_typed_assign_value(ctx, value, php_type, span)
+}
+
 /// Coerces a typed local assignment into the storage shape required by the declared type.
 pub(in crate::ir_lower) fn coerce_typed_assign_value(
     ctx: &mut LoweringContext<'_, '_>,
@@ -152,13 +180,68 @@ pub(in crate::ir_lower) fn coerce_typed_assign_value(
         value,
         &source_ty,
         &target_ty,
-        span,
+        Some(span),
     );
     if container_value.value != value.value {
         return container_value;
     }
+    if crate::types::param_binding::object_requires_runtime_nominal_guard(php_type, &source_ty)
+        || crate::types::param_binding::gradual_object_requires_runtime_nominal_guard(
+            php_type,
+            &source_ty,
+        )
+    {
+        if let Some(target_name) =
+            crate::types::param_binding::nominal_object_boundary_target(php_type)
+        {
+            let target_data = ctx.intern_class_name(&target_name);
+            // The guard BORROWS its operand and hands back its OWN reference: with an object
+            // source, `store_nominal_object_result` either boxes the payload into a fresh
+            // Mixed cell or increfs it, because the guard's EIR result is declared owned.
+            // An owning source temporary is dead from here on and has to be released, exactly
+            // as `box_value_as_mixed` releases the producer it supersedes -- otherwise
+            // `$h->p = new C()` into a `?C` slot leaves the object one reference above zero
+            // forever: no `__destruct`, and the payload leaks.
+            //
+            // A GRADUAL source (Mixed / Union) is excluded on purpose. There the guard result
+            // is the same boxed cell, marked borrowed by
+            // `LoweringContext::value_is_borrowed_gradual_nominal_guard`, so the source must
+            // outlive it.
+            let release_source =
+                matches!(source_ty, PhpType::Object(_)) && ctx.value_is_owning_temporary(value);
+            let guarded = ctx.emit_value(
+                Op::RuntimeCall,
+                vec![value.value],
+                Some(Immediate::NominalObject {
+                    target: target_data,
+                    boundary: crate::ir::NominalObjectBoundary::Property,
+                }),
+                PhpType::Object(target_name),
+                effects_lookup::runtime_effects(),
+                Some(span),
+            );
+            if release_source {
+                crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+            }
+            return guarded;
+        }
+    }
     match target_ty {
         PhpType::Mixed => ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span)),
+        // php's weak-mode float-to-int coercion at a declared `int` slot: an integral value
+        // converts, a fractional one stores the truncated integer with the "loses precision"
+        // deprecation, and NaN / infinity / out-of-range raise a `TypeError`.
+        PhpType::Int if source_ty == PhpType::Float => ctx.emit_value(
+            Op::FToI,
+            vec![value.value],
+            Some(Immediate::Bool(true)),
+            PhpType::Int,
+            Op::FToI.default_effects() | crate::ir::Effects::MAY_WARN,
+            Some(span),
+        ),
+        PhpType::Str if matches!(source_ty, PhpType::Object(_)) => {
+            coerce_to_string_at_span(ctx, value, Some(span))
+        }
         target @ PhpType::AssocArray { .. } if matches!(source_ty, PhpType::Array(_)) => {
             // `ArrayToHash` consumes its input owner. An assignment from a borrowed local must
             // preserve that local's indexed owner while producing the independent hash stored in
@@ -177,7 +260,9 @@ pub(in crate::ir_lower) fn coerce_typed_assign_value(
                 Some(span),
             )
         }
-        target @ (PhpType::Callable | PhpType::Object(_)) if source_ty == PhpType::Mixed => {
+        target @ (PhpType::Callable | PhpType::Object(_) | PhpType::Iterable)
+            if source_ty == PhpType::Mixed =>
+        {
             // The backend retains the extracted payload, so this value owns a lease of its own.
             // Marking it `MaybeOwned` made every consumer add a second `Acquire` on top, which is
             // one leaked object per `static::$prop = $mixed` store.
@@ -205,9 +290,18 @@ pub(super) fn lower_foreach(
     body: &[Stmt],
     loop_span: Span,
 ) {
+    // A by-reference walk of a stdClass the checker checked as its property-name loop.
+    if value_by_ref && crate::stdclass_by_ref_walk::is_site(loop_span) {
+        if let Some(walk) =
+            crate::stdclass_by_ref_walk::rewrite(array, key_var, value_var, body, loop_span)
+        {
+            super::lower_stmt(ctx, &walk);
+            return;
+        }
+    }
     // Apply the checker-computed loop header contract before lowering the source expression so
     // an iterated-and-mutated array is loaded with its stable payload representation.
-    apply_loop_storage_contracts(ctx, loop_span, Some(array.span));
+    let _ = apply_loop_storage_contracts(ctx, loop_span, Some(array.span));
     // A direct instance property has a dedicated fetch-for-write operation that separates and
     // republishes its container before iteration. Reifying it as a synthetic alias here bypasses
     // that operation and loses the property's copy-on-write boundary. Static properties and
@@ -223,7 +317,7 @@ pub(super) fn lower_foreach(
     let ForeachSource {
         value: mut source,
         is_borrowed_fetch: source_is_borrowed_fetch,
-        receiver: source_receiver,
+        receiver: mut source_receiver,
     } = lower_foreach_source(ctx, array, value_by_ref);
     if value_by_ref
         && by_ref_origin.is_none()
@@ -251,6 +345,42 @@ pub(super) fn lower_foreach(
     // objects, so `retain_object_foreach_source` returns them untouched and the flag still
     // describes `source`.
     let source = retain_object_foreach_source(ctx, source, array.span);
+    // A by-value loop iterates a SNAPSHOT: `foreach ($key as $i => $s) { unset($key[$i]); }` still
+    // visits every element. A boxed `mixed`/union local lends its array to the iterator without a
+    // reference of its own, so the in-place `unset` shortened the very storage being walked and
+    // the loop ended after one pass (Laravel's `data_get('tags.0')` returned the whole array). An
+    // owned reference makes the write split instead, and the loop's exit releases it.
+    let source = if !value_by_ref
+        && !source_is_borrowed_fetch
+        && matches!(array.kind, ExprKind::Variable(_))
+        && matches!(
+            ctx.builder.value_php_type(source.value).codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        )
+        && !ctx.value_is_owning_temporary(source)
+    {
+        crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, source, Some(array.span))
+    } else {
+        source
+    };
+    // By-value ordinary objects are normalized to their visible properties before `IterStart`,
+    // and an `IteratorAggregate` (compiled or interpreted) to the iterator it hands out.
+    let mut aggregate_root = None;
+    let source = if value_by_ref || source_is_borrowed_fetch {
+        source
+    } else {
+        let (source, walked_object) =
+            normalize_plain_object_foreach_source(ctx, source, array.span);
+        // A by-value source never reads through a receiver, so the pin slot is free for the
+        // walked object, which `receiver_pin` then releases on every way out of the loop.
+        if walked_object.is_some() {
+            debug_assert!(source_receiver.is_none());
+            source_receiver = walked_object;
+        }
+        let (iterator, root) = materialize_aggregate_iterator(ctx, source, array.span);
+        aggregate_root = root;
+        iterator
+    };
     // Iterator initialization can invoke user code before the loop frame exists.
     // Publish temporary sources first so a same-frame catch can unwind them.
     // Every by-reference source is deliberately excluded because retaining it
@@ -281,6 +411,17 @@ pub(super) fn lower_foreach(
     }
     let (iterator, iterator_owner, iterator_state) =
         ctx.emit_iter_start_with_origin(source, value_by_ref, by_ref_origin, array.span);
+    // php frees a temporary aggregate once `FE_RESET` has its iterator rewound; a `rewind()`
+    // that throws releases the iterator first and the aggregate after it, which the unwind
+    // order of the two owner records gives.
+    if let Some(slot) = aggregate_root {
+        retire_aggregate_root_under_iterator_owners(
+            ctx,
+            slot,
+            &[source_owner, iterator_owner],
+            array.span,
+        );
+    }
     // Take the loop's own lifetime reference on a borrowed fetch-for-write source after
     // `IterStart`.
     // The order is the whole point: `IterStart` splits a by-reference source through
@@ -307,9 +448,27 @@ pub(super) fn lower_foreach(
         // A name the body already bound keeps its earlier storage unless it is retyped here.
         // `$value = "held"; foreach ($items as &$value)` then read the boxed entry cell through
         // a `string` slot and echoed a pointer pair as a string.
-        ctx.declare_local(value_var, value_ty.clone());
+        let value_slot = ctx.declare_local(value_var, value_ty.clone());
         ctx.set_local_type(value_var, value_ty.clone());
         if value_ty == PhpType::Mixed {
+            if value_needs_null_init {
+                // This setup runs once per OUTER iteration when the loop is nested, and from the
+                // second one on the slot still holds the reference the previous run bound to an
+                // element. The null initializer then wrote THROUGH it: `foreach ($a as &$inner)
+                // { foreach ($inner as &$v) {...} }` nulled the last element of every inner array
+                // but the final one (Symfony's `EventDispatcher::optimizeListeners()` lost its
+                // listeners that way). php never assigns the value variable here, so detach it the
+                // way `unset($v)` does before the initializer stores into the slot itself.
+                for op in [Op::UnsetLocal, Op::ZeroLocalSlot] {
+                    ctx.emit_void(
+                        op,
+                        Vec::new(),
+                        Some(Immediate::LocalSlot(value_slot)),
+                        op.default_effects(),
+                        Some(array.span),
+                    );
+                }
+            }
             initialize_foreach_mixed_local_if_needed(
                 ctx,
                 value_var,
@@ -450,6 +609,12 @@ pub(super) fn lower_foreach(
     ctx.pop_loop_carried_missing_strings();
     branch_to(ctx, header);
     ctx.builder.position_at_end(exit);
+    // The exit is also reached by `break`, from states where the body had already STORED a value
+    // that widened a local's slot to boxed storage; the types in force here are those of the
+    // iterations that fell through to the next check. `$n = count($m); foreach ($m as $v) { if (…)
+    // { $n = $m; break; } } echo json_encode($n);` read the boxed slot as `int`. The `while`
+    // exit re-asserts the same widening.
+    ctx.reassert_widened_local_storage_types();
     ctx.clear_static_callable_locals();
     if by_ref_origin.is_some() {
         ctx.emit_void(
@@ -640,10 +805,13 @@ pub(crate) fn promote_by_ref_foreach_source(
     } else {
         array_value
     };
+    // Both operands above are owners the conversion takes -- the local's transferred reference or
+    // the alias's acquired one -- so the immediate tells codegen to consume it, which a slot load
+    // cannot prove on its own. Without it `$a = [1]; $x = &$a[0];` leaked the packed array.
     let hash = ctx.emit_value(
         Op::ArrayToHash,
         vec![array_value.value],
-        None,
+        Some(crate::ir::Immediate::Bool(true)),
         storage_ty.clone(),
         Op::ArrayToHash.default_effects(),
         Some(array.span),
@@ -899,4 +1067,146 @@ fn retain_object_foreach_source(
         crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
     }
     retained
+}
+
+/// Iterates an `IteratorAggregate` through the iterator its `getIterator()` returns.
+///
+/// The backend used to call `getIterator()` inside `IterStart` and keep the result in the iterator
+/// state, where no exit path ever released it: every `foreach` over an aggregate leaked the
+/// iterator object and everything it held (an `ArrayIterator` with its array, 7-9 blocks), and
+/// Laravel collections are aggregates. Asking here makes the iterator an owning temporary that
+/// the loop's ordinary source pin and exit release already balance.
+///
+/// A temporary aggregate is rooted in an unwind-visible owner slot, returned with the iterator, and
+/// retired by the caller right after `IterStart`: php's `FE_RESET` frees its operand once the
+/// iterator exists and is rewound, a `getIterator()` that throws still destroys it on the way to
+/// the catch, and a `rewind()` that throws destroys the iterator before it.
+fn materialize_aggregate_iterator(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: LoweredValue,
+    span: Span,
+) -> (LoweredValue, Option<crate::ir::LocalSlotId>) {
+    let PhpType::Object(class_name) = ctx.builder.value_php_type(source.value).codegen_repr() else {
+        return (source, None);
+    };
+    let implements = |ctx: &LoweringContext<'_, '_>, interface: &str| {
+        crate::ir_lower::expr::array_access_types::class_implements_interface_for_ir(
+            ctx,
+            &class_name,
+            interface,
+        )
+    };
+    // An `IteratorAggregate`-typed parameter names the interface itself, which no lookup reports
+    // as implementing itself.
+    let is_aggregate = class_name
+        .trim_start_matches('\\')
+        .eq_ignore_ascii_case("IteratorAggregate")
+        || implements(ctx, "IteratorAggregate");
+    if !is_aggregate || implements(ctx, "Iterator") {
+        return (source, None);
+    }
+    if !ctx.value_is_owning_temporary(source) {
+        let iterator = crate::ir_lower::expr::lower_zero_arg_method_call(ctx, source, "getIterator", span);
+        return (iterator, None);
+    }
+    let (_, root) = crate::ir_lower::expr::root_owned_call_operand(ctx, source, span);
+    let Some(root) = root else {
+        // Nothing to root: the call releases an owning receiver temporary itself.
+        let iterator = crate::ir_lower::expr::lower_zero_arg_method_call(ctx, source, "getIterator", span);
+        return (iterator, None);
+    };
+    // The call reads the aggregate through a borrowed load of its root, so the owner slot keeps
+    // the only reference and the call does not release it.
+    let root_name = ctx
+        .local_slots
+        .iter()
+        .find_map(|(name, slot)| (*slot == root).then(|| name.clone()))
+        .expect("a rooted operand names its hidden owner slot");
+    let receiver = ctx.load_local(&root_name, Some(span));
+    let iterator = crate::ir_lower::expr::lower_zero_arg_method_call(ctx, receiver, "getIterator", span);
+    (iterator, Some(root))
+}
+
+/// Releases a temporary aggregate's owner record while the iterator's records stay published.
+///
+/// Call-operand owner records form a stack and `PopCallOperandOwner` drops the innermost one, but
+/// the aggregate was rooted BEFORE the iterator it produced. The records pushed after it
+/// (`above`, innermost last) are unlinked without a release, the aggregate is retired, and they
+/// are pushed back in their original order, so the loop's own exits still find them.
+fn retire_aggregate_root_under_iterator_owners(
+    ctx: &mut LoweringContext<'_, '_>,
+    aggregate_root: crate::ir::LocalSlotId,
+    above: &[Option<crate::ir::LocalSlotId>],
+    span: Span,
+) {
+    let above: Vec<_> = above.iter().flatten().copied().collect();
+    for slot in above.iter().rev() {
+        ctx.emit_void(
+            Op::PopCallOperandOwner,
+            Vec::new(),
+            Some(Immediate::LocalSlot(*slot)),
+            Op::PopCallOperandOwner.default_effects(),
+            Some(span),
+        );
+    }
+    crate::ir_lower::expr::retire_owned_call_operand(ctx, aggregate_root, span);
+    for slot in above {
+        ctx.emit_void(
+            Op::PushCallOperandOwner,
+            Vec::new(),
+            Some(Immediate::LocalSlot(slot)),
+            Op::PushCallOperandOwner.default_effects(),
+            Some(span),
+        );
+    }
+}
+
+/// Casts an ordinary concrete object to its visible property hash before `foreach` iteration.
+///
+/// Returns the projection and, when the object was an owning temporary, the object itself: php's
+/// loop holds the object it walks, so `foreach (new Probe() as ...)` destroys it when the loop
+/// lets go, not before the first iteration. The caller pins it for every exit of the loop.
+fn normalize_plain_object_foreach_source(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: LoweredValue,
+    span: Span,
+) -> (LoweredValue, Option<LoweredValue>) {
+    let PhpType::Object(class_name) = ctx.builder.value_php_type(source.value).codegen_repr() else {
+        return (source, None);
+    };
+    // A parameter typed with one of the traversal interfaces names the interface itself, which no
+    // lookup reports as implementing itself: `function sum(IteratorAggregate $a)` walked an empty
+    // property projection and summed nothing.
+    let traversable = ["Traversable", "Iterator", "IteratorAggregate"]
+        .iter()
+        .any(|name| class_name.trim_start_matches('\\').eq_ignore_ascii_case(name))
+        || crate::ir_lower::expr::array_access_types::class_implements_interface_for_ir(
+            ctx,
+            &class_name,
+            "Iterator",
+        )
+        || crate::ir_lower::expr::array_access_types::class_implements_interface_for_ir(
+            ctx,
+            &class_name,
+            "IteratorAggregate",
+        );
+    if traversable {
+        return (source, None);
+    }
+    // The projection is scope-filtered by the function's lexical class, so it serves a walk from
+    // any scope: outside the class it holds only the public properties, as php visits them.
+    let result_type = PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(PhpType::Mixed),
+    };
+    let result = ctx.emit_value(
+        Op::Cast,
+        vec![source.value],
+        Some(Immediate::CastTarget(IrType::Heap(crate::ir::IrHeapKind::Hash))),
+        result_type,
+        Op::Cast.default_effects(),
+        Some(span),
+    );
+    let kept = ctx.value_is_owning_temporary(source).then_some(source);
+    (result, kept)
 }

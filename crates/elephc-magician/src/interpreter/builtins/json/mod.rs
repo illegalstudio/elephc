@@ -12,6 +12,7 @@
 
 mod json_decode;
 mod json_encode;
+pub(crate) use json_encode::eval_json_encode_serialized_object;
 mod json_last_error;
 mod json_last_error_msg;
 mod json_validate;

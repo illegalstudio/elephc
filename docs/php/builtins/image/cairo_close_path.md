@@ -2,7 +2,7 @@
 title: "cairo_close_path()"
 description: "Closes the current subpath with a line back to its starting point."
 sidebar:
-  order: 410
+  order: 423
 ---
 
 ## cairo_close_path()

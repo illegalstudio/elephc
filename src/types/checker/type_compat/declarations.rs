@@ -24,6 +24,127 @@ impl Checker {
         callable_wrapper_sig(sig)
     }
 
+    /// The storage a declared `callable` parameter gets in `body`.
+    ///
+    /// A `callable` parameter is normally normalized into a callable descriptor at the call
+    /// boundary, which is what makes `$callback(...)` a direct call. That normalization forgets
+    /// the value php keeps: `is_string('strlen')`, `is_array([$o, 'm'])`, `$callback[0]` and
+    /// `get_class()` all answered as if a `Closure` had been passed (symfony/cache's
+    /// `EarlyExpirationMessage::create()` reads `$callback[0]` and `\is_object($callback)`). A body
+    /// that INSPECTS the parameter's value -- `instanceof`, an element read, a comparison or
+    /// concatenation, a type probe, a reassignment -- keeps the caller's value unconverted
+    /// (`Mixed`); a call on it then resolves the callable when it runs. A body that calls it or
+    /// only forwards it to another call keeps the descriptor: forwarding needs no value, and the
+    /// descriptor is what lets a string such as `'strcasecmp'` reach `array_udiff()` resolved.
+    /// The declared `TypeExpr` is untouched, so reflection still reports `callable`.
+    pub(crate) fn callable_param_storage(
+        declared: PhpType,
+        body: &[crate::parser::ast::Stmt],
+        name: &str,
+    ) -> PhpType {
+        // `?callable` too: twig's `TwigFunction::__construct(..., ?callable $callable = null)`.
+        let is_callable_contract = match &declared {
+            PhpType::Callable => true,
+            PhpType::Union(members) => {
+                members.contains(&PhpType::Callable)
+                    && members.iter().all(|member| matches!(member, PhpType::Callable | PhpType::Void))
+            }
+            _ => false,
+        };
+        if !is_callable_contract {
+            return declared;
+        }
+        // A compiler-built body (a prelude: `CallbackFilterIterator`, PDO) keeps the descriptor:
+        // it stores the callback in a `callable`-typed property php code cannot declare, and
+        // nothing there reads the value php would show. Only source code is ever line-less here.
+        if body.iter().all(|stmt| stmt.span.line == 0) {
+            return declared;
+        }
+        // A program that evaluates code keeps converting at the boundary: the interpreter answers
+        // any callable name there, while the compiled call sites that later read a kept string
+        // know only the builtins the program spells (`literal_builtin_gate`).
+        if program_evaluates_code() {
+            return declared;
+        }
+        const VALUE_PROBES: &[&str] = &[
+            "is_string", "is_array", "is_object", "is_callable", "gettype", "get_debug_type",
+            "get_class", "var_dump", "var_export", "print_r", "json_encode", "serialize",
+            "spl_object_id", "spl_object_hash", "count", "implode", "explode", "strlen",
+        ];
+        let is_param = |expr: &Expr| matches!(&expr.kind, ExprKind::Variable(variable) if variable == name);
+        let mut used_as_value = false;
+        crate::parser::ast::visit::walk_nodes(body, &mut |node| match node {
+            crate::parser::ast::visit::Node::Expr(expr) => match &expr.kind {
+                ExprKind::InstanceOf { value, .. } if is_param(value) => used_as_value = true,
+                ExprKind::ArrayAccess { array, .. } if is_param(array) => used_as_value = true,
+                // A comparison with `null` (`$callback === null`) asks only whether one was passed,
+                // which the descriptor answers as well.
+                ExprKind::BinaryOp { left, right, .. }
+                    if (is_param(left) || is_param(right))
+                        && !matches!(left.kind, ExprKind::Null)
+                        && !matches!(right.kind, ExprKind::Null) =>
+                {
+                    used_as_value = true
+                }
+                ExprKind::FunctionCall { name: function, args }
+                    if args.iter().any(is_param)
+                        && VALUE_PROBES.contains(
+                            &crate::names::php_symbol_key(function.as_str().trim_start_matches('\\'))
+                                .as_str(),
+                        ) =>
+                {
+                    used_as_value = true
+                }
+                ExprKind::Assignment { target, .. } if is_param(target) => used_as_value = true,
+                ExprKind::Assignment { value, .. } if is_param(value) => used_as_value = true,
+                ExprKind::ArrayLiteral(items) if items.iter().any(is_param) => used_as_value = true,
+                ExprKind::ArrayLiteralAssoc(pairs) if pairs.iter().any(|(_, value)| is_param(value)) => {
+                    used_as_value = true
+                }
+                ExprKind::Closure { captures, .. }
+                    if captures.iter().any(|capture| capture == name) =>
+                {
+                    used_as_value = true
+                }
+                _ => {}
+            },
+            crate::parser::ast::visit::Node::Stmt(stmt) => {
+                use crate::parser::ast::StmtKind;
+                if matches!(&stmt.kind, StmtKind::Assign { name: target, .. } if target == name) {
+                    used_as_value = true;
+                }
+                // STORING the parameter keeps it to be read back later: twig's `TwigFunction`
+                // stores its `callable $callable` in a property, and symfony/twig-bridge's
+                // `DebugCommand` reads it back with `\is_array($cb)` and `$cb[0]`.
+                let stored = match &stmt.kind {
+                    // A local typed `callable` again (`callable $c = $callback;`) keeps nothing
+                    // the descriptor loses: it is the same contract restated.
+                    StmtKind::TypedAssign { type_expr, .. } if type_names_callable(type_expr) => None,
+                    StmtKind::Assign { value, .. }
+                    | StmtKind::TypedAssign { value, .. }
+                    | StmtKind::ArrayAssign { value, .. }
+                    | StmtKind::NestedArrayAssign { value, .. }
+                    | StmtKind::ArrayPush { value, .. }
+                    | StmtKind::PropertyAssign { value, .. }
+                    | StmtKind::StaticPropertyAssign { value, .. }
+                    | StmtKind::StaticPropertyArrayPush { value, .. }
+                    | StmtKind::StaticPropertyArrayAssign { value, .. }
+                    | StmtKind::PropertyArrayPush { value, .. }
+                    | StmtKind::PropertyArrayAssign { value, .. } => Some(value),
+                    _ => None,
+                };
+                if stored.is_some_and(is_param) {
+                    used_as_value = true;
+                }
+            }
+        });
+        if used_as_value {
+            PhpType::Mixed
+        } else {
+            declared
+        }
+    }
+
     /// Resolves a parameter type hint from a `TypeExpr` to a `PhpType`, validating that
     /// the type is valid for a parameter context. Rejects `void` and types containing `never`.
     /// Builds the signature a declared `callable(A): B` promises, for typing its INVOCATION.
@@ -68,7 +189,7 @@ impl Checker {
         span: crate::span::Span,
         context: &str,
     ) -> Result<PhpType, CompileError> {
-        let ty = self.resolve_type_expr(type_expr, span)?;
+        let ty = self.resolve_type_expr_in_current_class(type_expr, span)?;
         let null_only = matches!(type_expr, TypeExpr::Named(name)
             if name.as_str().eq_ignore_ascii_case("null"));
         match ty {
@@ -98,16 +219,23 @@ impl Checker {
                 "never can only be used as a standalone return type",
             ));
         }
-        if type_expr.contains_late_static() {
-            if let Some(current_class) = self.current_class.as_deref() {
-                let parent = self
-                    .classes
-                    .get(current_class)
-                    .and_then(|class_info| class_info.parent.as_deref());
-                let resolved =
-                    type_expr.substitute_relative_class_types(current_class, parent);
-                return self.resolve_type_expr(&resolved, span);
-            }
+        self.resolve_type_expr_in_current_class(type_expr, span)
+    }
+
+    /// Resolves relative class names against the active lexical class before converting a
+    /// declaration type expression, while preserving the outside-class diagnostics otherwise.
+    fn resolve_type_expr_in_current_class(
+        &self,
+        type_expr: &TypeExpr,
+        span: crate::span::Span,
+    ) -> Result<PhpType, CompileError> {
+        if let Some(current_class) = self.current_class.as_deref() {
+            let parent = self
+                .classes
+                .get(current_class)
+                .and_then(|class_info| class_info.parent.as_deref());
+            let resolved = type_expr.substitute_relative_class_types(current_class, parent);
+            return self.resolve_type_expr(&resolved, span);
         }
         self.resolve_type_expr(type_expr, span)
     }
@@ -267,90 +395,12 @@ impl Checker {
         can_widen_local: bool,
         context: &str,
     ) -> Result<(), CompileError> {
-        let boxed_object_reference = matches!(expected_ty, PhpType::Object(_))
-            && actual_ty.codegen_repr() == PhpType::Mixed
-            && matches!(arg.kind, ExprKind::Variable(_));
-        if expected_ty.codegen_repr() != PhpType::Mixed
-            && !boxed_object_reference
-            && self.by_ref_argument_uses_mixed_or_hash_storage(actual_ty, arg, env)?
-        {
-            return Err(CompileError::new(
-                arg.span,
-                &format!(
-                    "{} cannot bind typed by-reference storage from a mixed or hash-backed value; declare the parameter as mixed or pass a concrete indexed array element",
-                    context
-                ),
-            ));
-        }
-        // The call lowering boxes PHP array locals before exposing their ref-cell address.
-        // This changes storage, not the declared values accepted by the reference parameter.
-        if expected_ty.is_php_array()
-            && matches!(actual_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
-        {
-            return Ok(());
-        }
-        if requires_by_ref_boxed_storage(expected_ty)
-            && !supports_by_ref_boxed_storage(actual_ty)
-        {
-            if matches!(expected_ty, PhpType::Mixed)
-                && matches!(
-                    &arg.kind,
-                    ExprKind::Variable(name)
-                        if self.boxed_ref_aliased_locals.contains(name)
-                )
-            {
-                return Ok(());
-            }
-            if expected_ty.codegen_repr() == PhpType::Mixed && can_widen_local {
-                return Ok(());
-            }
-            // `lower_by_ref_array_element_arg_with_signature` widens a local
-            // indexed array to Mixed slots before taking the element address.
-            // Only that addressable shape has this conversion, not arbitrary
-            // scalar locals, properties, nested places or tagged nullable slots.
-            if expected_ty.codegen_repr() == PhpType::Mixed
-                && matches!(arg.kind, ExprKind::ArrayAccess { .. })
-                && self.is_by_ref_argument_lvalue(arg, env)?
-            {
-                return Ok(());
-            }
-            return Err(CompileError::new(
-                arg.span,
-                &format!(
-                    "{} requires a variable with mixed/union/nullable storage when passed by reference",
-                    context
-                ),
-            ));
-        }
-        // Rule 3, the mirror of rule 1: a parameter whose declared type is a CONCRETE scalar
-        // slot writes a raw value back, while a boxed caller variable goes on reading a cell.
-        // Nothing converts between them at the boundary, and `type_accepts` admits the binding
-        // — correct for a by-VALUE parameter, which is why the question has to be asked here.
-        //
-        // Measured before this rule existed: `$i = 0; $i++; byRef($i);` against
-        // `function byRef(int &$n) { $n = $n + 1; }` left `$i` reading NULL where php prints
-        // `int(2)`, and a `mixed` variable did the same. The argument was passed as the cell's
-        // VALUE with no reference at all, so the callee's write-back went nowhere.
-        //
-        // Scalars only. A container passed by reference has its own ref-cell lowering, and no
-        // wrong answer has been measured there — widening this rule on suspicion would refuse
-        // working code.
-        if matches!(
-            expected_ty.codegen_repr(),
-            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str
-        ) && supports_by_ref_boxed_storage(actual_ty)
-        {
-            return Err(CompileError::new(
-                arg.span,
-                &format!(
-                    "{} expects {}, got {} — a by-reference parameter writes back through the \
-                     caller's variable, and a boxed variable cannot receive a raw {} write. \
-                     Pass a variable that already holds {} (an incremented counter is \
-                     `int|float`, which is boxed), or declare the parameter `mixed &$p`",
-                    context, expected_ty, actual_ty, expected_ty, expected_ty
-                ),
-            ));
-        }
+        // The caller-storage preparation pass widens concrete variables to boxed cells whenever
+        // a gradual or nullable reference contract can replace their value. Conversely, EIR
+        // lowering inserts a checked concrete temporary for a boxed caller passed to a concrete
+        // reference parameter, then publishes the result back. Representation equality at the
+        // source call site is therefore no longer a validity requirement (this also retires the
+        // main-side "boxed variable cannot receive a raw scalar write" refusal).
         // A pointer by-reference parameter writes a raw pointer word back through the caller's
         // storage. Only a whole local can receive it (lowering then checks that its frame slot
         // is a pointer word); an array element lives in boxed or null element storage.
@@ -368,14 +418,15 @@ impl Checker {
                 ),
             ));
         }
+        // A `Void` value has no storage to write back through: the declared type must accept null.
         if *actual_ty == PhpType::Void && !Self::declared_type_accepts_null(expected_ty) {
             return Err(CompileError::new(
                 arg.span,
                 // The recovery names the VARIABLE in both branches, deliberately. Saying
                 // "declare the parameter nullable" alone is advice that does not work:
                 // `?int &$slot` needs the caller's variable to have nullable storage too, so
-                // a bare `$v = null` still fails the boxed-storage rule above. `?int $v =
-                // null` is the spelling that compiles.
+                // a bare `$v = null` still fails the boxed-storage rule. `?int $v = null` is the
+                // spelling that compiles.
                 &format!(
                     "{} expects {}, got null — a by-reference parameter writes back \
                      through the caller's variable, so that variable must already hold the \
@@ -385,6 +436,7 @@ impl Checker {
                 ),
             ));
         }
+        let _ = (can_widen_local, env);
         Ok(())
     }
 
@@ -404,26 +456,6 @@ impl Checker {
             && !self.typed_local_names.contains_key(name)
             && !self.name_is_seeded_program_storage(name)
             && !self.top_level_binding_is_program_global(name)
-    }
-
-    /// Identifies reference arguments whose writable cell stores a canonical boxed Mixed value.
-    fn by_ref_argument_uses_mixed_or_hash_storage(
-        &mut self,
-        actual_ty: &PhpType,
-        arg: &Expr,
-        env: &TypeEnv,
-    ) -> Result<bool, CompileError> {
-        if actual_ty.codegen_repr() == PhpType::Mixed {
-            return Ok(true);
-        }
-        let ExprKind::ArrayAccess { array, .. } = &arg.kind else {
-            return Ok(false);
-        };
-        Ok(match self.infer_type(array, env)?.codegen_repr() {
-            PhpType::AssocArray { .. } | PhpType::Mixed => true,
-            PhpType::Array(element) => element.codegen_repr() == PhpType::Mixed,
-            _ => false,
-        })
     }
 
     /// Validates that a default value expression is compatible with the declared type it is
@@ -558,8 +590,12 @@ impl Checker {
                     decl.span,
                     &format!("Function '{}' parameter ${}", name, param_name),
                 )?;
+                let declared_ty = Self::callable_param_storage(declared_ty, &decl.body, param_name);
                 param_types.push((param_name.clone(), declared_ty));
             } else if decl.ref_params.get(idx).copied().unwrap_or(false) {
+                // An untyped reference is a writable PHP cell, not a call-site-specialized
+                // scalar. The callee may legally replace its value with any PHP type, including
+                // when the parameter has a scalar or array default.
                 param_types.push((param_name.clone(), PhpType::Mixed));
             } else if let Some(default_expr) = decl.defaults.get(idx).and_then(|d| d.as_ref()) {
                 param_types.push((param_name.clone(), self.declaration_default_type(default_expr)));
@@ -585,6 +621,11 @@ impl Checker {
     }
 
     /// Returns a bitvec indicating which parameters of a method have declared type hints.
+    ///
+    /// The resolved signature is authoritative. Flattened declaration lists can retain more
+    /// than one declaration with the same method name across an inheritance chain, so selecting
+    /// the first syntax node can associate an overriding signature with an ancestor's flags and
+    /// accidentally specialize declared parameters from call-site values.
     /// Local declarations provide the annotations; inherited methods retain them in their signature.
     pub(crate) fn declared_method_param_flags(
         class_info: &ClassInfo,
@@ -592,6 +633,14 @@ impl Checker {
         is_static: bool,
     ) -> Vec<bool> {
         let method_key = crate::names::php_symbol_key(method_name);
+        let resolved = if is_static {
+            class_info.static_methods.get(&method_key)
+        } else {
+            class_info.methods.get(&method_key)
+        };
+        if let Some(signature) = resolved {
+            return signature.declared_params.clone();
+        }
         class_info
             .method_decls
             .iter()
@@ -661,14 +710,31 @@ impl Checker {
     where
         F: FnOnce(&mut Self) -> Result<T, CompileError>,
     {
+        // A by-reference parameter that carries no type declaration holds a `mixed` cell: its
+        // bound type is `Mixed` (see `build_method_sig`/`build_function_sig`), which is what the
+        // pre-bound own-storage map records for it.
+        let untyped_ref_params: std::collections::HashSet<String> = ref_param_names
+            .iter()
+            .filter(|name| {
+                matches!(
+                    pre_bound_own_storage.get(name.as_str()),
+                    Some(crate::types::PhpType::Mixed)
+                )
+            })
+            .cloned()
+            .collect();
+        let saved_untyped_ref_params =
+            std::mem::replace(&mut self.untyped_ref_params, untyped_ref_params);
         let saved_local_binding_scope = self.enter_local_binding_scope(param_names);
         let saved_ref_params = self.active_ref_params.clone();
         let saved_external_ref_bindings = self.active_external_ref_bindings.clone();
         let saved_globals = self.active_globals.clone();
         let saved_statics = self.active_statics.clone();
+        let saved_mixed_statics = self.mixed_static_locals.clone();
         let saved_foreach_keys = self.foreach_key_locals.clone();
         let saved_eval_barrier_active = self.eval_barrier_active;
         let saved_break_continue_depth = self.break_continue_depth;
+        let saved_loop_break_envs = std::mem::take(&mut self.loop_break_envs);
         let saved_finally_break_continue_bases = self.finally_break_continue_bases.clone();
         let saved_null_probe_scope_is_top_level = self.null_probe_scope_is_top_level;
 
@@ -684,6 +750,7 @@ impl Checker {
         );
         self.active_globals.clear();
         self.active_statics.clear();
+        self.mixed_static_locals.clear();
         self.foreach_key_locals.clear();
         self.eval_barrier_active = false;
         self.break_continue_depth = 0;
@@ -712,12 +779,15 @@ impl Checker {
         let result = f(self);
 
         self.active_ref_params = saved_ref_params;
+        self.untyped_ref_params = saved_untyped_ref_params;
         self.active_external_ref_bindings = saved_external_ref_bindings;
         self.active_globals = saved_globals;
         self.active_statics = saved_statics;
+        self.mixed_static_locals = saved_mixed_statics;
         self.foreach_key_locals = saved_foreach_keys;
         self.eval_barrier_active = saved_eval_barrier_active;
         self.break_continue_depth = saved_break_continue_depth;
+        self.loop_break_envs = saved_loop_break_envs;
         self.finally_break_continue_bases = saved_finally_break_continue_bases;
         self.null_probe_scope_is_top_level = saved_null_probe_scope_is_top_level;
         self.exit_local_binding_scope(saved_local_binding_scope);
@@ -735,12 +805,24 @@ fn by_ref_storage_place(arg: &Expr) -> &Expr {
     arg
 }
 
-/// Returns true when a by-reference parameter can write values that need boxed or nullable storage.
-fn requires_by_ref_boxed_storage(ty: &PhpType) -> bool {
-    matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::TaggedScalar)
+thread_local! {
+    static PROGRAM_EVALUATES_CODE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Returns true when an argument variable's storage can accept boxed or nullable writebacks.
-fn supports_by_ref_boxed_storage(ty: &PhpType) -> bool {
-    matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::TaggedScalar)
+/// Records whether the program being checked calls `eval()` (set per check, on the check thread).
+pub(crate) fn set_program_evaluates_code(evaluates: bool) {
+    PROGRAM_EVALUATES_CODE.with(|cell| cell.set(evaluates));
+}
+
+fn program_evaluates_code() -> bool {
+    PROGRAM_EVALUATES_CODE.with(|cell| cell.get())
+}
+
+/// Whether a declared type is `callable` or `?callable`.
+fn type_names_callable(type_expr: &TypeExpr) -> bool {
+    match type_expr {
+        TypeExpr::Named(name) => name.as_str().trim_start_matches('\\').eq_ignore_ascii_case("callable"),
+        TypeExpr::Nullable(inner) => type_names_callable(inner),
+        _ => false,
+    }
 }

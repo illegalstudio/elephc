@@ -13,8 +13,7 @@
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::builtins::semantics::{
-    runtime_fn_semantics, with_argument_lowering, BuiltinArgumentLowering, BuiltinResultType,
-    BuiltinSemanticInput, BuiltinSemantics,
+    runtime_fn_semantics, with_argument_lowering, BuiltinArgumentLowering, BuiltinSemantics,
 };
 use crate::errors::CompileError;
 use crate::types::PhpType;
@@ -25,19 +24,17 @@ builtin! {
     semantics: preg_split_semantics(),
 }
 
-/// Builds regex-split semantics with the boxed-Mixed EIR array layout expected by the runtime.
+/// Builds regex-split semantics.
+///
+/// The EIR result follows the checker's type for the call, vetted by the runtime id's
+/// `checked_result_type_fits_operands`: the runtime always builds boxed-Mixed
+/// element slots, so an `array<string>` checked type falls back to `array<mixed>`, while the
+/// `array|false` of a pattern that can fail stays boxed and the lowering adds the false.
 const fn preg_split_semantics() -> BuiltinSemantics {
-    let mut semantics = with_argument_lowering(
+    with_argument_lowering(
         runtime_fn_semantics(crate::ir::RuntimeFnId::PregSplit),
         BuiltinArgumentLowering::PositionalRegex,
-    );
-    semantics.result_type = BuiltinResultType::Shared(eir_result_type);
-    semantics
-}
-
-/// Returns the conservative EIR container type used by the regex split runtime ABI.
-fn eir_result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
-    PhpType::Mixed
+    )
 }
 
 /// Returns the split result array type, refining the element type based on argument count.
@@ -46,13 +43,10 @@ fn eir_result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
 /// can cause mixed-type entries via `PREG_OFFSET_CAPTURE`), or `Array(Str)` for 2 or
 /// 3 arguments. The registry pre-infers arguments; the hook must not call `infer_type`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    let elements = if cx.args.len() >= 4 {
-        PhpType::Mixed
-    } else {
-        PhpType::Str
-    };
-    Ok(PhpType::Union(vec![
-        PhpType::Array(Box::new(elements)),
-        PhpType::False,
-    ]))
+    let elem = if cx.args.len() >= 4 { PhpType::Mixed } else { PhpType::Str };
+    let array = PhpType::Array(Box::new(elem));
+    if crate::builtins::system::preg_match::preg_pattern_can_fail(&cx.args[0]) {
+        return Ok(PhpType::Union(vec![array, PhpType::False]));
+    }
+    Ok(array)
 }

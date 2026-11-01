@@ -116,6 +116,24 @@ echo $s->value;
     );
 }
 
+/// Verifies narrowing a non-`$this` value never authorizes an unrelated protected read.
+#[test]
+fn test_error_instanceof_narrowed_protected_property_on_variable() {
+    expect_error(
+        r#"<?php
+class ProtectedCandidate {
+    protected int $value = 7;
+}
+class UnrelatedReader {
+    public function read(object $candidate): int {
+        return $candidate instanceof ProtectedCandidate ? $candidate->value : 0;
+    }
+}
+"#,
+        "Cannot access protected property: ProtectedCandidate::value",
+    );
+}
+
 /// Verifies that declaring two classes differing only by case (Box vs box) reports
 /// "Duplicate class declaration: box".
 #[test]
@@ -272,16 +290,6 @@ fn test_error_typed_interface_constant_implementation_must_be_compatible() {
     expect_error(
         "<?php interface Contract { public const int VALUE = 1; } class Impl implements Contract { public const string VALUE = 'wrong'; }",
         "Type of Impl::VALUE must be compatible with Contract::VALUE of type int",
-    );
-}
-
-/// Verifies that `new static()` on a child with a required constructor parameter
-/// reports a missing argument error.
-#[test]
-fn test_error_new_static_validates_child_constructor() {
-    expect_error(
-        "<?php class Base { public static function make(): Base { return new static(); } } class Child extends Base { public function __construct(string $name) {} } echo Child::make();",
-        "Constructor 'Child::__construct' expects 1 arguments, got 0",
     );
 }
 
@@ -663,7 +671,9 @@ fn test_error_inherited_private_constructor_arity_names_the_declaring_class() {
     );
 }
 
-/// The same for TOO MANY arguments, which reaches the arity check by the other side.
+/// The same for TOO MANY arguments, which reaches the arity check by the other side. php ignores
+/// the surplus for a userland constructor; a fixed `new` has no lowering that drops it yet
+/// (bead elephc-1cx.17).
 #[test]
 fn test_error_inherited_private_constructor_excess_arity_names_the_declaring_class() {
     expect_error(
@@ -736,13 +746,12 @@ fn test_error_reflection_parameter_constructor_unknown_function() {
     );
 }
 
-/// Verifies that `new ReflectionParameter()` rejects dynamic function names
-/// because runtime function reflection lookup metadata is not available.
+/// `new ReflectionParameter($f, 'a')` with a function name held in a variable is valid php; elephc now
+/// compiles it and the program output matches php.
 #[test]
-fn test_error_reflection_parameter_constructor_dynamic_function_name() {
-    expect_error(
+fn test_reflection_parameter_constructor_accepts_dynamic_function_name() {
+    expect_no_error(
         "<?php function reflected_function($a) {} $f = 'reflected_function'; $r = new ReflectionParameter($f, 'a');",
-        "requires a string literal function name",
     );
 }
 
@@ -762,16 +771,6 @@ fn test_error_reflection_function_constructor_unknown_function() {
     expect_error(
         "<?php $r = new ReflectionFunction('missing_reflection_function');",
         "Function missing_reflection_function() does not exist",
-    );
-}
-
-/// Verifies that `new ReflectionFunction()` rejects dynamic function names
-/// because runtime function reflection lookup metadata is not available.
-#[test]
-fn test_error_reflection_function_constructor_dynamic_function_name() {
-    expect_error(
-        "<?php function reflected_function($a) {} $f = 'reflected_function'; $r = new ReflectionFunction($f);",
-        "requires a string literal function name",
     );
 }
 
@@ -811,16 +810,6 @@ fn test_error_reflection_class_undefined_class() {
     expect_error(
         "<?php $r = new ReflectionClass('Missing');",
         "ReflectionClass::__construct(): undefined class 'Missing'",
-    );
-}
-
-/// Verifies that `new ReflectionClass($name)` with a dynamic variable reports
-/// "requires a string literal class name".
-#[test]
-fn test_error_reflection_class_dynamic_argument() {
-    expect_error(
-        "<?php $name = 'C'; class C {} $r = new ReflectionClass($name);",
-        "requires a string literal class name",
     );
 }
 

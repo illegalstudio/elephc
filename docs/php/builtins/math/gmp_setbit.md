@@ -2,7 +2,7 @@
 title: "gmp_setbit()"
 description: "Sets or clears a bit in a GMP number."
 sidebar:
-  order: 632
+  order: 645
 ---
 
 ## gmp_setbit()

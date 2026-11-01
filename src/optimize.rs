@@ -46,6 +46,14 @@ use propagate::*;
 
 pub use reachability::prune_unreachable_declarations;
 pub use output::with_hosted_output;
+pub(crate) use control::expr_has_side_effects;
+
+/// Returns true when evaluating `expr` can raise a catchable error or has an observable effect,
+/// so a caller holding a half-built owner across it must keep that owner reachable from unwinding.
+pub(crate) fn expr_may_throw(expr: &crate::parser::ast::Expr) -> bool {
+    let effect = effects::expr_effect(expr);
+    effect.may_throw || effect.has_side_effects
+}
 
 #[cfg(test)]
 mod tests;
@@ -101,7 +109,9 @@ pub(in crate::optimize) fn with_active_instance_dispatch_metadata<R>(
 pub fn fold_constants(program: Program) -> Program {
     crate::compiler_stack::with_compiler_stack(|| {
         let program = crate::superglobals::seed_cli_populated_superglobals(program);
-        fold_block(program)
+        with_known_class_constants(program, |program| {
+            fold_block(program)
+        })
     })
 }
 
@@ -126,7 +136,7 @@ pub fn fold_constants_for_target(program: Program, target: Target) -> Program {
                 let user_functions = collect_top_level_user_functions(&program);
                 let previous_functions =
                     ACTIVE_FOLD_USER_FUNCTIONS.with(|functions| functions.replace(Some(user_functions)));
-                let folded = fold_constants(program);
+                let folded = flatten_file_scope_synthetic_blocks(fold_constants(program));
                 // A target guard can turn a conditional polyfill declaration into an unconditional
                 // declaration. Refresh the inventory so later probes see the retained function.
                 // Avoid `fold_constants` here, which would seed CLI superglobals twice.
@@ -140,6 +150,71 @@ pub fn fold_constants_for_target(program: Program, target: Target) -> Program {
             }))
         })
     })
+}
+
+/// Splices file-scope `Synthetic` blocks into their parent statement list.
+///
+/// Folding replaces an `if` whose condition the target decides with a `Synthetic` block of the
+/// taken branch. At file scope that block is unconditional code, so a declaration in it IS a
+/// file-scope declaration, but the declaration passes and the checker only collect direct
+/// file-scope (and namespace-block) statements, and `conditional_classes` lifts only out of
+/// conditional branches. Polyfills are written exactly this way:
+/// `if (\PHP_VERSION_ID < 80600) { enum SortDirection { ... } }` vanished, so Laravel's
+/// `orderBy($column, $direction = SortDirection::Ascending)` reached through Eloquent's dynamic
+/// forwarding had no enum to materialize and killed `/api/posts`. A block has no scope of its
+/// own, so splicing it changes nothing else; function and class bodies are left alone.
+///
+/// Only a block that DECLARES something is spliced. The parser builds `Synthetic` groups of its
+/// own, and lowering recognizes them by shape: `C::$items[0][] = 3` is a read/push/write-back
+/// group that `try_lower_array_root` fuses into one for-write fetch (false-to-array conversion,
+/// autovivification, a shared bucket detached). Spliced, the three statements lowered one by one,
+/// the push went to a detached copy, and file-scope code silently dropped the write.
+fn flatten_file_scope_synthetic_blocks(program: Program) -> Program {
+    let mut out = Vec::with_capacity(program.len());
+    for mut stmt in program {
+        match stmt.kind {
+            StmtKind::Synthetic(body) if body.iter().any(declares_at_file_scope) => {
+                out.extend(flatten_file_scope_synthetic_blocks(body))
+            }
+            StmtKind::NamespaceBlock { name, body } => {
+                stmt.kind = StmtKind::NamespaceBlock {
+                    name,
+                    body: flatten_file_scope_synthetic_blocks(body),
+                };
+                out.push(stmt);
+            }
+            kind => {
+                stmt.kind = kind;
+                out.push(stmt);
+            }
+        }
+    }
+    out
+}
+
+/// Returns whether a statement, or a `Synthetic` block it opens, declares a file-scope symbol
+/// that the declaration passes collect only from direct file-scope statements.
+fn declares_at_file_scope(stmt: &Stmt) -> bool {
+    match &stmt.kind {
+        StmtKind::Synthetic(body) => body.iter().any(declares_at_file_scope),
+        StmtKind::FunctionDecl { .. }
+        | StmtKind::FunctionVariantGroup { .. }
+        | StmtKind::FunctionVariantMark { .. }
+        | StmtKind::ConstDecl { .. }
+        | StmtKind::ClassDecl { .. }
+        | StmtKind::EnumDecl { .. }
+        | StmtKind::PackedClassDecl { .. }
+        | StmtKind::InterfaceDecl { .. }
+        | StmtKind::TraitDecl { .. }
+        | StmtKind::ClassLikeActivate { .. }
+        | StmtKind::NamespaceDecl { .. }
+        | StmtKind::NamespaceBlock { .. }
+        | StmtKind::UseDecl { .. }
+        | StmtKind::ExternFunctionDecl { .. }
+        | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ExternGlobalDecl { .. } => true,
+        _ => false,
+    }
 }
 
 /// Borrows the target selected for the current constant-folding pass.
@@ -340,7 +415,7 @@ impl PostTypecheckOptimizer {
     pub fn new_with_type_metadata(
         program: &Program,
         functions: &HashMap<String, crate::types::FunctionSig>,
-        classes: &HashMap<String, crate::types::ClassInfo>,
+        classes: &crate::fast_hash::FastMap<String, crate::types::ClassInfo>,
         interfaces: &HashMap<String, crate::types::InterfaceInfo>,
     ) -> Self {
         Self::new_with_optional_type_metadata(program, Some((functions, classes, interfaces)))
@@ -356,7 +431,7 @@ impl PostTypecheckOptimizer {
         program: &Program,
         type_metadata: Option<(
             &HashMap<String, crate::types::FunctionSig>,
-            &HashMap<String, crate::types::ClassInfo>,
+            &crate::fast_hash::FastMap<String, crate::types::ClassInfo>,
             &HashMap<String, crate::types::InterfaceInfo>,
         )>,
     ) -> Self {
@@ -409,6 +484,12 @@ impl PostTypecheckOptimizer {
         // can never carry propagated facts.
         for name in crate::superglobals::SUPERGLOBALS {
             mark_reference_volatile(name);
+        }
+        // `$GLOBALS['x']` and `$x` can name one slot, so neither spelling may retain a propagated
+        // scalar fact across a write through the other spelling.
+        for key in crate::ast_usage::collect(&program).globals_keys {
+            mark_reference_volatile(&crate::globals_array::alias_name(&key));
+            mark_reference_volatile(&key);
         }
         // Install the callable effect summaries and by-ref signatures so calls to
         // known-pure user callables stop clearing the environment. Substitution
@@ -626,21 +707,23 @@ struct InstanceDispatchMetadata {
     has_dynamic_class_barrier: bool,
 }
 
-/// Holds the body and never-return metadata for a function during effect analysis.
+/// Holds the body and call-boundary metadata for a function during effect analysis.
 #[derive(Clone, Debug)]
 struct FunctionEffectBody<'a> {
     body: &'a [Stmt],
     declared_never: bool,
     parameter_guard_may_throw: bool,
+    has_typed_parameters: bool,
 }
 
-/// Holds the body, class context, and never-return metadata for a static method during effect analysis.
+/// Holds the body, class context, and call-boundary metadata for a method during effect analysis.
 #[derive(Clone, Debug)]
 struct StaticMethodBody<'a> {
     context: ClassEffectContext,
     body: &'a [Stmt],
     declared_never: bool,
     parameter_guard_may_throw: bool,
+    has_typed_parameters: bool,
 }
 
 /// Holds callable summaries and dispatch metadata shared by optimizer passes.

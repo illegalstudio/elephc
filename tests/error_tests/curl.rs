@@ -34,6 +34,14 @@ fn expect_curl_error(src: &str, needle: &str) {
     );
 }
 
+/// Asserts `src` compiles. php binds a `curl_*` function's `CurlHandle` parameter when the call
+/// RUNS and throws `TypeError` there, so a statically wrong handle is not a compile error; the
+/// call throws php's `curl_exec(): Argument #1 ($handle) must be of type CurlHandle, string given`.
+fn expect_curl_compiles(src: &str) {
+    let result = check_source(src);
+    assert!(result.is_ok(), "php defers this to a run-time TypeError; got: {result:?}");
+}
+
 /// PHP's `CurlHandle` is `final`: a session object is minted by `curl_init()` and by
 /// nothing else, so a user class cannot extend it.
 #[test]
@@ -65,7 +73,7 @@ fn curl_setopt_rejects_wrong_arity() {
 /// which is the earliest point elephc can tell the difference.
 #[test]
 fn curl_exec_rejects_a_non_handle() {
-    expect_curl_error(r#"<?php curl_exec("not a handle");"#, "curl_exec");
+    expect_curl_compiles(r#"<?php curl_exec("not a handle");"#);
 }
 
 /// `curl_init()` accepts an optional URL string; passing an int is a type error.
@@ -74,25 +82,18 @@ fn curl_init_rejects_a_non_string_url() {
     expect_curl_error("<?php $ch = curl_init(42);", "curl_init");
 }
 
-/// `curl_setopt()`'s first parameter is typed `CurlHandle`, so passing an int is a
-/// compile-time type error naming that class — the earliest point elephc can tell the
-/// difference, and the same guard every other `curl_*` wrapper carries.
+/// `curl_setopt()`'s first parameter is typed `CurlHandle`, so passing an int is a `TypeError`
+/// at run time (php never refuses it at compile time); the program still compiles.
 #[test]
 fn curl_setopt_rejects_wrong_handle_type() {
-    expect_curl_error(
-        r#"<?php curl_setopt(1, CURLOPT_URL, "http://127.0.0.1/");"#,
-        "CurlHandle",
-    );
+    expect_curl_compiles(r#"<?php curl_setopt(1, CURLOPT_URL, "http://127.0.0.1/");"#);
 }
 
 /// `curl_getinfo()`'s handle parameter is typed the same way, so the wrong-handle
-/// diagnostic is not a `curl_setopt()`-only accident.
+/// `TypeError` is not a `curl_setopt()`-only accident.
 #[test]
 fn curl_getinfo_rejects_wrong_handle_type() {
-    expect_curl_error(
-        r#"<?php curl_getinfo("nope");"#,
-        "CurlHandle",
-    );
+    expect_curl_compiles(r#"<?php curl_getinfo("nope");"#);
 }
 
 /// `CurlMultiHandle` is `final` and not user-constructible, exactly like `CurlHandle`:
@@ -120,12 +121,9 @@ fn curl_multi_exec_requires_the_still_running_argument() {
 /// time — the same guard the easy surface carries.
 #[test]
 fn curl_multi_functions_reject_a_non_handle() {
-    expect_curl_error(
-        r#"<?php $r = 0; curl_multi_exec("nope", $r);"#,
-        "CurlMultiHandle",
-    );
-    expect_curl_error(r#"<?php curl_multi_errno(42);"#, "CurlMultiHandle");
-    expect_curl_error(r#"<?php curl_multi_select("nope");"#, "CurlMultiHandle");
+    expect_curl_compiles(r#"<?php $r = 0; curl_multi_exec("nope", $r);"#);
+    expect_curl_compiles(r#"<?php curl_multi_errno(42);"#);
+    expect_curl_compiles(r#"<?php curl_multi_select("nope");"#);
 }
 
 /// `curl_multi_add_handle()` takes its easy handle as `mixed` (see `curl_prelude`'s header
@@ -184,12 +182,9 @@ fn curl_share_setopt_rejects_wrong_arity() {
 /// time — the same guard the easy/multi surfaces carry.
 #[test]
 fn curl_share_functions_reject_a_non_handle() {
-    expect_curl_error(
-        r#"<?php curl_share_setopt("nope", CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS);"#,
-        "CurlShareHandle",
-    );
-    expect_curl_error(r#"<?php curl_share_errno(42);"#, "CurlShareHandle");
-    expect_curl_error(r#"<?php curl_share_close([]);"#, "CurlShareHandle");
+    expect_curl_compiles(r#"<?php curl_share_setopt("nope", CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS);"#);
+    expect_curl_compiles(r#"<?php curl_share_errno(42);"#);
+    expect_curl_compiles(r#"<?php curl_share_close([]);"#);
 }
 
 /// `curl_share_errno()` takes exactly one argument.

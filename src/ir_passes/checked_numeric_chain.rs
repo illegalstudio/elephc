@@ -140,7 +140,10 @@ fn collect_chain(
             let Some(Immediate::MixedNumericOp(operation)) = definition.immediate else {
                 return None;
             };
-            if matches!(operation, MixedNumericOp::Pow) {
+            // Only the three OVERFLOWING arithmetic operations belong in a checked chain. `pow`
+            // has no integer mnemonic, and `&`/`|`/`^` cannot overflow at all — admitting either
+            // would hand the backend a step it has no instruction for.
+            if !is_checked_chain_operation(operation) {
                 return None;
             }
             let (chain, scalar) = if value_is_i64(function, rhs) {
@@ -193,6 +196,19 @@ fn removable_uses(
         releases.push(*user_id);
     }
     saw_expected.then_some(releases)
+}
+
+/// Reports whether one mixed-numeric operation may appear in a fused checked chain.
+///
+/// The chain's whole point is the signed-overflow branch into float semantics, so it admits
+/// exactly the operations that can overflow and that the backend has a flag-setting integer
+/// mnemonic for. `pow` is lowered by a runtime helper, and the bitwise operations cannot
+/// overflow; both must fall back to the ordinary `MixedNumericBinop` path.
+pub(crate) fn is_checked_chain_operation(operation: MixedNumericOp) -> bool {
+    matches!(
+        operation,
+        MixedNumericOp::Add | MixedNumericOp::Sub | MixedNumericOp::Mul
+    )
 }
 
 /// Maps a boxed checked integer opcode to the chain's backend-neutral operation.

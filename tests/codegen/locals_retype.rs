@@ -2190,33 +2190,41 @@ fn test_strict_locals_rejects_both_include_forms() {
     }
 }
 
-/// The `unset` KILL is the shape `require_once` genuinely takes away: it is depth-gated like the
-/// straight-line retype, and nothing else picks the pair up, so the program that compiles under a
-/// plain `require` is a hard `cannot reassign` under `require_once`.
+/// The `unset` KILL is the shape `require_once` genuinely takes away: it is depth-gated, and the
+/// guarded include raises the depth of every statement it wraps.
+///
+/// What the guard no longer changes is whether the program COMPILES. The store that follows the
+/// ineligible kill is picked up by the depth-independent widening arm, so both include forms run
+/// and print what `php -n` prints (`|s`); the difference is confined to the decision, which is
+/// asserted directly — a plain `require` records a re-bind for `$q`, a `require_once` records
+/// none and warns about a widening instead.
 #[test]
 fn test_require_once_makes_a_top_level_unset_kill_ineligible() {
     const KILL_LIB: &str = "<?php\n$q = 1;\nunset($q);\n$q = \"s\";\necho \"|\", $q;\n";
-    let error = compile_files_error_message(
+    let warnings = check_files_diagnostics(
         &[
             ("main.php", "<?php\nrequire_once 'lib.php';\n"),
             ("lib.php", KILL_LIB),
         ],
         "main.php",
+        false,
     )
-    .expect("a guarded top-level unset must not be kill-eligible");
+    .expect("the guarded include must still type-check");
     assert!(
-        error.contains("cannot reassign $q from int to string"),
-        "expected the pre-feature error, got: {error}"
+        warnings
+            .iter()
+            .any(|warning| warning.contains("$q changes type from int to string")),
+        "a guarded top-level unset is not kill-eligible, so the store widens: {warnings:?}"
     );
 
-    let out = compile_and_run_files(
-        &[
-            ("main.php", "<?php\nrequire 'lib.php';\n"),
-            ("lib.php", KILL_LIB),
-        ],
-        "main.php",
-    );
-    assert_eq!(out, "|s");
+    for form in ["require_once", "require"] {
+        let main = format!("<?php\n{form} 'lib.php';\n");
+        let out = compile_and_run_files(
+            &[("main.php", main.as_str()), ("lib.php", KILL_LIB)],
+            "main.php",
+        );
+        assert_eq!(out, "|s", "{form} must run like php -n");
+    }
 }
 
 /// A `switch` arm is a conditional branch like an `if` arm, so a local assigned incompatible
@@ -2590,6 +2598,937 @@ fn test_by_ref_foreach_still_writes_through_and_unsets() {
     );
 }
 
+/// A TYPE-HINTED parameter reassigned to an incompatible type at depth 0 keeps its frame slot and
+/// widens it, and the program prints what `php -n` prints.
+///
+/// A parameter's type hint is a CALL-BOUNDARY contract: it says what the caller may pass, not what
+/// the body's slot may hold for the rest of the call. `Checker::local_binding_is_killable` refuses
+/// the precise re-bind here — a declared type is a contract it will not abandon a slot for — so
+/// before `Checker::local_binding_is_widenable` existed the whole program was rejected with
+/// `cannot reassign $n from int to string`. `php -n` prints `s|3`.
+#[test]
+fn test_typed_param_retype_widens_its_own_slot() {
+    let out = compile_and_run(
+        "<?php function f(int $n, string $s): string { $n = \"s\"; $s = \\strlen($s); return $n . \"|\" . $s; } echo f($argc, \"abc\");",
+    );
+    assert_eq!(out, "s|3");
+}
+
+/// The same for a name a conditional group INTRODUCED without ever assigning it: a `foreach` value
+/// target has no binding depth recorded at all, which the kill reads as "not a binding this body
+/// created" and refuses. Widening asks the question it actually needs — is this slot this frame's
+/// own storage — and a `foreach` value variable's is. `php -n` prints `done1`.
+#[test]
+fn test_foreach_target_retype_widens_after_the_loop() {
+    let out =
+        compile_and_run("<?php foreach ([1, 2, $argc] as $v) {} $v = \"done\" . $argc; echo $v;");
+    assert_eq!(out, "done1");
+}
+
+/// A widening store must not corrupt a read of the OLD binding written above it.
+///
+/// The re-bind path releases the previous occupant and abandons the slot; the widening path does
+/// neither, so a value a read above already captured stays valid and the slot simply joins its
+/// storage type. Both halves of the answer are heap strings, so a stale pointer would print
+/// garbage rather than a merely wrong integer. `php -n` prints `ab1!/3`.
+#[test]
+fn test_reads_above_a_widening_store_still_answer() {
+    let out = compile_and_run(
+        "<?php function f(string $s): string { $kept = $s . \"!\"; $s = \\strlen($s); return $kept . \"/\" . $s; } echo f(\"ab\" . $argc);",
+    );
+    assert_eq!(out, "ab1!/3");
+}
+
+// ---------------------------------------------------------------------------
+// A store inside a BRANCH: the depth-independent widening arm, end to end.
+//
+// Every fixture below is byte-verified against `php -n` (argc == 1, which is what the harness
+// runs the compiled binary with). They exist because the checker's acceptance is only half the
+// answer: the store widens the local's frame slot to boxed storage, and a read below the branch
+// that still assumed the pre-branch representation printed `0` for a string. `store_local`'s
+// whole-frame boxed contract for a widened slot, `join_arm_types` and the `while` exit's
+// re-assertion are what these pin.
+// ---------------------------------------------------------------------------
+
+/// The two shapes `error_tests::type_system::test_a_store_inside_a_branch_is_widened` accepts,
+/// run for their VALUES.
+///
+/// `f(1)` takes the branch and returns the string; `f(0)` does not and returns the parameter's
+/// own `int`, so one fixture covers both edges of the merge. The second source is the one that
+/// printed `I:0` before the join was fixed — the trailing `$j` is what stops the tail below the
+/// branch from being duplicated into the arms, which is the only reason the miscompile ever
+/// looked order-dependent.
+#[test]
+fn test_store_inside_a_branch_answers_like_php() {
+    let out = compile_and_run(
+        "<?php function f(int $n): string { if ($n > 0) { $n = \"s\"; } return (string) $n; } echo f(1), \"|\", f(0);",
+    );
+    assert_eq!(out, "s|0");
+
+    let out = compile_and_run(
+        "<?php $i = \\strlen(\"ab\"); if ($argc > 0) { $i = \"si\"; } echo $i; $j = 1; echo $j;",
+    );
+    assert_eq!(out, "si1");
+}
+
+/// The same store in the `else` arm, where the merge's stale fact came from the THEN arm instead.
+#[test]
+fn test_store_inside_an_else_arm_answers() {
+    let out = compile_and_run(
+        "<?php $e = \\strlen(\"ab\"); if ($argc > 5) { echo \"never\"; } else { $e = \"se\"; } echo $e, \"|\", \\gettype($e);",
+    );
+    assert_eq!(out, "se|string");
+}
+
+/// Nested branches: the inner merge widens, the outer one must not narrow the fact back.
+#[test]
+fn test_store_inside_a_nested_if_answers() {
+    let out = compile_and_run(
+        "<?php $n = \\strlen(\"abc\"); if ($argc > 0) { if ($argc < 5) { $n = \"sn\"; } } echo $n, \"|\", \\gettype($n);",
+    );
+    assert_eq!(out, "sn|string");
+}
+
+/// A `foreach` body, which has no type join of its own: the fact the widening store installs is
+/// what the read below the loop has to keep.
+#[test]
+fn test_store_inside_a_foreach_body_answers() {
+    let out = compile_and_run(
+        "<?php $f = \\strlen(\"abcd\"); foreach ([1, 2] as $x) { $f = \"sf\" . $x; } echo $f, \"|\", \\gettype($f);",
+    );
+    assert_eq!(out, "sf2|string");
+}
+
+/// A `while` body, whose exit deliberately restores the types as of the CONDITION — and so used
+/// to undo the widening the body performed, reading the boxed slot as `int` and printing `0`.
+#[test]
+fn test_store_inside_a_while_body_answers() {
+    let out = compile_and_run(
+        "<?php $b = \\strlen(\"ab\"); $k = 0; while ($k < 2) { $b = \"sb\" . $k; ++$k; } echo $b, \"|\", \\gettype($b);",
+    );
+    assert_eq!(out, "sb1|string");
+}
+
+/// The other edge of every loop: a body that never runs must leave the pre-loop value readable
+/// at its own type, not at the type the body would have stored.
+#[test]
+fn test_zero_trip_loops_keep_the_pre_loop_value() {
+    for (source, expected) in [
+        (
+            "<?php $a = \\strlen(\"ab\"); while ($argc > 5) { $a = \"sa\"; } echo $a, \"|\", \\gettype($a);",
+            "2|integer",
+        ),
+        (
+            "<?php $c = \\strlen(\"ab\"); for ($i = 0; $i < $argc - 5; ++$i) { $c = \"sc\"; } echo $c, \"|\", \\gettype($c);",
+            "2|integer",
+        ),
+        (
+            "<?php $e = \\strlen(\"ab\"); foreach ([] as $v) { $e = \"se\"; } echo $e, \"|\", \\gettype($e);",
+            "2|integer",
+        ),
+    ] {
+        assert_eq!(compile_and_run(source), expected, "for: {source}");
+    }
+}
+
+/// A `try` body and a `catch` body are branches too, and neither has a type join of its own.
+#[test]
+fn test_store_inside_a_try_or_catch_answers() {
+    let out = compile_and_run(
+        "<?php $t = \\strlen(\"ab\"); try { $t = \"st\"; } finally { echo \"f|\"; } echo $t, \"|\", \\gettype($t);",
+    );
+    assert_eq!(out, "f|st|string");
+
+    let out = compile_and_run(
+        "<?php $c = \\strlen(\"ab\"); try { throw new Exception(\"x\"); } catch (Throwable $e) { $c = \"sc\"; } echo $c, \"|\", \\gettype($c);",
+    );
+    assert_eq!(out, "sc|string");
+}
+
+/// A widening whose RHS THROWS: the store never runs, so the slot still holds the old value and
+/// the `catch` must read it back at the type it actually has.
+///
+/// This is the shape the depth gate used to refuse outright. A re-bind would have released the
+/// old value before the RHS ran; a widening releases nothing, and `store_local` is reached only
+/// after the RHS is fully lowered — so the unwind leaves `heap1` intact, exactly as `php -n`
+/// prints it.
+#[test]
+fn test_widening_inside_a_try_whose_rhs_throws_keeps_the_old_value() {
+    let out = compile_and_run(
+        "<?php function mightThrow(int $n): int { if ($n === 2) { throw new Exception(\"boom\"); } return $n; } $t = \"heap\" . $argc; try { $t = mightThrow($argc + 1); } catch (Exception $e) { echo \"caught|\"; } echo $t, \"|\", \\gettype($t);",
+    );
+    assert_eq!(out, "caught|heap1|string");
+
+    let out = compile_and_run(
+        "<?php function mightThrow(int $n): int { if ($n === 2) { throw new Exception(\"boom\"); } return $n; } $s = \"heap\" . $argc; try { $s = mightThrow($argc); } catch (Exception $e) { echo \"caught|\"; } echo $s, \"|\", \\gettype($s);",
+    );
+    assert_eq!(out, "1|integer");
+}
+
+/// A `switch` arm, whose join already went through the frame storage contract — the fixture is
+/// here so the whole family is covered by one file.
+#[test]
+fn test_store_inside_a_switch_arm_answers() {
+    let out = compile_and_run(
+        "<?php $s = \\strlen(\"ab\"); switch ($argc) { case 1: $s = \"ss\"; break; default: break; } echo $s, \"|\", \\gettype($s);",
+    );
+    assert_eq!(out, "ss|string");
+}
+
+/// A ternary arm and a short-circuit arm: expression-level branches, which have no local-type
+/// join at all, so the widening store's own fact is what carries past them.
+#[test]
+fn test_store_inside_an_expression_branch_answers() {
+    let out = compile_and_run(
+        "<?php $g = \\strlen(\"ab\"); $h = $argc > 5 ? ($g = \"sg\") : \"other\"; echo $g, \"|\", \\gettype($g), \"|\", $h;",
+    );
+    assert_eq!(out, "2|integer|other");
+
+    let out = compile_and_run(
+        "<?php $p = \\strlen(\"ab\"); $q = ($argc > 5) && ($p = \"sp\"); echo $p, \"|\", \\gettype($p);",
+    );
+    assert_eq!(out, "2|integer");
+}
+
+/// The order-dependent pair, in BOTH orders.
+///
+/// `w6` (a widening with a second one below it) printed `I:0` while `w9` — the same two widenings
+/// swapped — printed both correctly, which is what made the bug look like an ordering problem.
+/// It was not: the second construct merely stopped the tail below the first branch from being
+/// duplicated into its arms, where each copy carried its own arm's type. Both orders now answer.
+#[test]
+fn test_the_order_dependent_widening_pair_answers_in_both_orders() {
+    let out = compile_and_run(
+        "<?php $i = \\strlen(\"ab\"); if ($argc > 0) { $i = \"si\"; } echo \"I:\", $i; $j = \"j\" . $argc; if ($argc > 0) { $j = \\strlen($j); } echo \"|J:\", $j;",
+    );
+    assert_eq!(out, "I:si|J:2");
+
+    let out = compile_and_run(
+        "<?php $j = \"j\" . $argc; if ($argc > 0) { $j = \\strlen($j); } echo \"J:\", $j; $i = \\strlen(\"ab\"); if ($argc > 0) { $i = \"si\"; } echo \"|I:\", $i;",
+    );
+    assert_eq!(out, "J:2|I:si");
+}
+
+/// The shape this whole change exists for: Symfony's `Filesystem\Path::getExtension`, verbatim
+/// in structure — a guard that retypes its own subject from `string` to `array`, followed by a
+/// read of the widened local.
+///
+/// Both call sites matter. `ext("php")` takes the branch and counts the wrapped array;
+/// `ext(["a", "b"])` does not and counts the argument it was given, so the same `count($x)` is
+/// reached with a boxed string-turned-array on one path and a plain array on the other.
+#[test]
+fn test_is_string_guard_wrapping_its_own_subject_answers() {
+    let out = compile_and_run(
+        "<?php function ext($x): int { if (\\is_string($x)) { $x = [$x]; } return \\count($x); } echo ext(\"php\"), \"|\", ext([\"a\", \"b\"]);",
+    );
+    assert_eq!(out, "1|2");
+}
+
+/// An `unset` inside a `try` records no kill, so the binding survives and the store inside the
+/// branch below it is a widening. Pins the value half of
+/// `error_tests::type_system::test_unset_inside_try_leaves_the_pre_feature_error`, whose own
+/// fixture leaves the branch untaken.
+#[test]
+fn test_store_inside_a_branch_after_a_try_unset_answers() {
+    let out = compile_and_run(
+        "<?php $a = 1; try { unset($a); } finally { echo \"f|\"; } if ($argc > 0) { $a = \"s\"; } echo $a, \"|\", \\gettype($a);",
+    );
+    assert_eq!(out, "f|s|string");
+}
+
+/// A local whose reference was LENT to a by-reference parameter still widens, and the widened
+/// slot answers like `php -n` on both sides of the lend.
+///
+/// The checker used to refuse these outright, so the value was never measurable. Each fixture
+/// reads the container BEFORE the widening store (so the load is a concrete array from a slot
+/// the store later boxes) and the scalar after it. `array_shift`'s and `array_pop`'s receivers
+/// are the `Command::setName` / `UndefinedFunctionErrorEnhancer` shapes verbatim in structure.
+#[test]
+fn test_widening_after_a_by_reference_builtin_argument_answers() {
+    let out = compile_and_run(
+        "<?php $c = [\"bb\", \"a\" . $argc]; \\sort($c); $c = \"/\" . \\implode(\"/\", $c); echo $c, \"|\", \\gettype($c);",
+    );
+    assert_eq!(out, "/a1/bb|string");
+
+    let out = compile_and_run(
+        "<?php $d = [\"yy\", \"x\" . $argc]; \\sort($d); $last = \\array_pop($d); $d = \\implode(\",\", $d) . \">\" . $last; echo $d;",
+    );
+    assert_eq!(out, "x1>yy");
+
+    let out = compile_and_run(
+        "<?php $e = \\explode(\"|\", \"a|b|c\"); $head = \\array_shift($e); $e = \\array_unique([...$e, \"b\"]); echo $head, \"|\", \\count($e);",
+    );
+    assert_eq!(out, "a|2");
+}
+
+/// `array_splice`'s receiver, published into a frame slot a LATER store widens to boxed `Mixed`.
+///
+/// The splice's write-back went through the ordinary local store, whose boxing path TRANSFERS
+/// the SSA value's reference into the new cell while that same value stays live for the splice
+/// call and is released again by the cleanup — so the cell pointed at freed storage. The first
+/// fixture is `DebugClassLoader::checkCase` in structure; the second needs no retype at all and
+/// was wrong on `a61b5de243` too (`$c = null` widens the slot without ever consulting the
+/// widening rule), which is what proves the defect is the splice's and not the widening's.
+#[test]
+fn test_array_splice_receiver_survives_a_later_widening_of_its_slot() {
+    let out = compile_and_run(
+        "<?php $tail = [\"aa\", \"bb\", \"c\" . $argc]; \\array_splice($tail, 0, 1); $tail = \"/\" . \\implode(\"/\", $tail); echo \\strlen($tail), \"|\", $tail;",
+    );
+    assert_eq!(out, "6|/bb/c1");
+
+    let out = compile_and_run(
+        "<?php $c = [\"bb\", \"a\" . $argc]; \\array_splice($c, 0, 1); echo \\count($c), \"|\", $c[0]; $c = null; \\var_dump($c);",
+    );
+    assert_eq!(out, "1|a1NULL\n");
+}
+
+/// The same splice receiver with a heap-tracked element type, so a transferred owner would show
+/// up as a leak rather than only as a wrong value.
+#[test]
+fn test_array_splice_into_a_widened_slot_leaves_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php $t = [\"aa\" . $argc, \"bb\" . $argc]; \\array_splice($t, 0, 1); echo $t[0]; $t = \\count($t); echo \"|\", $t;",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bb1|1");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "the splice receiver's owner must not be transferred into the boxed slot: {}",
+        out.stderr
+    );
+}
+
+/// The value half of `error_tests::type_system::test_a_straight_line_store_narrows_a_union_binding`:
+/// the local really does hold what the straight-line store put there, on both call paths of the
+/// union-returning callee.
+#[test]
+fn test_a_straight_line_store_into_a_union_local_answers() {
+    let out = compile_and_run(
+        "<?php function pick(int $n): array|string|int { return $n > 0 ? \"abc\" : 5; } \
+         function run(int $n): string { $file = pick($n); $file = \"q\" . $n; return $file; } \
+         echo run($argc), \"|\", \\gettype(run(0));",
+    );
+    assert_eq!(out, "q1|string");
+}
+
+/// A widening in a body that also calls `eval()`.
+///
+/// The eval body refused every widening because the KILL refuses one: a kill drops the name's
+/// frame slot and mints a fresh one, while the eval scope addresses caller locals BY NAME, so the
+/// fragment then reads a slot the rest of the body no longer uses. All three shapes the gate was
+/// measured on printed NOTHING that way. A widening abandons nothing — it keeps the slot and lets
+/// `store_local` box it, which is the representation the eval scope wants, and is exactly why the
+/// branch-divergent `Mixed`-storage marking was never gated either.
+///
+/// Every position matters and each is a separate edge: the widening BEFORE the eval (both with
+/// and without a refused `unset` in between), the eval before it, a fragment that WRITES the name
+/// before the widening, and a fragment that writes it after a widening in a branch. The kill and
+/// the re-bind are still refused — `error_tests::type_system::test_retype_in_an_eval_body_is_an_error`
+/// asserts that half.
+#[test]
+fn test_widening_beside_an_eval_answers() {
+    let out = compile_and_run("<?php $a = \"old\" . $argc; $a = 7; eval('echo $a;');");
+    assert_eq!(out, "7");
+
+    let out = compile_and_run("<?php $a = \"old\" . $argc; unset($a); $a = 7; eval('echo $a;');");
+    assert_eq!(out, "7");
+
+    let out = compile_and_run(
+        "<?php $a = \\strlen(\"ab\"); eval('echo $a;'); $a = \"si\"; echo \"|\", $a, \"|\", \\gettype($a);",
+    );
+    assert_eq!(out, "2|si|string");
+
+    let out = compile_and_run(
+        "<?php $a = \\strlen(\"ab\"); eval('$a = 9;'); echo $a; $a = \"si\"; echo \"|\", $a, \"|\", \\gettype($a);",
+    );
+    assert_eq!(out, "9|si|string");
+
+    let out = compile_and_run(
+        "<?php $a = \\strlen(\"ab\"); if ($argc > 0) { $a = \"si\"; } eval('echo $a; $a = \"w\";'); echo \"|\", $a, \"|\", \\gettype($a);",
+    );
+    assert_eq!(out, "si|w|string");
+}
+
+/// A `++` after the branch, which disqualifies the mixed-storage marking and so leaves the store
+/// on the widening arm — both when the branch is skipped and when it is taken.
+///
+/// The taken half is the one that reads the boxed slot back as a string and increments it as PHP
+/// does (`"y"` -> `"z"`). `php -n` also emits `Deprecated: Increment on non-numeric string` there,
+/// which this compiler does not yet raise; that diagnostic gap is unrelated to the local's storage
+/// and the VALUE is what this fixture pins.
+#[test]
+fn test_incdec_after_a_widening_branch_answers() {
+    let out =
+        compile_and_run("<?php $a = 0; if ($argc > 1) { $a = \"x\"; } $a++; echo $a, \"|\", \\gettype($a);");
+    assert_eq!(out, "1|integer");
+
+    let out =
+        compile_and_run("<?php $b = 0; if ($argc > 0) { $b = \"y\"; } $b++; echo $b, \"|\", \\gettype($b);");
+    assert_eq!(out, "z|string");
+}
+
+/// A by-REFERENCE `foreach` whose body stores an OBJECT into the value variable really rewrites
+/// the iterated array's elements.
+///
+/// `foreach ($chunks as &$chunk) { $chunk = new C($chunk); }` is `Symfony\Component\String\
+/// ByteString::split` and its `CodePointString` twin, and it was the hard
+/// `cannot reassign $chunk from string to CodePointString`. The value variable is a CELL INTO the
+/// array, so the store is an element write: the array's payload has to be boxed `array<mixed>`
+/// from the loop PREHEADER on, which is exactly what the loop-storage contract already emits for
+/// `$chunks[$k] = new C(…)`. Nothing else could see that — the assignment is syntactically a plain
+/// local store, so `collect_array_writes` never looked at it.
+///
+/// Read back through a SECOND pass over the array rather than through `$chunk`, because the point
+/// is that the write reached `$chunks` and not merely the cell. Heap-debug is load-bearing: the
+/// preheader conversion boxes every element slot and the stores replace them, so an unpaired
+/// retain or release shows up here rather than as wrong output.
+#[test]
+fn test_by_ref_foreach_value_var_takes_an_object_into_the_array() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php class Chunk { public string $s = \"\"; }
+         $chunks = \\explode(\",\", \"aa,bb,cc\");
+         foreach ($chunks as &$chunk) { $w = new Chunk(); $w->s = $chunk; $chunk = $w; }
+         unset($chunk);
+         foreach ($chunks as $c) { echo $c->s, \"|\"; }
+         echo \\count($chunks);",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "aa|bb|cc|3");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// The same rewrite on an ASSOCIATIVE source, which must keep its keys.
+///
+/// The element write is filed with NO index, so it joins the payload type without claiming
+/// anything about the keys — a by-reference `foreach` visits the keys the array already has and
+/// can never turn a packed array into a hash, nor a hash into a packed one. This asserts the keys
+/// as well as the values, so a contract that reached for `ArrayToHash` instead of `ArrayToMixed`
+/// would fail here rather than silently renumbering.
+#[test]
+fn test_by_ref_foreach_object_retype_keeps_associative_keys() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php class Wrap { public string $s = \"\"; }
+         $map = [\"a\" => \"one\", \"b\" => \"two\"];
+         foreach ($map as $k => &$v) { $w = new Wrap(); $w->s = $k . \":\" . $v; $v = $w; }
+         unset($v);
+         foreach ($map as $k => $v) { echo $k, \"=\", $v->s, \"|\"; }
+         echo \\count($map);",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "a=a:one|b=b:two|2");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// The scalar half of the same rule: `string` elements replaced by `int`s through the reference.
+///
+/// A scalar-to-scalar change needs the identical preheader conversion — the slots still stop being
+/// raw `Str` pairs and start being boxed cells — so this is not a weaker case of the object shape
+/// but the same one with a payload that would fit in a register.
+///
+/// The heap is clean. It used to be pinned at a 48-byte residual that belonged to the boxed loop
+/// array, not to this rule; the ownership fixes to boxed element writes removed it.
+#[test]
+fn test_by_ref_foreach_value_var_takes_an_int_into_a_string_array() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php $parts = \\explode(\",\", \"aa,bbb,cccc\");
+         foreach ($parts as &$part) { $part = \\strlen($part); }
+         unset($part);
+         foreach ($parts as $p) { echo $p, \"|\"; }
+         echo \\gettype($parts[0]);",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2|3|4|integer");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Control: a by-reference `foreach` that keeps the element type must NOT be boxed.
+///
+/// `$n = 7` over an `array<int>` joins `int` with `int`, `representation_contract` answers `None`,
+/// and the loop keeps its raw element slots — a clean heap is the observable proof, because the
+/// boxed path always leaves the 48-byte residual the fixture above pins. This is what fails if the
+/// rule ever degrades to "a by-reference foreach boxes its source".
+///
+/// `$n = $n * 10` is deliberately NOT the control: `infer_type` answers `Mixed` for `int * int`
+/// (PHP's arithmetic overflows to float), so that shape really does box — and it boxes for the
+/// same reason, and with the same 48-byte residual, as `$nums[$i] = $nums[$i] * 10` written out by
+/// hand, which reaches `apply_array_write_evidence` without any reference in sight. The second arm
+/// pins that agreement, so a future narrowing of arithmetic inference has to move both together.
+#[test]
+fn test_by_ref_foreach_without_a_retype_keeps_its_element_type() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php $nums = [1, 2, 3];
+         foreach ($nums as &$n) { $n = 7; }
+         unset($n);
+         foreach ($nums as $x) { echo $x, \"|\"; }
+         echo \\gettype($nums[0]);",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "7|7|7|integer");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+
+    let through_reference = compile_and_run_with_heap_debug(
+        "<?php $nums = [1, 2, 3];
+         foreach ($nums as &$n) { $n = $n * 10; }
+         unset($n);
+         foreach ($nums as $x) { echo $x, \"|\"; }
+         echo \\gettype($nums[0]);",
+    );
+    let by_hand = compile_and_run_with_heap_debug(
+        "<?php $nums = [1, 2, 3];
+         for ($i = 0; $i < 3; $i++) { $nums[$i] = $nums[$i] * 10; }
+         foreach ($nums as $x) { echo $x, \"|\"; }
+         echo \\gettype($nums[0]);",
+    );
+    assert!(
+        through_reference.success,
+        "program failed: {}",
+        through_reference.stderr
+    );
+    assert!(by_hand.success, "program failed: {}", by_hand.stderr);
+    assert_eq!(through_reference.stdout, "10|20|30|integer");
+    assert_eq!(by_hand.stdout, through_reference.stdout);
+}
+
+/// The VALUE half of `error_tests::type_system::test_by_ref_foreach_value_var_retype_inside_the_body_type_checks`,
+/// on the very same program.
+///
+/// That fixture asserts only that the checker accepts the shape, and accepting a program says
+/// nothing about whether it answers what PHP answers. `php -n` prints `2CC` here — the array still
+/// has two elements and both are `C` instances — and this is the assertion that would catch a
+/// preheader conversion that boxed the slots but left the stores writing raw string pairs into
+/// them.
+///
+/// The program has no `unset($chunk)`, so the value variable is still bound to the last element
+/// at teardown; the heap must be clean anyway, as the `unset` form above is. It used to pin a
+/// four-block residual that the teardown did not release.
+#[test]
+fn test_by_ref_foreach_object_retype_reads_back_as_php_does() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php class C { public string $s = \"\"; }
+         $chunks = \\explode(\",\", \"a,b\");
+         foreach ($chunks as &$chunk) { $chunk = new C(); }
+         echo \\count($chunks), \\get_class($chunks[0]), \\get_class($chunks[1]);",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2CC");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// A DECLARED by-reference parameter whose own body stores a value the declaration cannot hold
+/// writes that value all the way back to the caller.
+///
+/// PHP's reference cell is untyped: `int &$i` gates what may be BOUND to it at the call and says
+/// nothing about what the body may later store through it, so `php -n` runs
+/// `function adv(string $s, int &$i) { $i = \strpos($s, ":", $i); }` and prints `int(2)` then
+/// `bool(false)` — the second call's `false` reaches the caller's variable.
+/// `Symfony\Component\Yaml\Inline::parseMapping` is that exact shape.
+///
+/// elephc's cell IS the caller's frame slot, so this only works if BOTH sides use a boxed one, and
+/// neither side can discover that alone — the checker's walk order does not guarantee a callee is
+/// reached before its callers. `Checker::scan_widened_ref_params` decides it once over every body
+/// before any is walked. Both call paths are asserted, and the `\gettype` on each is what
+/// separates a correct `false` from a boxed pointer read back as an integer, which is what this
+/// printed before.
+#[test]
+fn test_by_ref_param_widened_by_its_own_body_reaches_the_caller() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php function adv(string $s, int &$i): void { $i = \\strpos($s, \":\", $i); }
+         $p = 0; adv(\"ab:cd\", $p); echo \\var_export($p, true), \"|\", \\gettype($p), \"|\";
+         $q = 0; adv(\"abcd\", $q); echo \\var_export($q, true), \"|\", \\gettype($q);",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2|integer|false|boolean");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// The same rule on a declared UNION cell, which is `ProxyHelper::exportParameters`.
+///
+/// `?string &$args` is already boxed, so nothing about the ABI changes here — what changes is the
+/// body's BINDING, which refused `$args = \explode(", ", $args, 2)` with
+/// `cannot reassign $args from string|null to array<string>` on a program `php -n` runs. Both
+/// branches are exercised because they leave the parameter holding different TYPES, and the caller
+/// reads each back: a string on one path, an array on the other.
+#[test]
+fn test_by_ref_param_widened_from_a_nullable_union_reaches_the_caller() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php
+         function build(int $n, ?string &$args = null): string {
+             $args = \"\";
+             for ($k = 0; $k < $n; $k++) { $args .= \"p\" . $k . \", \"; }
+             if (0 === $n) { $args = \"none\"; } else { $args = \\explode(\", \", $args, 2); }
+             return \"sig\" . $n;
+         }
+         $a = null; echo build(0, $a), \"=\", \\gettype($a), \":\", $a, \"|\";
+         $b = null; echo build(2, $b), \"=\", \\gettype($b), \":\", \\count($b), \":\", $b[0];",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "sig0=string:none|sig2=array:2:p0");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// A widened by-reference parameter LENT on to another by-reference parameter keeps its own cell.
+///
+/// `Inline::parseMapping` hands `$i` to `parseScalar(…, int &$i)` and then stores `strpos`'s
+/// `int|false` into it. Binding `$i` to the callee's declared `int` after that call — which is
+/// what the by-reference argument effect does for an ordinary local, and rightly, since the
+/// adapter writes a concrete value back — typed every read below the call against a
+/// representation the slot does not have, and made the store eleven lines later
+/// `cannot reassign $i from int to int|false` again.
+///
+/// The `mixed &$i` twin is the same program with the decision spelled out by hand, and it is
+/// asserted to agree BYTE FOR BYTE, output and heap alike. That is the control the widening needs:
+/// it claims to reproduce a declaration PHP already lets you write, so the two must be
+/// indistinguishable, and both now end with a clean heap: the by-reference cell the caller's `$i`
+/// kept (8 blocks / 384 bytes once pinned here as the boxed-cell path's residual) is released.
+#[test]
+fn test_widened_by_ref_param_lent_to_another_matches_its_hand_written_twin() {
+    let program = |declared: &str| {
+        format!(
+            "<?php
+             class Inline {{
+                 private static function parseScalar(string $m, int &$i = 0): string {{
+                     $start = $i;
+                     while ($i < \\strlen($m) && \":\" !== $m[$i]) {{ ++$i; }}
+                     return \\substr($m, $start, $i - $start);
+                 }}
+                 public static function parseMapping(string $m, {declared} &$i = 0): array {{
+                     $out = [];
+                     $len = \\strlen($m);
+                     while ($i < $len) {{
+                         $key = self::parseScalar($m, $i);
+                         if (false === $i = \\strpos($m, \":\", $i)) {{ break; }}
+                         $out[] = $key;
+                         ++$i;
+                     }}
+                     return $out;
+                 }}
+             }}
+             $i = 0;
+             echo \\implode(\",\", Inline::parseMapping(\"aa:bb:cc\", $i)), \"|\", \\var_export($i, true), \"|\", \\gettype($i);"
+        )
+    };
+    let widened = compile_and_run_with_heap_debug(&program("int"));
+    let hand_written = compile_and_run_with_heap_debug(&program("mixed"));
+    assert!(widened.success, "program failed: {}", widened.stderr);
+    assert!(
+        hand_written.success,
+        "program failed: {}",
+        hand_written.stderr
+    );
+    assert_eq!(widened.stdout, "aa,bb|false|boolean");
+    assert_eq!(hand_written.stdout, widened.stdout);
+    assert!(
+        widened
+            .stderr
+            .contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        widened.stderr
+    );
+    assert!(
+        hand_written
+            .stderr
+            .contains("HEAP DEBUG: leak summary: clean"),
+        "the hand-written twin must end as clean, got: {}",
+        hand_written.stderr
+    );
+}
+
+/// Every reader a CALLER can apply to an array a retyped local filled agrees with `php -n`.
+///
+/// `$out = []; $e = $this; while ($e = $e->getP()) { $out[] = $e; }` is
+/// `Symfony\Component\ErrorHandler\Exception\FlattenException::getAllPrevious()` verbatim. The
+/// loop header retypes `$e` from `N` to `N|null`, which boxes its frame slot; the checker then
+/// narrows `$e` back to `N` for the loop body, which is right as a PHP type and wrong as a
+/// REPRESENTATION. Typing the pushed element from the narrowed view left the method returning
+/// `array<mixed>` — EIR lowering runs `__rt_array_to_mixed` on `$out`, and reading the emitted IR
+/// is how that was confirmed — while the inferred return type every CALLER compiles against still
+/// said `array<N>`.
+///
+/// The fixture is every reader, not one, because that is what decided the level of the fix.
+/// Measured against `php -n` on the tree before it, with the per-reader `foreach` dispatch that
+/// preceded it already in place: `foreach` (value and key/value), `count`, `$r[0]->label`,
+/// `array_search`, `end`/`reset`, `array_reverse`, `json_encode`, `print_r`, an `array`-typed
+/// parameter and an `array` property were already right, and SEVEN were not — a by-reference
+/// `foreach`, `array_pop`, `array_shift`, `array_map`, `array_filter`, `array_merge` and an
+/// append-then-read all read raw object pointers out of an array of cells. Six of the seven
+/// printed empty labels, `array_filter` answered `2` where PHP answers `1`, and none of them
+/// crashed: the class of failure was SILENT. Seven readers is what says the fix belongs at the
+/// return boundary rather than in each reader.
+///
+/// `array_merge([$this], $r)` is `FlattenException::toArray()`'s exact shape and the one this
+/// fixture would most easily lose: `2c662c5e0c` had just made that call COMPILE, which turned a
+/// refusal into a silently empty label.
+///
+/// Heap: clean. It was 1 block / 48 bytes -- the returned array, never released at exit -- and
+/// before that 8 blocks / 416 bytes: passing `$a`/`$b` into the `?N $p`
+/// constructor parameter boxes each for the Mixed ABI and runs the nullable nominal guard over
+/// that box, which FORWARDS the same cell; the post-call cleanup asked only about the argument
+/// itself and released nothing, so all 3 chain links leaked their boxed guard cell (7 blocks / 368
+/// bytes even with no accessor call at all). Fixed by releasing the argument expression's own box
+/// when the guard forwards it (`LoweringContext::owning_box_behind_borrowed_nominal_guard`).
+#[test]
+fn test_a_retyped_locals_boxed_slot_is_visible_in_the_arrays_it_fills() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class N {
+    public string $label;
+    public ?N $p;
+    public function __construct(string $label, ?N $p) { $this->label = $label; $this->p = $p; }
+    public function getP(): ?N { return $this->p; }
+    public function getAllPrevious(): array {
+        $out = [];
+        $e = $this;
+        while ($e = $e->getP()) { $out[] = $e; }
+        return $out;
+    }
+}
+$a = new N("a" . $argc, null);
+$b = new N("b", $a);
+$c = new N("c", $b);
+$r = $c->getAllPrevious();
+$parts = [];
+foreach ($r as $n) { $parts[] = $n->label; }
+echo "foreach=", implode(",", $parts), "\n";
+foreach ($r as $k => $n) { echo "kv=", $k, ":", $n->label, "\n"; }
+echo "count=", count($r), "\n";
+echo "index=", $r[0]->label, ",", $r[1]->label, "\n";
+echo "search=", var_export(array_search($a, $r, true), true), "\n";
+$labels = array_map(function (N $x): string { return $x->label; }, $r);
+echo "map=", implode(",", $labels), "\n";
+$kept = array_filter($r, function (N $x): bool { return $x->label !== "b"; });
+echo "filter=", count($kept), ":", implode(",", array_map(function (N $x): string { return $x->label; }, $kept)), "\n";
+$all = array_merge([$c], $r);
+$m = [];
+foreach ($all as $x) { $m[] = $x->label; }
+echo "merge=", implode(",", $m), "\n";
+$rev = array_reverse($r);
+$rv = [];
+foreach ($rev as $x) { $rv[] = $x->label; }
+echo "reverse=", implode(",", $rv), "\n";
+echo "json=", json_encode($r), "\n";
+$copy = $r;
+$popped = array_pop($copy);
+echo "pop=", $popped->label, ":", count($copy), "\n";
+$copy2 = $r;
+$shifted = array_shift($copy2);
+echo "shift=", $shifted->label, ":", count($copy2), "\n";
+$last = end($r);
+$first = reset($r);
+echo "ends=", $last->label, ",", $first->label, "\n";
+$appended = $r;
+$appended[] = $c;
+$ap = [];
+foreach ($appended as $x) { $ap[] = $x->label; }
+echo "append=", implode(",", $ap), "\n";
+foreach ($r as &$n) { echo "byref=", $n->label, "\n"; }
+unset($n);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "foreach=b,a1\n\
+         kv=0:b\n\
+         kv=1:a1\n\
+         count=2\n\
+         index=b,a1\n\
+         search=1\n\
+         map=b,a1\n\
+         filter=1:a1\n\
+         merge=c,b,a1\n\
+         reverse=a1,b\n\
+         json=[{\"label\":\"b\",\"p\":{\"label\":\"a1\",\"p\":null}},{\"label\":\"a1\",\"p\":null}]\n\
+         pop=a1:1\n\
+         shift=b:1\n\
+         ends=a1,b\n\
+         append=b,a1,c\n\
+         byref=b\n\
+         byref=a1\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap (the chain-building leak is fixed), got: {}",
+        out.stderr
+    );
+}
+
+/// The same rule for an INDEXED element write, which is the other statement form that stores a
+/// value into a local array.
+///
+/// `$out[$i] = $e` reaches a different checker entry point from `$out[] = $e`
+/// (`check_array_assign` rather than `check_array_push`) and had to be corrected there too, or the
+/// FlattenException shape written with an explicit cursor would keep the old, silent answer. The
+/// readers here are the two that failed most loudly in the append form: a closure typed `N` and
+/// `array_pop`.
+#[test]
+fn test_an_indexed_element_write_from_a_retyped_local_boxes_the_array_too() {
+    let out = compile_and_run(
+        r#"<?php
+class N {
+    public string $label;
+    public ?N $p;
+    public function __construct(string $label, ?N $p) { $this->label = $label; $this->p = $p; }
+    public function getP(): ?N { return $this->p; }
+    public function indexedPrevious(): array {
+        $out = [];
+        $i = 0;
+        $e = $this;
+        while ($e = $e->getP()) { $out[$i] = $e; $i = $i + 1; }
+        return $out;
+    }
+}
+$a = new N("a" . $argc, null);
+$b = new N("b", $a);
+$c = new N("c", $b);
+$r = $c->indexedPrevious();
+echo "count=", count($r), "\n";
+$labels = array_map(function (N $x): string { return $x->label; }, $r);
+echo "map=", implode(",", $labels), "\n";
+$popped = array_pop($r);
+echo "pop=", $popped->label, "\n";
+"#,
+    );
+    assert_eq!(out, "count=2\nmap=b,a1\npop=a1\n");
+}
+
+/// Control: a loop local that keeps ONE representation leaves its array packed.
+///
+/// This is what fails if the rule ever degrades to "a value stored into an array is boxed". `$i`
+/// is an `int` on every path, so nothing retypes it and the array stays `array<int>`. Both
+/// spellings now end with a clean heap, so the representation is read from the allocation count:
+/// the twin below stores an `int|string` element, which boxes every element -- one more
+/// allocation per element than the packed array needs -- while printing the same thing.
+#[test]
+fn test_a_loop_local_that_keeps_its_type_leaves_its_array_packed() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function evens(int $n): array {
+    $out = [];
+    $i = 0;
+    while ($i < $n) { $out[] = $i * 2; $i = $i + 1; }
+    return $out;
+}
+$r = evens($argc + 2);
+echo implode(",", $r), "|", count($r), "|", gettype($r[0]);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "0,2,4|3|integer");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap: {}",
+        out.stderr
+    );
+    let boxed = compile_and_run_with_heap_debug(
+        r#"<?php
+function evens(int $n): array {
+    $out = [];
+    $i = 0;
+    while ($i < $n) { $out[] = $i % 2 === 0 ? $i * 2 : (string) ($i * 2); $i = $i + 1; }
+    return $out;
+}
+$r = evens($argc + 2);
+echo implode(",", $r), "|", count($r), "|", gettype($r[0]);
+"#,
+    );
+    assert!(boxed.success, "program failed: {}", boxed.stderr);
+    assert_eq!(boxed.stdout, "0,2,4|3|integer");
+    let allocs = |stderr: &str| -> usize {
+        stderr
+            .split("allocs=")
+            .nth(1)
+            .and_then(|rest| rest.split_whitespace().next())
+            .and_then(|count| count.parse().ok())
+            .expect("heap-debug allocation count")
+    };
+    assert!(
+        allocs(&out.stderr) + 3 <= allocs(&boxed.stderr),
+        "expected the packed array to allocate no cell per element: packed {} vs boxed {}",
+        out.stderr,
+        boxed.stderr
+    );
+}
+
+/// Control: a by-reference parameter whose body keeps the declaration's representation is NOT
+/// widened, and a caller that never sees a wider value keeps reading it concretely.
+///
+/// `$i = \strlen($s)` stores an `int` into an `int` cell, so `merged_assignment_type` keeps `Int`
+/// and the pre-pass records nothing — this fixture is what fails if the rule ever degrades to
+/// "any assignment to a by-reference parameter boxes it". A clean heap is the observable half:
+/// the boxed path leaves a residual, as the fixture above pins.
+#[test]
+fn test_by_ref_param_that_keeps_its_type_is_not_widened() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php function measure(string $s, int &$i): void { $i = \\strlen($s); }
+         $n = 0; measure(\"abcd\", $n); echo $n, \"|\", \\gettype($n);",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "4|integer");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies a local that holds `false` on one path and an `int` on another keeps both types.
+///
+/// Regression: the frame slot widened `bool` into `int` (same I64 storage), so below a branch that
+/// something kept from being duplicated into its arms, `var_dump($p)` printed `int(0)` for php's
+/// `bool(false)` and `$p === false` answered false. The second branch is what keeps the tail
+/// shared. Expected output is php 8.5's.
+#[test]
+fn test_bool_and_int_on_different_paths_keep_their_types() {
+    let out = compile_and_run(
+        r#"<?php
+$p = false;
+if ($argc > 5) {
+    $p = 3;
+}
+var_dump($p, $p === false);
+$t = true;
+if ($argc > 5) {
+    $t = 5;
+}
+var_dump($t);
+$q = 1;
+if ($argc > 6) {
+    $q = 2;
+}
+echo $q;
+"#,
+    );
+    assert_eq!(out, "bool(false)\nbool(true)\nbool(true)\n1");
+}
+
 /// Issue #857: a PHP parameter TYPE HINT constrains the incoming argument, not the local. A
 /// typed parameter reassigned to another PHP type takes the ordinary retype-to-fresh-slot
 /// path, exactly as an untyped local does; it used to be rejected outright with
@@ -2741,4 +3680,22 @@ fn test_promoted_param_retype_leaves_the_property_alone() {
         "<?php class B { public function __construct(public int $n) { $n = \"s\" . $n; } } echo (new B($argc))->n;",
     );
     assert_eq!(out, "1");
+}
+
+/// A `global`-declared local takes a value of another type and the top level sees it.
+///
+/// The global's shared cell is boxed, so the retype is an ordinary store through that cell rather
+/// than a widening of storage this frame does not own. php prints `x|string` then `string(1) "x"`.
+#[test]
+fn test_global_bound_local_retype_reaches_the_global() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php $g = 1; function f() { global $g; $g = "x"; } f(); echo $g, "|", gettype($g), "\n"; $g = 7; f(); var_dump($g);"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "x|string\nstring(1) \"x\"\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
 }

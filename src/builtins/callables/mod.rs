@@ -19,6 +19,7 @@ pub(crate) mod support;
 
 // Group A — no check hook
 pub mod get_class;
+pub mod get_class_methods;
 pub mod get_parent_class;
 pub mod is_a;
 pub mod is_subclass_of;
@@ -48,7 +49,6 @@ pub mod class_alias;
 pub mod clone;
 pub mod function_exists;
 pub mod get_called_class;
-pub mod get_class_methods;
 pub mod get_class_vars;
 pub mod get_object_vars;
 pub mod method_exists;
@@ -59,13 +59,14 @@ pub mod property_exists;
 // applicator body. `clone()`'s own by-reference refusal has no PHP-visible spelling
 // to alias either.
 #[allow(non_snake_case)]
+pub mod __elephc_clone_apply_one;
+#[allow(non_snake_case)]
 pub mod __elephc_clone_override_reference_guard;
 
-// Internal object-introspection aliases used by the injected `var_export`
-// prelude. They have no PHP-visible counterpart to alias: PHP would use
-// `get_object_vars()` / `$v instanceof UnitEnum`, neither of which elephc can
-// express for a runtime `mixed` today.
+// Internal object-introspection aliases used by injected support code. They keep
+// metadata access private instead of adding PHP-visible extension functions.
 #[allow(non_snake_case)]
+pub mod __elephc_diag_suppressed;
 pub mod __elephc_object_is_enum;
 #[allow(non_snake_case)]
 pub mod __elephc_object_prop_count;

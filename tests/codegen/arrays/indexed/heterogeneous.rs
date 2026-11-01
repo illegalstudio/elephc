@@ -237,11 +237,11 @@ declare(strict_types=1);
 final class Link { public function __construct(public string $label) {} }
 final class Factory { public function link(string $l): Link { return new Link($l); } }
 final class Row { public function __construct(public array $links) {} }
-final class Composer {
+final class RowBuilder {
     public function __construct(private Factory $factory) {}
     public function row(): Row { return new Row([$this->factory->link('View'), $this->factory->link('Edit')]); }
 }
-$c = new Composer(new Factory());
+$c = new RowBuilder(new Factory());
 echo $c->row()->links[0]->label, '|', $c->row()->links[1]->label;
 "#,
     );
@@ -258,11 +258,11 @@ final class ChainedLink { public function __construct(public string $label) {} }
 final class ChainedFactory {
     public function link(string $label): ChainedLink { return new ChainedLink($label); }
 }
-final class ChainedComposer {
+final class ChainedBuilder {
     private function factory(): ChainedFactory { return new ChainedFactory(); }
     public function links(): array { return [$this->factory()->link('Chained')]; }
 }
-$links = (new ChainedComposer())->links();
+$links = (new ChainedBuilder())->links();
 echo $links[0]->label;
 "#,
     );

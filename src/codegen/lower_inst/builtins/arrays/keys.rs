@@ -28,14 +28,21 @@ pub(super) fn lower_array_keys(ctx: &mut FunctionContext<'_>, inst: &Instruction
     super::super::ensure_arg_count(inst, "array_keys", 1)?;
     let array = expect_operand(inst, 0)?;
     let array_ty = ctx.value_php_type(array)?;
-    let result_elem_ty = result_array_element_type(&inst.result_php_type.codegen_repr())?;
+    let result_elem_ty = match result_array_element_type(&inst.result_php_type.codegen_repr())? {
+        PhpType::Void | PhpType::Never => PhpType::Mixed,
+        result_elem_ty => result_elem_ty,
+    };
     match array_ty.codegen_repr() {
         PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => {
             lower_dynamic_mixed_array_keys(ctx, inst, array, &result_elem_ty)
         }
         PhpType::Array(_) => lower_indexed_array_keys(ctx, inst, array, &result_elem_ty),
         PhpType::AssocArray { key, .. } => {
-            lower_assoc_array_keys(ctx, inst, array, &key.codegen_repr(), &result_elem_ty)
+            let key_ty = match key.codegen_repr() {
+                PhpType::Void | PhpType::Never => PhpType::Mixed,
+                key_ty => key_ty,
+            };
+            lower_assoc_array_keys(ctx, inst, array, &key_ty, &result_elem_ty)
         }
         PhpType::Mixed => lower_boxed_mixed_array_keys(ctx, inst, array, &result_elem_ty),
         other => Err(CodegenIrError::unsupported(format!(

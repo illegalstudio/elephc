@@ -69,7 +69,7 @@ pub(super) fn parse_include(
 /// `ExprKind::IncludeValue` marker that the resolver expands by inlining the included file's
 /// statements into the caller's statement list (sharing scope) and capturing its top-level
 /// `return` into a hidden temporary.
-pub(in crate::parser::stmt) fn try_parse_value_include(
+pub(in crate::parser) fn try_parse_value_include(
     tokens: &[SpannedToken],
     pos: &mut usize,
 ) -> Result<Option<Expr>, CompileError> {

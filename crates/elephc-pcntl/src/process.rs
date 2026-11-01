@@ -137,6 +137,18 @@ pub extern "C" fn elephc_pcntl_fork() -> i64 {
     i64::from(pid)
 }
 
+/// Sends `signal` to `process_id` (`kill(2)`); signal 0 only probes that the process exists.
+/// Returns one on success, or zero after recording errno.
+#[no_mangle]
+pub extern "C" fn elephc_posix_kill(process_id: i64, signal: i64) -> libc::c_int {
+    let result = unsafe { libc::kill(process_id as libc::pid_t, signal as libc::c_int) };
+    if result == -1 {
+        record_errno();
+        return 0;
+    }
+    1
+}
+
 /// Moves one process into a process group and records errno on failure.
 #[no_mangle]
 pub extern "C" fn elephc_posix_setpgid(process_id: i64, process_group_id: i64) -> libc::c_int {

@@ -21,6 +21,7 @@ pub struct EvalClass {
     parent: Option<String>,
     interfaces: Vec<String>,
     attributes: Vec<EvalAttribute>,
+    doc_comment: Option<String>,
     traits: Vec<String>,
     trait_adaptations: Vec<EvalTraitAdaptation>,
     constants: Vec<EvalClassConstant>,
@@ -39,6 +40,7 @@ impl PartialEq for EvalClass {
             && self.parent == other.parent
             && self.interfaces == other.interfaces
             && self.attributes == other.attributes
+            && self.doc_comment == other.doc_comment
             && self.traits == other.traits
             && self.trait_adaptations == other.trait_adaptations
             && self.constants == other.constants
@@ -270,6 +272,7 @@ impl EvalClass {
             parent,
             interfaces,
             attributes: Vec::new(),
+            doc_comment: None,
             traits,
             trait_adaptations,
             constants,
@@ -308,6 +311,12 @@ impl EvalClass {
         self
     }
 
+    /// Returns a copy of this class with an optional verbatim PHP doc comment attached.
+    pub fn with_doc_comment_option(mut self, doc_comment: Option<String>) -> Self {
+        self.doc_comment = doc_comment;
+        self
+    }
+
     /// Marks this eval class metadata as an anonymous class expression result.
     pub fn with_anonymous(mut self) -> Self {
         self.is_anonymous = true;
@@ -323,6 +332,25 @@ impl EvalClass {
                 }
             }
         }
+        self
+    }
+
+    /// Stamps every method with the strict-types mode of the file that declared the class.
+    ///
+    /// php scopes `declare(strict_types=1)` to the file containing the code doing the coercing,
+    /// so a method's `return` obeys the file its class was DECLARED in, whatever file the call
+    /// came from. Stamping here rather than in the parser keeps the mode on the one thing that
+    /// knows it -- the declaration statement, which php requires to follow the `declare` -- and
+    /// leaves every parser-shape expectation comparing shapes.
+    pub fn with_strict_types(mut self, strict_types: bool) -> Self {
+        if !strict_types {
+            return self;
+        }
+        self.methods = self
+            .methods
+            .into_iter()
+            .map(|method| method.with_strict_types(true))
+            .collect();
         self
     }
 
@@ -369,6 +397,11 @@ impl EvalClass {
     /// Returns attributes declared directly on this eval class.
     pub fn attributes(&self) -> &[EvalAttribute] {
         &self.attributes
+    }
+
+    /// Returns the verbatim PHP doc comment attached to this class, when declared.
+    pub fn doc_comment(&self) -> Option<&str> {
+        self.doc_comment.as_deref()
     }
 
     /// Returns trait names used directly by this eval class.

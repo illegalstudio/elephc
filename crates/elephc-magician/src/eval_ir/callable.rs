@@ -49,6 +49,17 @@ pub struct EvalFunction {
     parameter_is_by_ref: Vec<bool>,
     parameter_is_variadic: Vec<bool>,
     return_type: Option<EvalParameterType>,
+    /// Whether the function was declared `function &name()`, PHP's return-by-reference form.
+    returns_by_ref: bool,
+    /// Whether the FILE that declared this was under `declare(strict_types=1)`.
+    ///
+    /// php scopes strict typing to the file containing the code doing the coercing, so a `return`
+    /// obeys the file the function was DECLARED in while an argument obeys the file the CALL was
+    /// written in. Stamping the declaration is what lets the interpreter restore the right mode
+    /// while a body runs. Deliberately absent from `PartialEq`, like `source_location`: two
+    /// declarations of the same shape are the same declaration whatever file mode they were read
+    /// under, and every parser-shape expectation compares shapes.
+    strict_types: bool,
     body: Vec<EvalStmt>,
 }
 
@@ -64,6 +75,7 @@ impl PartialEq for EvalFunction {
             && self.parameter_is_by_ref == other.parameter_is_by_ref
             && self.parameter_is_variadic == other.parameter_is_variadic
             && self.return_type == other.return_type
+            && self.returns_by_ref == other.returns_by_ref
             && self.body == other.body
     }
 }
@@ -87,8 +99,21 @@ impl EvalFunction {
             parameter_is_by_ref,
             parameter_is_variadic,
             return_type: None,
+            returns_by_ref: false,
+            strict_types: false,
             body,
         }
+    }
+
+    /// Returns a copy of this function stamped with its declaring file's strict-types mode.
+    pub const fn with_strict_types(mut self, strict_types: bool) -> Self {
+        self.strict_types = strict_types;
+        self
+    }
+
+    /// Returns whether the file that declared this function was under `strict_types=1`.
+    pub const fn strict_types(&self) -> bool {
+        self.strict_types
     }
 
     /// Returns a copy of this function with source-location metadata attached.
@@ -140,6 +165,22 @@ impl EvalFunction {
     pub fn with_return_type(mut self, return_type: Option<EvalParameterType>) -> Self {
         self.return_type = return_type;
         self
+    }
+
+    /// Returns a copy of this function marked as returning by reference.
+    ///
+    /// PHP's `function &name()`. It is recorded rather than dropped because an implementation
+    /// may ADD the `&` its interface does not require but may never REMOVE one it does:
+    /// `php -n` 8.5.6 refuses that with `Declaration of Bad::get() must be compatible with
+    /// & Ref::get()`.
+    pub const fn with_returns_by_ref(mut self, returns_by_ref: bool) -> Self {
+        self.returns_by_ref = returns_by_ref;
+        self
+    }
+
+    /// Returns whether this function was declared to return by reference.
+    pub const fn returns_by_ref(&self) -> bool {
+        self.returns_by_ref
     }
 
     /// Returns the original source spelling of this eval-declared function name.
@@ -206,6 +247,12 @@ pub enum EvalParameterTypeVariant {
     Bool,
     Callable,
     Class(String),
+    /// PHP 8.2's standalone `false` type. Kept distinct from `Bool` because it accepts only the
+    /// one value: `function f(): false` returning `true` is a TypeError in PHP. Without it both
+    /// `false` and `true` parsed as a CLASS named "false", so Symfony's
+    /// `ControllerResolver::getController(): callable|false` threw on its ordinary
+    /// "no `_controller` attribute" path — the 404 route — instead of returning.
+    False,
     Float,
     Int,
     Iterable,
@@ -213,6 +260,8 @@ pub enum EvalParameterTypeVariant {
     Never,
     Object,
     String,
+    /// PHP 8.2's standalone `true` type, the mirror of [`EvalParameterTypeVariant::False`].
+    True,
     Void,
 }
 
@@ -243,9 +292,21 @@ impl EvalParameterType {
 
     /// Creates one eval method parameter type from intersection variants.
     pub fn intersection(variants: Vec<EvalParameterTypeVariant>) -> Self {
+        Self::intersection_allowing_null(variants, false)
+    }
+
+    /// Creates one eval parameter type from intersection variants that may also accept null.
+    ///
+    /// PHP 8.2's disjunctive normal form types write a parenthesized intersection inside a union,
+    /// and `(A&B)|null` is the shape the standard library and Symfony use: every atom must match,
+    /// or the value is null.
+    pub fn intersection_allowing_null(
+        variants: Vec<EvalParameterTypeVariant>,
+        allows_null: bool,
+    ) -> Self {
         Self {
             variants,
-            allows_null: false,
+            allows_null,
             kind: EvalParameterTypeKind::Intersection,
         }
     }

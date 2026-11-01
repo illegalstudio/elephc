@@ -67,14 +67,15 @@ fn test_nested_spread_literal_merges_type_in_linear_time() {
     );
 }
 
-/// Direct scalar property references need writeback support distinct from nested array origins.
+/// A direct instance or static property can be passed to a `mixed &` parameter, as in php; the
+/// writeback is observable and the program output matches php.
 #[test]
-fn test_error_by_ref_argument_rejects_direct_property_storage() {
+fn test_by_ref_argument_accepts_direct_property_storage() {
     for source in [
         "<?php function setv(mixed &$value): void {} class Box { public iterable $value = []; } $box = new Box(); setv($box->value);",
         "<?php function setv(mixed &$value): void {} class Box { public static iterable $value = []; } setv(Box::$value);",
     ] {
-        expect_error(source, "must be passed a variable");
+        expect_no_error(source);
     }
 }
 
@@ -100,16 +101,14 @@ fn test_error_variadic_by_ref_argument_rejects_array_property_storage() {
     );
 }
 
-/// Mixed property storage cannot provide the declared array slot needed by nested ref writeback.
+/// A nested element of a `mixed` property can be passed to a `mixed &` parameter, as in php; the
+/// writeback is observable and the program output matches php.
 #[test]
-fn test_error_by_ref_argument_rejects_nested_mixed_property_storage() {
+fn test_by_ref_argument_accepts_nested_mixed_property_storage() {
     for access in ["$box->items[0]", "$box->items[0][0]"] {
-        expect_error(
-            &format!(
-                "<?php function setv(mixed &$value): void {{}} class Box {{ public mixed $items = [[1]]; }} $box = new Box(); setv({access});"
-            ),
-            "must be passed a variable",
-        );
+        expect_no_error(&format!(
+            "<?php function setv(mixed &$value): void {{}} class Box {{ public mixed $items = [[1]]; }} $box = new Box(); setv({access});"
+        ));
     }
 }
 
@@ -128,13 +127,13 @@ fn test_error_null_coalesce_assignment_missing_rhs() {
     expect_error("<?php $x ??=;", "Unexpected token");
 }
 
-/// Verifies that `??=` rejects a type-changing initializer on an existing typed variable.
-/// Input: `$x = 5; $x ??= 2.5;` — `$x` is int, RHS is float, which widens and is rejected.
+/// Verifies that `??=` rejects a fallback outside an explicit nullable local contract.
+/// Input: `?int $x = null; $x ??= 2.5;` — the reachable float fallback cannot be stored as int.
 #[test]
 fn test_error_null_coalesce_assignment_type_change() {
     expect_error(
-        "<?php $x = 5; $x ??= 2.5;",
-        "null coalescing assignment for $x must keep int, got float",
+        "<?php ?int $x = null; $x ??= 2.5;",
+        "cannot reassign $x",
     );
 }
 
@@ -220,6 +219,16 @@ fn test_error_string_offset_write_on_property() {
     );
 }
 
+/// Verifies that a non-numeric string offset assignment index is rejected.
+/// Input: `$s = "hello"; $s["x"] = "H";` — the offset cannot be converted to an integer.
+#[test]
+fn test_error_string_offset_assignment_requires_integer() {
+    expect_error(
+        "<?php $s = \"hello\"; $s[\"x\"] = \"H\";",
+        "String offset assignment index must be integer",
+    );
+}
+
 /// Verifies that by-reference foreach over a parameter typed `iterable` is rejected.
 /// Input: `function f(iterable $items) { foreach ($items as &$value) {} }`
 #[test]
@@ -248,17 +257,15 @@ fn test_foreach_accepts_builtin_iterator_interface_parameter_types() {
     }
 }
 
-/// Nominal objects and namespaced lookalikes do not inherit builtin Traversable behavior.
+/// A by-value `foreach` over a plain object, or over a namespaced lookalike of `Traversable`, is
+/// valid php (it walks the accessible properties); elephc accepts it and the programs match php.
 #[test]
-fn test_foreach_rejects_non_iterable_objects_and_namespaced_traversable_lookalikes() {
+fn test_foreach_accepts_plain_objects_and_namespaced_traversable_lookalikes() {
     for source in [
         "<?php class Plain {} function walk(Plain $items): void { foreach ($items as $value) {} }",
         r"<?php namespace Domain; interface Traversable {} function walk(Traversable $items): void { foreach ($items as $value) {} }",
     ] {
-        expect_error(
-            source,
-            "to implement Iterator or IteratorAggregate",
-        );
+        expect_no_error(source);
     }
 }
 
@@ -322,7 +329,7 @@ fn test_error_union_typed_local_rejects_invalid_initializer() {
     expect_error("<?php int|string $value = 1.5;", "cannot initialize $value");
 }
 
-/// Verifies a boxed `mixed` value cannot enter an object parameter without a runtime tag check.
+/// Verifies a boxed `mixed` value cannot reach an object parameter through a call.
 #[test]
 fn test_error_mixed_rejected_at_object_parameter_boundary() {
     expect_error(
@@ -338,6 +345,13 @@ fn test_error_mixed_rejected_at_array_return_boundary() {
         "<?php function relay(mixed $value): array { return $value; }",
         "Function 'relay' return type expects array, got mixed",
     );
+}
+
+/// Verifies a `mixed &` local passed on to an `array &` parameter compiles: the boundary is now
+/// checked at run time, as php checks it, instead of being refused at compile time.
+#[test]
+fn test_mixed_reaches_a_concrete_by_ref_boundary_checked_at_run_time() {
+    expect_no_error("<?php function mutate(array &$value): void {} function relay(mixed &$value): void { mutate($value); }")
 }
 
 /// Verifies that referencing an undefined variable produces an "Undefined variable" error.
@@ -391,10 +405,11 @@ fn test_warning_leading_numeric_string_arithmetic() {
     );
 }
 
-/// Verifies a name beginning with `with` does not imply a late-static fluent return.
+/// A name beginning with `with` does not imply a late-static fluent return; a method that exists only on
+/// the sub-interface is resolved at run time like php, and the program output matches php.
 #[test]
-fn test_error_with_prefix_does_not_refine_declared_ancestor_return() {
-    expect_error(
+fn test_with_prefix_method_call_on_ancestor_return_is_resolved_at_runtime() {
+    expect_no_error(
         r#"<?php
 interface Account {
     public function withdraw(int $amount): Account;
@@ -411,17 +426,14 @@ function rate(Savings $account): int {
 }
 echo rate(new SavingsAccount());
 "#,
-        "Undefined method: Account::interestRate",
     );
 }
 
-/// Verifies that binding `static` preserves distinct explicit union members.
-///
-/// `static|Choice` called on `SpecialChoice` becomes `SpecialChoice|Choice`, so a
-/// subclass-only method is not safe on the result even though one branch is late-bound.
+/// `static|Choice` called on `SpecialChoice` yields `SpecialChoice|Choice`; calling a subclass-only method
+/// on it is not a compile-time error in php (the program never runs the call here), and elephc now matches.
 #[test]
-fn test_error_late_static_union_keeps_explicit_ancestor_member() {
-    expect_error(
+fn test_late_static_union_call_of_subclass_method_is_resolved_at_runtime() {
+    expect_no_error(
         r#"<?php
 class Choice {
     public function choose(bool $same): static|Choice {
@@ -435,7 +447,6 @@ function render(SpecialChoice $choice): string {
     return $choice->choose(false)->special();
 }
 "#,
-        "Undefined method",
     );
 }
 
@@ -587,12 +598,6 @@ fn test_error_multilevel_break_cannot_jump_out_of_finally() {
         "<?php while (1) { try { echo 1; } finally { while (1) { break 2; } } }",
         "Cannot jump out of a finally block",
     );
-}
-
-/// Verifies that calling an undefined function produces an error.
-#[test]
-fn test_error_undefined_function() {
-    expect_error("<?php nope();", "Undefined function: nope");
 }
 
 /// Verifies that passing too many arguments to a user-defined function is rejected.
@@ -829,6 +834,26 @@ $box = new Box("bad");
     );
 }
 
+/// Verifies an overriding constructor's own declared `?string` parameter accepts a `Stringable`
+/// argument, as php does in weak mode (`RuntimeException` has `__toString()`), even when an
+/// inherited declaration with the same name leaves that position untyped.
+#[test]
+fn test_overriding_constructor_accepts_a_stringable_for_a_string_parameter() {
+    expect_no_error(r#"<?php
+class ParentFailure {
+    public function __construct($message, $line, $detail) {}
+}
+class DetailedFailure extends ParentFailure {
+    public function __construct(
+        private string $message,
+        private int $line,
+        private ?string $detail = null,
+    ) {}
+}
+new DetailedFailure('message', 4, new RuntimeException('wrong'));
+"#)
+}
+
 /// Verifies that an unrelated object default is rejected after class relationships are known.
 #[test]
 fn test_error_promoted_property_rejects_incompatible_object_default() {
@@ -869,6 +894,23 @@ class Foo {
 function unused_class_constant_default(Foo $value = Foo::BAR): void {}
 "#,
         "Function 'unused_class_constant_default' parameter $value expects Foo, got int",
+    );
+}
+
+/// Verifies a scoped class constant used as a typed property default is checked against the
+/// property's declared type after class-like constant metadata is complete.
+#[test]
+fn test_error_typed_property_default_rejects_incompatible_scoped_constant() {
+    expect_error(
+        r#"<?php
+interface Defaults {
+    public const VALUE = "wrong";
+}
+class Box {
+    public int $value = Defaults::VALUE;
+}
+"#,
+        "Property Box::$value default expects Int, got Str",
     );
 }
 
@@ -1169,6 +1211,16 @@ fn test_error_self_type_outside_class() {
     );
 }
 
+/// Verifies a closure declared outside a class still rejects the unresolved relative `self`
+/// parameter type instead of treating it as an ordinary class name.
+#[test]
+fn test_error_closure_self_type_outside_class() {
+    expect_error(
+        "<?php $closure = static function (self $value): int { return 1; };",
+        "Cannot use 'self' as a type outside of a class",
+    );
+}
+
 /// Verifies that `static` is likewise rejected as a free-function parameter type.
 #[test]
 fn test_error_static_type_outside_class() {
@@ -1178,13 +1230,14 @@ fn test_error_static_type_outside_class() {
     );
 }
 
-/// Verifies that variable variables (`$$name`) are rejected with an explanatory message, since
-/// elephc allocates locals to fixed compile-time slots with no runtime variable-name table.
+/// Verifies that the variable-variable forms elephc does not model (a compound assignment here)
+/// are rejected with an explanatory message. A plain `$$name = value;` write and a `$$name` read
+/// are supported (`crate::parser::variable_variables`).
 #[test]
-fn test_error_variable_variables_unsupported() {
+fn test_error_variable_variable_compound_assignment_unsupported() {
     expect_error(
-        "<?php $x = \"y\"; $$x = 1;",
-        "Variable variables (`$$name`) are not supported",
+        "<?php $x = \"y\"; $y = 'a'; $$x .= 'b';",
+        "Variable variables (`$$name`) are only supported in a plain `$$name = value;` write or a read",
     );
 }
 
@@ -1536,18 +1589,6 @@ fn test_null_probe_on_a_later_assigned_variable_is_still_rejected() {
     );
 }
 
-/// Verifies a lossy float constant at an `int` parameter is rejected instead of silently
-/// truncated. PHP passes `5` after emitting `Deprecated: Implicit conversion from float 5.5 to
-/// int loses precision`; elephc has no runtime deprecation channel, so it refuses the program
-/// rather than dropping the notice.
-#[test]
-fn test_error_int_parameter_rejects_lossy_float_constant() {
-    expect_error(
-        "<?php function ti(int $i) { return $i; } echo ti(5.5);",
-        "PHP emits `Deprecated: Implicit conversion from float 5.5 to int loses precision`",
-    );
-}
-
 /// Verifies a non-numeric string constant at an `int` parameter is rejected with PHP's
 /// failure mode named. PHP throws `TypeError` when the call runs.
 #[test]
@@ -1568,33 +1609,12 @@ fn test_error_int_parameter_rejects_leading_numeric_string_constant() {
     );
 }
 
-/// Verifies a runtime float at an `int` parameter is rejected, because deciding between PHP's
-/// silent conversion, its deprecation notice and its `TypeError` needs a runtime check elephc
-/// cannot perform at a parameter boundary.
-#[test]
-fn test_error_int_parameter_rejects_runtime_float() {
-    expect_error(
-        "<?php function ti(int $i) { return $i; } $f = 5.5 * $argc; echo ti($f);",
-        "add an explicit cast at the call site",
-    );
-}
-
 /// Verifies a non-numeric string constant at a `float` parameter is rejected the same way.
 #[test]
 fn test_error_float_parameter_rejects_non_numeric_string_constant() {
     expect_error(
         "<?php function tf(float $f) { return $f; } echo tf(\"abc\");",
         "PHP throws `TypeError` for the non-numeric string \"abc\" at a `float` parameter",
-    );
-}
-
-/// Verifies an out-of-range float constant at an `int` parameter reports PHP's `TypeError`
-/// rather than wrapping around.
-#[test]
-fn test_error_int_parameter_rejects_out_of_range_float_constant() {
-    expect_error(
-        "<?php function ti(int $i) { return $i; } echo ti(1e20);",
-        "PHP throws `TypeError` for the float",
     );
 }
 
@@ -1636,91 +1656,113 @@ fn test_error_typed_by_ref_parameter_rejects_mixed_local_storage() {
     );
 }
 
-/// Verifies `declare(strict_types=1)` rejects the `bool`→`int` binding PHP's coercive mode
-/// performs silently, and that the diagnostic names the `TypeError` PHP would throw.
-///
-/// This is the audit repro: before the directive was honoured, elephc compiled `ti(true)` to
-/// `int(1)` while PHP 8.4.20 fatals with
-/// `TypeError: ti(): Argument #1 ($i) must be of type int, true given`.
+/// Verifies `declare(strict_types=1)` does not refuse the `bool`->`int` binding PHP's coercive mode
+/// performs silently: php compiles `ti(true)` and throws
+/// `TypeError: ti(): Argument #1 ($i) must be of type int, true given` when the call RUNS, which
+/// `tests/codegen/regressions/agent_checker_deferrals.rs` pins end to end.
 #[test]
-fn test_error_strict_types_rejects_bool_into_int_parameter() {
-    expect_error(
-        "<?php declare(strict_types=1); function ti(int $i) { return $i; } echo ti(true);",
-        "must be of type int, bool given",
-    );
+fn test_strict_types_bool_into_int_parameter_is_a_run_time_type_error() {
+    check_source("<?php declare(strict_types=1); function ti(int $i) { return $i; } echo ti(true);")
+        .expect("php throws at run time; it does not refuse the program");
 }
 
-/// Verifies the strict diagnostic identifies the directive as the reason and suggests the cast
-/// that makes the call legal, rather than reading as a plain type mismatch.
+/// Verifies every scalar that binds to a `string` parameter in coercive mode compiles under the
+/// directive: `int`, `float` and `bool` sources all throw `TypeError` in PHP when the call runs.
 #[test]
-fn test_error_strict_types_diagnostic_names_the_directive() {
-    expect_error(
-        "<?php declare(strict_types=1); function ti(int $i) { return $i; } echo ti(true);",
-        "`declare(strict_types=1)` is active in this file",
-    );
-}
-
-/// Verifies every scalar that binds to a `string` parameter in coercive mode is rejected under
-/// the directive: `int`, `float` and `bool` sources all throw `TypeError` in PHP 8.4.20.
-#[test]
-fn test_error_strict_types_rejects_scalars_into_string_parameter() {
-    for (argument, php_type) in [("42", "int"), ("4.5", "float"), ("true", "bool")] {
-        expect_error(
-            &format!(
-                "<?php declare(strict_types=1); function ts(string $s) {{ return $s; }} echo ts({});",
-                argument
-            ),
-            &format!("must be of type string, {} given", php_type),
-        );
+fn test_strict_types_scalars_into_string_parameter_are_run_time_type_errors() {
+    for argument in ["42", "4.5", "true"] {
+        check_source(&format!(
+            "<?php declare(strict_types=1); function ts(string $s) {{ return $s; }} echo ts({});",
+            argument
+        ))
+        .expect("php throws at run time; it does not refuse the program");
     }
 }
 
-/// Verifies every scalar that binds to a `bool` parameter in coercive mode is rejected under the
-/// directive.
+/// Verifies strict binding rejects a `Stringable` object even when the declaration offers a
+/// `string` union member; PHP only performs this object conversion from weak call sites.
 #[test]
-fn test_error_strict_types_rejects_scalars_into_bool_parameter() {
-    for (argument, php_type) in [("1", "int"), ("1.5", "float"), ("\"a\"", "string")] {
-        expect_error(
-            &format!(
-                "<?php declare(strict_types=1); function tb(bool $b) {{ return $b; }} echo tb({});",
-                argument
-            ),
-            &format!("must be of type bool, {} given", php_type),
-        );
+fn test_error_strict_types_rejects_stringable_object_into_string_union() {
+    expect_error(
+        "<?php declare(strict_types=1); class Label { public function __toString(): string { return 'x'; } } function either(string|iterable $value): string { return ''; } echo either(new Label());",
+        "parameter $value expects Union",
+    );
+    expect_error(
+        "<?php declare(strict_types=1); class Label { public function __toString(): string { return 'x'; } } function many(string ...$values): string { return ''; } echo many(new Label());",
+        "variadic parameter $values expects Str",
+    );
+}
+
+/// Verifies `strict_types=1` also rejects `Stringable` object conversion at a declared string
+/// return boundary, where coercive PHP source would invoke `__toString()`.
+#[test]
+fn test_error_strict_types_rejects_stringable_object_string_return() {
+    expect_error(
+        "<?php declare(strict_types=1); class ReturnLabel { public function __toString(): string { return 'x'; } } function label(): string { return new ReturnLabel(); }",
+        "return type expects Str, got Object",
+    );
+}
+
+/// Verifies weak binding still rejects an arbitrary object that has no string conversion,
+/// rather than accepting every object merely because the declaration contains `string`.
+#[test]
+fn test_error_weak_binding_rejects_non_stringable_object_into_string_union() {
+    expect_error(
+        "<?php class Value {} function either(string|iterable $value): string { return ''; } echo either(new Value());",
+        "parameter $value expects Union",
+    );
+    expect_error(
+        "<?php class Value {} function many(string ...$values): string { return ''; } echo many(new Value());",
+        "variadic parameter $values expects Str",
+    );
+}
+
+/// Verifies every scalar that binds to a `bool` parameter in coercive mode compiles under the
+/// directive and throws `TypeError` when the call runs.
+#[test]
+fn test_strict_types_scalars_into_bool_parameter_are_run_time_type_errors() {
+    for argument in ["1", "1.5", "\"a\""] {
+        check_source(&format!(
+            "<?php declare(strict_types=1); function tb(bool $b) {{ return $b; }} echo tb({});",
+            argument
+        ))
+        .expect("php throws at run time; it does not refuse the program");
     }
 }
 
 /// Verifies the constant `float`/numeric-string arguments coercive mode folds into an `int`
-/// parameter are rejected under the directive instead.
+/// parameter compile under the directive and throw `TypeError` when the call runs.
 #[test]
-fn test_error_strict_types_rejects_constants_into_int_parameter() {
-    expect_error(
-        "<?php declare(strict_types=1); function ti(int $i) { return $i; } echo ti(5.0);",
-        "must be of type int, float given",
-    );
-    expect_error(
-        "<?php declare(strict_types=1); function ti(int $i) { return $i; } echo ti(\"42\");",
-        "must be of type int, string given",
-    );
+fn test_strict_types_constants_into_int_parameter_are_run_time_type_errors() {
+    check_source("<?php declare(strict_types=1); function ti(int $i) { return $i; } echo ti(5.0);")
+        .expect("php throws at run time; it does not refuse the program");
+    check_source("<?php declare(strict_types=1); function ti(int $i) { return $i; } echo ti(\"42\");")
+        .expect("php throws at run time; it does not refuse the program");
 }
 
-/// Verifies a numeric string is rejected at a `float` parameter under the directive, even though
-/// coercive mode binds it as a constant.
+/// Verifies a numeric string at a `float` parameter under the directive compiles (php throws
+/// `TypeError` when the call runs), even though coercive mode binds it as a constant.
 #[test]
-fn test_error_strict_types_rejects_numeric_string_into_float_parameter() {
-    expect_error(
-        "<?php declare(strict_types=1); function tf(float $f) { return $f; } echo tf(\"1.5\");",
-        "must be of type float, string given",
-    );
+fn test_strict_types_numeric_string_into_float_parameter_is_a_run_time_type_error() {
+    check_source("<?php declare(strict_types=1); function tf(float $f) { return $f; } echo tf(\"1.5\");")
+        .expect("php throws at run time; it does not refuse the program");
 }
 
-/// Verifies the directive reaches method calls, not just plain functions.
+/// Verifies the directive reaches method calls, which php checks at run time too.
 #[test]
 fn test_error_strict_types_rejects_method_argument() {
     expect_error(
         "<?php declare(strict_types=1); class C { public function m(int $i) { return $i; } } $c = new C(); echo $c->m(true);",
         "Method C::m parameter $i expects int, got bool",
     );
+}
+
+/// Verifies the directive reaches method calls, not just plain functions: the call compiles and
+/// throws `TypeError` at run time.
+#[test]
+fn test_strict_types_method_argument_is_a_run_time_type_error() {
+    check_source("<?php declare(strict_types=1); class C { public function m(int $i) { return $i; } } $c = new C(); echo $c->m(true);")
+        .expect("php throws at run time; it does not refuse the program");
 }
 
 /// Verifies the directive reaches a closure invoked through a variable, which is validated on a
@@ -1810,6 +1852,15 @@ fn test_strict_types_absent_keeps_coercive_binding() {
     expect_no_error("<?php function ti(int $i) { return $i; } echo ti(true);");
 }
 
+/// Rejects reference aliases whose source is not an element of the same static-property array.
+#[test]
+fn test_error_ref_assign_static_property_element_cross_array() {
+    expect_error(
+        "<?php class C { public static array $a = []; public static array $b = []; static function t() { self::$a['x'] = &self::$b['y']; } }",
+        "Reference between two different static-property arrays is not yet supported",
+    );
+}
+
 /// `unset` at top level kills the binding: a later incompatible assignment binds fresh.
 #[test]
 fn test_unset_then_retype_is_accepted() {
@@ -1836,10 +1887,10 @@ fn test_conditional_unset_keeps_binding() {
     expect_no_error("<?php $a = 1; if ($argc > 1) { unset($a); } echo $a;");
 }
 
-/// A binding created inside a branch is not killable at depth 0 (may be uninitialized).
+/// A binding created inside a branch may be unset and re-bound to another type afterwards: unset() detaches the binding from any reference, so the kill is sound and the assignment that follows is a fresh binding, as in php.
 #[test]
-fn test_branch_created_binding_not_killable() {
-    expect_error("<?php if ($argc > 1) { $a = 1; } unset($a); $a = \"x\"; echo $a;", "cannot reassign");
+fn test_branch_created_binding_can_be_unset_and_rebound() {
+    expect_no_error("<?php if ($argc > 1) { $a = 1; } unset($a); $a = \"x\"; echo $a;");
 }
 
 /// Unset detaches an ordinary local from aliases that retain the old cell.
@@ -1854,10 +1905,11 @@ fn test_static_local_not_killable() {
     expect_error("<?php function f() { static $a = 1; unset($a); $a = \"x\"; } f();", "cannot reassign");
 }
 
-/// Global-bound locals are never killable.
+/// `unset()` of a `global`-bound local only drops the local alias, so the assignment that follows is a
+/// fresh local binding, as in php; elephc accepts it and the program output matches php.
 #[test]
-fn test_global_local_not_killable() {
-    expect_error("<?php $g = 1; function f() { global $g; unset($g); $g = \"x\"; } f();", "cannot reassign");
+fn test_global_local_can_be_unset_and_rebound() {
+    expect_no_error("<?php $g = 1; function f() { global $g; unset($g); $g = \"x\"; } f();");
 }
 
 /// A name ANY function-like body in the program declares `global` is never killable, wherever the
@@ -1951,13 +2003,12 @@ fn test_untyped_by_ref_param_unset_and_rebind_detaches_local() {
     );
 }
 
-/// A typed by-ref parameter keeps its declared cell ABI, while an untyped parameter uses boxed
-/// Mixed storage and can replace its payload with a value of another PHP type.
+/// A by-ref parameter, typed or not, accepts an assignment of another PHP type inside the function
+/// (php does not enforce a parameter type after entry); the programs match php.
 #[test]
 fn test_by_ref_param_retype_follows_declared_storage() {
-    expect_error(
+    expect_no_error(
         "<?php function f(int &$x) { $x = \"s\"; } $a = 1; f($a);",
-        "cannot reassign $x from int to string",
     );
     expect_no_error(
         "<?php function f(&$x) { $x = \"s\"; } $a = 1; f($a);",
@@ -1971,16 +2022,23 @@ fn test_ref_alias_target_retype_not_permitted() {
     expect_error("<?php $a = 1; $r = &$a; $r = \"s\";", "cannot reassign $r from int to string");
 }
 
-/// A local handed to an unresolved callable is promoted to rebindable boxed Mixed storage.
+/// A local handed to an unresolved callable may be unset and re-bound afterwards.
 ///
-/// The runtime descriptor may discover that the parameter is by-reference. Promoting the caller
-/// place preserves that possibility while still allowing PHP's ordinary type-changing assignment,
-/// and `unset()` detaches the local name before a fresh binding is created.
+/// `$cb` here is a `callable` parameter with no signature attached, so nothing says whether its
+/// first parameter is by-reference. The reference the callee may hold lasts only for the duration of
+/// the call, and `unset()` detaches the binding from it, so the kill is sound and the assignment that
+/// follows is a fresh binding, as in php. No re-bind site is recorded and `--strict-locals` accepts
+/// it too.
 #[test]
-fn test_unresolved_callable_arg_uses_rebindable_boxed_storage() {
-    expect_no_error(
-        "<?php function g(callable $cb) { $a = 1; $cb($a); unset($a); $a = \"s\"; echo $a; }",
+fn test_unresolved_callable_arg_can_be_unset_and_rebound() {
+    let source = "<?php function g(callable $cb) { $a = 1; $cb($a); unset($a); $a = \"s\"; echo $a; }";
+    let result = check_source_full(source).expect("the unresolved-callable fixture must type-check");
+    assert!(
+        result.local_retype_sites.is_empty(),
+        "…and never re-bound either: {:?}",
+        result.local_retype_sites
     );
+    expect_no_error_strict(source);
 }
 
 /// A string variable callee uses the same boxed caller place because its runtime target may bind
@@ -1995,19 +2053,55 @@ fn test_string_variable_callee_arg_uses_rebindable_boxed_storage() {
     );
 }
 
-/// Sibling unknown-callee shapes promote simple local arguments to the same rebindable boxed
-/// storage: a dynamic class static call, a dynamic constructor, and a method call on a `mixed`
-/// receiver. After `unset()` detaches the local name, each may create a fresh typed binding.
+/// Sibling unknown-callee shapes reach the same rule: a dynamic class static call
+/// (`$c::m($a)`, which desugars to `call_user_func([$c, "m"], $a)`), a dynamic constructor
+/// (`new $c($a)`), and a method call on a `mixed` receiver dispatched over runtime candidates.
+///
+/// The reference an unresolved callee may take is held only for the duration of the call, and
+/// `unset()` detaches the binding from it, so the kill is sound and the assignment that follows is
+/// a fresh binding, as in php. No re-bind site is recorded and `--strict-locals` accepts it too.
+///
+/// UNRESOLVED is the whole premise, so the third source names a method NO class declares. It
+/// used to declare `C::m(&$x)` and still qualified, but only because `$o` was not `mixed`: `g`
+/// is never called, and an uncalled function's undeclared parameter was seeded `PhpType::Int`,
+/// so the call fell past the mixed-receiver path entirely. With the seed corrected to `mixed`
+/// the receiver reaches that path, `mixed_receiver_by_ref_signature` finds the single class
+/// declaring `m` by reference, and the callee is known — `$a` is then genuinely ref-bound and a
+/// reference may hold a new type, which is
+/// `test_a_single_by_ref_candidate_on_a_mixed_receiver_is_resolved` below.
 #[test]
-fn test_unknown_callee_siblings_use_rebindable_boxed_storage() {
-    expect_no_error(
+fn test_unknown_callee_siblings_can_be_unset_and_rebound() {
+    for source in [
         "<?php class C { static function m(&$x) { $x = 2; } } function g() { $a = 1; $c = \"C\"; $c::m($a); unset($a); $a = \"s\"; echo $a; }",
-    );
-    expect_no_error(
+
         "<?php function g(string $c) { $a = 1; $x = new $c($a); unset($a); $a = \"s\"; echo $a, $x; }",
-    );
-    expect_no_error(
-        "<?php class C { function m(&$x) { $x = 2; } } function g($o) { $a = 1; $o->m($a); unset($a); $a = \"s\"; echo $a; }",
+        "<?php class C { function other(&$x) { $x = 2; } } function g($o) { $a = 1; $o->m($a); unset($a); $a = \"s\"; echo $a; }",
+    ] {
+        let result =
+            check_source_full(source).expect("an unresolved callee's argument must type-check");
+        assert!(
+            result.local_retype_sites.is_empty(),
+            "…and never re-bound either: {:?}",
+            result.local_retype_sites
+        );
+        expect_no_error_strict(source);
+    }
+}
+
+/// Verifies a `mixed` receiver takes its by-reference shape from the classes declaring the method.
+///
+/// The counterpart to the test above: there the method is declared by nobody and the argument
+/// stays conservatively aliased, here exactly one class declares it BY REFERENCE, so the shape is
+/// a fact rather than a guess. `$a` is ref-bound, which both keeps the `unset` kill refused — the
+/// callee holds its address — and allows the store that follows even under `--strict-locals`,
+/// because what a reference may be assigned is not limited by what it held.
+///
+/// This is the rule Symfony's `PdoAdapter::doSave` needs: `$stmt->bindParam(1, $id)` on a gradual
+/// receiver defines `$id` when a class declares that parameter by reference.
+#[test]
+fn test_a_single_by_ref_candidate_on_a_mixed_receiver_is_resolved() {
+    expect_no_error_strict(
+        "<?php class C { function m(&$x) { $x = 2; } } function g($o) { $a = 1; $o->m($a); $a = \"s\"; echo $a; }",
     );
 }
 
@@ -2035,15 +2129,30 @@ fn test_unknown_callee_does_not_over_reach() {
 /// is narrow — the RFC gives the pipe no by-ref
 /// parameters and the known-signature path rejects one outright — but the conservatism must not
 /// depend on which call syntax reached the callee.
-/// The promoted boxed place makes both subsequent assignment shapes valid.
+///
+/// Read off the decision, like its ordinary-call sibling above: neither shape records a kill or a
+/// re-bind site, so the piped value's slot is never abandoned. The store that follows widens it,
+/// and `--strict-locals` keeps the hard error.
 #[test]
-fn test_unresolved_pipe_target_arg_uses_rebindable_boxed_storage() {
-    expect_no_error(
+fn test_unresolved_pipe_target_arg_not_killable() {
+    for source in [
         "<?php function g(callable $cb) { $a = 1; $r = $a |> $cb; unset($a); $a = \"s\"; echo $a, $r; }",
-    );
-    expect_no_error(
+
         "<?php function g(callable $cb) { $a = 1; $r = $a |> $cb; $a = \"s\"; echo $a, $r; }",
-    );
+    ] {
+        let result = check_source_full(source).expect("the pipe fixture must type-check");
+        assert!(
+            result.local_bind_kill_sites.is_empty(),
+            "an unresolved pipe target's value is never killable: {:?}",
+            result.local_bind_kill_sites
+        );
+        assert!(
+            result.local_retype_sites.is_empty(),
+            "…and never re-bound either: {:?}",
+            result.local_retype_sites
+        );
+        expect_error_strict(source, "cannot reassign");
+    }
 }
 
 /// The pipe controls: a KNOWN pipe target leaves both shapes available, and an unresolvable pipe
@@ -2082,23 +2191,17 @@ fn test_known_by_value_pipe_target_leaves_the_piped_value_markable() {
     expect_no_error("<?php if ($argc > 1) { $a = 0; } else { $a = \"ciao\"; } echo strval($a);");
 }
 
-/// The conservative half of the `Pipe` arm, unchanged: a target the scan cannot resolve to a name
-/// with a signature still disqualifies the piped value, and so does a resolvable BY-REFERENCE one.
-///
-/// A `callable` parameter carries no signature here, so an unknown callee could bind the piped
-/// value by reference for the rest of the body — the divergent assignment stays the pre-feature
-/// hard error. The by-reference first-class callable is the arm that proves the new gate is the
-/// signature and not the syntax: same shape, same `strval(...)` spelling, different `ref_params`,
-/// and the checker rejects the pipe itself on top.
+/// A divergent assignment piped into an unresolved `callable` target is accepted (php type-checks
+/// the value only when the pipe runs); a resolvable BY-REFERENCE pipe target is still rejected, now
+/// with the pipe operator's own by-reference diagnostic.
 #[test]
 fn test_unresolved_or_by_ref_pipe_target_still_disqualifies_the_piped_value() {
-    expect_error(
+    expect_no_error(
         "<?php function g(callable $cb, int $n) { if ($n > 1) { $a = 0; } else { $a = \"ciao\"; } echo $a |> $cb; }",
-        "cannot reassign $a from int to string",
     );
     expect_error(
         "<?php function f(&$x) { $x = 1; return 1; } if ($argc > 1) { $a = 0; } else { $a = \"ciao\"; } echo $a |> f(...);",
-        "cannot reassign $a from int to string",
+        "Pipe operator does not support by-reference parameters",
     );
 }
 
@@ -2125,16 +2228,31 @@ fn test_unset_inside_try_catch_finally_records_no_kill() {
     }
 }
 
-/// The same non-eligibility as an ERROR, in the shapes where the straight-line retype cannot
-/// rescue the program: a re-binding assignment that is itself inside a branch, and an
-/// expression-form one. Both are the hard `cannot reassign` a kill would have avoided.
+/// The same non-eligibility, in the shapes where the straight-line re-bind cannot rescue the
+/// program: a re-binding assignment that is itself inside a branch, and an expression-form one.
+///
+/// NEITHER is the hard error any more. Both are depth-independent widenings: the slot stays and
+/// `store_local` widens it, which is sound whether or not the branch is taken (the value semantics
+/// of the taken branch are pinned end to end by
+/// `codegen::locals_retype::test_store_inside_a_branch_after_a_try_unset_answers`). What the
+/// `unset` inside the `try` still does NOT do is end the binding — `local_bind_kill_sites` stays
+/// empty for it, which is what the sibling test above asserts — and `--strict-locals` still
+/// rejects every one of these shapes.
 #[test]
 fn test_unset_inside_try_leaves_the_pre_feature_error() {
-    expect_error(
+    expect_warning(
+        "<?php $a = 1; try { unset($a); } finally { echo \"f\"; } if ($argc > 1) { $a = \"s\"; } echo $a;",
+        "$a changes type from int to string",
+    );
+    expect_error_strict(
         "<?php $a = 1; try { unset($a); } finally { echo \"f\"; } if ($argc > 1) { $a = \"s\"; } echo $a;",
         "cannot reassign $a from int to string",
     );
-    expect_error(
+    expect_warning(
+        "<?php $a = 1; try { unset($a); } finally { echo \"f\"; } $b = ($a = \"s\"); echo $b;",
+        "changes type from int to string",
+    );
+    expect_error_strict(
         "<?php $a = 1; try { unset($a); } finally { echo \"f\"; } $b = ($a = \"s\"); echo $b;",
         "cannot reassign $a from int to string",
     );
@@ -2145,28 +2263,28 @@ fn test_unset_inside_try_leaves_the_pre_feature_error() {
     );
 }
 
-/// A retype assignment whose RHS can THROW is no exception to the depth-0 gate.
+/// A retype assignment whose RHS can THROW is a WIDENING, not a re-bind, and that is what makes
+/// it safe inside a `try`.
 ///
-/// The straight-line retype requires conditional depth 0 (`merge_local_assignment_type`'s sibling
-/// of `Checker::local_binding_is_killable`), and `try` raises depth for its whole body exactly
-/// like an `if` with no `else`. Probed via `--check`: `$s = "heap" . $argc; try { $s =
-/// mightThrow($argc); } catch (...) {}`, where `mightThrow` returns `int`, stays the ordinary
-/// depth-gated hard error — whether the RHS can throw changes nothing the checker looks at. This
-/// LITERAL shape never reaches lowering, so it is pinned here rather than as a codegen e2e
-/// fixture.
+/// It used to be refused outright, because the straight-line re-bind requires conditional depth 0
+/// and `try` raises depth for its whole body exactly like an `if` with no `else`. The widening arm
+/// has no depth condition, so the shape compiles — and the ownership risk the refusal was standing
+/// in for is not reintroduced. A RE-BIND releases the old slot value before the store
+/// (`rebind_local_for_retype`), so an RHS that throws after that release would unwind past a slot
+/// holding freed memory; a widening releases nothing of its own and the RHS is fully lowered
+/// BEFORE `store_local` touches the slot, so an unwind leaves the old value intact. `php -n`
+/// agrees: the caught path still prints the untouched `heap1`, which
+/// `codegen::locals_retype::test_widening_inside_a_try_whose_rhs_throws_keeps_the_old_value` pins
+/// end to end.
 ///
-/// This is not the last word on the underlying ownership risk, though: moving the depth-0 retype
-/// into a CALLEE and the `try` into the CALLER reaches a shape that DOES compile, because the
-/// retype is no longer nested inside the `try` at all — only the CALL that can throw is. See
-/// `codegen::locals_retype::test_retype_whose_throwing_rhs_unwinds_out_of_the_callee_frame` for
-/// the e2e fixture that pins the unwind-across-a-pending-release case this rejection alone would
-/// otherwise leave uncovered.
+/// The unwind-across-a-pending-release case the old rejection left uncovered stays covered by
+/// `codegen::locals_retype::test_retype_whose_throwing_rhs_unwinds_out_of_the_callee_frame`, where
+/// the depth-0 re-bind sits in a CALLEE and only the CALL is inside the caller's `try`.
 #[test]
-fn test_retype_inside_try_with_throwing_rhs_stays_the_depth_gated_error() {
-    expect_error(
-        "<?php function mightThrow(int $n): int { if ($n === 1) { throw new Exception(\"boom\"); } return $n; } $s = \"heap\" . $argc; try { $s = mightThrow($argc); } catch (Exception $e) {} echo $s;",
-        "cannot reassign $s from string to int",
-    );
+fn test_retype_inside_try_with_throwing_rhs_is_widened_not_refused() {
+    let source = "<?php function mightThrow(int $n): int { if ($n === 1) { throw new Exception(\"boom\"); } return $n; } $s = \"heap\" . $argc; try { $s = mightThrow($argc); } catch (Exception $e) {} echo $s;";
+    expect_warning(source, "$s changes type from string to int");
+    expect_error_strict(source, "cannot reassign $s from string to int");
 }
 
 /// A named untyped by-reference argument (`f(x: $a)`) promotes `$a` to boxed Mixed storage.
@@ -2195,16 +2313,30 @@ fn test_typed_local_not_killable() {
     expect_error("<?php int $a = 1; unset($a); $a = \"x\";", "cannot reassign");
 }
 
-/// A PHP parameter type hint constrains the INCOMING ARGUMENT, not the local afterwards, so a
-/// type-hinted parameter is as killable and as retypable as an untyped one (issue #857).
-/// `function format(float $v): string { $v = (string) $v; return $v; }` is valid PHP that used
-/// to be rejected with `cannot reassign $v from float to string`.
+/// A typed parameter may be unset and re-bound to another type: unset() detaches the binding from any reference, so the kill is sound and the assignment that follows is a fresh binding, as in php.
+///
+/// A parameter's type hint is a CALL-BOUNDARY contract, not a storage contract for the rest of the
+/// body. `php -n` prints `x` for the first program and the compiled program prints `x` too. Without
+/// an `unset()`, a retype of a typed parameter still warns permissively and is an error under
+/// `--strict-locals`.
 #[test]
-fn test_typed_param_is_killable() {
-    expect_no_error("<?php function f(int $a) { unset($a); $a = \"x\"; echo $a; } f(1);");
+fn test_typed_param_can_be_unset_and_rebound() {
+    let source = "<?php function f(int $a) { unset($a); $a = \"x\"; echo $a; } f(1);";
+    check_source_full(source)
+        .expect("a typed parameter's unset-then-retype must type-check in permissive mode");
+    expect_no_warning(source, "changes type");
+    expect_no_error_strict(source);
     expect_no_error("<?php function f($a) { unset($a); $a = \"x\"; echo $a; } f(1);");
     expect_no_error(
         "<?php function format(float $v): string { $v = (string) $v; return $v; } echo format(1.5);",
+    );
+    expect_warning(
+        "<?php function format(float $v): string { $v = (string) $v; return $v; } echo format(1.5);",
+        "changes type from float to string",
+    );
+    expect_error_strict(
+        "<?php function format(float $v): string { $v = (string) $v; return $v; } echo format(1.5);",
+        "cannot reassign $v from float to string",
     );
 }
 
@@ -2245,32 +2377,55 @@ fn test_untyped_method_by_ref_call_arg_uses_rebindable_boxed_storage() {
     );
 }
 
-/// A local passed to a builtin by-reference parameter may still detach from that storage.
-/// After `unset()`, a fresh binding may have a different PHP type.
+/// A local passed to a BUILTIN's by-ref parameter (`sort`, `preg_match`, …) is aliased only for
+/// the duration of the call: `unset()` detaches the binding from any reference, so the kill is sound
+/// and the assignment that follows is a fresh binding, as in php. No type change is reported in
+/// either mode.
 #[test]
-fn test_builtin_by_ref_call_arg_can_detach_and_rebind() {
-    expect_no_error(
-        "<?php $a = [3, 1]; sort($a); unset($a); $a = \"s\";",
+fn test_builtin_by_ref_call_arg_can_be_unset_and_rebound() {
+    let source = "<?php $a = [3, 1]; sort($a); unset($a); $a = \"s\"; echo $a;";
+    let result =
+        check_source_full(source).expect("a lent reference's retype must type-check permissively");
+    assert!(
+        result.local_retype_sites.is_empty(),
+        "a widening abandons no slot, so it records no re-bind site: {:?}",
+        result.local_retype_sites
     );
+    expect_no_warning(source, "changes type");
+    expect_no_error_strict(source);
 }
 
 /// A `foreach` value target is bound inside the loop, which may never run, so it is not
 /// killable at depth 0 afterwards — even though nothing ever assigned it via `check_assign`.
+///
+/// The KILL is still refused, which is what the name says. The reassignment after it is not: a
+/// `foreach` value variable is an ordinary slot in this frame, so the store WIDENS it
+/// (`Checker::local_binding_is_widenable` asks `name_is_seeded_program_storage`, not the binding
+/// depth the kill reads). `php -n` prints `x`, and so does the compiled program.
 #[test]
 fn test_foreach_bound_local_not_killable() {
-    expect_error(
+    let result = check_source_full("<?php foreach ([1, 2] as $v) {} unset($v); $v = \"x\"; echo $v;")
+        .expect("a foreach target's unset-then-retype must type-check in permissive mode");
+    assert!(
+        result.local_bind_kill_sites.is_empty(),
+        "a foreach-bound local is never killable: {:?}",
+        result.local_bind_kill_sites
+    );
+    expect_warning(
         "<?php foreach ([1, 2] as $v) {} unset($v); $v = \"x\"; echo $v;",
-        "cannot reassign",
+        "changes type from int to string",
+    );
+    expect_error_strict(
+        "<?php foreach ([1, 2] as $v) {} unset($v); $v = \"x\"; echo $v;",
+        "cannot reassign $v from int to string",
     );
 }
 
-/// Same rule for a `list()` target bound inside a branch: the binding depth is recorded for
-/// every shape a conditional statement can introduce, not only for plain assignments.
+/// The same holds for a `list()` target bound inside a branch: unset() detaches the binding from any reference, so the kill is sound and the assignment that follows is a fresh binding, as in php.
 #[test]
-fn test_branch_created_list_unpack_target_not_killable() {
-    expect_error(
+fn test_branch_created_list_unpack_target_can_be_unset_and_rebound() {
+    expect_no_error(
         "<?php if ($argc > 0) { [$p, $q] = [1, 2]; } unset($p); $p = \"x\"; echo $p;",
-        "cannot reassign",
     );
 }
 
@@ -2337,6 +2492,139 @@ fn test_implicit_retype_errors_under_strict_locals() {
     expect_error_strict("<?php $a = 0; $a = \"ciao\"; echo $a;", "cannot reassign $a");
 }
 
+/// A depth-0 reassignment the RE-BIND cannot take still compiles: it WIDENS the slot instead.
+///
+/// `Checker::local_binding_is_killable` answers "may the old frame slot be abandoned", and its
+/// extra conditions exist to make that abandonment provably safe. A widening abandons nothing —
+/// the slot stays and `store_local` joins its storage type — so the two shapes below, which the
+/// kill refuses and `php -n` runs without comment, no longer fail to compile:
+///
+/// - a TYPE-HINTED parameter, whose hint is a call-boundary contract rather than a storage
+///   contract for the body (`function f(int $n) { $n = "s"; }`);
+/// - a name a conditional group INTRODUCED without an assignment, which therefore has no binding
+///   depth recorded at all — a `foreach` value target here, reassigned after the loop; `list()`
+///   targets, `catch` variables and builtin out-parameters are the same shape.
+///
+/// Both keep the hard error under `--strict-locals`, which is what the flag is for. The measured
+/// runtime parity is in `codegen::locals_retype`.
+#[test]
+fn test_depth_zero_retype_the_rebind_refuses_still_widens() {
+    expect_warning(
+        "<?php function f(int $n): string { $n = \"s\"; return $n; } echo f(1);",
+        "changes type from int to string",
+    );
+    expect_error_strict(
+        "<?php function f(int $n): string { $n = \"s\"; return $n; } echo f(1);",
+        "cannot reassign $n from int to string",
+    );
+    expect_warning(
+        "<?php foreach ([1, 2] as $v) {} $v = \"x\"; echo $v;",
+        "changes type from int to string",
+    );
+    expect_error_strict(
+        "<?php foreach ([1, 2] as $v) {} $v = \"x\"; echo $v;",
+        "cannot reassign $v from int to string",
+    );
+}
+
+/// Storage that is NOT this frame's is refused in BOTH modes, however ordinary the PHP is.
+///
+/// `Checker::local_binding_is_widenable` widens a slot; it does not get to widen one another body
+/// owns. A superglobal, `$argv`, a `static` local and a `=&` alias
+/// therefore keep the hard error rather than becoming a silent widening — the same refusals the
+/// kill applies, kept for the same reason. These are the controls that stop the widening arm from
+/// being satisfiable by simply accepting everything.
+///
+/// A by-reference PARAMETER used to be the sixth entry here, and it is deliberately not any more:
+/// its storage is still not this frame's, which is exactly why the answer for it is no longer this
+/// rule's to give. `Checker::scan_widened_ref_params` decides the cell's representation once, over
+/// EVERY body, before any is walked, so both sides of the call agree on a boxed one — and
+/// `function f(int &$x) { $x = "s"; } $a = 1; f($a); echo $a;` prints `php -n`'s `s`
+/// (`codegen::locals_retype::test_by_ref_param_widened_by_its_own_body_reaches_the_caller` and its
+/// three siblings measure the values). What must NOT be lost with it is the call boundary, which
+/// is the only thing standing between a program PHP rejects and a silent wrong answer;
+/// [`test_widened_by_ref_param_still_validates_its_argument`] is that control.
+#[test]
+fn test_storage_this_frame_does_not_own_is_never_widened() {
+    for source in [
+        "<?php $_SERVER = 5; var_dump($_SERVER);",
+        "<?php $argv = \"s\"; echo $argv;",
+        // A `global`-declared name is no longer here: the global's shared cell is boxed, so the
+        // retype is a store through it and reaches the top level (see
+        // `codegen::locals_retype::test_global_bound_local_retype_reaches_the_global`).
+        "<?php function f() { static $a = 1; $a = \"x\"; echo $a; } f();",
+        "<?php $a = 1; $r =& $a; $a = \"x\"; echo $a;",
+    ] {
+        expect_error(source, "cannot reassign");
+    }
+}
+
+/// Widening a by-reference parameter's CELL must not relax what may be BOUND to it.
+///
+/// The two are different contracts and PHP keeps them apart: the declared type gates the argument
+/// at the call (`php -n` throws `adv(): Argument #2 ($i) must be of type int, string given` and
+/// exits 255), while the body may afterwards store anything through the reference. So
+/// `Checker::scan_widened_ref_params` publishes its decision into the signature only AFTER every
+/// diagnostic that reads it has run — if it moved earlier, `expected` would be `mixed` when the
+/// argument is checked, this call would compile, and elephc would silently run a program PHP
+/// refuses. That is the one failure mode of the whole feature that is a wrong ANSWER rather than a
+/// missing convenience, so it gets its own pin, in both modes.
+#[test]
+fn test_widened_by_ref_param_still_validates_its_argument() {
+    let source = "<?php function adv(string $s, int &$i): void { $i = \\strpos($s, \":\", $i); } $z = \"str\"; adv(\"a\", $z);";
+    expect_error(source, "parameter $i expects Int, got Str");
+    expect_error_strict(source, "parameter $i expects Int, got Str");
+}
+
+/// A by-reference parameter its own body widens type-checks, in BOTH modes.
+///
+/// Nothing here consults `local_binding_is_widenable`: the parameter's environment is SEEDED
+/// `mixed` because its cell is boxed, so the store merges and no widening decision is taken at
+/// all — which is why `--strict-locals` accepts it too, and why it does not warn. A future change
+/// that routed this through the widening arm instead would still pass the permissive half while
+/// silently starting to reject the strict one.
+///
+/// Decision only. What the programs PRINT is pinned against `php -n` by the four
+/// `codegen::locals_retype::test_by_ref_param_*` fixtures, because a checker that accepts a
+/// program says nothing about whether it then answers what PHP answers.
+#[test]
+fn test_by_ref_param_widened_by_its_own_body_type_checks() {
+    for source in [
+        "<?php function adv(string $s, int &$i): void { $i = \\strpos($s, \":\", $i); } $p = 0; adv(\"ab:cd\", $p); echo $p;",
+        "<?php function w(?string &$a): void { $a = \\explode(\",\", \"x,y\"); } $v = null; w($v); echo \\count($v);",
+    ] {
+        expect_no_error(source);
+        expect_no_error_strict(source);
+    }
+}
+
+/// The CURRENT conditional depth is NOT a condition of the widening arm.
+///
+/// A kill has to prove the store runs before it may abandon a slot; a widening proves nothing —
+/// it keeps the slot and lets `store_local` widen it, which is sound on the taken and the untaken
+/// path alike. `if (\is_string($extensions)) { $extensions = [$extensions]; }` is ordinary PHP and
+/// the single most common shape the hard error was rejecting.
+///
+/// It was gated for a while on the LOWERING being wrong, not on the checker: the widened frame
+/// slot is boxed, and a merge that restored an older, narrower fact made the read below the branch
+/// ask for a representation the slot no longer holds — `$i = \strlen('ab'); if ($argc > 0) { $i =
+/// 'si'; } echo $i;` printed `0` instead of `si`. That is fixed where it belongs, in
+/// `store_local`'s whole-frame boxed contract for a widened slot and in `join_arm_types`. Both
+/// fixtures below are byte-verified against `php -n` by
+/// `codegen::locals_retype::test_store_inside_a_branch_answers_like_php`.
+#[test]
+fn test_a_store_inside_a_branch_is_widened() {
+    let param =
+        "<?php function f(int $n): string { if ($n > 0) { $n = \"s\"; } return (string) $n; } echo f(1);";
+    expect_warning(param, "$n changes type from int to string");
+    expect_error_strict(param, "cannot reassign $n from int to string");
+
+    let local =
+        "<?php $i = \\strlen(\"ab\"); if ($argc > 0) { $i = \"si\"; } echo $i; $j = 1; echo $j;";
+    expect_warning(local, "$i changes type from int to string");
+    expect_error_strict(local, "cannot reassign $i from int to string");
+}
+
 /// The `unset()` kill is MODE-INDEPENDENT: `--strict-locals` only tightens the two permissive
 /// retype shapes, and dropping a binding never went through either of them.
 ///
@@ -2368,12 +2656,31 @@ fn test_unset_then_assign_has_no_warning() {
     expect_no_warning("<?php $a = 0; unset($a); $a = \"ciao\";", "changes type");
 }
 
-/// A conditional incompatible reassignment is not kill/rebind-eligible. The `$a++`
-/// write also blocks Task 6's mixed-storage marking, so this fixture stays an error
-/// through the whole plan (a plain conditional retype becomes legal in Task 6).
+/// A conditional incompatible reassignment is not kill/rebind-eligible, and the `$a++` write
+/// blocks the mixed-storage marking as well — so what is left is the WIDENING arm, and that is
+/// what this fixture takes.
+///
+/// Neither of the two decisions this test was written to pin has changed: no binding is re-bound
+/// (nothing is recorded in `local_retype_sites`) and the name is not marked (no "boxed mixed
+/// storage" warning). Only the fallback did — from a hard error to the storage widening this
+/// compiler used before precise re-binds existed. `--strict-locals` still refuses it.
 #[test]
-fn test_conditional_retype_still_errors() {
-    expect_error("<?php $a = 0; if ($argc > 1) { $a = \"x\"; } $a++;", "cannot reassign");
+fn test_conditional_retype_is_widened_not_rebound_or_marked() {
+    let source = "<?php $a = 0; if ($argc > 1) { $a = \"x\"; } $a++;";
+    expect_warning(source, "$a changes type from int to string");
+    expect_no_warning(source, "boxed mixed storage");
+    expect_error_strict(source, "cannot reassign");
+    let result = check_source_full(source).expect("the widened fixture must type-check");
+    assert!(
+        result.local_retype_sites.is_empty(),
+        "a widening records no re-bind site: {:?}",
+        result.local_retype_sites
+    );
+    assert!(
+        result.mixed_storage_store_sites.is_empty(),
+        "the ++ write must still block marking: {:?}",
+        result.mixed_storage_store_sites
+    );
 }
 
 /// Interplay: a conditional unset leaves the binding alive, so a later depth-0
@@ -2390,21 +2697,38 @@ fn test_ref_aliased_retype_still_errors() {
     expect_error("<?php $a = 0; $r =& $a; $a = \"x\";", "cannot reassign");
 }
 
-/// A name used as the VALUE variable of a by-reference `foreach` is reference-aliased, so a
-/// later incompatible assignment is the hard error in permissive mode too.
-///
-/// PHP keeps writing through the reference after the loop ends — this fixture makes `$arr[2]`
-/// become `"changed"` — so the retype is not a retype at all: it is a store into the last
-/// element's storage. Lowering ref-binds `$v`'s slot, refuses to re-bind it for the retype, and
-/// degrades to `store_ref_cell_slot` at the CELL's `int` type, which has no `Str` -> `Int`
-/// coercion; the permissive re-bind therefore produced a program that miscompiles rather than
-/// one that runs. This is the pin for that regression.
+/// A later assignment to the by-reference `foreach` value variable writes through the reference, as in
+/// php (`$arr[2]` becomes `"changed"`); elephc accepts it and the program output matches php.
 #[test]
-fn test_by_ref_foreach_value_var_retype_still_errors() {
-    expect_error(
+fn test_by_ref_foreach_value_var_retype_writes_through_the_reference() {
+    expect_no_error(
         "<?php $v = 0; $arr = [1, 2, 3]; foreach ($arr as &$v) { } $v = \"changed\"; echo $arr[2];",
-        "cannot reassign $v from int to string",
     );
+}
+
+/// A store to the value variable INSIDE the loop body is a different question, and it is not a
+/// retype decision at all.
+///
+/// `foreach ($chunks as &$chunk) { $chunk = new C(…); }` writes THROUGH the reference into
+/// `$chunks`, so the answer is the array's payload representation, not the local's binding: the
+/// loop-storage contract widens `$chunks` to `array<mixed>` in the preheader and the value
+/// variable is then bound to that `mixed` payload, which every value fits. Nothing consults
+/// `local_binding_is_widenable`, so `--strict-locals` accepts it too — asserted here, because a
+/// future change that routed this through the widening arm instead would still pass the
+/// permissive half and silently start rejecting the strict one.
+///
+/// This is the DECISION half only. What the program prints is pinned against `php -n` by
+/// `codegen::locals_retype::test_by_ref_foreach_value_var_takes_an_object_into_the_array` and its
+/// three siblings, which run the same shapes and compare the output; accepting a program is not
+/// evidence that it answers what PHP answers, so neither assertion stands alone.
+///
+/// The pin above stays exactly as it was: it is the store AFTER the loop, where the widening
+/// really is the only available answer and the cell is the array's last element.
+#[test]
+fn test_by_ref_foreach_value_var_retype_inside_the_body_type_checks() {
+    let inside = "<?php class C { public string $s = \"\"; } $chunks = \\explode(\",\", \"a,b\"); foreach ($chunks as &$chunk) { $chunk = new C(); } echo \\count($chunks), \\get_class($chunks[0]), \\get_class($chunks[1]);";
+    expect_no_error(inside);
+    expect_no_error_strict(inside);
 }
 
 /// Control for the pin above: with a by-VALUE `foreach` nothing is aliased, so a pre-bound `$v`
@@ -2433,16 +2757,42 @@ fn test_fresh_loop_bound_by_ref_foreach_value_var_can_change_type() {
     );
 }
 
-/// The mixed-storage half of the same exclusion: a `foreach` value variable — by reference or by
-/// value — is disqualified outright by `mixed_storage_scan::collect_stmt`, so a branch-divergent
-/// pair of assignments after the loop can never box a slot lowering has ref-bound. Pinned in both
-/// modes because the marking is what would otherwise make permissive mode diverge from strict.
+/// A reference LENT to a by-reference parameter for the duration of one call does NOT veto the
+/// widening: the name keeps its own frame slot afterwards, so the slot is this frame's to
+/// re-represent.
+///
+/// `sort($c); … $c = 'x';` was a hard `cannot reassign $c from array<string> to string` because
+/// the checker files every by-reference call ARGUMENT in the same permanent set as a `=&` alias.
+/// That set answers the KILL's question (may the slot be abandoned — no, the callee may have
+/// stashed the reference), not the widening's (is the name still homed in an ordinary frame slot
+/// — yes: nothing here reaches `mark_ref_bound_local`, and `ref_place_args` already adapts a
+/// boxed caller slot to a declared parameter representation). `array_shift`, `array_pop`,
+/// `array_splice`, `uksort` and `preg_match_all`'s out parameter are the same shape, and between
+/// them they were six of the stock fixture's remaining checker errors.
+///
+/// `--strict-locals` still refuses every one of them, which is what the flag is for.
 #[test]
-fn test_by_ref_foreach_value_var_is_never_mixed_marked() {
+fn test_a_lent_reference_does_not_veto_the_widening() {
+    let builtin = "<?php $c = [\"bb\", \"aa\"]; \\sort($c); $c = \"x\"; echo $c;";
+    // Both values are heap-represented, so the assignment stores another pointer and php never
+    // reports anything; `--strict-locals` still rejects the incompatible rebind.
+    expect_no_warning(builtin, "changes type from");
+    expect_error_strict(builtin, "cannot reassign $c from array<string> to string");
+
+    let out_param =
+        "<?php function fill(array &$o): void { $o = [\"a\"]; } $m = [\"z\"]; fill($m); $m = 7; echo $m;";
+    expect_warning(out_param, "$m changes type from array to int");
+    expect_error_strict(out_param, "cannot reassign $m from array to int");
+}
+
+/// A `foreach` value variable, by reference or by value, followed by a branch-divergent pair of
+/// assignments is valid php in both modes; elephc accepts it and the program output matches php.
+#[test]
+fn test_by_ref_foreach_value_var_divergent_assignment_is_accepted() {
     let src = "<?php $v = 0; $arr = [1, 2, 3]; foreach ($arr as &$v) { } \
                if ($argc > 1) { $v = 1; } else { $v = \"s\"; } echo $v;";
-    expect_error(src, "cannot reassign $v from int to string");
-    expect_error_strict(src, "cannot reassign $v from int to string");
+    expect_no_error(src);
+    expect_no_error_strict(src);
 }
 
 /// A late-discovered by-reference callable keeps the final pass's detach decision.
@@ -2613,6 +2963,73 @@ fn test_seeded_superglobal_not_killable() {
     expect_error("<?php unset($_GET); $_GET = 5;", "cannot reassign");
 }
 
+/// A STRAIGHT-LINE store whose value fits a union binding narrows it to what was actually stored.
+///
+/// The merge kept the binding's type whenever the value fit it, which is right across control
+/// flow and wrong for an assignment that dominates everything after it — PHP replaces the value.
+/// `ContainerBuilderDebugDumpPass::process` is the shape: `$file` is bound
+/// `array|bool|string|int|float|UnitEnum|null` by `getParameter()`, `substr_replace()` stores a
+/// `string` into it, and the `Filesystem::chmod($file, …)` three lines below reported
+/// `expects Union([Str, Iterable]), got Union([Array(Mixed), Bool, Str, Int, Float, …])` — the
+/// type `$file` had BEFORE the store.
+///
+/// The two controls -- a store inside a BRANCH leaves the union standing, and a by-reference
+/// PARAMETER is never narrowed -- used to be observed through the refusal of that union by a
+/// `string|iterable` parameter. php accepts the call (it checks, and coerces, the value actually
+/// passed), and so does the checker now: a boxed union that overlaps the parameter is a run-time
+/// question. Both controls therefore compile, as they do under php.
+#[test]
+fn test_a_straight_line_store_narrows_a_union_binding() {
+    expect_no_error(
+        "<?php class F { public function chmod(string|iterable $f): int { return \\strlen((string) $f); } } \
+         function p(string $n): array|bool|string|int|float|null { return $n . \".xml\"; } \
+         function run(F $fs): int { $file = p(\"d\"); $file = \\substr_replace($file, \".ser\", -4); return $fs->chmod($file); } \
+         echo run(new F());",
+    );
+
+    expect_no_error(
+        "<?php class F { public function chmod(string|iterable $f): int { return \\strlen((string) $f); } } \
+         function p(int $n): array|string|int { return $n > 0 ? \"abc\" : 5; } \
+         function run(F $fs, int $n): int { $file = p($n); if ($n > 5) { $file = \"zz\"; } return $fs->chmod($file); } \
+         echo run(new F(), 1);",
+    );
+
+    expect_no_error(
+        "<?php class F { public function chmod(string|iterable $f): int { return \\strlen((string) $f); } } \
+         function w(array|string|int &$p): void { $p = \"z\"; } \
+         function run(F $fs): int { $v = 5; w($v); return $fs->chmod($v); } \
+         echo run(new F());",
+    );
+}
+
+/// A superglobal assignment is not a re-binding at all: it stores into the program's request
+/// storage, whose type — a hash with `Str` keys and `Mixed` values — nothing about the
+/// assignment can change. So ANY array is accepted and the environment keeps that type, exactly
+/// as the declared-local arm does for `int $x = …`.
+///
+/// Five of the stock fixture's checker errors were this, all inside
+/// `Request::overrideGlobals()`: an `array<mixed>` from a method call and an `array<array<never>>`
+/// literal, both refused as `cannot reassign $_GET from array<string, mixed> to …`.
+///
+/// A SCALAR keeps its error, in both modes: PHP would allow it, but the storage this compiler
+/// gives a superglobal is a hash, and publishing a scalar through the symbol every reader
+/// dereferences as one would be a silent wrong answer rather than a diagnostic.
+#[test]
+fn test_superglobal_assignment_keeps_the_program_storage_type() {
+    expect_no_error(
+        "<?php function bag(): array { return [\"q\" => 1]; } $_GET = bag(); $_REQUEST = [[]]; echo \\count($_GET);",
+    );
+    expect_no_error_strict(
+        "<?php function bag(): array { return [\"q\" => 1]; } $_GET = bag(); $_REQUEST = [[]]; echo \\count($_GET);",
+    );
+    expect_no_warning(
+        "<?php function bag(): array { return [\"q\" => 1]; } $_GET = bag(); echo \\count($_GET);",
+        "changes type",
+    );
+    expect_error("<?php $_GET = 5; var_dump($_GET);", "cannot reassign $_GET");
+    expect_error_strict("<?php $_GET = 5; var_dump($_GET);", "cannot reassign $_GET");
+}
+
 /// Same rule for the top-level-seeded `$argv`/`$argc`. Measured before the fix: the kill was
 /// recorded, lowering abandoned the slot holding the runtime-built argv array, and the program
 /// leaked it (`HEAP DEBUG: live_blocks=2`).
@@ -2623,11 +3040,25 @@ fn test_seeded_argv_not_killable() {
 
 /// A by-VALUE closure capture is seeded from the enclosing frame, so it is not killable inside
 /// the closure body either.
+///
+/// Not WIDENABLE is a different question, and the answer is the opposite one: the capture is
+/// seeded, but it is seeded into a slot the CLOSURE's own frame owns (see
+/// `Checker::name_is_seeded_program_storage`, which deliberately excludes captures and
+/// parameters), so the store after the refused kill widens that slot. `php -n` prints `x`.
 #[test]
 fn test_by_value_capture_not_killable_inside_closure() {
-    expect_error(
+    let result = check_source_full(
         "<?php $a = 1; $f = function () use ($a) { unset($a); $a = \"x\"; return $a; }; echo $f();",
-        "cannot reassign",
+    )
+    .expect("a captured name's unset-then-retype must type-check in permissive mode");
+    assert!(
+        result.local_bind_kill_sites.is_empty(),
+        "a by-value capture is never killable: {:?}",
+        result.local_bind_kill_sites
+    );
+    expect_error_strict(
+        "<?php $a = 1; $f = function () use ($a) { unset($a); $a = \"x\"; return $a; }; echo $f();",
+        "cannot reassign $a from int to string",
     );
 }
 
@@ -2860,10 +3291,22 @@ fn test_ref_aliased_never_mixed() {
     expect_error("<?php $a = 0; $r =& $a; if ($argc > 1) { $a = 1; } else { $a = \"x\"; }", "cannot reassign");
 }
 
-/// A non-Assign write (++) blocks marking: the divergent assignment stays an error.
+/// A non-Assign write (++) blocks marking: the divergent assignment gets no boxed-storage
+/// decision, and falls back to the plain widening instead.
+///
+/// The subject of this test is the MARKING, and it is asserted directly here rather than through
+/// the hard error it used to imply: no "boxed mixed storage" warning, no store sites recorded.
 #[test]
 fn test_incdec_write_blocks_marking() {
-    expect_error("<?php $a = 0; if ($argc > 1) { $a = \"x\"; } $a++;", "cannot reassign");
+    let source = "<?php $a = 0; if ($argc > 1) { $a = \"x\"; } $a++;";
+    expect_no_warning(source, "boxed mixed storage");
+    let result = check_source_full(source).expect("the widened fixture must type-check");
+    assert!(
+        result.mixed_storage_store_sites.is_empty(),
+        "a ++ write must leave the name unmarked: {:?}",
+        result.mixed_storage_store_sites
+    );
+    expect_error_strict(source, "cannot reassign");
 }
 
 /// unset anywhere in the body blocks marking: the name stays unmarked, so the
@@ -3181,19 +3624,35 @@ fn test_an_is_array_guard_does_not_produce_false_advice() {
 }
 
 /// Controls: the guards whose warning is TRUE keep it. `is_object` is not a narrowing predicate the
-/// checker supports at all, `isset` is self-negating (its branch sees the COMPLEMENT), and
-/// `is_callable` narrows to a target that rejects a `string` — all three really do make
-/// `--strict-locals` report `cannot reassign`, so the advice is accurate and stays.
+/// checker supports at all, and `isset` is self-negating (its branch sees the COMPLEMENT) — both
+/// really do make `--strict-locals` report `cannot reassign`, so the advice is accurate and stays.
+///
+/// `is_callable` used to sit here on the strength of narrowing to a target that rejects a `string`.
+/// It no longer does: it narrows to `callable|string`, because PHP accepts a function-name string
+/// there. Its case moved to `test_an_is_callable_guard_does_not_produce_false_advice`.
 #[test]
 fn test_guards_whose_advice_is_true_still_warn() {
     for source in [
         "<?php $a = 1; if (is_object($a)) { $a = \"x\"; } echo $a;",
         "<?php $a = 1; if (isset($a)) { $a = \"x\"; } echo $a;",
-        "<?php $a = 1; if (is_callable($a)) { $a = \"x\"; } echo $a;",
     ] {
         expect_warning(source, "boxed mixed storage");
         expect_error_strict(source, "cannot reassign $a");
     }
+}
+
+/// Verifies an `is_callable` guard does not advise an error `--strict-locals` does not make.
+///
+/// The guard narrows to `callable|string`, so assigning a string inside the branch is a write the
+/// checker accepts — and the mixed-storage scan has to use the SAME target, or the body warns
+/// "compile with --strict-locals to make this an error" while strict compiles it clean and the
+/// frame slot is boxed for nothing. The `is_array` case above is the same failure on the same table.
+#[test]
+fn test_an_is_callable_guard_does_not_produce_false_advice() {
+    let source = "<?php $a = 1; if (is_callable($a)) { $a = \"x\"; } echo $a;";
+    expect_no_warning(source, "boxed mixed storage");
+    expect_no_error(source);
+    expect_no_error_strict(source);
 }
 
 /// A guard region containing a pre-bound name's FIRST in-body assignment IS transparent: the guard
@@ -3282,9 +3741,22 @@ fn test_a_closure_local_is_still_marked_out_loud() {
 /// looked kill/retype eligible after `sort(...$args)` even though `sort` holds a reference into it.
 /// The recording now happens before that bail-out, and `record_reference_alias_root` sees through
 /// the `Spread` wrapper (as `mixed_storage_scan::disqualify_root` already did).
+///
+/// What the alias buys is read off the DECISION rather than off a hard error: an aliased name is
+/// not kill/re-bind eligible, so the store takes the widening arm and records NO re-bind site,
+/// while the by-value control below records one. Both type-check today — PHP allows either — so
+/// the re-bind site is the only thing that still tells the two apart.
 #[test]
 fn test_spread_by_ref_builtin_argument_is_ref_aliased() {
-    expect_error(
+    let result =
+        check_source_full("<?php $args = [[3, 1, 2]]; sort(...$args); $args = \"s\"; echo $args;")
+            .expect("the spread fixture must type-check in permissive mode");
+    assert!(
+        result.local_retype_sites.is_empty(),
+        "a spread by-ref argument aliases its local, so no slot may be abandoned: {:?}",
+        result.local_retype_sites
+    );
+    expect_error_strict(
         "<?php $args = [[3, 1, 2]]; sort(...$args); $args = \"s\"; echo $args;",
         "cannot reassign",
     );
@@ -3295,6 +3767,13 @@ fn test_spread_by_ref_builtin_argument_is_ref_aliased() {
 #[test]
 fn test_spread_argument_of_a_by_value_builtin_stays_rebindable() {
     expect_no_error("<?php $args = [[3, 1, 2]]; var_dump(...$args); $args = \"s\"; echo $args;");
+    let result =
+        check_source_full("<?php $args = [[3, 1, 2]]; var_dump(...$args); $args = \"s\"; echo $args;")
+            .expect("the by-value spread fixture must type-check");
+    assert!(
+        !result.local_retype_sites.is_empty(),
+        "a by-value spread leaves the local re-bindable, so the store abandons its slot",
+    );
 }
 
 /// Control for the test above: the same shape written as a LOCAL still marks and warns, so the
@@ -3335,12 +3814,21 @@ fn test_concatenation_of_inexactly_typed_operands_is_still_exact() {
 
 /// A concatenation still only counts as evidence, never as a licence: a write the scan cannot
 /// model reaching the same name disqualifies it exactly as before.
+///
+/// "Disqualified" is asserted as what it is — no mark, no store sites — instead of through the
+/// hard error it used to imply. The store itself is now the ordinary depth-independent widening,
+/// and `--strict-locals` still refuses it.
 #[test]
 fn test_concatenation_evidence_does_not_survive_a_disqualifying_write() {
-    expect_error(
-        "<?php $a = 0; if ($argc > 1) { $a = \"s\" . $argc; } $a++;",
-        "cannot reassign",
+    let source = "<?php $a = 0; if ($argc > 1) { $a = \"s\" . $argc; } $a++;";
+    expect_no_warning(source, "boxed mixed storage");
+    let result = check_source_full(source).expect("the widened fixture must type-check");
+    assert!(
+        result.mixed_storage_store_sites.is_empty(),
+        "the ++ write must disqualify the concatenation evidence: {:?}",
+        result.mixed_storage_store_sites
     );
+    expect_error_strict(source, "cannot reassign");
 }
 
 /// Marking verification for every end-to-end fixture in `codegen::locals_retype` that claims the
@@ -3408,14 +3896,9 @@ fn test_every_lowering_fixture_takes_the_retype_path() {
     for &source in crate::locals_retype_fixtures::RETYPE_FIXTURES {
         let result = check_source_full(source)
             .unwrap_or_else(|error| panic!("fixture must type-check: {}\n{}", error.message, source));
-        assert!(
-            result
-                .warnings
-                .iter()
-                .any(|warning| warning.message.contains("changes type from")),
-            "fixture never reached the retype path: {}",
-            source
-        );
+        // The WARNING is no longer part of "took the retype path": a fixture that retypes between
+        // two heap representations stores another pointer and php reports nothing. The decision
+        // itself (the abandoned slot) is what this sweep pins, and it must still be recorded.
         assert!(
             !result.local_retype_sites.is_empty()
                 && result
@@ -3427,6 +3910,38 @@ fn test_every_lowering_fixture_takes_the_retype_path() {
             source
         );
     }
+}
+
+/// A retype warns only when it crosses the scalar/heap storage boundary.
+///
+/// Two heap-represented values share one pointer slot, so `array` to `string` (or `object` to
+/// `object`, `string` to `string|false`) abandons no representation a read could observe; php
+/// prints nothing and neither does elephc. A scalar slot and a heap slot cannot be the same
+/// storage, which is the documented `--strict-locals` case ("int then string") and still warns.
+#[test]
+fn test_retype_warning_only_names_a_storage_class_change() {
+    let heap_to_heap = check_source_full("<?php $a = [1, $argc]; $a = \"str\" . $argc; echo $a;")
+        .expect("the fixture must type-check");
+    assert!(
+        !heap_to_heap
+            .warnings
+            .iter()
+            .any(|warning| warning.message.contains("changes type from")),
+        "a heap-to-heap retype must stay silent: {:?}",
+        heap_to_heap.warnings
+    );
+    assert!(!heap_to_heap.local_retype_sites.is_empty(), "the slot is still re-bound");
+
+    let scalar_to_heap = check_source_full("<?php $a = $argc; $a = \"s\" . $argc; echo $a;")
+        .expect("the fixture must type-check");
+    assert!(
+        scalar_to_heap
+            .warnings
+            .iter()
+            .any(|warning| warning.message.contains("$a changes type from int to string")),
+        "a scalar-to-heap retype still warns: {:?}",
+        scalar_to_heap.warnings
+    );
 }
 
 /// The one `codegen::locals_retype` fixture whose ONLY marked name is a by-value capture is
@@ -3544,35 +4059,61 @@ fn test_unset_without_eval_still_records_a_kill_site() {
     );
 }
 
-/// The binding the kill no longer ends is still there, so a later INCOMPATIBLE assignment is the
-/// pre-feature hard error rather than a fresh binding.
+/// The binding the kill no longer ends is still there, so a later INCOMPATIBLE assignment does
+/// not get a fresh slot: no kill site and no re-bind site are recorded, which is the decision.
 ///
 /// Measured before the gate: this compiled with no diagnostic at all and printed NOTHING where
-/// PHP prints `7`.
+/// PHP prints `7` — because the re-bind ABANDONED the slot the eval fragment then addressed by
+/// name. Both halves of that are still refused here. What takes over is the WIDENING, which
+/// abandons nothing: it keeps the slot and lets `store_local` box it, which is the very
+/// representation the eval scope wants (the same reason `mixed_storage_scan`'s marking was never
+/// gated). `codegen::locals_retype::test_widening_beside_an_eval_answers` runs it: `7`, php's
+/// answer. `--strict-locals` still refuses the shape outright.
 #[test]
 fn test_kill_then_rebind_in_an_eval_body_is_an_error() {
-    expect_error(
-        "<?php $a = \"old\" . $argc; unset($a); $a = 7; eval('echo $a;');",
-        "cannot reassign $a",
+    let source = "<?php $a = \"old\" . $argc; unset($a); $a = 7; eval('echo $a;');";
+    let result =
+        check_source_full(source).expect("the widening must carry this shape in permissive mode");
+    assert!(
+        result.local_bind_kill_sites.is_empty(),
+        "an eval body may not abandon a slot the fragment addresses by name: {:?}",
+        result.local_bind_kill_sites
     );
+    assert!(
+        result.local_retype_sites.is_empty(),
+        "…and may not re-bind one either: {:?}",
+        result.local_retype_sites
+    );
+    expect_warning(source, "$a changes type from string to int");
+    expect_error_strict(source, "cannot reassign $a");
 }
 
-/// The straight-line RETYPE is gated by the same rule, and for the same reason: it too abandons
-/// the name's slot and mints a fresh one.
+/// The straight-line RETYPE is refused by the same rule, and for the same reason: it too would
+/// abandon the name's slot and mint a fresh one.
 ///
 /// This shape has no `unset` in it at all, and it was the second silent miscompile found while
 /// fixing the first: measured before the gate, `$a = "old"; $a = 7; eval('echo $a;');` compiled
-/// with only the retype warning and printed NOTHING where PHP prints `7`.
+/// with only the retype warning and printed NOTHING where PHP prints `7`. Read here off the
+/// absent re-bind site, since the widening now carries the shape and prints `7` like php.
 #[test]
 fn test_retype_in_an_eval_body_is_an_error() {
-    expect_error(
+    for source in [
         "<?php $a = \"old\"; $a = 7; eval('echo $a;');",
-        "cannot reassign $a",
-    );
-    expect_error(
         "<?php $a = \"old\" . $argc; $a = 7; eval('echo $a;');",
-        "cannot reassign $a",
-    );
+    ] {
+        let result = check_source_full(source).expect("the widening must carry this shape");
+        assert!(
+            result.local_retype_sites.is_empty(),
+            "an eval body may not re-bind a local: {:?}",
+            result.local_retype_sites
+        );
+        assert!(
+            result.local_bind_kill_sites.is_empty(),
+            "…nor kill one: {:?}",
+            result.local_bind_kill_sites
+        );
+        expect_error_strict(source, "cannot reassign $a");
+    }
 }
 
 /// An `eval` in a CLOSURE body poisons that closure's scope only. The closure gets its own body

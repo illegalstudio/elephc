@@ -2,7 +2,7 @@
 title: "cairo_pattern_create_radial() - internals"
 description: "Compiler internals for cairo_pattern_create_radial(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 435
+  order: 448
 ---
 
 ## `cairo_pattern_create_radial()` - internals

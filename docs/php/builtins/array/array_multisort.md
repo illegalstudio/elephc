@@ -2,7 +2,7 @@
 title: "array_multisort()"
 description: "Sorts exactly two equal-length indexed arrays in ascending tuple order. AOT accepts either two concrete integer arrays or two boxed scalar arrays, not a mixed pair. Concrete string/float arrays, sort flags, associative arrays, and eval are unsupported."
 sidebar:
-  order: 28
+  order: 34
 ---
 
 ## array_multisort()

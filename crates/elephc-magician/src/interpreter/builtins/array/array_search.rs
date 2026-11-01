@@ -85,11 +85,15 @@ pub(in crate::interpreter) fn eval_array_search_result(
     strict: bool,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let comparison = if strict { EvalBinOp::StrictEq } else { EvalBinOp::LooseEq };
     let len = values.array_len(array)?;
     for position in 0..len {
         let key = values.array_iter_key(array, position)?;
         let value = values.array_get(array, key)?;
+        let comparison = if strict {
+            EvalBinOp::StrictEq
+        } else {
+            EvalBinOp::LooseEq
+        };
         let equal = values.compare(comparison, needle, value)?;
         if values.truthy(equal)? {
             return match name {
