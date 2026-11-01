@@ -140,7 +140,7 @@ pub(super) fn emit_runtime_closure_descriptor_with_captures(
             if capture_ty.codegen_repr() == PhpType::Str {
                 abi::emit_call_label(ctx.emitter, "__rt_str_persist");
             } else {
-                abi::emit_incref_if_refcounted(ctx.emitter, capture_ty);
+                abi::emit_incref_if_refcounted(ctx.emitter, &capture_ty.codegen_repr());
             }
         }
         callable_descriptor::emit_store_current_result_to_runtime_capture(

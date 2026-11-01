@@ -40,7 +40,7 @@ impl Checker {
         let (receiver, GuardTarget::Exact(PhpType::Void), negated) = guard_receiver_and_target(condition)? else { return None; };
         // Only local reads are stable and free of user-code effects at this point.
         let ExprKind::Variable(name) = &receiver.kind else { return None; };
-        if !self.local_flow_read_is_stable(name) { return None; }
+        if !self.local_flow_read_is_stable(name) || !self.definitely_bound_locals.contains(name) { return None; }
         let current = env.get(name)?;
         let is_null = if *current == PhpType::Void { true }
             else if super::type_is_definitely_non_null(current) { false }
@@ -125,6 +125,8 @@ impl Checker {
                     if with_effects {
                         Self::merge_short_circuit_storage_effects(env, &right_env);
                         self.finish_conditional_flow(flow, env);
+                    } else {
+                        self.restore_conditional_bindings(&flow);
                     }
                     // Effects may invalidate the views used to check the operand's inputs.
                     // Such operands need a fresh summary from the unrefined entry environment.

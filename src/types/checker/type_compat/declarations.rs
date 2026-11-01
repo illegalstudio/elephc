@@ -693,6 +693,8 @@ impl Checker {
         F: FnOnce(&mut Self) -> Result<T, CompileError>,
     {
         let saved_local_binding_scope = self.enter_local_binding_scope(param_names);
+        self.definitely_bound_locals.extend(pre_bound_own_storage.keys().cloned());
+        if self.current_class.is_some() { self.definitely_bound_locals.insert("this".to_string()); }
         let saved_ref_params = self.active_ref_params.clone();
         let saved_external_ref_bindings = self.active_external_ref_bindings.clone();
         let saved_globals = self.active_globals.clone();
@@ -703,6 +705,7 @@ impl Checker {
         let saved_finally_break_continue_bases = self.finally_break_continue_bases.clone();
         let saved_null_probe_scope_is_top_level = self.null_probe_scope_is_top_level;
 
+        self.definitely_bound_locals.extend(ref_param_names.iter().cloned());
         self.active_ref_params = ref_param_names.into_iter().collect();
         self.active_external_ref_bindings = self.active_ref_params.clone();
         self.non_builtin_ref_aliased_locals

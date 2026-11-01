@@ -113,7 +113,7 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         env.get(name)
-            .cloned()
+            .map(|ty| self.binding_read_type(name, ty, env))
             .or_else(|| self.eval_barrier_active.then_some(PhpType::Mixed))
             .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", name)))
     }

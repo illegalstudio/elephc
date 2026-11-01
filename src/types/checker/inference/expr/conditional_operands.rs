@@ -55,6 +55,7 @@ impl Checker {
         let ExprKind::Match { subject, arms, default } = &expr.kind else { unreachable!("match effects require match"); };
         self.infer_type_with_assignment_effects(subject, env)?;
         let mut flow = self.snapshot_conditional_flow(env);
+        self.exclude_conditional_binding_entry(&mut flow);
         let mut missed = self.snapshot_flow_exit(env);
         let mut typed_arms = Vec::new();
         for (conditions, result) in arms {

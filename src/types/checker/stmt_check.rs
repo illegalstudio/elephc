@@ -91,12 +91,14 @@ impl Checker {
             StmtKind::IncludeOnceGuard { body, .. } => {
                 // The guard lowers to a real runtime branch (`Op::IncludeOnceGuard`), so its
                 // body is conditional exactly like an `if` body.
-                self.in_conditional_scope(env, |checker, env| {
-                    for stmt in body {
-                        checker.check_stmt(stmt, env)?;
-                    }
+                let entry = self.definitely_bound_locals.clone();
+                let result = self.in_conditional_scope(env, |checker, env| {
+                    for stmt in body { checker.check_stmt(stmt, env)?; }
                     Ok(())
-                })
+                });
+                self.definitely_bound_locals.retain(|name| entry.contains(name));
+                self.publish_binding_read_views(env);
+                result
             }
             StmtKind::IfDef { .. } => {
                 Err(CompileError::new(stmt.span, "Unresolved ifdef statement"))

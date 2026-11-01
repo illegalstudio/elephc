@@ -9,6 +9,56 @@
 
 use super::*;
 
+/// Presence joins include skipped branches and intersect only reaching bindings.
+#[test]
+fn test_nullable_fallback_flow_definite_binding_joins() {
+    for body in [
+        "if ($choose) { $value = $parameter; $value ??= 5; } return $value;",
+        "while ($choose) { $value = $parameter; $value ??= 5; break; } return $value;",
+        "foreach ($choose ? [1] : [] as $item) { $value = $parameter; $value ??= 5; } return $value;",
+        "switch ($choose) { case true: $value = $parameter; $value ??= 5; break; } return $value;",
+        "try { if ($choose) { throw new RuntimeException('stop'); } $value = $parameter; $value ??= 5; } catch (Exception $error) {} return $value;",
+        "if ($choose) { $value = $parameter; $value ??= 5; } try {} finally {} return $value;",
+    ] {
+        let source = format!("<?php function bindingJoin(?int $parameter, bool $choose): int {{ {body} }}");
+        expect_error(&source, "return type expects int");
+    }
+    for (parameter, fallback, result) in [
+        ("?string", "'fallback'", "string"),
+        ("?BindingTarget", "new BindingTarget()", "BindingTarget"),
+    ] {
+        let source = format!("<?php class BindingTarget {{}} function bindingJoin({parameter} $parameter, bool $choose): {result} {{ if ($choose) {{ $value = $parameter; $value ??= {fallback}; }} return $value; }}");
+        expect_error(&source, "return type expects");
+    }
+    for body in [
+        "$value = $parameter; $value ??= 5; return $value;",
+        "if ($choose) { $value = $parameter; } if ($value !== null) { return $value; } return 5;",
+        "if ($choose) { $value = $parameter; } if ($value === null) { throw new RuntimeException('missing'); } return $value;",
+        "if ($choose) { $value = $parameter; $value ??= 5; } else { $value = 5; } return $value;",
+        "do { $value = $parameter; $value ??= 5; } while (false); return $value;",
+        "for (;;) { $value = $parameter; $value ??= 5; break; } return $value;",
+        "switch ($choose) { case true: $value = $parameter; $value ??= 5; break; default: $value = 5; } return $value;",
+        "try { if ($choose) { throw new RuntimeException('stop'); } $value = $parameter; $value ??= 5; } catch (Exception $error) { $value = 5; } return $value;",
+        "try {} finally { $value = $parameter; $value ??= 5; } return $value;",
+        "try { if ($choose) { return 1; } $value = $parameter; if ($value === null) { $value = 5; } } finally {} return $value;",
+        "$value = $choose ? ($parameter ?? 5) : 6; return $value;",
+        "$value = match ($choose) { true => ($parameter ?? 5), false => 6 }; return $value;",
+        "if ($choose) { $raw = 3; } return $raw;",
+    ] {
+        let source = format!("<?php function bindingJoin(?int $parameter, bool $choose): int {{ {body} }}");
+        let checked = check_source(&source);
+        assert!(checked.is_ok(), "{source}: {checked:?}");
+    }
+}
+
+
+/// A nullable local introduced on only one branch cannot promise a non-null return.
+#[test]
+fn test_nullable_fallback_flow_review_maybe_unbound_integer_return() {
+    expect_error("<?php function run(?int $parameter, bool $choose): int { if ($choose) { $value = $parameter; if ($value === null) { $value = 5; } } return $value; }",
+        "return type expects int, got int|null");
+}
+
 /// Relative object parameters retain the catch exit of their argument type guard.
 #[test]
 fn test_nullable_fallback_flow_review_relative_object_guard() {

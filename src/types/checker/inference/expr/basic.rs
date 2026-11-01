@@ -34,7 +34,7 @@ impl Checker {
             ExprKind::FloatLiteral(_) => Ok(PhpType::Float),
             ExprKind::Variable(name) => {
                 let ty = self.variable_type_or_eval_dynamic(name, expr.span, env)?;
-                self.record_integer_local_read(name, expr.span, &ty);
+                self.record_local_value_read(name, expr.span, &ty, env);
                 Ok(ty)
             }
             ExprKind::Negate(inner) => {
@@ -302,10 +302,13 @@ impl Checker {
                 let mut then_env = env.clone();
                 let mut else_env = env.clone();
                 let guards = self.guard_narrowings(condition, env)?;
+                let bound = self.definitely_bound_locals.clone();
                 let then_ty = self.with_flow_narrowings(&guards, true, &mut then_env,
                     |checker, env| checker.match_arm_result_type(then_expr, env))?;
+                self.definitely_bound_locals = bound.clone();
                 let else_ty = self.with_flow_narrowings(&guards, false, &mut else_env,
                     |checker, env| checker.match_arm_result_type(else_expr, env))?;
+                self.definitely_bound_locals = bound;
                 let arms = [(&**then_expr, then_ty), (&**else_expr, else_ty)];
                 if let Some(buffer) = buffer_merge_result_type("a ternary", &arms, expr.span)? {
                     return Ok(buffer);

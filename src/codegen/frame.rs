@@ -446,6 +446,7 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
         abi::emit_enable_heap_debug_flag(ctx.emitter);
     }
     zero_initialize_main_cleanup_locals(ctx);
+    initialize_nullable_scalar_locals(ctx);
     initialize_ref_cell_state_slots(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
     zero_initialize_eval_context_locals(ctx);
@@ -533,6 +534,7 @@ pub(super) fn emit_function_prologue_with_label(
         }
     }
     zero_initialize_function_cleanup_locals(ctx);
+    initialize_nullable_scalar_locals(ctx);
     initialize_ref_cell_state_slots(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
     zero_initialize_eval_context_locals(ctx);
@@ -1017,6 +1019,7 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
     capture_concat_base(ctx);
     emit_callee_saved_saves(ctx);
     zero_initialize_main_cleanup_locals(ctx);
+    initialize_nullable_scalar_locals(ctx);
     initialize_ref_cell_state_slots(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
     zero_initialize_eval_context_locals(ctx);
@@ -1251,6 +1254,24 @@ pub(super) fn emit_web_entry_stub(
         crate::codegen::lower_inst::builtins::io::emit_application_stream_closer(ctx);
     }
     Ok(())
+}
+
+/// Gives nullable scalar frame locals a null tag before any conditional store can be skipped.
+fn initialize_nullable_scalar_locals(ctx: &mut FunctionContext<'_>) {
+    let slots: Vec<_> = ctx.function.locals.iter().filter(|local|
+        local.kind == crate::ir::LocalKind::PhpLocal && local.ir_type == crate::ir::IrType::TaggedScalar
+            && !local_slot_is_parameter(ctx.function, local.id))
+        .map(|local| local.id).collect();
+    for slot in slots {
+        let offset = ctx.local_offset(slot).expect("declared nullable frame slot");
+        let scratch = abi::secondary_scratch_reg(ctx.emitter);
+        abi::emit_load_int_immediate(ctx.emitter, scratch,
+            crate::codegen_support::sentinels::NULL_SENTINEL);
+        abi::store_at_offset(ctx.emitter, scratch, offset);
+        abi::emit_load_int_immediate(ctx.emitter, scratch,
+            crate::codegen_support::sentinels::TAGGED_SCALAR_TAG_NULL);
+        abi::store_at_offset(ctx.emitter, scratch, offset - 8);
+    }
 }
 
 /// Zero-initializes cleanup-tracked locals so skipped assignments stay safe at epilogue.

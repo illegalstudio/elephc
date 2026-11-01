@@ -20,7 +20,6 @@ use super::Checker;
 /// Explicit function exits and catch boundaries for one active try statement.
 pub(super) struct FinallyFlowFrame {
     catch_types: Vec<Vec<String>>,
-    catch_depth: u32,
     checking_catches: bool,
     has_finally: bool,
     inputs: Vec<FinallyEdge>,
@@ -57,7 +56,7 @@ impl Checker {
     /// Opens a catch boundary even when it has no finally of its own.
     pub(super) fn begin_finally_region(&mut self, catch_types: Vec<Vec<String>>, has_finally: bool) {
         self.finally_flow_frames.push(FinallyFlowFrame {
-            catch_types, catch_depth: self.local_conditional_depth,
+            catch_types,
             checking_catches: false, has_finally, inputs: Vec::new(),
         });
     }
@@ -97,12 +96,6 @@ impl Checker {
         let incoming = self.join_flow_snapshots(&edges).unwrap_or_else(|| fallback.clone());
         self.restore_flow_snapshot(&incoming, env);
         reachable
-    }
-
-    /// Allows a direct catch-body fallback store because handlers have independent flow joins.
-    pub(super) fn coalescing_flow_scope(&self) -> bool {
-        self.local_conditional_depth == 0 || self.finally_flow_frames.last().is_some_and(|frame|
-            frame.checking_catches && frame.catch_depth == self.local_conditional_depth)
     }
 
     /// Saves explicit throws for their matching handler and each finally crossed beforehand.

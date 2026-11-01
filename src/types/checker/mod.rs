@@ -43,6 +43,7 @@ mod loop_backedges;
 mod method_pass;
 mod member_receivers;
 mod local_values;
+mod binding_flow;
 mod mixed_storage_scan;
 mod numeric_regions;
 mod packed_counter;
@@ -465,7 +466,7 @@ pub(crate) struct Checker {
     /// Receiver types observed at member uses, with conflicting checker visits disabled.
     pub member_receiver_types: HashMap<(String, Span), Option<PhpType>>,
     /// Integer reads agreed by every authoritative flow visit to one scoped local use.
-    pub integer_local_read_sites: crate::types::IntegerLocalReadSites,
+    pub local_value_read_types: crate::types::LocalValueReadTypes,
     /// Named-function contexts and body scopes queried without their local branch guards.
     pub member_receiver_analysis_scopes: Vec<(Option<String>, String)>,
     /// Caller locals converted to canonical boxed storage by a validated by-reference call.
@@ -511,6 +512,8 @@ pub(crate) struct Checker {
     /// A binding created inside a branch may be uninitialized at a later depth-0 point, so
     /// releasing or abandoning its slot there is not safe.
     pub local_binding_depth: HashMap<String, u32>,
+    /// Bindings present on every currently reaching path, independent of storage eligibility.
+    pub definitely_bound_locals: HashSet<String>,
     /// For each local currently VIEWED through a flow guard's narrowing, the type its binding
     /// held before the guard narrowed it, paired with the view the guard published.
     ///
@@ -714,6 +717,7 @@ pub(crate) struct Checker {
 pub(crate) struct SavedLocalBindingScope {
     conditional_depth: u32,
     binding_depth: HashMap<String, u32>,
+    definitely_bound: HashSet<String>,
     narrowed_origins: HashMap<String, NarrowedLocalOrigin>,
     loop_flow_frames: Vec<loop_flow::LoopFlowFrame>,
     finally_flow_frames: Vec<finally_flow::FinallyFlowFrame>,
@@ -926,6 +930,7 @@ impl Checker {
         let saved = SavedLocalBindingScope {
             conditional_depth: self.local_conditional_depth,
             binding_depth: std::mem::take(&mut self.local_binding_depth),
+            definitely_bound: std::mem::take(&mut self.definitely_bound_locals),
             // A guard in the ENCLOSING body narrows the enclosing frame's local. A closure
             // checked inside that branch binds its own name in its own frame, so inheriting the
             // origin would measure the closure's store against a binding it does not own.
@@ -960,6 +965,7 @@ impl Checker {
         };
         self.local_conditional_depth = 0;
         self.local_parameter_names = param_names.iter().cloned().collect();
+        self.definitely_bound_locals = param_names.iter().cloned().collect();
         self.local_binding_depth = param_names.into_iter().map(|name| (name, 0)).collect();
         self.typed_local_names = HashMap::new();
         // Cleared rather than inherited: a caller that runs `eval` says nothing about the body
@@ -975,6 +981,7 @@ impl Checker {
     pub(crate) fn exit_local_binding_scope(&mut self, saved: SavedLocalBindingScope) {
         self.local_conditional_depth = saved.conditional_depth;
         self.local_binding_depth = saved.binding_depth;
+        self.definitely_bound_locals = saved.definitely_bound;
         self.narrowed_local_origins = saved.narrowed_origins;
         self.loop_flow_frames = saved.loop_flow_frames;
         self.finally_flow_frames = saved.finally_flow_frames;
@@ -1014,6 +1021,9 @@ impl Checker {
         pre_guard: Option<&PhpType>,
         view: &PhpType,
     ) -> SavedNarrowingOrigin {
+        if !name.starts_with('\u{1}') && stmt_check::type_is_definitely_non_null(view) {
+            self.definitely_bound_locals.insert(name.to_string());
+        }
         let previous = self.narrowed_local_origins.get(name).cloned();
         match previous
             .as_ref()
@@ -1066,6 +1076,9 @@ impl Checker {
     /// clearing only `view` let a nested store's effect evaporate before `exit_flow_narrowing`
     /// could see it.
     pub(crate) fn republish_flow_narrowing(&mut self, name: &str, view: &PhpType) {
+        if !name.starts_with('\u{1}') && stmt_check::type_is_definitely_non_null(view) {
+            self.definitely_bound_locals.insert(name.to_string());
+        }
         if let Some(entry) = self.narrowed_local_origins.get_mut(name) {
             entry.view = Some(view.clone());
         }
@@ -1546,7 +1559,7 @@ fn check_types_on_compiler_stack(
         builtin_call_types: checker.builtin_call_types,
         array_push_property_plans: checker.array_push_property_plans,
         member_receiver_types: checker.member_receiver_types,
-        integer_local_read_sites: checker.integer_local_read_sites,
+        local_value_read_types: checker.local_value_read_types,
         boxed_reference_promotion_sites: checker.boxed_reference_promotion_sites,
         buffer_read_sites: checker.buffer_read_observations.into_iter()
             .filter_map(|(span, buffer)| buffer.then_some(span)).collect(),

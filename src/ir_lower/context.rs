@@ -350,7 +350,7 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// Checked receiver views at property reads and method calls, scoped to the current body.
     pub member_receiver_types: &'m HashMap<(String, Span), Option<PhpType>>,
     /// Checked integer value views, separate from the physical local/reference contract.
-    pub integer_local_read_sites: &'m crate::types::IntegerLocalReadSites,
+    pub local_value_read_types: &'m crate::types::LocalValueReadTypes,
     /// Checker-authorized argument sites that may widen an ordinary local to boxed Mixed.
     pub boxed_reference_promotion_sites: &'m HashMap<(String, Span), HashSet<String>>,
     pub first_class_builtin_call_types: &'m HashMap<Span, PhpType>,
@@ -540,7 +540,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         builtin_call_types: &'m HashMap<Span, PhpType>,
         array_push_property_plans: &'m HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
         member_receiver_types: &'m HashMap<(String, Span), Option<PhpType>>,
-        integer_local_read_sites: &'m crate::types::IntegerLocalReadSites,
+        local_value_read_types: &'m crate::types::LocalValueReadTypes,
         boxed_reference_promotion_sites: &'m HashMap<(String, Span), HashSet<String>>,
         first_class_builtin_call_types: &'m HashMap<Span, PhpType>,
         generic_call_sites: &'m HashMap<(String, Span), String>,
@@ -609,7 +609,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             builtin_call_types,
             array_push_property_plans,
             member_receiver_types,
-            integer_local_read_sites,
+            local_value_read_types,
             boxed_reference_promotion_sites,
             first_class_builtin_call_types,
             generic_call_sites,

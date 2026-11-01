@@ -487,23 +487,24 @@ impl Checker {
         env: &TypeEnv,
         param_hints: &[PhpType],
     ) -> Result<PhpType, CompileError> {
+        let mut capture_storage = Vec::new();
         for capture in captures {
-            if !capture_refs.contains(capture) {
-                if let Some(ty) = env.get(capture) {
-                    self.record_integer_local_read(capture, expr.span, ty);
-                }
+            let read = env.get(capture).map(|ty| self.binding_read_type(capture, ty, env));
+            let projected = !capture_refs.contains(capture) && read.as_ref()
+                .is_some_and(|ty| self.record_local_value_read(capture, expr.span, ty, env));
+            let variable = Expr::new(ExprKind::Variable(capture.clone()), expr.span);
+            let physical = self.guarded_local_storage_type(&variable, env);
+            let use_storage = capture_refs.contains(capture) || (!projected && read == Some(PhpType::Int)
+                && physical.is_some_and(|ty| ty.codegen_repr() == PhpType::TaggedScalar));
+            let captured = if use_storage { physical.cloned() } else { read };
+            if let Some(captured) = captured {
+                if env.get(capture) != Some(&captured) { capture_storage.push((capture.clone(), captured)); }
             }
         }
-        // Reference captures carry the enclosing cell's storage, even when the current
-        // read view is non-null. Value captures keep their precise read type.
-        let capture_env = (!capture_refs.is_empty()).then(|| {
+        // Reference and unproved tagged captures retain the physical type carried by their ABI.
+        let capture_env = (!capture_storage.is_empty()).then(|| {
             let mut captured = env.clone();
-            for name in capture_refs {
-                let variable = Expr::new(ExprKind::Variable(name.clone()), expr.span);
-                if let Some(storage) = self.guarded_local_storage_type(&variable, env) {
-                    captured.insert(name.clone(), storage.clone());
-                }
-            }
+            captured.extend(capture_storage);
             captured
         });
         let env = capture_env.as_ref().unwrap_or(env);

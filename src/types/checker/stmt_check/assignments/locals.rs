@@ -191,10 +191,13 @@ fn check_assign_value_type(
                 {
                     // Only a retained coalescing proof justifies skipping compatibility.
                     // A bare non-null type can also belong to a possibly undefined local.
-                    let coalesced = checker.guarded_union_types.get(name)
-                        .is_some_and(|storage| storage.coalesced);
+                    let coalesced = checker.definitely_bound_locals.contains(name)
+                        && checker.guarded_union_types.get(name).is_some_and(|storage| storage.coalesced);
                     let mut default_env = env.clone();
-                    let ty = checker.infer_type_with_assignment_effects(default, &mut default_env)?;
+                    let bound = checker.definitely_bound_locals.clone();
+                    let checked = checker.infer_type_with_assignment_effects(default, &mut default_env);
+                    checker.definitely_bound_locals = bound;
+                    let ty = checked?;
                     if coalesced { return Ok(existing); }
                     ty
                 } else {
@@ -286,7 +289,6 @@ fn check_assign_value_type(
         // The assignment merge protects the slot's contract. A coalescing store also proves
         // the current value's narrower type, without changing boxed parameter storage.
         if null_coalesce_default.is_some()
-            && checker.coalescing_flow_scope()
             && !checker.mixed_storage_locals.contains(name)
             && !checker.boxed_ref_aliased_locals.contains(name)
             && !checker.ref_aliased_locals.contains(name)
@@ -566,7 +568,9 @@ impl Checker {
         span: Span,
         env: &mut TypeEnv,
     ) -> Result<PhpType, CompileError> {
-        check_assign_value_type(self, name, value, span, env, false)
+        let result = check_assign_value_type(self, name, value, span, env, false);
+        if result.is_ok() { self.definitely_bound_locals.insert(name.to_string()); }
+        result
     }
 }
 

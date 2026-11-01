@@ -13,6 +13,25 @@ use crate::ir::{Immediate, IrHeapKind, IrType, Op};
 #[test]
 fn test_nullable_fallback_flow_storage_all_targets() {
     let source = r#"<?php
+function maybeBoundLocal(?int $parameter, bool $choose): void {
+    if ($choose) { $value = $parameter; $value ??= 5; }
+    var_dump($value); $show = fn() => var_dump($value); $show();
+}
+function unprovedAliasCapture(?int $value): Closure {
+    $alias = &$value;
+    if ($value !== null) { $alias = null; return fn() => var_dump($value); }
+    return fn() => var_dump(null);
+}
+function conditionalProvenCapture(?int $value, bool $choose): Closure {
+    if ($choose) {
+        $value ??= 40;
+        $items = []; $items[] = $value; echo json_encode($items);
+        return fn(): int => $value + 2;
+    }
+    return fn(): int => 2;
+}
+function nullableBooleanCapture(?bool $value): Closure { return fn() => var_dump($value); }
+function nullableFloatCapture(?float $value): Closure { return fn() => var_dump($value); }
 class ProjectedValueHolder {
     public static int $value = 0;
     function captured(?int $value): Closure { $value ??= 40; return fn(): int => $value + 2; }
@@ -480,7 +499,7 @@ echo fallback(null);
         let target = crate::codegen::platform::Target::parse(name).unwrap();
         let module = super::lower_source_at_for_target(source,
             std::path::Path::new("main.php"), std::path::Path::new("."), target);
-        for function_name in ["projectedValueConsumer", "projectedGuardConsumer"] {
+        for function_name in ["projectedValueConsumer", "projectedGuardConsumer", "conditionalProvenCapture"] {
             let function = module.functions.iter().find(|function| function.name == function_name).unwrap();
             let slot = function.locals.iter().find(|local| local.name.as_deref() == Some("value")).unwrap();
             assert_eq!(slot.ir_type, IrType::TaggedScalar, "{name}: {function_name}");
@@ -488,6 +507,17 @@ echo fallback(null);
             assert!(!captures.is_empty(), "{name}: {function_name}");
             for capture in captures {
                 assert_eq!(function.values[capture.operands[0].as_raw() as usize].ir_type, IrType::I64,
+                    "{name}: {}", crate::ir::print_function(function));
+            }
+        }
+        for (function_name, expected) in [("unprovedAliasCapture", IrType::TaggedScalar),
+            ("nullableBooleanCapture", IrType::Heap(crate::ir::IrHeapKind::Mixed)),
+            ("nullableFloatCapture", IrType::Heap(crate::ir::IrHeapKind::Mixed))] {
+            let function = module.functions.iter().find(|function| function.name == function_name).unwrap();
+            let captures: Vec<_> = function.instructions.iter().filter(|inst| inst.op == Op::ClosureCapture).collect();
+            assert!(!captures.is_empty(), "{name}: {function_name}");
+            for capture in captures {
+                assert_eq!(function.values[capture.operands[0].as_raw() as usize].ir_type, expected,
                     "{name}: {}", crate::ir::print_function(function));
             }
         }

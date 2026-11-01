@@ -90,7 +90,9 @@ impl Checker {
                 for name in capture_refs {
                     self.invalidate_local_flow_narrowing(name, env);
                 }
-                self.infer_type(expr, env)
+                let result = self.infer_type(expr, env);
+                if result.is_ok() { self.definitely_bound_locals.extend(capture_refs.iter().cloned()); }
+                result
             }
             ExprKind::Variable(name) if self.eval_barrier_active && !env.contains_key(name) => {
                 env.insert(name.clone(), PhpType::Mixed);
@@ -220,6 +222,7 @@ impl Checker {
                 // single expression, so branch narrowing is write-invalidation-safe.
                 let guards = self.guard_narrowings(condition, env)?;
                 let mut flow = self.snapshot_conditional_flow(env);
+                self.exclude_conditional_binding_entry(&mut flow);
                 let mut then_env = env.clone();
                 let mut else_env = env.clone();
                 let then_ty = self.with_conditional_flow_arm(&mut flow, &mut then_env,
@@ -387,24 +390,28 @@ impl Checker {
                     if let Some(output_ty) = preg_output_type(builtin_name, arg, idx) {
                         if let Some(name) = output_variable(arg) {
                             self.record_local_storage_effect(name, &output_ty);
+                            self.definitely_bound_locals.insert(name.clone());
                             env.insert(name.clone(), output_ty);
                         }
                     }
                     if crate::builtins::mbstring::is_capture_output_argument(builtin_name, arg, idx) {
                         if let Some(name) = output_variable(arg) {
                             self.record_local_storage_effect(name, &PhpType::Mixed);
+                            self.definitely_bound_locals.insert(name.clone());
                             env.insert(name.clone(), PhpType::Mixed);
                         }
                     }
                     if let Some(output_ty) = pcntl_output_type(builtin_name, arg, idx) {
                         if let Some(name) = output_variable(arg) {
                             self.record_local_storage_effect(name, &output_ty);
+                            self.definitely_bound_locals.insert(name.clone());
                             env.insert(name.clone(), output_ty);
                         }
                     }
                     if let Some(output_ty) = xml_struct_output_type(builtin_name, arg, idx) {
                         if let Some(name) = output_variable(arg) {
                             self.record_local_storage_effect(name, &output_ty);
+                            self.definitely_bound_locals.insert(name.clone());
                             env.insert(name.clone(), output_ty);
                         }
                     }
@@ -413,6 +420,7 @@ impl Checker {
                     if let Some(arg) = openssl_encrypt_tag_arg(&expanded_args) {
                         if let Some(name) = output_variable(arg) {
                             self.record_local_storage_effect(name, &PhpType::Str);
+                            self.definitely_bound_locals.insert(name.clone());
                             env.insert(name.clone(), PhpType::Str);
                         }
                     }
@@ -447,6 +455,7 @@ impl Checker {
                             // `unset($var)` ends this binding even when escaped-reference
                             // conservatism keeps the name in `ref_aliased_locals`. A later `=&`
                             // assignment must establish fresh cell provenance for the new binding.
+                            self.definitely_bound_locals.remove(var);
                             self.invalidate_boxed_ref_alias_binding(var);
                             // Detaching a promoted reference is separate from killing its type
                             // binding: escaped aliases still prohibit incompatible reassignments.
@@ -754,6 +763,7 @@ impl Checker {
 
     /// Marks the active statement stream as having crossed eval and widens local facts.
     fn mark_eval_barrier(&mut self, env: &mut TypeEnv) {
+        self.definitely_bound_locals.clear();
         self.eval_barrier_active = true;
         let local_names = env.keys().cloned().collect::<Vec<_>>();
         for ty in env.values_mut() {

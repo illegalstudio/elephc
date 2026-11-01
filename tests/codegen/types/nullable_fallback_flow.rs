@@ -9,6 +9,110 @@
 
 use super::*;
 
+/// Tagged captures retain integer, boolean and float payloads and null tags through invocation.
+#[test]
+fn test_nullable_fallback_flow_tagged_capture_abi_runtime() {
+    let source = r#"<?php
+function integerSnapshot(?int $value): Closure { return fn() => var_dump($value); }
+function booleanSnapshot(?bool $value): Closure { return fn() => var_dump($value); }
+function floatSnapshot(?float $value): Closure { return fn() => var_dump($value); }
+function guardedBooleanSnapshot(?bool $value): Closure {
+    if ($value !== null) { return fn(): bool => $value; } return fn(): bool => false;
+}
+function guardedFloatSnapshot(?float $value): Closure {
+    if ($value !== null) { return fn(): float => $value; } return fn(): float => 0.0;
+}
+function runSnapshots(): void {
+    $a = integerSnapshot(null); $a(); $b = integerSnapshot(5); $b();
+    $c = booleanSnapshot(null); $c(); $d = booleanSnapshot(true); $d();
+    $e = booleanSnapshot(false); $e();
+    $f = floatSnapshot(null); $f(); $g = floatSnapshot(2.5); $g();
+    $h = guardedBooleanSnapshot(true); var_dump($h());
+    $i = guardedFloatSnapshot(2.5); var_dump($i());
+}
+runSnapshots();
+"#;
+    assert_nullable_flow_cli_heap_output(source,
+        "NULL\nint(5)\nNULL\nbool(true)\nbool(false)\nNULL\nfloat(2.5)\nbool(true)\nfloat(2.5)\n");
+}
+
+
+/// Zero-iteration, switch and exception edges preserve missing nullable bindings.
+#[test]
+fn test_nullable_fallback_flow_definite_binding_control_edges_runtime() {
+    let source = r#"<?php
+function skippedWhile(?int $parameter, bool $choose): void {
+    while ($choose) { $value = $parameter; $value ??= 5; break; } var_dump($value);
+}
+function requiredDo(?int $parameter): void {
+    do { $value = $parameter; $value ??= 5; } while (false); var_dump($value);
+}
+function skippedForeach(?int $parameter, bool $choose): void {
+    foreach ($choose ? [1] : [] as $item) { $value = $parameter; $value ??= 5; } var_dump($value);
+}
+function skippedSwitch(?int $parameter, bool $choose): void {
+    switch ($choose) { case true: $value = $parameter; $value ??= 5; break; } var_dump($value);
+}
+function boundSwitch(?int $parameter, bool $choose): void {
+    switch ($choose) { case true: $value = $parameter; $value ??= 5; break; default: $value = 5; } var_dump($value);
+}
+function boundFinally(?int $parameter): void {
+    try {} finally { $value = $parameter; $value ??= 5; } var_dump($value);
+}
+skippedWhile(null, false); skippedWhile(null, true); requiredDo(null);
+skippedForeach(null, false); skippedForeach(null, true);
+skippedSwitch(null, false); skippedSwitch(null, true);
+boundSwitch(null, false); boundFinally(null);
+"#;
+    assert_nullable_flow_cli_heap_output(source, "NULL\nint(5)\nint(5)\nNULL\nint(5)\nNULL\nint(5)\nint(5)\nint(5)\n");
+}
+
+
+/// Conditional nullable bindings and uncertain value captures preserve their null tag.
+#[test]
+fn test_nullable_fallback_flow_review_maybe_unbound_reads_runtime() {
+    let source = r#"<?php
+function conditionalBinding(?int $parameter, bool $choose): void {
+    if ($choose) { $value = $parameter; $value ??= 5; }
+    var_dump($value);
+}
+function siblingBinding(?int $parameter, bool $choose): void {
+    if ($choose) { $value = $parameter; $value ??= 5; } else { var_dump($value); }
+}
+function capturedBinding(?int $parameter, bool $choose): void {
+    if ($choose) { $value = $parameter; $value ??= 5; }
+    $show = fn() => var_dump($value); $show();
+}
+function capturedAlias(?int $value): void {
+    $alias = &$value;
+    if ($value !== null) { $alias = null; $show = fn() => var_dump($value); $show(); }
+}
+function insideBinding(?int $parameter, bool $choose): void {
+    if ($choose) {
+        $value = $parameter; $value ??= 5;
+        $show = fn() => var_dump($value); $show();
+        $items = []; $items[] = $value; echo json_encode($items), "\n";
+    }
+}
+function stopBinding(bool $stop): void { if ($stop) { throw new Exception('stop'); } }
+function caughtBinding(?int $parameter, bool $stop): void {
+    try { stopBinding($stop); $value = $parameter; $value ??= 5; } catch (Exception $error) {}
+    var_dump($value);
+}
+conditionalBinding(null, false); conditionalBinding(null, true);
+siblingBinding(null, false);
+capturedBinding(null, false); capturedBinding(null, true);
+capturedAlias(5);
+insideBinding(null, true); caughtBinding(null, true); caughtBinding(null, false);
+"#;
+    let expected = "NULL\nint(5)\nNULL\nNULL\nint(5)\nNULL\nint(5)\n[5]\nNULL\nint(5)\n";
+    for optimized in [true, false] {
+        let run = || assert_nullable_flow_heap_output(source, expected);
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+    assert_nullable_flow_cli_heap_output(source, expected);
+}
+
 /// Relative class entry guards retain the nullable continuation through the production CLI.
 #[test]
 fn test_nullable_fallback_flow_review_relative_object_guard_cli_runtime() {

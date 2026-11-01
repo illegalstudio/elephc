@@ -512,23 +512,33 @@ impl Checker {
                 self.infer_type_with_assignment_effects(subject, env)?;
                 let mut errors = Vec::new();
                 let branch_entry_boxed_refs = self.boxed_ref_aliased_locals.clone();
+                let mut arm_bindings = Vec::new();
                 for (values, _) in cases {
-                    for v in values {
-                        self.infer_type_with_assignment_effects(v, env)?;
+                    let mut entries: Option<HashSet<String>> = None;
+                    for value in values {
+                        self.infer_type_with_assignment_effects(value, env)?;
+                        if let Some(entries) = &mut entries {
+                            entries.retain(|name| self.definitely_bound_locals.contains(name));
+                        } else { entries = Some(self.definitely_bound_locals.clone()); }
                     }
+                    arm_bindings.push(entries.unwrap_or_else(|| self.definitely_bound_locals.clone()));
                 }
                 let entry = self.snapshot_flow_exit(env);
                 let flow = self.snapshot_all_locals_flow(env);
                 self.begin_switch_flow(flow, default.is_none());
                 let mut arms: Vec<&[Stmt]> = cases.iter().map(|(_, body)| body.as_slice()).collect();
                 if let Some(body) = default {
-                    arms.insert(crate::termination::switch_default_position(cases, body), body);
+                    let position = crate::termination::switch_default_position(cases, body);
+                    arms.insert(position, body);
+                    arm_bindings.insert(position, entry.bound.clone());
                 }
                 let last_arm = arms.len().saturating_sub(1);
                 let mut fallthrough = None;
                 let mut strict_arm_bindings = super::switch_storage::entry_bindings(self, env);
                 for (index, body) in arms.into_iter().enumerate() {
-                    let mut inputs = vec![entry.clone()];
+                    let mut direct = entry.clone();
+                    direct.bound = arm_bindings[index].clone();
+                    let mut inputs = vec![direct];
                     inputs.extend(fallthrough.take());
                     let joined = self.join_flow_snapshots(&inputs).expect("switch entry");
                     self.restore_flow_snapshot(&joined, env);
@@ -565,6 +575,7 @@ impl Checker {
             } => {
                 let storage_entry = self.guarded_union_types.clone();
                 let mut flow = self.snapshot_conditional_flow(env);
+                self.exclude_conditional_binding_entry(&mut flow);
                 let mut errors = Vec::new();
 
                 // Flow-sensitive type narrowing across the if / elseif* / else chain.
@@ -610,6 +621,7 @@ impl Checker {
                     let branch_entry_boxed_refs = self.boxed_ref_aliased_locals.clone();
                     let branch_entry_storage = self.guarded_union_types.clone();
                     let branch_entry_reads = self.snapshot_conditional_flow(env);
+                    let branch_entry_bound = self.definitely_bound_locals.clone();
 
                     let guards = self.guard_narrowings(cond, env)?;
                     applied_any_guard |= !guards.is_empty();
@@ -663,6 +675,7 @@ impl Checker {
                     self.restore_guarded_storage_provenance(&branch_entry_storage);
                     self.restore_statement_flow_storage(&flow);
                     self.restore_conditional_read_inputs(&branch_entry_reads, env);
+                    self.definitely_bound_locals = branch_entry_bound;
                     for (var, previous) in &saved {
                         restore_narrowed_var(env, var, previous);
                     }
@@ -691,6 +704,9 @@ impl Checker {
                             self.observe_conditional_flow_exit(&mut flow, env);
                         }
                     }
+                }
+                if else_falls_through && else_body.is_none() {
+                    self.observe_conditional_binding_exit(&mut flow);
                 }
                 if else_falls_through {
                     callable_target_exits.push(self.callable_array_targets.clone());
@@ -961,6 +977,7 @@ impl Checker {
                     let reachable = self.enter_catch_flow(index, &try_tail, env);
                     self.boxed_ref_aliased_locals = branch_entry_boxed_refs.clone();
                     if let Some(variable) = &catch_clause.variable {
+                        self.definitely_bound_locals.insert(variable.clone());
                         self.record_loop_binding_end(variable);
                         self.invalidate_local_flow_narrowing(variable, env);
                         env.insert(
@@ -1188,6 +1205,10 @@ impl Checker {
     fn check_break_continue_target_body(&mut self, stmt: &Stmt, body: &[Stmt], env: &mut TypeEnv) -> Vec<CompileError> {
         let flow = self.snapshot_loop_flow(env);
         self.begin_loop_flow(flow, true, true);
+        if let StmtKind::Foreach { key_var, value_var, .. } = &stmt.kind {
+            self.definitely_bound_locals.insert(value_var.clone());
+            self.definitely_bound_locals.extend(key_var.iter().cloned());
+        }
         let errors = self.check_loop_body(body, env);
         self.record_iteration_exception_flow(stmt);
         let frame = self.pop_loop_flow();

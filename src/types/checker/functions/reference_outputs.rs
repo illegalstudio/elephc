@@ -317,6 +317,7 @@ impl Checker {
         if let Some(outputs) = self.boxed_reference_outputs.remove(&key) {
             for (name, output_ty) in outputs {
                 self.record_local_storage_effect(&name, &output_ty);
+                self.definitely_bound_locals.insert(name.clone());
                 env.insert(name, output_ty);
             }
         }
