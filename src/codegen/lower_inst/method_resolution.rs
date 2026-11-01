@@ -8,6 +8,7 @@
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
 
 use super::*;
+use crate::codegen::emit::Emitter;
 
 /// Resolves method implementation class, canonical key, return type, and ABI arity.
 pub(super) fn resolve_method_call_target(
@@ -273,11 +274,30 @@ pub(super) fn store_call_result(
             return Ok(());
         }
         if matches!(result_ty, PhpType::Mixed | PhpType::Union(_)) && return_ty != PhpType::Mixed {
-            emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
+            emit_box_call_result_as_mixed(ctx.emitter, &box_ty);
         }
         ctx.store_result_value(result)?;
     }
     Ok(())
+}
+
+/// Boxes a call's concrete result for a generic EIR slot.
+///
+/// The callee hands its caller an owned reference to a heap result, so the box takes that
+/// reference over rather than retaining a second one: a method a narrowed receiver's
+/// static type does not declare (`if ($shape instanceof Square) { $shape->grow() }`)
+/// dispatches through a `Mixed` slot, and the retained copy kept the returned object
+/// alive after the box was released, so it was never destructed. Strings keep the
+/// copying box, since a returned string may be persistent data the box must not own.
+fn emit_box_call_result_as_mixed(emitter: &mut Emitter, return_ty: &PhpType) {
+    if matches!(
+        return_ty,
+        PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable
+    ) {
+        emit_box_current_owned_value_as_mixed(emitter, return_ty);
+    } else {
+        emit_box_current_value_as_mixed(emitter, return_ty);
+    }
 }
 
 /// Stores a resolved method call's result, honoring by-reference returns.

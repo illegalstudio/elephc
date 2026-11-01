@@ -117,9 +117,15 @@ pub(super) fn lower_declared_mixed_prop_get(
         dispatch.push(arm.class_id);
     }
 
-    ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    emit_mixed_object_payload_or_null(ctx, &null_label);
+    if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Object(_)) {
+        // A narrowed object receiver (non-null, already guarded) is the raw object pointer the
+        // class-id ladder reads.
+        ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
+    } else {
+        ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        emit_mixed_object_payload_or_null(ctx, &null_label);
+    }
     emit_mixed_property_class_dispatch(
         ctx,
         &dispatch,
