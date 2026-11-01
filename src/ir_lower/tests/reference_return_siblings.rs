@@ -18,16 +18,11 @@ class SiblingReferenceHolder {
     public ?SiblingReferenceNode $fallback = null;
 }
 
-function &siblingReferenceReturn(SiblingReferenceHolder $holder, int $choice): SiblingReferenceNode {
+function &siblingReferenceReturn(SiblingReferenceHolder $holder, int $choice): ?SiblingReferenceNode {
     $node = $holder->node;
     switch ($choice) {
-        case 1:
-            if (!($node instanceof SiblingReferenceNode)) { throw new TypeError('node'); }
-            return $node;
-        default:
-            $node = null; var_dump($node); $node = $holder->fallback;
-            if (!($node instanceof SiblingReferenceNode)) { throw new TypeError('fallback'); }
-            return $node;
+        case 1: return $node;
+        default: $node = null; var_dump($node); $node = $holder->fallback; return $node;
     }
 }
 "#;

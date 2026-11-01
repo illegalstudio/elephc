@@ -175,7 +175,6 @@ pub(super) fn unset(
             let name = lower_expr(ctx, &name);
             ctx.emit_void(Op::DynamicPropUnset, vec![receiver.value, name.value], None,
                 Op::DynamicPropUnset.default_effects(), Some(expr.span));
-            crate::ir_lower::ownership::release_if_owned(ctx, name, Some(expr.span));
         },
     );
 }

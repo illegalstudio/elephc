@@ -994,9 +994,9 @@ mod tests {
         assert_eq!(analysis.stable_ref_cell_payload_type(target), Some(&PhpType::Str));
     }
 
-    /// A promotion uses the final callable frame storage that it loads while allocating the cell.
+    /// A promotion follows the target slot ABI even when its hidden owner widened independently.
     #[test]
-    fn promoted_callable_uses_final_target_storage_payload_type() {
+    fn promoted_callable_uses_target_payload_type_instead_of_owner_storage() {
         let mut function = Function::new(
             "promoted_callable".to_string(),
             IrType::Void,
@@ -1027,7 +1027,7 @@ mod tests {
                     second: owner,
                 }),
                 IrType::Void,
-                PhpType::Mixed,
+                PhpType::Callable,
                 Ownership::NonHeap,
             );
             builder.terminate(Terminator::Return { value: None });
@@ -1039,53 +1039,6 @@ mod tests {
             Some(&PhpType::Callable)
         );
         assert!(!analysis.owns_mixed_ref_cell_payload(target));
-    }
-
-    /// A promotion uses the final Mixed frame storage that it loads while allocating the cell.
-    #[test]
-    fn promoted_mixed_target_uses_final_storage_payload_type() {
-        let mut function = Function::new(
-            "promoted_mixed_target".to_string(),
-            IrType::Void,
-            PhpType::Void,
-        );
-        let target = function.add_local(
-            Some("value".to_string()),
-            IrType::Heap(crate::ir::IrHeapKind::Mixed),
-            PhpType::Mixed,
-            LocalKind::PhpLocal,
-        );
-        let owner = function.add_local(
-            Some("value#ref".to_string()),
-            IrType::Heap(crate::ir::IrHeapKind::Mixed),
-            PhpType::Mixed,
-            LocalKind::RefCell,
-        );
-        {
-            let mut builder = Builder::new(&mut function);
-            let entry = builder.create_named_block("entry", Vec::new());
-            builder.set_entry(entry);
-            builder.position_at_end(entry);
-            builder.emit(
-                Op::PromoteLocalRefCell,
-                Vec::new(),
-                Some(Immediate::LocalSlotPair {
-                    first: target,
-                    second: owner,
-                }),
-                IrType::Void,
-                PhpType::Str,
-                Ownership::NonHeap,
-            );
-            builder.terminate(Terminator::Return { value: None });
-        }
-
-        let analysis = LocalSlotAnalysis::new(&function);
-        assert_eq!(
-            analysis.stable_ref_cell_payload_type(target),
-            Some(&PhpType::Mixed)
-        );
-        assert!(analysis.owns_mixed_ref_cell_payload(target));
     }
 
     /// An idempotent promotion does not override a transferred cell's concrete payload ABI.

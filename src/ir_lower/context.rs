@@ -3161,15 +3161,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             self.abandon_local_binding(name);
             return null;
         }
-        if self.eval_barrier_active || self.eval_scope_read_param.is_some() {
-            // The runtime state word distinguishes an attached native payload cell from the raw
-            // zero left after detachment. Preserve the established frame layout so earlier eval
-            // synchronization keeps using the cell's physical ABI; only the flow type becomes
-            // null after this unset.
-            self.local_types.insert(name.to_string(), PhpType::Void);
-        } else {
-            self.set_local_type(name, PhpType::Void);
-        }
+        self.set_local_type(name, PhpType::Void);
         self.initialized_slots.insert(slot);
         null
     }
