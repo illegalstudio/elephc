@@ -22,7 +22,7 @@ echo trim(viewCastSource()), '|';
 $saved = trim(viewCastSource()); echo $saved, '|';
 printCastViews(str_repeat(' ', 1) . 'ab ');
 printCastViews(42);
-echo trim(new ViewCastText()), '|';
+echo trim((string)new ViewCastText()), '|';
 unset($saved);
 "#);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);

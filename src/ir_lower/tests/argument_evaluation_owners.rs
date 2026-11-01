@@ -94,24 +94,28 @@ fn single_argument_string_views_release_casts_on_all_targets() {
     use crate::ir::{Immediate, Op, RuntimeCallTarget, RuntimeFnId};
     let source = r#"<?php
 function castViewOwner(mixed $value): string { return trim($value); }
+class ObjectCastViewText { public function __toString(): string { return ' kept '; } }
+function objectCastViewOwner(ObjectCastViewText $value): string { return trim((string)$value); }
 echo castViewOwner(' kept ');
 "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let module = lower_for(source, target);
-        let function = module.functions.iter().find(|function| function.name == "castViewOwner").unwrap();
-        let (trim_index, trim) = function.instructions.iter().enumerate().find(|(_, inst)| {
-            inst.op == Op::RuntimeCall && inst.immediate == Some(Immediate::RuntimeCall(
-                RuntimeCallTarget::Function(RuntimeFnId::Trim)))
-        }).expect("trim must read the coerced argument");
-        let cast = trim.operands[0];
-        assert!(function.instructions.iter().any(|inst| inst.op == Op::Cast && inst.result == Some(cast)), "{target}");
-        let persist = function.instructions.iter().enumerate().find(|(_, inst)| {
-            inst.op == Op::StrPersist && inst.operands == [trim.result.unwrap()]
-        }).expect("the result view must survive its base owner's retirement").0;
-        let release = function.instructions.iter().enumerate().find(|(_, inst)| {
-            inst.op == Op::Release && inst.operands == [cast]
-        }).expect("the detached cast must be retired").0;
-        assert!(trim_index < persist && persist < release, "{target}");
+        for name in ["castViewOwner", "objectCastViewOwner"] {
+            let function = module.functions.iter().find(|function| function.name == name).unwrap();
+            let (trim_index, trim) = function.instructions.iter().enumerate().find(|(_, inst)| {
+                inst.op == Op::RuntimeCall && inst.immediate == Some(Immediate::RuntimeCall(
+                    RuntimeCallTarget::Function(RuntimeFnId::Trim)))
+            }).expect("trim must read the coerced argument");
+            let cast = trim.operands[0];
+            assert!(function.instructions.iter().any(|inst| inst.op == Op::Cast && inst.result == Some(cast)), "{target}");
+            let persist = function.instructions.iter().enumerate().find(|(_, inst)| {
+                inst.op == Op::StrPersist && inst.operands == [trim.result.unwrap()]
+            }).expect("the result view must survive its base owner's retirement").0;
+            let release = function.instructions.iter().enumerate().find(|(_, inst)| {
+                inst.op == Op::Release && inst.operands == [cast]
+            }).expect("the detached cast must be retired").0;
+            assert!(trim_index < persist && persist < release, "{target}");
+        }
     }
 }
 
