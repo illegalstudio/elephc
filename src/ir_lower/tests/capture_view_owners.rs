@@ -105,7 +105,9 @@ fn named_object_reference_separates_physical_and_logical_types() {
     let source = r#"<?php
 interface NamedObjectReferenceContract { public function label(): string; }
 function readNamedObjectReference(NamedObjectReferenceContract &$value): string {
-    return $value->label();
+    $label = $value->label();
+    $value = "changed";
+    return $label;
 }
 "#;
     for target in TARGETS {
@@ -137,8 +139,8 @@ function readNamedObjectReference(NamedObjectReferenceContract &$value): string 
             .unwrap_or_else(|| panic!("{target}: missing logical parameter local"));
         assert_eq!(
             local.php_type.codegen_repr(),
-            crate::types::PhpType::Object("NamedObjectReferenceContract".to_string()),
-            "{target}: the body must retain the declared object view",
+            crate::types::PhpType::Mixed,
+            "{target}: the local must retain the boxed ref-cell payload ABI",
         );
         let loads = function
             .instructions
@@ -154,6 +156,19 @@ function readNamedObjectReference(NamedObjectReferenceContract &$value): string 
                     )
             }),
             "{target}: every body read must expose the concrete object view",
+        );
+        let store = function
+            .instructions
+            .iter()
+            .find(|instruction| {
+                instruction.op == Op::StoreRefCell
+                    && instruction.immediate == Some(Immediate::LocalSlot(local.id))
+            })
+            .unwrap_or_else(|| panic!("{target}: missing replacement ref-cell store"));
+        assert_eq!(
+            store.result_php_type.codegen_repr(),
+            crate::types::PhpType::Mixed,
+            "{target}: replacement stores must follow the boxed physical payload ABI",
         );
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{target}: {error:?}"));

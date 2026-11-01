@@ -270,7 +270,7 @@ pub(crate) fn lower_user_function(
         None,
         body_return_type.clone(),
         signature.declared_return,
-        &body_signature.params,
+        &eir_signature.params,
         None,
         false,
         std::collections::HashSet::new(),

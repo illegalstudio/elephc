@@ -2524,9 +2524,24 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
         let previous_slot = self.local_slots.get(name).copied();
         let previous_type = self.local_type(name);
-        let value = if self.is_ref_bound_local(name) {
+        // A declared object view can sit over a boxed reference payload. PHP validates that
+        // view on entry but still permits the function body to replace the shared cell with a
+        // different type. Only a physically raw object cell must reject incompatible stores.
+        let ref_cell_store_type = self
+            .is_ref_bound_local(name)
+            .then(|| self.ref_cell_store_type(name, &previous_type));
+        let value = if ref_cell_store_type
+            .as_ref()
+            .is_some_and(|store_type| matches!(store_type.codegen_repr(), PhpType::Object(_)))
+        {
             crate::ir_lower::object_boundaries::coerce_reference_store(
-                self, name, value, &previous_type, span,
+                self,
+                name,
+                value,
+                ref_cell_store_type
+                    .as_ref()
+                    .expect("an object ref-cell store has a physical type"),
+                span,
             )
         } else {
             value
@@ -2539,8 +2554,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let uses_global = self.uses_global_storage(name, previous_kind);
         let php_type = if uses_global {
             self.global_alias_type(name)
-        } else if self.is_ref_bound_local(name)
-            && matches!(previous_type.codegen_repr(), PhpType::Object(_))
+        } else if ref_cell_store_type
+            .as_ref()
+            .is_some_and(|store_type| matches!(store_type.codegen_repr(), PhpType::Object(_)))
         {
             previous_type.clone()
         } else if previous_kind == LocalKind::PhpLocal {
@@ -2681,8 +2697,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
         let is_ref_bound =
             self.is_ref_bound_local(name) && !uses_global && previous_kind == LocalKind::PhpLocal;
-        let ref_cell_store_type =
-            is_ref_bound.then(|| self.ref_cell_store_type(name, &previous_type));
         let op = match (is_ref_bound, previous_kind) {
             (true, _) => Op::StoreRefCell,
             (false, LocalKind::StaticLocal) => Op::StoreStaticLocal,
