@@ -68,7 +68,7 @@ pub(super) fn pending_class_aot_interface_method_requirements(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<EvalAotInterfaceMethodRequirement>, EvalStatus> {
     let mut requirements = Vec::new();
-    for interface in pending_class_interface_names(class, context) {
+    for interface in pending_class_runtime_interface_names(class, context, values)? {
         if context.has_interface(&interface) || !values.interface_exists(&interface)? {
             continue;
         }
@@ -86,13 +86,35 @@ pub(super) fn pending_class_aot_interface_property_requirements(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<(String, EvalInterfaceProperty)>, EvalStatus> {
     let mut requirements = Vec::new();
-    for interface in pending_class_interface_names(class, context) {
+    for interface in pending_class_runtime_interface_names(class, context, values)? {
         if context.has_interface(&interface) || !values.interface_exists(&interface)? {
             continue;
         }
         requirements.extend(context.native_interface_property_requirements(&interface));
     }
     Ok(requirements)
+}
+
+/// Includes interfaces inherited through a generated parent, including an eval parent chain.
+fn pending_class_runtime_interface_names(
+    class: &EvalClass,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<String>, EvalStatus> {
+    let mut interfaces = pending_class_interface_names(class, context);
+    let mut seen: std::collections::HashSet<_> = interfaces
+        .iter()
+        .map(|name| name.to_ascii_lowercase())
+        .collect();
+    if let Some(parent) = pending_class_native_parent_name(class, context) {
+        let names = values.reflection_class_interface_names(&parent)?;
+        for interface in crate::interpreter::builtins::eval_owned_runtime_string_array_to_vec(
+            names, values,
+        )? {
+            push_pending_class_interface_name(&interface, &mut interfaces, &mut seen);
+        }
+    }
+    Ok(interfaces)
 }
 
 /// Returns generated/AOT method requirements for one runtime interface.

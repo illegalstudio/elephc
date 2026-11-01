@@ -35,32 +35,61 @@ NativeConcreteCtorChild::make(); EvalConcreteCtorChild::make(); return "done";')
     assert_eq!(out, "5|9|done");
 }
 
-/// Constructor exceptions preserve final, abstract and inherited interface requirements.
+/// Constructor exceptions preserve native final requirements.
 #[test]
 fn test_eval_constructor_overrides_preserve_required_contracts() {
-    for source in [
-        r#"<?php
+    assert_constructor_contract_rejected(r#"<?php
 class RequiredNativeFinalCtor { final public function __construct(string $name) {} }
 eval('class RefusedNativeFinalCtor extends RequiredNativeFinalCtor { public function __construct(int $id) {} }');
-"#,
-        r#"<?php
+"#);
+}
+
+/// Constructor exceptions preserve native abstract requirements.
+#[test]
+fn test_eval_constructor_overrides_preserve_abstract_contracts() {
+    assert_constructor_contract_rejected(r#"<?php
 abstract class RequiredNativeAbstractCtor { abstract public function __construct(string $name); }
 eval('class RefusedNativeAbstractCtor extends RequiredNativeAbstractCtor { public function __construct(int $id) {} }');
-"#,
-        r#"<?php
+"#);
+}
+
+/// A concrete native parent still carries its interface constructor contract.
+#[test]
+fn test_eval_constructor_overrides_preserve_native_interface_contracts() {
+    assert_constructor_contract_rejected(r#"<?php
 interface RequiredNativeCtorInterface { public function __construct(string $name); }
 class RequiredNativeInterfaceCtor implements RequiredNativeCtorInterface { public function __construct(string $name) {} }
 eval('class RefusedNativeInterfaceCtor extends RequiredNativeInterfaceCtor { public function __construct(int $id) {} }');
-"#,
-        r#"<?php
+"#);
+}
+
+/// Native interface constructors remain required through an intermediate eval parent.
+#[test]
+fn test_eval_constructor_overrides_preserve_native_interface_ancestry() {
+    assert_constructor_contract_rejected(r#"<?php
+interface RequiredNativeCtorAncestor { public function __construct(string $name); }
+class RequiredNativeCtorRoot implements RequiredNativeCtorAncestor { public function __construct(string $name) {} }
+eval('class RequiredEvalCtorMiddle extends RequiredNativeCtorRoot {}
+class RefusedEvalCtorLeaf extends RequiredEvalCtorMiddle { public function __construct(int $id) {} }');
+"#);
+}
+
+/// A concrete eval parent still carries its interface constructor contract.
+#[test]
+fn test_eval_constructor_overrides_preserve_eval_interface_contracts() {
+    assert_constructor_contract_rejected(r#"<?php
 eval('interface RequiredEvalCtorInterface { public function __construct(string $name); }
 class RequiredEvalInterfaceCtor implements RequiredEvalCtorInterface { public function __construct(string $name) {} }
 class RefusedEvalInterfaceCtor extends RequiredEvalInterfaceCtor { public function __construct(int $id) {} }');
-"#,
-    ] {
-        let error = crate::support::compile_and_run_expect_failure(source);
-        assert!(error.contains("Fatal error: eval() runtime failed"), "{error}");
-    }
+"#);
+}
+
+/// Identifies the rejected source if a required constructor contract is lost.
+fn assert_constructor_contract_rejected(source: &str) {
+    let output = compile_and_run_capture(source);
+    assert!(!output.success, "constructor contract accepted: {source}");
+    let error = format!("{}{}", output.stdout, output.stderr);
+    assert!(error.contains("Fatal error: eval() runtime failed"), "{error}");
 }
 
 /// Verifies AOT constructor by-reference args write back to eval lvalue targets.
