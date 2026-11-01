@@ -477,6 +477,29 @@ impl Parser {
         target: EvalExpr,
         require_semicolon: bool,
     ) -> Result<Vec<EvalStmt>, EvalParseError> {
+        let target = match target {
+            EvalExpr::PropertyCompoundAssign { object, property, op, value } => {
+                if require_semicolon { self.expect_semicolon()?; }
+                let statement = match *property {
+                    EvalExpr::Const(EvalConst::String(property)) => EvalStmt::PropertyCompoundAssign {
+                        object: *object, property, op, value: *value,
+                    },
+                    property => EvalStmt::DynamicPropertyCompoundAssign {
+                        object: *object, property, op, value: *value,
+                    },
+                };
+                return Ok(vec![statement]);
+            }
+            EvalExpr::PropertyIncDec { object, property, increment, .. } => {
+                if require_semicolon { self.expect_semicolon()?; }
+                let place = match *property {
+                    EvalExpr::Const(EvalConst::String(property)) => EvalExpr::PropertyGet { object, property },
+                    property => EvalExpr::DynamicPropertyGet { object, property: Box::new(property) },
+                };
+                return property_inc_dec_stmt(place, increment).map(|stmt| vec![stmt]);
+            }
+            target => target,
+        };
         if matches!(self.current(), TokenKind::PlusPlus | TokenKind::MinusMinus) {
             let increment = matches!(self.current(), TokenKind::PlusPlus);
             self.advance();

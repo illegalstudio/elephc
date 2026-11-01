@@ -11,6 +11,42 @@
 use super::super::*;
 use super::support::*;
 
+/// Property expression values survive writeback and retire after normal and throwing setters.
+#[test]
+fn property_update_expression_results_keep_balanced_owners() {
+    let source = br#"
+class ExpressionValueBox {
+    public int $number = 1;
+    public string $text = 'a';
+    public function receiver(): self { echo 'r|'; return $this; }
+}
+class ExpressionThrowingSetter {
+    public function __get(string $name): mixed { return 'a'; }
+    public function __set(string $name, mixed $value): void { throw new RuntimeException('setter'); }
+}
+$box = new ExpressionValueBox(); $name = 'number';
+echo ($box->receiver()->number += 3), '|';
+echo ++$box->{$name}, '|', $box->{$name}++, '|', $box->number, '|';
+echo ($box->text .= 'b'), ':', $box->text, '|';
+$throwing = new ExpressionThrowingSetter();
+try { echo ($throwing->missing .= 'b'); }
+catch (RuntimeException $error) { echo 'caught|'; }
+unset($box, $name, $throwing, $error);
+"#;
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let program = parse_fragment(source).unwrap();
+    let returned = execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+    eval_release_value(&mut context, &mut values, returned).unwrap();
+    assert_eq!(values.output, "r|4|5|5|6|ab:ab|caught|");
+    for (id, value) in &values.values {
+        if matches!(value, FakeValue::String(text) if text == "ab") {
+            assert_eq!(values.cell_owners[id], 0, "computed result {id} escaped: {value:?}");
+        }
+    }
+}
+
 /// Fresh magic names retire on success and failure without consuming an aliased getter result.
 #[test]
 fn magic_property_name_owners_cover_success_and_failure() {

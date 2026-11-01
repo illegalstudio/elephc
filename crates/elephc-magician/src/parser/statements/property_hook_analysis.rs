@@ -331,6 +331,17 @@ pub(super) fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str)
                 || eval_expr_uses_this_property(index, property_name)
         }
         EvalExpr::Assign { value, .. } => eval_expr_uses_this_property(value, property_name),
+        EvalExpr::PropertyCompoundAssign { object, property, value, .. } => {
+            eval_is_this_dynamic_property(object, property, property_name)
+                || eval_expr_uses_this_property(object, property_name)
+                || eval_expr_uses_this_property(property, property_name)
+                || eval_expr_uses_this_property(value, property_name)
+        }
+        EvalExpr::PropertyIncDec { object, property, .. } => {
+            eval_is_this_dynamic_property(object, property, property_name)
+                || eval_expr_uses_this_property(object, property_name)
+                || eval_expr_uses_this_property(property, property_name)
+        }
         EvalExpr::Call { args, .. }
         | EvalExpr::NamespacedCall { args, .. }
         | EvalExpr::NewObject { args, .. }

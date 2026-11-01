@@ -11,6 +11,8 @@ foreach ($catalog->product as $product) {
 foreach ($catalog->xpath('//product[price < 2]') as $product) {
     echo 'Under EUR 2: ', (string)$product->name, "\n";
 }
+// A property update inside eval returns its new numeric value and updates the live view.
+eval('echo "Adjusted price: ", ($product->price += 0.30), "\n";');
 echo $catalog->asXML();
 
 // The same factories accept PHP data URLs.

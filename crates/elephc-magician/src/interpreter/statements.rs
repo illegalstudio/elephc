@@ -42,6 +42,7 @@ mod property_append_fetch;
 mod property_dimension_guards;
 mod property_dimension_unset;
 mod property_write_receivers;
+mod property_update_expressions;
 mod property_validation;
 mod abstract_setter;
 mod readonly_property_writes;
@@ -54,7 +55,12 @@ mod trait_declarations;
 
 use super::*;
 use property_write_receivers::{prepare_property_write_receiver, finish_property_write_receiver,
-    eval_write_property_get_result, with_eval_property_write_operands, with_eval_named_property_write_operands};
+    eval_write_property_get_result, with_eval_property_write_operands, with_eval_named_property_write_operands,
+    with_eval_named_property_write_result};
+pub(in crate::interpreter) use property_update_expressions::{
+    eval_property_compound_expression, eval_property_inc_dec_expression,
+};
+use property_update_expressions::{eval_property_compound_assign_value, eval_property_inc_dec_value};
 use crate::context::{
     NativeCallableArrayDefaultElement, NativeCallableArrayDefaultKey,
     NativeCallableObjectDefaultArg, NativeCallableSignature,

@@ -116,6 +116,20 @@ pub enum EvalExpr {
         name: String,
         value: Box<EvalExpr>,
     },
+    /// A property read-modify-write yields its computed value without replaying the receiver.
+    PropertyCompoundAssign {
+        object: Box<EvalExpr>,
+        property: Box<EvalExpr>,
+        op: EvalBinOp,
+        value: Box<EvalExpr>,
+    },
+    /// A property increment yields the new value for prefix and the old value for postfix.
+    PropertyIncDec {
+        object: Box<EvalExpr>,
+        property: Box<EvalExpr>,
+        increment: bool,
+        prefix: bool,
+    },
     Match {
         subject: Box<EvalExpr>,
         arms: Vec<EvalMatchArm>,

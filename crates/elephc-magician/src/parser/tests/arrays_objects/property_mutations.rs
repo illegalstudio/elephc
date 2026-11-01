@@ -10,6 +10,30 @@
 
 use super::super::support::*;
 
+/// Expression updates retain their result and prefix increment binds above exponentiation.
+#[test]
+fn parse_property_update_expressions_keep_receivers_and_operator_precedence() {
+    let program = parse_fragment(br#"
+echo ($box->receiver()->number += 3);
+echo ($box->receiver()->{$name} .= 'x');
+echo ++$box->{$name} ** 2;
+echo $box->{$name}++;
+"#).unwrap();
+    assert!(matches!(&program.statements()[0], EvalStmt::Echo(EvalExpr::PropertyCompoundAssign {
+        object, op: EvalBinOp::Add, ..
+    }) if matches!(object.as_ref(), EvalExpr::MethodCall { .. })));
+    assert!(matches!(&program.statements()[1], EvalStmt::Echo(EvalExpr::PropertyCompoundAssign {
+        property, op: EvalBinOp::Concat, ..
+    }) if matches!(property.as_ref(), EvalExpr::LoadVar(name) if name == "name")));
+    assert!(matches!(&program.statements()[2], EvalStmt::Echo(EvalExpr::Binary {
+        op: EvalBinOp::Pow, left, ..
+    }) if matches!(left.as_ref(), EvalExpr::PropertyIncDec { prefix: true, .. })));
+    assert!(matches!(&program.statements()[3], EvalStmt::Echo(EvalExpr::PropertyIncDec {
+        increment: true, prefix: false, ..
+    })));
+    assert!(parse_fragment(b"echo (1 += 2);").is_err());
+}
+
 /// Indexed receivers keep property stores and updates on the property mutation path.
 #[test]
 fn parse_fragment_accepts_indexed_property_mutations() {

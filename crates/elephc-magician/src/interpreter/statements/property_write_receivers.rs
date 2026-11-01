@@ -242,6 +242,29 @@ pub(super) fn with_eval_named_property_write_operands<V: RuntimeValueOps>(
         |args, property, context, scope, values| consume(args, property.unwrap_or(""), context, scope, values))
 }
 
+/// Preserves an owned mutation result while the shared receiver and name leases are retired.
+pub(super) fn with_eval_named_property_write_result<V: RuntimeValueOps>(
+    object: &EvalExpr, property: DimensionProperty<'_>, args: &[&EvalExpr],
+    context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut V,
+    consume: impl FnOnce(&[RuntimeCellHandle], &str, &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V)
+        -> Result<RuntimeCellHandle, EvalStatus>,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut produced = None;
+    let status = with_eval_named_property_write_operands(object, property, args, context, scope, values,
+        |args, property, context, scope, values| {
+            produced = Some(consume(args, property, context, scope, values)?);
+            Ok(())
+        });
+    match (status, produced) {
+        (Ok(()), Some(value)) => Ok(value),
+        (Err(status), value) => {
+            if let Some(value) = value { let _ = release_expr_result(value, context, values); }
+            Err(status)
+        }
+        (Ok(()), None) => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
 /// Shares receiver preparation and reverse cleanup for literal and runtime-name mutations.
 fn with_write_operands<V: RuntimeValueOps>(
     object: &EvalExpr, property: Option<DimensionProperty<'_>>, args: &[&EvalExpr],
