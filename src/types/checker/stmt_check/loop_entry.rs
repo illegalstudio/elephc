@@ -56,6 +56,7 @@ pub(super) fn stabilize_loop_storage(
     let entry_captures = checker.by_ref_captured_locals.clone();
     let entry_pending_captures = checker.pending_ref_capture_invalidations.clone();
     let entry_bound = checker.definitely_bound_locals.clone();
+    let entry_pending_probes = checker.pending_null_probe_roots.len();
     let narrowed: HashSet<_> = snapshot.iter().filter_map(|(name, ty)| {
         checker.guarded_local_storage_type(&Expr::var(name), &snapshot)
             .filter(|physical| *physical != ty).map(|_| name.clone())
@@ -128,6 +129,7 @@ pub(super) fn stabilize_loop_storage(
     checker.by_ref_captured_locals = entry_captures;
     checker.pending_ref_capture_invalidations = entry_pending_captures;
     checker.definitely_bound_locals = entry_bound;
+    checker.pending_null_probe_roots.truncate(entry_pending_probes);
     let mut unbound = backedges.unbound;
     if backedges.unbind_all { unbound.extend(snapshot.keys().map(String::as_str)); }
     for name in unbound {

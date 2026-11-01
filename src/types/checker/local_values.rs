@@ -22,7 +22,9 @@ impl Checker {
                 && crate::types::loop_storage_scope_is_within(&self.current_loop_storage_scope, scope)
         }) { return false; }
         let integer = *ty == PhpType::Int && self.local_flow_read_is_stable(name)
-            && self.definitely_bound_locals.contains(name);
+            && self.definitely_bound_locals.contains(name)
+            && self.guarded_local_storage_type(&Expr::var(name), env)
+                .is_some_and(|storage| storage.codegen_repr() == PhpType::TaggedScalar);
         let read = if *ty == PhpType::Int && !integer {
             self.guarded_local_storage_type(&Expr::var(name), env)
                 .filter(|storage| storage.codegen_repr() == PhpType::TaggedScalar)

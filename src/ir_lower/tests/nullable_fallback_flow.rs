@@ -9,6 +9,26 @@
 
 use crate::ir::{Immediate, IrHeapKind, IrType, Op};
 
+/// Synthetic OPcache foreach results retain a return shape capable of carrying hash keys.
+#[test]
+fn test_nullable_fallback_flow_r37_synthetic_hash_return() {
+    let source = "<?php function typedHash(array<string> $keys): array<string,int> { $all = []; foreach ($keys as $key) { $all[$key] = 1; } return $all; } echo count(typedHash([])), count(typedHash(['key'])); $settings = ini_get_all('zend opcache'); echo count($settings);";
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = crate::codegen::platform::Target::parse(name).unwrap();
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), target);
+        for (function_name, expected) in [
+            ("__elephc_opcache_ini_all_details", IrType::Heap(IrHeapKind::Hash)),
+            ("__elephc_opcache_ini_all_plain", IrType::Heap(IrHeapKind::Mixed)),
+            ("typedHash", IrType::Heap(IrHeapKind::Hash)),
+        ] {
+            let function = module.functions.iter().find(|function| function.name == function_name).unwrap();
+            assert_eq!(function.return_type, expected, "{name}: {function_name}");
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Coalescing assignments retain nullable parameter loads and emit valid calls on all targets.
 #[test]
 fn test_nullable_fallback_flow_storage_all_targets() {

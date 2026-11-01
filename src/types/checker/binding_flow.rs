@@ -47,7 +47,9 @@ impl Checker {
 
     /// Keeps a missing-binding path observable through storage that can represent null.
     pub(super) fn binding_read_type(&self, name: &str, read: &PhpType, env: &TypeEnv) -> PhpType {
-        if self.definitely_bound_locals.contains(name) { return read.clone(); }
+        if name.starts_with('\u{1}') || super::builtins::is_callback_argument_placeholder(name)
+            || self.definitely_bound_locals.contains(name)
+        { return read.clone(); }
         let physical = self.guarded_local_storage_type(&Expr::var(name), env).unwrap_or(read);
         if Self::binding_storage_admits_null(physical) {
             self.join_flow_views(read, &PhpType::Void)

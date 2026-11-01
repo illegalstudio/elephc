@@ -314,6 +314,12 @@ impl Checker {
             && self.type_accepts(left, right)) { left.clone() }
         else if matches!((left, right), (PhpType::Object(_), PhpType::Object(_)))
             && self.type_accepts(right, left) { right.clone() }
+        // A skipped loop retains its empty literal, which can use the populated hash's
+        // representation at the return boundary instead of inventing a packed/hash union.
+        else if matches!(left, PhpType::Array(element) if **element == PhpType::Never)
+            && matches!(right, PhpType::AssocArray { .. }) { right.clone() }
+        else if matches!(right, PhpType::Array(element) if **element == PhpType::Never)
+            && matches!(left, PhpType::AssocArray { .. }) { left.clone() }
         // A general PHP-array contract absorbs a more precise container without losing
         // the array family when the value itself remains boxed.
         else if (left.is_php_array() && matches!(right, PhpType::Array(_) | PhpType::AssocArray { .. }))

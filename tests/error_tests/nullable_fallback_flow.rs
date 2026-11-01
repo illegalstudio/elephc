@@ -9,6 +9,22 @@
 
 use super::*;
 
+/// Callback engine arguments are present even though they are absent from caller bindings.
+#[test]
+fn test_nullable_fallback_flow_r37_callback_placeholders() {
+    check_source("<?php $result = mb_ereg_replace_callback('a', function(array $matches): string { return 'X'; }, 'aba'); var_dump($result);").unwrap();
+}
+
+/// Speculative loop probes do not precede the eval that creates their top-level bindings.
+#[test]
+fn test_nullable_fallback_flow_r37_eval_loop_probes() {
+    for probe in ["unset($value);", "var_dump(isset($value));"] {
+        let source = format!("<?php for ($i = 0; $i < 3; $i++) {{ eval('$value = 42;'); echo $value; {probe} }}");
+        check_source(&source).unwrap();
+    }
+    expect_error("<?php for ($i = 0; $i < 3; $i++) { var_dump(isset($later)); $later = 42; }", "Undefined variable: $later");
+}
+
 /// A successful store removes the missing-binding null from reused branch-local counters.
 #[test]
 fn test_nullable_fallback_flow_ci_rebound_counter_presence() {
