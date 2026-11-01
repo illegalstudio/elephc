@@ -138,6 +138,36 @@ fn type_admits_null(ty: &PhpType) -> bool {
     }
 }
 
+impl Checker {
+    /// Proves that a completed store cannot import null hidden by a storage-read type.
+    pub(in crate::types::checker) fn stored_value_is_non_null(
+        &self, value: &Expr, ty: &PhpType, env: &TypeEnv,
+    ) -> bool {
+        if type_admits_null(ty) { return false; }
+        if operand_is_never_null(self, value, ty, env) { return true; }
+        match &value.kind {
+            ExprKind::Cast { .. } | ExprKind::Not(_) | ExprKind::InstanceOf { .. }
+                | ExprKind::Print(_) => true,
+            ExprKind::Variable(name) => self.local_flow_read_is_stable(name)
+                && self.definitely_bound_locals.contains(name)
+                && (self.guarded_local_storage_type(value, env).is_some()
+                    || (self.local_parameter_names.contains(name)
+                        && !self.boxed_parameter_locals.contains(name))),
+            ExprKind::FunctionCall { name, .. }
+                if self.builtin_call_types.contains_key(&value.span) => {
+                crate::builtins::registry::lookup(name.as_str()).is_some_and(|def| {
+                    // The neutral fopen declaration is Mixed because it cannot express
+                    // stream-resource|false. Its typed operation never returns null.
+                    !type_admits_null(&def.return_type) || matches!(def.spec.semantics.lowering,
+                        crate::builtins::semantics::BuiltinLowering::Runtime(
+                            crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::Fopen)))
+                })
+            }
+            _ => false,
+        }
+    }
+}
+
 /// Returns whether a signature declares a return type that excludes null.
 fn declares_non_null_return(sig: &FunctionSig) -> bool {
     sig.declared_return && !type_admits_null(&sig.return_type)

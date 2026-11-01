@@ -9,6 +9,45 @@
 
 use super::*;
 
+/// A fallible RHS cannot prove a nullable binding suitable for a non-null parameter.
+#[test]
+fn test_nullable_fallback_flow_r38_fallible_store_contracts() {
+    for body in [
+        "if ($flag) { $value = $input; } $value = $ints[$key];",
+        "$value = $input; if ($value === null) { $value = $ints[$key]; }",
+        "$value = $input; $value ??= $ints[$key];",
+        "$value = $input; $value ??= 7; $value = $ints[$key];",
+    ] {
+        let source = format!("<?php function need(int $value): void {{}} function run(?int $input, bool $flag, int $key): void {{ $ints = [10]; {body} need($value); }}");
+        expect_error(&source, "expects int");
+        let cast = source.replace("$ints[$key]", "(int)$ints[$key]");
+        check_source(&cast).unwrap_or_else(|error| panic!("{cast}: {error}"));
+    }
+    for body in ["$value ??= $default;", "$fallback = 7; $value ??= $fallback;"] {
+        let source = format!("<?php function run(?int $value, int $default): int {{ {body} return $value; }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+}
+
+/// An inferred array-element type cannot erase the null path that carries a loop exit.
+#[test]
+fn test_nullable_fallback_flow_r38_array_guard_reachability() {
+    for guard in [
+        "if ($value !== null) { continue; }",
+        "if ($value === null) {} else { continue; }",
+        "if (!($value === null)) { continue; }",
+    ] {
+        let source = format!("<?php function loopMiss(int $key) {{ $ints = [10]; $result = 1; foreach ([1, 2] as $item) {{ $value = $ints[$key]; {guard} $result = 2.5; break; }} return $result; }}");
+        let checked = check_source_full(&source).unwrap();
+        let result = &checked.functions["loopMiss"].return_type;
+        // The diagnostic harness may box heterogeneous numeric flow as Mixed. Either
+        // representation must retain the float exit instead of proving a concrete integer.
+        assert!(*result == types::PhpType::Mixed || matches!(result, types::PhpType::Union(members)
+            if members.len() == 2 && members.contains(&types::PhpType::Int)
+                && members.contains(&types::PhpType::Float)), "{source}: {result:?}");
+    }
+}
+
 /// Callback engine arguments are present even though they are absent from caller bindings.
 #[test]
 fn test_nullable_fallback_flow_r37_callback_placeholders() {

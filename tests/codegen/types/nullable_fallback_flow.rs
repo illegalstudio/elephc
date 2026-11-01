@@ -9,6 +9,33 @@
 
 use super::*;
 
+/// Fallible stores preserve null through conditional bindings, guards and prior fallbacks.
+#[test]
+fn test_nullable_fallback_flow_r38_fallible_store_runtime() {
+    for body in [
+        "if ($flag) { $value = $input; } $value = $ints[$key];",
+        "$value = $input; if ($value === null) { $value = $ints[$key]; }",
+        "$value = $input; $value ??= $ints[$key];",
+        "$value = $input; $value ??= 7; $value = $ints[$key];",
+    ] {
+        let source = format!("<?php function run(?int $input, bool $flag, int $key): void {{ $ints = [10]; {body} var_dump($value); }} run(null, false, 5); run(null, false, 0);");
+        assert_nullable_flow_cli_heap_output(&source, "NULL\nint(10)\n");
+    }
+}
+
+/// Strict guards over fallible array reads retain reachable float-valued break edges.
+#[test]
+fn test_nullable_fallback_flow_r38_array_guard_runtime() {
+    for guard in [
+        "if ($value !== null) { continue; }",
+        "if ($value === null) {} else { continue; }",
+        "if (!($value === null)) { continue; }",
+    ] {
+        let source = format!("<?php function loopMiss(int $key) {{ $ints = [10]; $result = 1; foreach ([1, 2] as $item) {{ $value = $ints[$key]; {guard} $result = 2.5; break; }} return $result; }} var_dump(loopMiss(5));");
+        assert_nullable_flow_cli_heap_output(&source, "float(2.5)\n");
+    }
+}
+
 /// Reused counters lose the absent-branch null while retaining their physical numeric slots.
 #[test]
 fn test_nullable_fallback_flow_ci_rebound_counter_runtime() {

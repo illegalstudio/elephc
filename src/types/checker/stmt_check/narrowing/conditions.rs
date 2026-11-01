@@ -30,7 +30,7 @@ fn chain_operands<'a>(condition: &'a Expr, op: &BinOp) -> Vec<&'a Expr> {
 }
 
 impl Checker {
-    /// Proves a strict null comparison from a plain local's current read type.
+    /// Proves a strict null comparison from null or a retained local refinement.
     pub(in crate::types::checker) fn known_null_guard_truth(&self, condition: &Expr, env: &TypeEnv) -> Option<bool> {
         if let ExprKind::Not(inner) = &condition.kind {
             return self.known_null_guard_truth(inner, env).map(|truth| !truth);
@@ -43,7 +43,8 @@ impl Checker {
         if !self.local_flow_read_is_stable(name) || !self.definitely_bound_locals.contains(name) { return None; }
         let current = env.get(name)?;
         let is_null = if *current == PhpType::Void { true }
-            else if super::type_is_definitely_non_null(current) { false }
+            else if super::type_is_definitely_non_null(current)
+                && self.guarded_local_storage_type(receiver, env).is_some() { false }
             else { return None; };
         Some(is_null ^ negated)
     }

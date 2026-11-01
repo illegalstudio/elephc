@@ -65,7 +65,14 @@ fn null_coalesce_assignment_type(
     default_ty: &PhpType,
     default: &Expr,
     span: Span,
+    env: &TypeEnv,
 ) -> Result<PhpType, CompileError> {
+    let default_ty = if type_is_definitely_non_null(default_ty)
+        && !checker.stored_value_is_non_null(default, default_ty, env)
+    {
+        checker.normalize_union_type(vec![default_ty.clone(), PhpType::Void])
+    } else { default_ty.clone() };
+    let default_ty = &default_ty;
     if *existing == PhpType::Void {
         return Ok(default_ty.clone());
     }
@@ -209,7 +216,7 @@ fn check_assign_value_type(
                     checker.finish_conditional_flow(flow, env);
                     ty
                 };
-                null_coalesce_assignment_type(checker, name, &existing, &default_ty, default, span)
+                null_coalesce_assignment_type(checker, name, &existing, &default_ty, default, span, env)
             } else {
                 checker.infer_type_with_assignment_effects(value, env)
             }
@@ -232,7 +239,7 @@ fn check_assign_value_type(
             }
         }
     }
-    let ty = match ty_result {
+    let mut ty = match ty_result {
         Ok(ty) => ty,
         Err(error) => {
             // Error recovery: the initializer failed to type, but the assignment
@@ -250,6 +257,16 @@ fn check_assign_value_type(
         poison_unbound_local(env, name);
         return Err(error);
     }
+    let stored_non_null = checker.stored_value_is_non_null(value, &ty, env);
+    // An array element or other unproved read can carry null even when its checker
+    // type omits it. A nullable destination must not turn that store into a proof.
+    if null_coalesce_default.is_none() && type_is_definitely_non_null(&ty)
+        && !stored_non_null
+        && checker.guarded_local_storage_type(&Expr::var(name), env).or_else(|| env.get(name))
+            .is_some_and(Checker::union_contains_void)
+    {
+        ty = checker.normalize_union_type(vec![ty, PhpType::Void]);
+    }
     update_reflection_class_assignment_metadata(checker, name, reflection_class_target);
     let previous_view = env.get(name).cloned();
     let previous_storage = checker.guarded_union_types.get(name).cloned();
@@ -266,7 +283,7 @@ fn check_assign_value_type(
     if merged.is_ok() {
         // A completed non-null store ends the missing-binding alternative. Keep the physical
         // contract while retracting the null that an earlier conditional binding added.
-        if !previously_bound && type_is_definitely_non_null(&ty)
+        if !previously_bound && stored_non_null
             && checker.local_flow_read_is_stable(name)
         {
             if let Some(read) = env.get(name).filter(|read| Checker::union_contains_void(read)).cloned() {
@@ -299,6 +316,20 @@ fn check_assign_value_type(
             });
             if !retain {
                 checker.guarded_union_types.remove(name);
+            }
+            if checker.local_flow_read_is_stable(name) {
+                if stored_non_null && env.get(name).is_some_and(type_is_definitely_non_null) {
+                    // Keep a successful fresh-value proof available to later local copies.
+                    // A same-type contract changes no physical representation.
+                    let storage = env.get(name).expect("successful assignment").clone();
+                    checker.guarded_union_types.entry(name.to_string())
+                        .or_insert(GuardedLocalStorage { ty: storage, coalesced: false });
+                } else if checker.guarded_union_types.get(name)
+                    .is_some_and(|storage| type_is_definitely_non_null(&storage.ty))
+                {
+                    // An unproved replacement ends a previous raw-value proof.
+                    checker.guarded_union_types.remove(name);
+                }
             }
         }
         // The assignment merge protects the slot's contract. A coalescing store also proves
