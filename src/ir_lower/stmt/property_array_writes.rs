@@ -284,6 +284,11 @@ pub(super) fn lower_property_array_assign_with_update(
     update: PropertyElementUpdate,
 ) {
     let compound = compound_source(value, object, property, index, span);
+    if compound.is_some()
+        || matches!(update, PropertyElementUpdate::IncDec(_) | PropertyElementUpdate::Stored(_))
+    {
+        crate::ir_lower::scoped_writes::consume_update_receiver(ctx, object);
+    }
     let index_expression = index;
     let delayed_incdec = match update {
         PropertyElementUpdate::IncDec(increment) if (ctx.classes.contains_key("SimpleXMLElement")

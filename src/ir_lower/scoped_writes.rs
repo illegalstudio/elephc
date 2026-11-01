@@ -147,3 +147,13 @@ pub(super) fn property_name(ctx: &mut LoweringContext<'_, '_>, expr: &Expr, span
 pub(super) fn consume_update_operands(ctx: &mut LoweringContext<'_, '_>) {
     ctx.scoped_write_scopes.last_mut().expect("scoped update has a statement boundary").preserve = false;
 }
+
+/// Lets a specialized property update take ownership of its parser-captured receiver.
+pub(super) fn consume_update_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &Expr,
+) {
+    if matches!(&receiver.kind, ExprKind::Variable(name) if scoped_name(name)) {
+        consume_update_operands(ctx);
+    }
+}
