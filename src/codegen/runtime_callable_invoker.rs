@@ -2520,8 +2520,7 @@ fn push_loaded_mixed_hash_value_ref_arg(
     abi::emit_jump(emitter, &done_label);
 
     emitter.label(&direct_marker_label);
-    move_raw_hash_value_lo_to_result(emitter);
-    abi::emit_push_result_value(emitter, &PhpType::Int);
+    push_invoker_ref_storage_address(raw_lo_reg, raw_hi_reg, target_ty, emitter, ctx);
     abi::emit_jump(emitter, &done_label);
 
     emitter.label(&boxed_marker_label);
@@ -3860,6 +3859,51 @@ mod tests {
         assert!(output.contains("    ldr x10, [x9]\n"));
         assert!(!output.contains("stur x10, [x29, #-3"));
         assert!(!output.contains("ldur x10, [x29, #-3"));
+    }
+
+    /// Direct associative ref markers adapt their caller slot before a concrete object callee.
+    #[test]
+    fn direct_hash_ref_markers_use_target_storage_adaptation_on_all_targets() {
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            let owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, 1);
+            let mut ctx =
+                InvokerEmitContext::new("hash_ref", owners, false, false, Vec::new(), target);
+            let mut data = DataSection::new();
+            push_loaded_mixed_hash_value_ref_arg(
+                Some(&PhpType::Object("Payload".to_string())),
+                0,
+                &mut emitter,
+                &mut ctx,
+                &mut data,
+            );
+
+            let assembly = emitter.output();
+            let direct_label = assembly
+                .lines()
+                .find(|line| line.contains("hash_invoker_ref_direct") && line.ends_with(':'))
+                .unwrap_or_else(|| panic!("{name}: missing direct-marker label: {assembly}"));
+            let boxed_label = assembly
+                .lines()
+                .find(|line| line.contains("hash_invoker_ref_boxed") && line.ends_with(':'))
+                .unwrap_or_else(|| panic!("{name}: missing boxed-marker label: {assembly}"));
+            let direct_start = assembly.find(direct_label).unwrap();
+            let boxed_start = assembly.find(boxed_label).unwrap();
+            let direct_path = &assembly[direct_start..boxed_start];
+            let payload_address = match target.arch {
+                Arch::AArch64 => "add x0, x0, #8",
+                Arch::X86_64 => "add rax, 8",
+            };
+            assert!(direct_path.contains("__rt_heap_kind"), "{name}: {direct_path}");
+            assert!(direct_path.contains(payload_address), "{name}: {direct_path}");
+        }
     }
 
     /// Ref-cell markers retain source tag 7 directly instead of creating nested Mixed boxes.
