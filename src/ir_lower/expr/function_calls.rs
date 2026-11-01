@@ -581,6 +581,8 @@ pub(super) fn emit_builtin_call_value(
     // Scope widening can make the already-lowered source load an owned string cast.
     // Eval guards that owner through exceptional exits, then releases it normally here.
     if let Some(slot) = eval_source_owner {
+        // The argument guard sits above the root and must not survive this call.
+        ctx.unguard_call_argument(operands[0], span);
         retire_owned_call_operand(ctx, slot, span);
     } else {
         release_owned_call_arg_temporaries(

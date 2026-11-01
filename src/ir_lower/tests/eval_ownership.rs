@@ -454,6 +454,20 @@ fn check_profiled_eval_owns_its_result_and_roots_its_source(target: &str) {
     let root = function.instructions[..index].iter().find(|inst| {
         inst.op == Op::StoreLocal && inst.operands == [call.operands[0]]
     }).expect("the source must be visible to exceptional frame cleanup");
+    let guard = function.instructions[..index].iter().find(|inst| {
+        inst.immediate == Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ExceptionGuardOwned))
+            && inst.operands.first() == call.operands.first()
+    }).expect("the eval argument must have an exceptional ownership guard");
+    let token = guard.result.expect("argument guard token");
+    let cleanup = &function.instructions[index + 1..];
+    let unguard = cleanup.iter().position(|inst| {
+        inst.immediate == Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ExceptionUnguardOwned))
+            && inst.operands == [token]
+    }).expect("normal eval completion must remove its argument guard");
+    let detach = cleanup.iter().position(|inst| {
+        inst.op == Op::PopCallOperandOwner && inst.immediate == root.immediate
+    }).expect("normal eval completion must detach its source root");
+    assert!(unguard < detach, "{target}: remove the newer guard before detaching the source root");
     assert!(function.instructions[index + 1..].iter().any(|inst| {
         inst.op == Op::ReleaseLocalSlot && inst.immediate == root.immediate
     }), "{target}: normal return must clear and retire the source root");
