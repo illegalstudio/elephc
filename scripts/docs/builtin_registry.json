@@ -45568,7 +45568,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "error_log",
-      "codegen_line": 1762,
+      "codegen_line": 1763,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -82201,7 +82201,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "ini_get",
-      "codegen_line": 4399,
+      "codegen_line": 4400,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -82414,7 +82414,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "ini_set",
-      "codegen_line": 4906,
+      "codegen_line": 4924,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -113515,7 +113515,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_compile_file",
-      "codegen_line": 956,
+      "codegen_line": 957,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -113571,7 +113571,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_get_configuration",
-      "codegen_line": 204,
+      "codegen_line": 205,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -113627,7 +113627,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_get_status",
-      "codegen_line": 489,
+      "codegen_line": 490,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -113698,7 +113698,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_invalidate",
-      "codegen_line": 849,
+      "codegen_line": 850,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -113769,7 +113769,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_is_script_cached",
-      "codegen_line": 737,
+      "codegen_line": 738,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -113833,7 +113833,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_is_script_cached_in_file_cache",
-      "codegen_line": 974,
+      "codegen_line": 975,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -113897,7 +113897,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_jit_blacklist",
-      "codegen_line": 1037,
+      "codegen_line": 1038,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -113953,7 +113953,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_reset",
-      "codegen_line": 231,
+      "codegen_line": 232,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -130068,7 +130068,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_abort",
-      "codegen_line": 3416,
+      "codegen_line": 3417,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -130124,7 +130124,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_cache_expire",
-      "codegen_line": 3523,
+      "codegen_line": 3524,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -130188,7 +130188,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_cache_limiter",
-      "codegen_line": 3495,
+      "codegen_line": 3496,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -130244,7 +130244,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_commit",
-      "codegen_line": 3730,
+      "codegen_line": 3731,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -130300,7 +130300,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_create_id",
-      "codegen_line": 3341,
+      "codegen_line": 3342,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -130364,7 +130364,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_decode",
-      "codegen_line": 3107,
+      "codegen_line": 3108,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -130420,7 +130420,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_destroy",
-      "codegen_line": 2957,
+      "codegen_line": 2958,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -130468,7 +130468,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_encode",
-      "codegen_line": 3089,
+      "codegen_line": 3090,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -130516,7 +130516,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_gc",
-      "codegen_line": 3386,
+      "codegen_line": 3387,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -130564,7 +130564,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_get_cookie_params",
-      "codegen_line": 3551,
+      "codegen_line": 3552,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -130620,7 +130620,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_id",
-      "codegen_line": 2993,
+      "codegen_line": 2994,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -130684,7 +130684,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_module_name",
-      "codegen_line": 3750,
+      "codegen_line": 3751,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -130748,7 +130748,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_name",
-      "codegen_line": 3022,
+      "codegen_line": 3023,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -130812,7 +130812,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_regenerate_id",
-      "codegen_line": 3156,
+      "codegen_line": 3157,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -130868,7 +130868,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_register_shutdown",
-      "codegen_line": 3740,
+      "codegen_line": 3741,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -130916,7 +130916,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_reset",
-      "codegen_line": 3448,
+      "codegen_line": 3449,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -130972,7 +130972,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_save_path",
-      "codegen_line": 3127,
+      "codegen_line": 3128,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -131028,7 +131028,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_set_cookie_params",
-      "codegen_line": 3570,
+      "codegen_line": 3571,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -131140,7 +131140,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_set_save_handler",
-      "codegen_line": 3787,
+      "codegen_line": 3788,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -131260,7 +131260,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_start",
-      "codegen_line": 1929,
+      "codegen_line": 1930,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -131316,7 +131316,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_status",
-      "codegen_line": 3060,
+      "codegen_line": 3061,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -131364,7 +131364,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_unset",
-      "codegen_line": 3070,
+      "codegen_line": 3071,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -131412,7 +131412,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_write_close",
-      "codegen_line": 2869,
+      "codegen_line": 2870,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -131787,7 +131787,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "setcookie",
-      "codegen_line": 1281,
+      "codegen_line": 1282,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -131935,7 +131935,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "setrawcookie",
-      "codegen_line": 1297,
+      "codegen_line": 1298,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],

@@ -45,6 +45,14 @@ const CMAKE_FLAGS: &[&str] = &[
     "-DENABLE_OPENSSL=ON",
     "-DENABLE_BZIP2=ON",
     "-DENABLE_LZMA=ON",
+    // The iOS SDK does not declare memcpy_s for libzip's translation units. Force the
+    // portable memcpy path (and the macOS-only clone APIs off) rather than relying on a
+    // cross try-compile probe.
+    "-DHAVE_MEMCPY_S=OFF",
+    // The macOS-only clone APIs must not leak into the iOS cross build; use libzip's
+    // portable copy fallback on every target.
+    "-DHAVE_CLONEFILE=OFF",
+    "-DHAVE_FICLONERANGE=OFF",
 ];
 
 /// Builds libzip into the catalog-declared staging prefix.
@@ -175,7 +183,6 @@ fn toolchain_file(request: &RecipeRequest<'_>) -> String {
         }
         (Platform::Windows, _) => {}
     }
-    file.push_str("set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)\n");
     file.push_str(&format!(
         "set(CMAKE_C_COMPILER \"{}\")\n",
         absolute_tool(&request.toolchain.cc).display()
@@ -207,7 +214,13 @@ mod tests {
         ] {
             assert!(CMAKE_FLAGS.contains(&expected), "missing {expected}");
         }
-        for disabled in ["-DENABLE_ZSTD=OFF", "-DENABLE_COMMONCRYPTO=OFF"] {
+        for disabled in [
+            "-DENABLE_ZSTD=OFF",
+            "-DENABLE_COMMONCRYPTO=OFF",
+            "-DHAVE_MEMCPY_S=OFF",
+            "-DHAVE_CLONEFILE=OFF",
+            "-DHAVE_FICLONERANGE=OFF",
+        ] {
             assert!(CMAKE_FLAGS.contains(&disabled), "missing {disabled}");
         }
         assert!(!CMAKE_FLAGS.iter().any(|flag| flag.contains("SYSTEM")));

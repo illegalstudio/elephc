@@ -273,6 +273,15 @@ jobs:
         # A no-op on the warm cache restored above; otherwise the pinned
         # examples/zip/elephc.lock builds libzip + bzip2 + xz + zlib + openssl.
         run: |
+          if ! command -v cmake >/dev/null 2>&1; then
+            if command -v apt-get >/dev/null 2>&1; then
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake
+            else
+              echo "cmake is required to build the managed libzip package" >&2
+              exit 1
+            fi
+          fi
           ./target/debug/elephc native install --locked \
             --target macos-aarch64 \
             --manifest-path examples/zip/elephc.toml
@@ -519,6 +528,15 @@ jobs:
         # A no-op on the warm cache restored above; otherwise the pinned
         # examples/zip/elephc.lock builds libzip + bzip2 + xz + zlib + openssl.
         run: |
+          if ! command -v cmake >/dev/null 2>&1; then
+            if command -v apt-get >/dev/null 2>&1; then
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake
+            else
+              echo "cmake is required to build the managed libzip package" >&2
+              exit 1
+            fi
+          fi
           ./target/debug/elephc native install --locked \
             --target linux-x86_64 \
             --manifest-path examples/zip/elephc.toml
@@ -757,6 +775,15 @@ jobs:
         # A no-op on the warm cache restored above; otherwise the pinned
         # examples/zip/elephc.lock builds libzip + bzip2 + xz + zlib + openssl.
         run: |
+          if ! command -v cmake >/dev/null 2>&1; then
+            if command -v apt-get >/dev/null 2>&1; then
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake
+            else
+              echo "cmake is required to build the managed libzip package" >&2
+              exit 1
+            fi
+          fi
           ./target/debug/elephc native install --locked \
             --target linux-aarch64 \
             --manifest-path examples/zip/elephc.toml
@@ -1462,6 +1489,15 @@ jobs:
         # A no-op on the warm cache restored above; otherwise the pinned
         # examples/zip/elephc.lock builds libzip + bzip2 + xz + zlib + openssl.
         run: |
+          if ! command -v cmake >/dev/null 2>&1; then
+            if command -v apt-get >/dev/null 2>&1; then
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake
+            else
+              echo "cmake is required to build the managed libzip package" >&2
+              exit 1
+            fi
+          fi
           "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
             --target macos-aarch64 \
             --manifest-path examples/zip/elephc.toml
@@ -1607,6 +1643,15 @@ jobs:
         # A no-op on the warm cache restored above; otherwise the pinned
         # examples/zip/elephc.lock builds libzip + bzip2 + xz + zlib + openssl.
         run: |
+          if ! command -v cmake >/dev/null 2>&1; then
+            if command -v apt-get >/dev/null 2>&1; then
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake
+            else
+              echo "cmake is required to build the managed libzip package" >&2
+              exit 1
+            fi
+          fi
           "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
             --target linux-x86_64 \
             --manifest-path examples/zip/elephc.toml
@@ -1752,6 +1797,15 @@ jobs:
         # A no-op on the warm cache restored above; otherwise the pinned
         # examples/zip/elephc.lock builds libzip + bzip2 + xz + zlib + openssl.
         run: |
+          if ! command -v cmake >/dev/null 2>&1; then
+            if command -v apt-get >/dev/null 2>&1; then
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake
+            else
+              echo "cmake is required to build the managed libzip package" >&2
+              exit 1
+            fi
+          fi
           "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
             --target linux-aarch64 \
             --manifest-path examples/zip/elephc.toml
