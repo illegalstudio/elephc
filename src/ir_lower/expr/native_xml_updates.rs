@@ -240,6 +240,7 @@ fn ordinary(
     // The ordinary getter/arithmetic may produce a concrete scalar or string. The
     // common result owner has boxed storage and must outlive every operand lease.
     let result = ctx.box_value_as_mixed(result, PhpType::Mixed, Some(expr.span));
+    let result = crate::ir_lower::ownership::copy_assignment_value(ctx, result, Some(expr.span));
     stage_call_result(ctx, staging.as_ref(), result, expr.span);
     retire(ctx, owners, expr.span);
     take_prepublished_call_result(ctx, staging, result, expr.span)

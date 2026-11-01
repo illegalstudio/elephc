@@ -36,6 +36,8 @@ $xml = new SimpleXMLElement('<r/>');
     let body = r#"
 $counter = new OrdinaryXmlEnabledCounter();
 updateOrdinaryXmlEnabledCounter($counter);
+echo ($counter->receiver()->number += 3), '|';
+echo $counter->number, '|';
 echo ($counter->receiver()->{str_repeat('text', 1)} .= str_repeat('c', 2)), '|';
 echo $counter->text, '|';
 unset($counter, $xml);
@@ -45,7 +47,7 @@ unset($counter, $xml);
     let eval_body = body.replace("OrdinaryXmlEnabled", "EvalOrdinaryXmlEnabled")
         .replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("{eval_setup}\n$code = $argc > 0 ? '{eval_body}' : ''; eval($code);");
-    let expected = "r|5|r|6|r|6|r|ab|n|8|r|abcc|abcc|";
+    let expected = "r|5|r|6|r|6|r|ab|n|8|r|11|11|r|abcc|abcc|";
     assert_bundle_with(&[
         BundleCase { name: "ordinary_xml_enabled_aot", source: &aot, expected },
         BundleCase { name: "ordinary_xml_enabled_eval_bridge", source: &eval, expected },
