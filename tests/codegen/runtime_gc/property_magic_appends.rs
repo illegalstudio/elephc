@@ -175,9 +175,41 @@ echo $visibilityPrivateGetter->size(), '|';
     let eval = format!("<?php {eval_capability} $source = $argc > 0 ? '{body}' : ''; eval($source);");
     let named_expected = "named:Error:Cannot access protected property EvalAppendMagicProtected::$items|2|named:Error:Cannot access private property EvalAppendMagicPrivate::$items|2|named:Error:Unsupported property append through an overloaded __get()|1|named:Error:Unsupported property append through an overloaded __get()|1|";
     let eval_expected = format!("{}{named_expected}", expected.replace("AppendMagic", "EvalAppendMagic"));
+    let guarded = r#"<?php
+class AppendGuardReadonlyArray {
+    public readonly array $items;
+    public function __construct() { $this->items = [1]; }
+}
+class AppendGuardPrivateSetArray { public private(set) array $items = [1]; }
+class AppendGuardReadonlyValue {
+    public readonly mixed $items;
+    public function __construct(mixed $items) { $this->items = $items; }
+}
+function appendGuardErased(object $box): void { $box->items[] = 2; }
+$guardArray = new AppendGuardReadonlyArray();
+try { appendGuardErased($guardArray); } catch (Error $error) { echo 'array-blocked|'; }
+echo json_encode($guardArray->items), '|';
+$guardSet = new AppendGuardPrivateSetArray();
+try { appendGuardErased($guardSet); } catch (Error $error) { echo 'set-blocked|'; }
+echo json_encode($guardSet->items), '|';
+foreach ([null, false, 7, 's', [1]] as $guardValue) {
+    $guardBox = new AppendGuardReadonlyValue($guardValue);
+    try { appendGuardErased($guardBox); } catch (Error $error) { echo 'scalar-blocked|'; }
+}
+$guardChild = new ArrayObject([1]);
+$guardBox = new AppendGuardReadonlyValue($guardChild);
+appendGuardErased($guardBox); echo count($guardChild), '|';
+unset($guardArray, $guardSet, $guardBox, $guardChild, $guardValue, $error);
+"#;
+    let guarded_body = guarded.strip_prefix("<?php").unwrap().replace("AppendGuard", "EvalAppendGuard")
+        .replace("appendGuard", "evalAppendGuard").replace('\\', "\\\\").replace('\'', "\\'");
+    let guarded_eval = format!("<?php $guardCode = $argc > 0 ? '{guarded_body}' : ''; eval($guardCode);");
+    let guarded_expected = "array-blocked|[1]|set-blocked|[1]|scalar-blocked|scalar-blocked|scalar-blocked|scalar-blocked|scalar-blocked|2|";
     assert_bundle_with(&[
         BundleCase { name: "magic_append_native", source: &native, expected },
         BundleCase { name: "magic_append_eval", source: &eval, expected: &eval_expected },
+        BundleCase { name: "readonly_container_native", source: guarded, expected: guarded_expected },
+        BundleCase { name: "readonly_container_eval", source: &guarded_eval, expected: guarded_expected },
     ], |source| {
         let out = compile_and_run_with_heap_debug(source);
         assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);

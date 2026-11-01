@@ -18,6 +18,7 @@ use super::PropertyDimensionFetchMode as FetchMode;
 struct SlotGuard {
     action: SlotAction,
     nullable: bool,
+    object_only: bool,
 }
 
 /// Distinguishes a prohibited container from legal array autovivification on an uninitialized slot.
@@ -112,13 +113,14 @@ fn slot_guard(
         !crate::ir_lower::expr::ir_can_access_member(ctx, declaring, visibility));
     if admits_array(declared) && !info.readonly_properties.contains(property) && !inaccessible {
         return (mode == FetchMode::Write).then_some(SlotGuard {
-            action: SlotAction::InitializeArray, nullable: false,
+            action: SlotAction::InitializeArray, nullable: false, object_only: false,
         });
     }
     let nullable = matches!(storage, PhpType::Mixed | PhpType::TaggedScalar);
-    if mode == FetchMode::ReadWrite && !nullable { return None; }
+    let object_only = info.readonly_properties.contains(property) || inaccessible;
+    if mode == FetchMode::ReadWrite && !nullable && !object_only { return None; }
     let (exception, message) = null_write_error(ctx, class, info, property, declared);
-    Some(SlotGuard { action: SlotAction::Reject { exception, message }, nullable })
+    Some(SlotGuard { action: SlotAction::Reject { exception, message }, nullable, object_only })
 }
 
 /// Shares exact-class selection between final stores and guards that precede element reads.
@@ -297,24 +299,33 @@ fn apply_slot_guard(
     let reject = ctx.builder.create_named_block("property.array.null_reject", vec![]);
     let write = ctx.builder.create_named_block("property.array.nonnull_write", vec![]);
     let initialized_slots = ctx.initialized_slots_snapshot();
-    if mode == FetchMode::Write {
+    if mode == FetchMode::Write || guard.object_only {
         let initialized = ctx.emit_value(Op::PropInitialized, vec![receiver.value],
             Some(Immediate::Data(data)), PhpType::Bool, Op::PropInitialized.default_effects(), Some(span));
-        let read = if guard.nullable {
+        let read = if guard.nullable || guard.object_only {
             ctx.builder.create_named_block("property.array.initialized_read", vec![])
         } else { write };
         ctx.builder.terminate(Terminator::CondBr { cond: initialized.value,
             then_target: read, then_args: vec![], else_target: reject, else_args: vec![] });
         ctx.builder.position_at_end(read);
     }
-    if guard.nullable {
+    if guard.nullable || guard.object_only {
         let current = ctx.emit_owned_value(Op::PropGet, vec![receiver.value], Some(Immediate::Data(data)),
             PhpType::Mixed, Op::PropGet.default_effects(), Some(span));
-        let null = ctx.emit_value(Op::IsNull, vec![current.value], None, PhpType::Bool,
-            Op::IsNull.default_effects(), Some(span));
+        // Readonly and inaccessible-set properties permit child object mutation only.
+        let (condition, then_target, else_target) = if guard.object_only {
+            let object = ctx.emit_value(Op::TypePredicate, vec![current.value],
+                Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Object)),
+                PhpType::Bool, Op::TypePredicate.default_effects(), Some(span));
+            (object, write, reject)
+        } else {
+            let null = ctx.emit_value(Op::IsNull, vec![current.value], None, PhpType::Bool,
+                Op::IsNull.default_effects(), Some(span));
+            (null, reject, write)
+        };
         crate::ir_lower::ownership::release_if_owned(ctx, current, Some(span));
-        ctx.builder.terminate(Terminator::CondBr { cond: null.value,
-            then_target: reject, then_args: vec![], else_target: write, else_args: vec![] });
+        ctx.builder.terminate(Terminator::CondBr { cond: condition.value,
+            then_target, then_args: vec![], else_target, else_args: vec![] });
     }
     ctx.builder.position_at_end(reject);
     lower_throw_access_exception(ctx, exception, message, span);
