@@ -620,7 +620,12 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
 
     crate::progress::phase("web-prelude");
     let phase_started = Instant::now();
-    let ast = if web_application {
+    let ast = if web_application && autoloaded("web_environment") {
+        web_prelude::application::inject_with_autoload_usage(
+            ast, php_version, &ini_overrides, &mut prelude_inventory,
+            preload_startup_path.as_deref(), true,
+        )
+    } else if web_application {
         web_prelude::application::inject(
             ast, php_version, &ini_overrides, &mut prelude_inventory,
             preload_startup_path.as_deref(),
