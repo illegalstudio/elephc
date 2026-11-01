@@ -9,6 +9,22 @@
 
 use crate::ir::{Immediate, IrHeapKind, IrType, Op};
 
+/// Switch label prefix views retain float-capable returns on every supported target.
+#[test]
+fn test_nullable_fallback_flow_r41_switch_prefix_all_targets() {
+    let source = "<?php function switchPrefix(int $subject, int $key) { $ints = [10]; $result = 1; $value = $ints[$key]; switch ($subject) { case 1: foreach ([1, 2] as $item) { if ($value !== null) { continue; } $result = 2.5; break; } break; case ($value = 7): break; } return $result; } var_dump(switchPrefix(1, 5));";
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = crate::codegen::platform::Target::parse(name).unwrap();
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), target);
+        let function = module.functions.iter().find(|function| function.name == "switchPrefix").unwrap();
+        let result = &function.return_php_type;
+        assert!(*result == crate::types::PhpType::Mixed || matches!(result, crate::types::PhpType::Union(members)
+            if members.contains(&crate::types::PhpType::Float)), "{name}: {result:?}");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Synthetic OPcache foreach results retain a return shape capable of carrying hash keys.
 #[test]
 fn test_nullable_fallback_flow_r37_synthetic_hash_return() {

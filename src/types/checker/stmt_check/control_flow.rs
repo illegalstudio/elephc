@@ -512,16 +512,17 @@ impl Checker {
                 self.infer_type_with_assignment_effects(subject, env)?;
                 let mut errors = Vec::new();
                 let branch_entry_boxed_refs = self.boxed_ref_aliased_locals.clone();
-                let mut arm_bindings = Vec::new();
+                let mut arm_entries = Vec::new();
                 for (values, _) in cases {
-                    let mut entries: Option<HashSet<String>> = None;
+                    let mut entries = Vec::new();
                     for value in values {
                         self.infer_type_with_assignment_effects(value, env)?;
-                        if let Some(entries) = &mut entries {
-                            entries.retain(|name| self.definitely_bound_locals.contains(name));
-                        } else { entries = Some(self.definitely_bound_locals.clone()); }
+                        entries.push(self.snapshot_flow_exit(env));
                     }
-                    arm_bindings.push(entries.unwrap_or_else(|| self.definitely_bound_locals.clone()));
+                    // Only this label's evaluated prefix reaches its matching arm. Later
+                    // labels still contribute physical storage requirements, not read proofs.
+                    arm_entries.push(self.join_flow_snapshots(&entries)
+                        .unwrap_or_else(|| self.snapshot_flow_exit(env)));
                 }
                 let entry = self.snapshot_flow_exit(env);
                 let flow = self.snapshot_all_locals_flow(env);
@@ -530,14 +531,12 @@ impl Checker {
                 if let Some(body) = default {
                     let position = crate::termination::switch_default_position(cases, body);
                     arms.insert(position, body);
-                    arm_bindings.insert(position, entry.bound.clone());
+                    arm_entries.insert(position, entry.clone());
                 }
                 let last_arm = arms.len().saturating_sub(1);
                 let mut fallthrough = None;
                 let mut strict_arm_bindings = super::switch_storage::entry_bindings(self, env);
-                for (index, body) in arms.into_iter().enumerate() {
-                    let mut direct = entry.clone();
-                    direct.bound = arm_bindings[index].clone();
+                for (index, (body, direct)) in arms.into_iter().zip(arm_entries).enumerate() {
                     let mut inputs = vec![direct];
                     inputs.extend(fallthrough.take());
                     let joined = self.join_flow_snapshots(&inputs).expect("switch entry");

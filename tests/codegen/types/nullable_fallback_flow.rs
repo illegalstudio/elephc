@@ -9,6 +9,55 @@
 
 use super::*;
 
+/// Switch dispatch preserves a miss before a skipped label and evaluated effects in own/default arms.
+#[test]
+fn test_nullable_fallback_flow_r41_switch_prefix_runtime() {
+    let source = r#"<?php
+function switchPrefix(int $subject, int $key) {
+    $ints = [10]; $result = 1; $value = $ints[$key];
+    switch ($subject) {
+        case 1:
+            foreach ([1, 2] as $item) {
+                if ($value !== null) { continue; }
+                $result = 2.5; break;
+            }
+            break;
+        case ($value = 7): break;
+    }
+    return $result;
+}
+function ownLabel(int $subject, int $key) {
+    $ints = [10]; $result = 1; $value = $ints[$key];
+    switch ($subject) {
+        case ($value = 7):
+            foreach ([1, 2] as $item) {
+                if ($value !== null) { continue; }
+                $result = 2.5; break;
+            }
+            break;
+        default: break;
+    }
+    return $result;
+}
+function defaultLabel(int $subject, int $key) {
+    $ints = [10]; $result = 1; $value = $ints[$key];
+    switch ($subject) {
+        default:
+            foreach ([1, 2] as $item) {
+                if ($value !== null) { continue; }
+                $result = 2.5; break;
+            }
+            break;
+        case ($value = 7): break;
+    }
+    return $result;
+}
+var_dump(switchPrefix(1, 5)); echo switchPrefix(1, 0), "\n";
+var_dump(ownLabel(7, 5), defaultLabel(3, 5));
+"#;
+    assert_nullable_flow_cli_heap_output(source, "float(2.5)\n1\nint(1)\nint(1)\n");
+}
+
 /// Else and elseif bodies observe the original array miss rather than a sibling's fresh store.
 #[test]
 fn test_nullable_fallback_flow_r40_sibling_runtime() {

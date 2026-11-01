@@ -9,6 +9,37 @@
 
 use super::*;
 
+/// Later switch labels cannot remove a reachable float exit from an earlier matching arm.
+#[test]
+fn test_nullable_fallback_flow_r41_switch_label_proofs() {
+    let body = "foreach ([1, 2] as $item) { if ($value !== null) { continue; } $result = 2.5; break; }";
+    for arms in [
+        format!("case 1: {body} break; case ($value = 7): break;"),
+        format!("default: break; case 1: {body} break; case ($value = 7): break;"),
+        format!("case 1: case ($value = 7): {body} break;"),
+    ] {
+        let source = format!("<?php function run(int $subject, int $key) {{ $ints = [10]; $result = 1; $value = $ints[$key]; switch ($subject) {{ {arms} }} return $result; }}");
+        let checked = check_source_full(&source).unwrap();
+        let result = &checked.functions["run"].return_type;
+        assert!(*result == types::PhpType::Mixed || matches!(result, types::PhpType::Union(members)
+            if members.contains(&types::PhpType::Float)), "{source}: {result:?}");
+    }
+}
+
+/// An evaluated label still establishes its proof in its own arm and the unmatched default.
+#[test]
+fn test_nullable_fallback_flow_r41_switch_label_effects() {
+    let body = "foreach ([1, 2] as $item) { if ($value !== null) { continue; } $result = 2.5; break; }";
+    for arms in [
+        format!("case ($value = 7): {body} break; default: break;"),
+        format!("default: {body} break; case ($value = 7): break;"),
+    ] {
+        let source = format!("<?php function run(int $subject, int $key) {{ $ints = [10]; $result = 1; $value = $ints[$key]; switch ($subject) {{ {arms} }} return $result; }}");
+        let checked = check_source_full(&source).unwrap();
+        assert_eq!(checked.functions["run"].return_type, types::PhpType::Int, "{source}");
+    }
+}
+
 /// A proof from an earlier clause cannot prune a later sibling's nullable loop exit.
 #[test]
 fn test_nullable_fallback_flow_r40_sibling_proofs() {
