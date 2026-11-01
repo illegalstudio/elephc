@@ -15,6 +15,20 @@ use super::*;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::try_handlers::EXCEPTION_GUARD_SLOT_SIZE;
 
+/// Guards an owner already preserved in a caller-reserved stack block.
+pub(super) fn guard_saved_owner(
+    emitter: &mut Emitter,
+    owner_offset: usize,
+    guard_offset: usize,
+) {
+    register(
+        emitter,
+        guard_offset,
+        owner_offset,
+        "__rt_exception_release_owned",
+    );
+}
+
 /// Removes a saved-owner record while leaving its owner for normal cleanup.
 pub(super) fn unguard_saved_owner(emitter: &mut Emitter, guard_offset: usize) {
     abi::emit_temporary_stack_address(

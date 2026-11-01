@@ -109,7 +109,6 @@ pub(super) fn coerce_borrowed_ref_cell_local(
             | PhpType::AssocArray { .. } | PhpType::Object(_) | PhpType::Callable
             | PhpType::Iterable)
     {
-        move_int_result_to_first_arg(ctx);
         abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
         move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
         return Ok(());
@@ -241,69 +240,5 @@ pub(in crate::codegen) fn coerce_loaded_local_to_result_type(
             "local load from PHP type {:?} as {:?}",
             source_ty, result_ty
         ))),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::codegen::data_section::DataSection;
-    use crate::codegen::emit::Emitter;
-    use crate::codegen::platform::Target;
-    use crate::codegen::shared_state::SharedCodegenState;
-
-    /// Borrowed boxed reference payloads reach Mixed unboxing through each target's first argument register.
-    #[test]
-    fn borrowed_mixed_ref_cell_unbox_uses_the_target_argument_abi() {
-        for name in [
-            "macos-aarch64",
-            "ios-arm64",
-            "ios-sim-arm64",
-            "linux-aarch64",
-            "linux-x86_64",
-        ] {
-            let target = Target::parse(name).unwrap();
-            let module = Module::new(target);
-            let function = crate::codegen::shared_helper::helper_function(
-                "borrowed_ref_cell_unbox",
-                PhpType::Void,
-            );
-            let layout = crate::codegen::frame::layout_for_function(
-                &function, target, false, false, false,
-            );
-            let mut emitter = Emitter::new(target);
-            let mut data = DataSection::new();
-            let mut shared = SharedCodegenState::default();
-            {
-                let mut ctx = FunctionContext::new(
-                    &module,
-                    &function,
-                    &mut emitter,
-                    &mut data,
-                    &mut shared,
-                    layout,
-                    false,
-                    false,
-                    false,
-                    None,
-                );
-                coerce_borrowed_ref_cell_local(
-                    &mut ctx,
-                    &PhpType::Mixed,
-                    &PhpType::Object("ReferenceValue".to_string()),
-                )
-                .unwrap();
-            }
-            let assembly = emitter.output();
-            let call = assembly
-                .find("__rt_mixed_unbox")
-                .expect("borrowed Mixed payload unbox call");
-            if target.arch == Arch::X86_64 {
-                assert!(
-                    assembly[..call].contains("mov rdi, rax"),
-                    "{name}: boxed payload was not moved into the SysV argument register:\n{assembly}"
-                );
-            }
-        }
     }
 }

@@ -504,7 +504,8 @@ pub(super) fn function_signature_from_eir_with_param_count(
         let original_param_count = signature.params.len();
         ensure_variadic_param_slot(&mut signature);
         if original_param_count == param_count {
-            return signature.clone();
+            restore_declared_object_reference_params(&mut signature);
+            return signature;
         }
     }
 
@@ -552,6 +553,28 @@ pub(super) fn function_signature_from_eir_with_param_count(
     }
 }
 
+/// Restores the concrete reference-cell ABI hidden by boxed EIR object parameters.
+fn restore_declared_object_reference_params(signature: &mut FunctionSig) {
+    for (index, (_, php_type)) in signature.params.iter_mut().enumerate() {
+        if !signature.ref_params.get(index).copied().unwrap_or(false)
+            || php_type.codegen_repr() != PhpType::Mixed
+        {
+            continue;
+        }
+        let Some(declared) = signature
+            .param_type_exprs
+            .get(index)
+            .and_then(Option::as_ref)
+            .map(crate::ir_lower::type_expr_to_php_type)
+        else {
+            continue;
+        };
+        if matches!(declared.codegen_repr(), PhpType::Object(_)) {
+            *php_type = declared;
+        }
+    }
+}
+
 /// Adds the virtual variadic array slot when the EIR ABI stores it outside `params`.
 pub(super) fn ensure_variadic_param_slot(signature: &mut FunctionSig) {
     let Some(variadic) = signature.variadic.clone() else {
@@ -589,6 +612,9 @@ pub(super) fn ensure_variadic_param_slot(signature: &mut FunctionSig) {
 mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
+    use crate::ir::FunctionParam;
+    use crate::names::Name;
+    use crate::parser::ast::TypeExpr;
 
     /// EIR-only callable metadata retains the declaration's reference-return flag.
     #[test]
@@ -623,6 +649,47 @@ mod tests {
                 by_ref_return,
             );
         }
+    }
+
+    /// Runtime callable metadata exposes the concrete ABI of declared object references.
+    #[test]
+    fn callable_signature_restores_declared_object_reference_storage() {
+        let mut function = crate::ir::Function::new(
+            "object_reference".into(),
+            IrType::Void,
+            PhpType::Void,
+        );
+        function.params.push(FunctionParam {
+            name: "value".into(),
+            ir_type: IrType::Heap(crate::ir::IrHeapKind::Mixed),
+            php_type: PhpType::Mixed,
+            by_ref: true,
+            variadic: false,
+        });
+        function.signature = Some(FunctionSig {
+            params: vec![("value".into(), PhpType::Mixed)],
+            param_type_exprs: vec![Some(TypeExpr::Named(Name::unqualified(
+                "ReferenceValue",
+            )))],
+            param_attributes: vec![Vec::new()],
+            defaults: vec![None],
+            return_type: PhpType::Void,
+            declared_return: false,
+            by_ref_return: false,
+            ref_params: vec![true],
+            declared_params: vec![true],
+            variadic: None,
+            deprecation: None,
+            is_generator: false,
+        });
+
+        assert_eq!(
+            function_signature_from_eir(&function).params,
+            vec![(
+                "value".to_string(),
+                PhpType::Object("ReferenceValue".to_string()),
+            )]
+        );
     }
 
     /// ARM64 string capture cleanup forwards the string pointer from x1, not the scalar result x0.

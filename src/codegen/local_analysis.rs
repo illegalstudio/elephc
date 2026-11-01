@@ -895,9 +895,9 @@ mod tests {
         );
     }
 
-    /// Boxed object-reference parameters keep their uniform Mixed payload ABI.
+    /// Declared object-reference parameters retain their concrete reference-cell storage.
     #[test]
-    fn boxed_object_by_ref_parameter_keeps_mixed_payload_storage() {
+    fn boxed_object_by_ref_parameter_uses_declared_payload_storage() {
         let mut function = Function::new(
             "boxed_object_by_ref_parameter".to_string(),
             IrType::Void,
@@ -936,7 +936,7 @@ mod tests {
         let analysis = LocalSlotAnalysis::new(&function);
         assert_eq!(
             analysis.stable_ref_cell_payload_type(slot),
-            Some(&PhpType::Mixed)
+            Some(&PhpType::Object("ReferenceValue".to_string()))
         );
     }
 

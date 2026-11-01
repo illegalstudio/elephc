@@ -167,6 +167,11 @@ pub(super) fn lower_eval_literal_scope_eir_function(
     abi::emit_call_label(ctx.emitter, &function_symbol(&function_name));
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
+    callable_guards::guard_saved_owner(
+        ctx.emitter,
+        EVAL_TEMP_CELL_OFFSET,
+        EVAL_RESULT_GUARD_OFFSET,
+    );
     reload_eval_scope_locals(ctx, &reload_locals, None)?;
     reload_eval_globals_from_local_scope(ctx, &reload_globals)?;
     callable_guards::unguard_saved_owner(ctx.emitter, EVAL_RESULT_GUARD_OFFSET);
