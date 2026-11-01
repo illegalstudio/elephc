@@ -11,7 +11,7 @@
 /// Opaque eval mutates attached SPL cells without replaying a stale offsetSet copy.
 #[test]
 fn test_opaque_eval_spl_nested_write_keeps_attached_storage_through_reentry() {
-    let out = crate::support::compile_and_run_with_heap_debug(r#"<?php
+    let (out, assembly) = crate::support::compile_and_run_with_heap_debug_and_asm(r#"<?php
 class EvalSplReplacement { public string $label = 'new'; }
 class EvalSplRetired {
     public function __destruct() {
@@ -23,18 +23,38 @@ class EvalSplRetired {
 class EvalSplSetter extends ArrayObject {
     public function offsetSet(mixed $key, mixed $value): void { echo 'unexpected-set|'; }
 }
+$copyControl = new ArrayObject(['x' => [1]]);
+$copySubclass = new EvalSplSetter(['x' => [1]]);
+$control = $argc > 0 ? 'echo "control|";
+$firstCopy = $copyControl->getArrayCopy(); echo "control-copy|";
+echo json_encode($firstCopy), "|";
+$secondCopy = $copySubclass->getArrayCopy(); echo "control-subclass-copy|";
+echo json_encode($secondCopy), "|";
+unset($firstCopy, $secondCopy);' : '';
+eval($control);
+unset($copyControl, $copySubclass, $control);
 $evalSpl = new ArrayObject(['x' => [new EvalSplRetired()]]);
 $evalSetter = new EvalSplSetter(['x' => [1]]);
 $source = $argc > 0 ? '$evalSpl["x"][0] = new EvalSplReplacement();
 echo "replaced|";
 $evalSetter["x"][] = 2;
 echo "appended|";
+$firstCopy = $evalSpl->getArrayCopy(); echo "updated-copy|";
+echo json_encode($firstCopy), "|";
+$secondCopy = $evalSetter->getArrayCopy(); echo "subclass-copy|";
+echo json_encode($secondCopy), "|";
+unset($firstCopy, $secondCopy);
 return json_encode($evalSpl->getArrayCopy()) . "|" . json_encode($evalSetter->getArrayCopy());' : '';
 echo eval($source);
 unset($evalSetter, $evalSpl);
 "#);
-    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "new|replaced|appended|{\"x\":[\"retargeted\"]}|{\"x\":[1,2]}");
+    let copy_slots: Vec<_> = assembly.lines().filter(|line|
+        line.contains("getarraycopy") && line.ends_with(':')).take(8).collect();
+    assert!(out.success, "stdout={} stderr={} copy slots={copy_slots:?}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, concat!(
+        "control|control-copy|{\"x\":[1]}|control-subclass-copy|{\"x\":[1]}|",
+        "new|replaced|appended|updated-copy|{\"x\":[\"retargeted\"]}|subclass-copy|{\"x\":[1,2]}|",
+        "{\"x\":[\"retargeted\"]}|{\"x\":[1,2]}"));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
