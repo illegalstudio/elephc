@@ -830,6 +830,7 @@ fn ensure_static_property_type_supported(php_type: &PhpType, inst: &Instruction)
         | PhpType::Buffer(_)
         | PhpType::Pointer(_)
         | PhpType::Callable
+        | PhpType::Iterable
         | PhpType::Object(_) => Ok(()),
         _ => Err(CodegenIrError::unsupported(format!(
             "{} for static property PHP type {:?}",
@@ -852,6 +853,19 @@ fn ensure_static_property_value_supported(
         return Ok(());
     }
     if matches!(slot.php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        return Ok(());
+    }
+    if slot.php_type.codegen_repr() == PhpType::Iterable
+        && matches!(
+            value_ty.codegen_repr(),
+            PhpType::Mixed
+                | PhpType::Union(_)
+                | PhpType::Iterable
+                | PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+                | PhpType::Object(_)
+        )
+    {
         return Ok(());
     }
     // A `?ptr<T>` slot is one raw pointer word (null is address 0), and any pointer fits any
@@ -1006,6 +1020,12 @@ fn load_static_property_store_value_to_result(
             PhpType::Object(_) => {
                 property_values::emit_mixed_object_for_property_store(ctx);
                 objects::release_adopted_mixed_source(ctx, value, &PhpType::Object(String::new()))?;
+            }
+            // An iterable symbol owns the unboxed array or Traversable payload, never the
+            // transient Mixed cell that carried it across the typed-property boundary.
+            PhpType::Iterable => {
+                objects::emit_mixed_iterable_for_property_store(ctx);
+                objects::release_adopted_mixed_source(ctx, value, &PhpType::Iterable)?;
             }
             _ => {}
         }

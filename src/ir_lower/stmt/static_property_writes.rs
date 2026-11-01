@@ -121,8 +121,8 @@ pub(super) fn lower_static_property_assign(
 /// into a Mixed/Union slot is boxed, and the box retains the child itself. A boxed value
 /// going into a slot codegen narrows to -- `Str`, `Int`, `Bool`, `Float`, `Object`, or the
 /// tagged-scalar pair -- is cast out of the box, and what lands in the slot owns nothing of
-/// it (`__rt_str_persist` copies, the scalar casts read a payload word, the object arm
-/// increfs the unboxed pointer on its own). Both directions leave the source's reference
+/// it (`__rt_str_persist` copies, the scalar casts read a payload word, and object/iterable
+/// arms incref the unboxed pointer on their own). Both directions leave the source's reference
 /// unrelated to the slot's, so borrowed sources need no `Acquire` and owning temporary
 /// sources must be released after the store -- without that release the box outlives its
 /// last use and leaks, one cell per compound assignment (issue #1041).
@@ -145,9 +145,8 @@ pub(super) fn static_property_store_retains_independent_value(
     let value_is_boxed = matches!(value_ty, PhpType::Mixed | PhpType::Union(_));
     let boxes_into_mixed = matches!(slot_ty, PhpType::Mixed | PhpType::Union(_)) && !value_is_boxed;
     // The slot types codegen actually casts a Mixed source out of. Deliberately not "any slot
-    // that is not Mixed": an array or iterable slot falls through `load_static_property_store_
-    // value_to_result`'s catch-all arm untouched, so the Mixed pointer itself is what gets
-    // stored and the store still consumes it.
+    // that is not Mixed": an array slot falls through `load_static_property_store_value_to_result`
+    // untouched, so the Mixed pointer itself is what gets stored and the store still consumes it.
     let narrows_out_of_mixed = value_is_boxed
         && matches!(
             slot_ty,
@@ -157,6 +156,7 @@ pub(super) fn static_property_store_retains_independent_value(
                 | PhpType::Bool
                 | PhpType::Float
                 | PhpType::Object(_)
+                | PhpType::Iterable
                 | PhpType::TaggedScalar
         );
     boxes_into_mixed || narrows_out_of_mixed

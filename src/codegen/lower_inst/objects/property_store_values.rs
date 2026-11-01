@@ -214,7 +214,7 @@ const ITERABLE_MIXED_TAGS: [u8; 3] = [4, 5, 6];
 /// The weak-mode guard already refused every tag this slot cannot hold, so the fallback only
 /// normalizes to a null pointer rather than republishing an unrelated payload as a heap pointer,
 /// which both `__rt_incref` and the slot's later `__rt_decref_any` already ignore.
-fn emit_mixed_iterable_for_property_store(ctx: &mut FunctionContext<'_>) {
+pub(super) fn emit_mixed_iterable_for_property_store(ctx: &mut FunctionContext<'_>) {
     let payload_label = ctx.next_label("prop_store_mixed_iterable_payload");
     let done = ctx.next_label("prop_store_mixed_iterable_done");
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
