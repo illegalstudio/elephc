@@ -1,5 +1,14 @@
+[test-groups.simplexml-large-bundles]
+max-threads = 1
+
 [profile.default]
 slow-timeout = { period = "60s", terminate-after = 1 }
+
+# ARM shard 11 lost its runner while these four catalog-sized XML bundles ran together.
+# Serialize only their scheduling, preserving their assertions and existing bundle budget.
+[[profile.ci.overrides]]
+filter = 'binary(codegen_tests) and (test(=codegen::runtime_gc::property_dimension_fetch_modes::test_property_dimension_xml_fetch_modes_bundle) or test(=codegen::runtime_gc::property_magic_dimension_guards::test_magic_property_dimension_xml_guards_bundle) or test(=codegen::simplexml::debug::test_simplexml_native_debug_projection_bundle) or test(=codegen::simplexml::dimension_owners::test_simplexml_dimension_write_owners_isolated_bundle))'
+test-group = 'simplexml-large-bundles'
 
 # A fixture bundle (tests/codegen/support/bundle.rs) compiles several opaque-eval programs as
 # one: one catalog compile per optimizer mode instead of one per fixture, but the run itself
@@ -34,11 +43,11 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # The split constructorless factory probes also lower the entire opaque-eval catalog: x86 CI
 # measured 55-60 seconds for passing copies and terminated sibling targets at 60 seconds.
 [[profile.default.overrides]]
-filter = 'test(/^ir_lower::tests::simplexml_targets::simplexml_target_/) or test(/^ir_lower::tests::simplexml_targets::simplexml_constructorless_factories_probe_active_eval_classes::/) or test(=ir_lower::tests::reference_return_boundaries::protected_nullable_object_reference_returns_use_dynamic_slot_state)'
+filter = 'test(/^ir_lower::tests::simplexml_targets::simplexml_target_/) or test(/^ir_lower::tests::simplexml_targets::simplexml_constructorless_factories_probe_active_eval_classes::/) or test(/^ir_lower::tests::reference_return_boundaries::protected_nullable_object_reference_returns_use_dynamic_slot_state::/)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.ci.overrides]]
-filter = 'test(/^ir_lower::tests::simplexml_targets::simplexml_target_/) or test(/^ir_lower::tests::simplexml_targets::simplexml_constructorless_factories_probe_active_eval_classes::/) or test(=ir_lower::tests::reference_return_boundaries::protected_nullable_object_reference_returns_use_dynamic_slot_state)'
+filter = 'test(/^ir_lower::tests::simplexml_targets::simplexml_target_/) or test(/^ir_lower::tests::simplexml_targets::simplexml_constructorless_factories_probe_active_eval_classes::/) or test(/^ir_lower::tests::reference_return_boundaries::protected_nullable_object_reference_returns_use_dynamic_slot_state::/)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 # These BCMath probes compile dynamic-eval hosts and exceeded 60s under local load.

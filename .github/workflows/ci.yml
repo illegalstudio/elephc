@@ -1567,6 +1567,8 @@ jobs:
           # artifact was materialized just above, so a missing one is a bug.
           ELEPHC_TEST_REQUIRE_GMP_NATIVE: "1"
           ELEPHC_TEST_REQUIRE_FILEINFO_NATIVE: "1"
+          # Preserve the last phase and assembly size if one of these fixtures times out.
+          ELEPHC_FIXTURE_PHASE_TIMING: "test_simplexml_generic_property_handoff_bundle,test_simplexml_computed_indexed_incdec_bundle,test_simplexml_gmp_mixed_operator_dispatch_bundle,test_simplexml_eval_subclass_constructorless_factories,test_simplexml_review_names_and_filter_close_bundle,test_property_dimension_xml_fetch_modes_bundle,test_magic_property_dimension_xml_guards_bundle,test_simplexml_native_debug_projection_bundle,test_simplexml_dimension_write_owners_isolated_bundle"
         run: |
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
@@ -1699,6 +1701,8 @@ jobs:
           # artifact was materialized just above, so a missing one is a bug.
           ELEPHC_TEST_REQUIRE_GMP_NATIVE: "1"
           ELEPHC_TEST_REQUIRE_FILEINFO_NATIVE: "1"
+          # Preserve the last phase and assembly size if one of these fixtures times out.
+          ELEPHC_FIXTURE_PHASE_TIMING: "test_simplexml_generic_property_handoff_bundle,test_simplexml_computed_indexed_incdec_bundle,test_simplexml_gmp_mixed_operator_dispatch_bundle,test_simplexml_eval_subclass_constructorless_factories,test_simplexml_review_names_and_filter_close_bundle,test_property_dimension_xml_fetch_modes_bundle,test_magic_property_dimension_xml_guards_bundle,test_simplexml_native_debug_projection_bundle,test_simplexml_dimension_write_owners_isolated_bundle"
         run: |
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
