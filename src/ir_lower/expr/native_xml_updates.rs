@@ -31,8 +31,10 @@ pub(super) fn lower_plain_dynamic(
         object: Box::new(object.clone()), property: Box::new(property.clone()),
     }, span);
     let Ok(inputs) = prepare_inputs(ctx, object, Property::Dynamic(property), value, false, &expr) else { return true; };
-    lower_dynamic_property_assign_prepared(ctx, &local_expr(&inputs.receiver, span),
-        &local_expr(&inputs.name, span), &local_expr(&inputs.rhs, span), span);
+    let receiver = load(ctx, &inputs.receiver, span);
+    let name = load(ctx, &inputs.name, span);
+    let assigned = load(ctx, &inputs.rhs, span);
+    super::assignments::lower_dynamic_property_assign_from_values(ctx, receiver, name, assigned, span);
     retire(ctx, inputs.owners, span);
     true
 }
@@ -129,14 +131,14 @@ fn lower(
     // Capturing a concrete ordinary receiver preserves its type even when XML is loaded.
     let native_possible = possible(ctx, &local_expr(&inputs.receiver, expr.span), property);
     let result = if !native_possible {
-        ordinary(ctx, parent, property, &name_expr, op, &right_expr, post, reread, expr)
+        ordinary(ctx, parent, property, &inputs.name, op, &inputs.rhs, post, reread, expr)
     } else { property_access::native_xml_reads::dispatch(
         ctx, parent, expr, PhpType::Mixed, false,
         |ctx, receiver| lower_method_call_with_receiver(ctx, receiver, "__elephc_property_update", &[
             name_expr.clone(), right_expr.clone(), Expr::new(ExprKind::IntLiteral(code), expr.span),
             Expr::new(ExprKind::BoolLiteral(post), expr.span),
         ], Op::MethodCall, expr),
-        |ctx, receiver| ordinary(ctx, receiver, property, &name_expr, op, &right_expr, post, reread, expr),
+        |ctx, receiver| ordinary(ctx, receiver, property, &inputs.name, op, &inputs.rhs, post, reread, expr),
     ) };
     stage_call_result(ctx, staging.as_ref(), result, expr.span);
     retire(ctx, inputs.owners, expr.span);
@@ -192,8 +194,8 @@ fn prepare_inputs(
 
 /// Shares the ordinary receiver snapshot and preserves coerced prefix results.
 fn ordinary(
-    ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, property: Property<'_>, name: &Expr,
-    op: &BinOp, right: &Expr, post: bool, reread: bool, expr: &Expr,
+    ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, property: Property<'_>, name: &str,
+    op: &BinOp, right: &str, post: bool, reread: bool, expr: &Expr,
 ) -> LoweredValue {
     let staging = prepublish_call_result(ctx, &PhpType::Mixed, expr.span);
     let mut owners = Vec::new();
@@ -204,20 +206,21 @@ fn ordinary(
         Property::Dynamic(_) => prepared_dynamic_property_fetch(ctx, receiver, name, expr),
     };
     let current = capture(ctx, current, &mut owners, expr.span);
-    let operation = Expr::new(ExprKind::BinaryOp {
-        left: Box::new(local_expr(&current, expr.span)), op: op.clone(), right: Box::new(right.clone()),
-    }, expr.span);
-    let next = lower_expr(ctx, &operation);
+    let current_value = load(ctx, &current, expr.span);
+    let right_value = load(ctx, right, expr.span);
+    let next = prepared_binary::lower_prepared_binary(ctx, current_value, op, right_value, expr.span);
     let next = capture(ctx, next, &mut owners, expr.span);
     let receiver = local_expr(&parent, expr.span);
     let assigned = local_expr(&next, expr.span);
     match property {
-        Property::Named(property) => crate::ir_lower::stmt::lower_stmt(ctx, &Stmt::new(
-            StmtKind::PropertyAssign { object: Box::new(receiver), property: property.into(), value: assigned }, expr.span)),
+        Property::Named(property) => ctx.with_borrowed_write_operand(|ctx| {
+            crate::ir_lower::stmt::lower_stmt(ctx, &Stmt::new(
+                StmtKind::PropertyAssign { object: Box::new(receiver), property: property.into(), value: assigned }, expr.span));
+        }),
         Property::Dynamic(_) => {
             let receiver = load(ctx, &parent, expr.span);
-            let name = lower_expr(ctx, name);
-            let assigned = lower_expr(ctx, &assigned);
+            let name = load(ctx, name, expr.span);
+            let assigned = load(ctx, &next, expr.span);
             super::assignments::lower_dynamic_property_assign_from_values(
                 ctx,
                 receiver,
@@ -246,17 +249,17 @@ fn ordinary(
 fn prepared_dynamic_property_fetch(
     ctx: &mut LoweringContext<'_, '_>,
     receiver: LoweredValue,
-    name: &Expr,
+    name: &str,
     expr: &Expr,
 ) -> LoweredValue {
     let result_type = property_access::dynamic_property_fetch_result_type(
         ctx,
         receiver.value,
-        name,
+        &local_expr(name, expr.span),
         PropertyFetchMode::Read,
         expr,
     );
-    let name = lower_expr(ctx, name);
+    let name = load(ctx, name, expr.span);
     property_access::lower_dynamic_property_fetch_from_operands(
         ctx,
         receiver,
