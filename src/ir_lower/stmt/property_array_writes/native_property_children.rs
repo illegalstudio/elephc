@@ -84,12 +84,17 @@ pub(super) fn fetch(
         let class = ctx.intern_class_name("SimpleXMLElement");
         let native = ctx.emit_value(Op::InstanceOf, vec![child.value], Some(Immediate::Data(class)),
             PhpType::Bool, Op::InstanceOf.default_effects(), Some(span));
-        let selected = ctx.builder.create_named_block("xml.property_child.selected", vec![]);
+        let selected = ctx.builder.create_named_block("xml.property_child.native", vec![]);
         let ordinary = ctx.builder.create_named_block("xml.property_child.not_native", vec![]);
         let rejected = ctx.builder.create_named_block("xml.property_child.rejected", vec![]);
         let split = ctx.initialized_slots_snapshot();
         ctx.builder.terminate(Terminator::CondBr { cond: native.value,
             then_target: selected, then_args: vec![], else_target: ordinary, else_args: vec![] });
+        ctx.builder.position_at_end(selected);
+        ctx.restore_initialized_slots(split.clone());
+        crate::ir_lower::expr::store_value_into_temp(ctx, &result, PhpType::Mixed, child, span);
+        merge_slots(&mut merged, ctx.initialized_slots_snapshot());
+        jump(ctx, done);
         ctx.builder.position_at_end(ordinary);
         ctx.restore_initialized_slots(split.clone());
         if matches!(storage, Storage::NativeHook | Storage::Magic)
@@ -106,8 +111,14 @@ pub(super) fn fetch(
             let shared = ctx.emit_value(Op::RuntimeCall, vec![receiver.value],
                 Some(Immediate::RuntimeCall(RuntimeCallTarget::ObjectCellHasOtherOwner)), PhpType::Bool,
                 effects_lookup::runtime_effects(), Some(span));
+            let array_selected = ctx.builder.create_named_block("xml.property_child.array_selected", vec![]);
             ctx.builder.terminate(Terminator::CondBr { cond: shared.value,
-                then_target: rejected, then_args: vec![], else_target: selected, else_args: vec![] });
+                then_target: rejected, then_args: vec![], else_target: array_selected, else_args: vec![] });
+            ctx.builder.position_at_end(array_selected);
+            ctx.restore_initialized_slots(split.clone());
+            crate::ir_lower::expr::store_value_into_temp(ctx, &result, PhpType::Mixed, child, span);
+            merge_slots(&mut merged, ctx.initialized_slots_snapshot());
+            jump(ctx, done);
         }
         ctx.builder.position_at_end(rejected);
         ctx.restore_initialized_slots(split.clone());
@@ -120,11 +131,6 @@ pub(super) fn fetch(
                 &format!("Indirect modification of {}::${property} is not allowed", owner.trim_start_matches('\\')), span);
         }
         jump(ctx, missing);
-        ctx.builder.position_at_end(selected);
-        ctx.restore_initialized_slots(split);
-        crate::ir_lower::expr::store_value_into_temp(ctx, &result, PhpType::Mixed, child, span);
-        merge_slots(&mut merged, ctx.initialized_slots_snapshot());
-        jump(ctx, done);
         ctx.builder.position_at_end(next);
         ctx.restore_initialized_slots(before);
     }
