@@ -31,6 +31,7 @@ pub(super) fn declarations() -> Program {
         parse_options_decl(),
         parse_scalar_options_decl(),
         parse_definition_decl(),
+        int_coerce_decl(),
         int_arg_decl(),
         string_arg_decl(),
         options_arg_decl(),
@@ -209,21 +210,6 @@ fn check_flags_decl() -> Stmt {
         .build()
 }
 
-/// Builds the optional-type rejection used by `array|int $options` parameters.
-fn reject_options() -> Stmt {
-    s_throw(e_new_fq(
-        "TypeError",
-        vec![e_concat_all(vec![
-            e_var("caller"),
-            e_str("(): Argument #"),
-            e_var("arg"),
-            e_str(" ($options) must be of type array|int, "),
-            e_call("__elephc_filter_type_name", vec![e_var("options")]),
-            e_str(" given"),
-        ])],
-    ))
-}
-
 /// Applies the REQUIRE_SCALAR default after an int/flags value replaces the flag word.
 fn scalar_default(flags: Expr) -> Expr {
     let no_array_flag = e_binop(
@@ -326,19 +312,6 @@ fn parse_options_decl() -> Stmt {
 
 /// Builds `__elephc_filter_parse_scalar_options(mixed, array &$state, string, int): void`.
 fn parse_scalar_options_decl() -> Stmt {
-    let int_branch = vec![
-        s_assign("flags", e_var("options")),
-        s_array_assign("state", e_int(1), scalar_default(e_var("flags"))),
-        s_return_void(),
-    ];
-    let scalar_branch = vec![
-        s_array_assign(
-            "state",
-            e_int(1),
-            scalar_default(crate::synthetic_class::e_cast(crate::parser::ast::CastType::Int, e_var("options"))),
-        ),
-        s_return_void(),
-    ];
     function("__elephc_filter_parse_scalar_options")
         .param("options", t_mixed())
         .param_by_ref("state", Some(t_array()))
@@ -346,40 +319,15 @@ fn parse_scalar_options_decl() -> Stmt {
         .param("arg", t_int())
         .returns(TypeExpr::Void)
         .body(vec![
-            s_if(e_call("is_int", vec![e_var("options")]), int_branch, vec![], None),
-            s_if(
-                e_binop(
-                    e_call("is_float", vec![e_var("options")]),
-                    BinOp::Or,
-                    e_binop(
-                        e_call("is_bool", vec![e_var("options")]),
-                        BinOp::Or,
-                        e_binop(
-                            e_call("is_string", vec![e_var("options")]),
-                            BinOp::And,
-                            e_call("is_numeric", vec![e_var("options")]),
-                        ),
-                    ),
-                ),
-                scalar_branch,
-                vec![],
-                None,
-            ),
-            s_if(
-                e_binop(
-                    e_call("is_string", vec![e_var("options")]),
-                    BinOp::And,
-                    crate::synthetic_class::e_not(e_call("is_numeric", vec![e_var("options")])),
-                ),
-                vec![reject_options()],
-                vec![],
-                None,
-            ),
-            s_if(e_call("is_null", vec![e_var("options")]), vec![
-                s_array_assign("state", e_int(1), scalar_default(e_int(0))),
-                s_return_void(),
-            ], vec![], None),
-            reject_options(),
+            s_assign("flags", e_call("__elephc_filter_int_coerce", vec![
+                e_var("options"),
+                e_var("caller"),
+                e_var("arg"),
+                e_str("options"),
+                e_str("array|int"),
+            ])),
+            s_array_assign("state", e_int(1), scalar_default(e_var("flags"))),
+            s_return_void(),
         ])
         .build()
 }
@@ -441,13 +389,29 @@ fn parse_definition_decl() -> Stmt {
         .build()
 }
 
-/// Builds `__elephc_filter_int_arg(mixed $value, string $caller, int $arg, string $param): int`.
-fn int_arg_decl() -> Stmt {
-    function("__elephc_filter_int_arg")
+/// Builds php-src's weak `int` coercion, including null/fractional deprecations and range failures.
+fn int_coerce_decl() -> Stmt {
+    let throw_type_error = e_new_fq(
+        "TypeError",
+        vec![e_concat_all(vec![
+            e_var("caller"),
+            e_str("(): Argument #"),
+            e_var("arg"),
+            e_str(" ($"),
+            e_var("param"),
+            e_str(") must be of type "),
+            e_var("expected"),
+            e_str(", "),
+            e_call("__elephc_filter_type_name", vec![e_var("value")]),
+            e_str(" given"),
+        ])],
+    );
+    function("__elephc_filter_int_coerce")
         .param("value", t_mixed())
         .param("caller", TypeExpr::Str)
         .param("arg", t_int())
         .param("param", TypeExpr::Str)
+        .param("expected", TypeExpr::Str)
         .returns(t_int())
         .body(vec![
             s_if(
@@ -457,32 +421,15 @@ fn int_arg_decl() -> Stmt {
                 None,
             ),
             s_if(
-                e_call("is_float", vec![e_var("value")]),
-                vec![
-                    s_if(
-                        e_binop(
-                            e_var("value"),
-                            BinOp::StrictNotEq,
-                            e_cast(crate::parser::ast::CastType::Int, e_var("value")),
-                        ),
-                        vec![s_expr(e_call("__elephc_builtin_deprecated", vec![
-                            e_concat_all(vec![
-                                e_str("Implicit conversion from float "),
-                                e_cast(crate::parser::ast::CastType::String, e_var("value")),
-                                e_str(" to int loses precision"),
-                            ]),
-                        ]))],
-                        vec![],
-                        None,
-                    ),
-                    s_return(e_cast(crate::parser::ast::CastType::Int, e_var("value"))),
-                ],
+                e_call("is_bool", vec![e_var("value")]),
+                vec![s_return(e_cast(crate::parser::ast::CastType::Int, e_var("value")))],
                 vec![],
                 None,
             ),
+            s_assign("number", e_var("value")),
             s_if(
                 e_binop(
-                    e_call("is_bool", vec![e_var("value")]),
+                    e_call("is_float", vec![e_var("value")]),
                     BinOp::Or,
                     e_binop(
                         e_call("is_string", vec![e_var("value")]),
@@ -490,7 +437,74 @@ fn int_arg_decl() -> Stmt {
                         e_call("is_numeric", vec![e_var("value")]),
                     ),
                 ),
-                vec![s_return(crate::synthetic_class::e_cast(crate::parser::ast::CastType::Int, e_var("value")))],
+                vec![
+                    s_if(
+                        e_call("is_string", vec![e_var("value")]),
+                        vec![s_assign("number", e_binop(e_var("value"), BinOp::Add, e_int(0)))],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_call("is_int", vec![e_var("number")]),
+                        vec![s_return(e_var("number"))],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(
+                            e_binop(
+                                e_call("is_nan", vec![e_var("number")]),
+                                BinOp::Or,
+                                e_binop(
+                                    e_var("number"),
+                                    BinOp::GtEq,
+                                    e_cast(crate::parser::ast::CastType::Float, e_const("PHP_INT_MAX")),
+                                ),
+                            ),
+                            BinOp::Or,
+                            e_binop(
+                                e_var("number"),
+                                BinOp::Lt,
+                                e_cast(crate::parser::ast::CastType::Float, e_const("PHP_INT_MIN")),
+                            ),
+                        ),
+                        vec![s_throw(throw_type_error.clone())],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(
+                            e_var("number"),
+                            BinOp::NotEq,
+                            e_cast(crate::parser::ast::CastType::Int, e_var("number")),
+                        ),
+                        vec![s_if(
+                            e_call("is_string", vec![e_var("value")]),
+                            vec![
+                                s_expr(e_call("__elephc_builtin_deprecated", vec![
+                                    e_concat_all(vec![
+                                        e_str("Implicit conversion from float-string \""),
+                                        e_var("value"),
+                                        e_str("\" to int loses precision"),
+                                    ]),
+                                ])),
+                            ],
+                            vec![],
+                            Some(vec![
+                                s_expr(e_call("__elephc_builtin_deprecated", vec![
+                                    e_concat_all(vec![
+                                        e_str("Implicit conversion from float "),
+                                        e_cast(crate::parser::ast::CastType::String, e_var("value")),
+                                        e_str(" to int loses precision"),
+                                    ]),
+                                ])),
+                            ]),
+                        )],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_cast(crate::parser::ast::CastType::Int, e_var("number"))),
+                ],
                 vec![],
                 None,
             ),
@@ -504,7 +518,9 @@ fn int_arg_decl() -> Stmt {
                             e_var("arg"),
                             e_str(" ($"),
                             e_var("param"),
-                            e_str(") of type int is deprecated"),
+                            e_str(") of type "),
+                            e_var("expected"),
+                            e_str(" is deprecated"),
                         ]),
                     ])),
                     s_return(e_int(0)),
@@ -512,20 +528,26 @@ fn int_arg_decl() -> Stmt {
                 vec![],
                 None,
             ),
-            s_throw(e_new_fq(
-                "TypeError",
-                vec![e_concat_all(vec![
-                    e_var("caller"),
-                    e_str("(): Argument #"),
-                    e_var("arg"),
-                    e_str(" ($"),
-                    e_var("param"),
-                    e_str(") must be of type int, "),
-                    e_call("__elephc_filter_type_name", vec![e_var("value")]),
-                    e_str(" given"),
-                ])],
-            )),
+            s_throw(throw_type_error),
         ])
+        .build()
+}
+
+/// Builds `__elephc_filter_int_arg(mixed $value, string $caller, int $arg, string $param): int`.
+fn int_arg_decl() -> Stmt {
+    function("__elephc_filter_int_arg")
+        .param("value", t_mixed())
+        .param("caller", TypeExpr::Str)
+        .param("arg", t_int())
+        .param("param", TypeExpr::Str)
+        .returns(t_int())
+        .body(vec![s_return(e_call("__elephc_filter_int_coerce", vec![
+            e_var("value"),
+            e_var("caller"),
+            e_var("arg"),
+            e_var("param"),
+            e_str("int"),
+        ]))])
         .build()
 }
 
@@ -597,37 +619,13 @@ fn options_arg_decl() -> Stmt {
         .returns(t_mixed())
         .body(vec![
             s_if(e_call("is_array", vec![e_var("options")]), vec![s_return(e_var("options"))], vec![], None),
-            s_if(e_call("is_int", vec![e_var("options")]), vec![s_return(e_var("options"))], vec![], None),
-            s_if(
-                e_binop(
-                    e_call("is_float", vec![e_var("options")]),
-                    BinOp::Or,
-                    e_binop(
-                        e_call("is_bool", vec![e_var("options")]),
-                        BinOp::Or,
-                        e_binop(
-                            e_call("is_string", vec![e_var("options")]),
-                            BinOp::And,
-                            e_call("is_numeric", vec![e_var("options")]),
-                        ),
-                    ),
-                ),
-                vec![s_return(crate::synthetic_class::e_cast(crate::parser::ast::CastType::Int, e_var("options")))],
-                vec![],
-                None,
-            ),
-            s_if(e_call("is_null", vec![e_var("options")]), vec![s_return(e_int(0))], vec![], None),
-            s_throw(e_new_fq(
-                "TypeError",
-                vec![e_concat_all(vec![
-                    e_var("caller"),
-                    e_str("(): Argument #"),
-                    e_var("arg"),
-                    e_str(" ($options) must be of type array|int, "),
-                    e_call("__elephc_filter_type_name", vec![e_var("options")]),
-                    e_str(" given"),
-                ])],
-            )),
+            s_return(e_call("__elephc_filter_int_coerce", vec![
+                e_var("options"),
+                e_var("caller"),
+                e_var("arg"),
+                e_str("options"),
+                e_str("array|int"),
+            ])),
         ])
         .build()
 }
