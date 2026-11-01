@@ -7318,6 +7318,32 @@ echo $n . ":" . count($r);
     assert_eq!(out, "1:1");
 }
 
+/// Verifies `stream_select()` accepts `null` for a descriptor set, PHP's usual idiom for the
+/// write and except sets, and a `?array` set that holds `null` or an array at run time. A null
+/// set reached the runtime as the null sentinel, which was read as an array header: exit 139.
+#[test]
+fn test_stream_select_accepts_null_descriptor_sets() {
+    let out = compile_and_run(
+        r#"<?php
+$p = stream_socket_pair(1, 1, 0);
+fwrite($p[0], "x");
+$r = [$p[1]]; $w = null; $e = null;
+$n1 = stream_select($r, $w, $e, 0, 0);
+$r2 = null; $w2 = [$p[0]]; $e2 = null;
+$n2 = stream_select($r2, $w2, $e2, 0, 0);
+$w3 = $argc > 5 ? [$p[0]] : null;
+$r3 = [$p[1]]; $e3 = null;
+$n3 = stream_select($r3, $w3, $e3, 0, 0);
+$w4 = $argc > 0 ? [$p[0]] : null;
+$r4 = [$p[1]]; $e4 = null;
+$n4 = stream_select($r4, $w4, $e4, 0, 0);
+echo $n1, ":", count($r), ":", $w === null ? "null" : "set", " ", $n2, ":", count($w2), ":", $r2 === null ? "null" : "set",
+    " ", $n3, ":", count($r3), ":", $w3 === null ? "null" : "set", " ", $n4, ":", count($r4), ":", count($w4), "\n";
+"#,
+    );
+    assert_eq!(out, "1:1:null 1:1:null 1:1:null 2:1:1\n");
+}
+
 /// Verifies compiled PHP output for stream bucket append then pop in order.
 #[test]
 fn test_stream_bucket_append_then_pop_in_order() {
