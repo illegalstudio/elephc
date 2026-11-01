@@ -18,6 +18,7 @@ mod print_r_capture;
 mod owned_tostring;
 #[path = "runtime_gc/borrowed_string_reads.rs"]
 mod borrowed_string_reads;
+mod global_return_owners;
 #[path = "runtime_gc/ref_local_append.rs"]
 mod ref_local_append;
 #[path = "runtime_gc/string_offset_lifetime.rs"]
