@@ -31,7 +31,6 @@ mod numeric_storage;
 pub(crate) use function::dynamic_constructor_thunk_name;
 pub(crate) use function::eval_native_default_helper_name;
 pub(crate) use function::{lower_array_merge_callable, lower_boxed_usort_callable, lower_prepared_builtin_callable};
-pub(crate) use context::type_expr_to_php_type;
 mod ownership;
 mod object_boundaries;
 mod program;

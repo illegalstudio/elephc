@@ -10,8 +10,6 @@
 //! - Object class refinements and container element refinements share one physical payload shape.
 
 use super::*;
-use crate::ir::FunctionParam;
-
 /// Finds slots whose every possible reference binding uses one compatible physical payload type.
 pub(super) fn stable_payload_types(
     function: &Function,
@@ -22,12 +20,7 @@ pub(super) fn stable_payload_types(
     for (index, param) in function.params.iter().enumerate().filter(|(_, param)| param.by_ref) {
         let slot = LocalSlotId::from_raw(index as u32);
         if function.locals.get(index).is_some() {
-            record_payload_type(
-                &mut candidates,
-                &mut conflicts,
-                slot,
-                parameter_payload_type(function, param),
-            );
+            record_payload_type(&mut candidates, &mut conflicts, slot, param.php_type.clone());
         }
     }
     for (index, inst) in function.instructions.iter().enumerate() {
@@ -76,36 +69,6 @@ pub(super) fn stable_payload_types(
         candidates.remove(&slot);
     }
     candidates
-}
-
-/// Recovers the concrete storage used by declared object-reference parameters.
-fn parameter_payload_type(function: &Function, param: &FunctionParam) -> PhpType {
-    if param.php_type.codegen_repr() != PhpType::Mixed {
-        return param.php_type.clone();
-    }
-    let Some(signature) = function.signature.as_ref() else {
-        return param.php_type.clone();
-    };
-    let Some(source_index) = signature
-        .params
-        .iter()
-        .position(|(name, _)| name == &param.name)
-    else {
-        return param.php_type.clone();
-    };
-    let Some(declared) = signature
-        .param_type_exprs
-        .get(source_index)
-        .and_then(Option::as_ref)
-        .map(crate::ir_lower::type_expr_to_php_type)
-    else {
-        return param.php_type.clone();
-    };
-    if matches!(declared.codegen_repr(), PhpType::Object(_)) {
-        declared
-    } else {
-        param.php_type.clone()
-    }
 }
 
 /// Records one binding while rejecting slots whose bindings need different load or boxing rules.
