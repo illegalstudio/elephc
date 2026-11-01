@@ -55,6 +55,50 @@ echo $callback(5);
     }
 }
 
+/// Object-reference closure descriptors preserve the concrete payload ABI used by their body.
+#[test]
+fn closure_object_reference_keeps_its_concrete_payload_abi() {
+    let source = r#"<?php
+interface ClosureObjectReferenceContract { public function label(): string; }
+$callback = function (ClosureObjectReferenceContract &$value): string {
+    return $value->label();
+};
+"#;
+    for target in TARGETS {
+        let module = super::lower_source_at_for_target(
+            source,
+            Path::new("main.php"),
+            Path::new("."),
+            Target::parse(target).unwrap(),
+        );
+        let closure = module
+            .closures
+            .first()
+            .unwrap_or_else(|| panic!("{target}: missing closure"));
+        let parameter = closure
+            .params
+            .first()
+            .unwrap_or_else(|| panic!("{target}: missing closure parameter"));
+        assert!(parameter.by_ref, "{target}: parameter must remain by-reference");
+        assert_eq!(
+            parameter.php_type.codegen_repr(),
+            crate::types::PhpType::Object("ClosureObjectReferenceContract".to_string()),
+            "{target}: the callee must receive the concrete object payload slot",
+        );
+        let signature = closure
+            .signature
+            .as_ref()
+            .unwrap_or_else(|| panic!("{target}: missing closure signature"));
+        assert_eq!(
+            signature.params[0].1.codegen_repr(),
+            parameter.php_type.codegen_repr(),
+            "{target}: descriptor and callee payload layouts must agree",
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
 /// A hidden Mixed owner does not change the string payload ABI of its returned ref-cell.
 #[test]
 fn bound_string_reference_store_keeps_its_physical_payload_type() {

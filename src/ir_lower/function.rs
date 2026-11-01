@@ -1585,7 +1585,8 @@ fn lower_closure_function_with_signature(
     callable_default: Option<Expr>,
 ) -> FunctionSig {
     closure_defaults::lower_helpers(parent, name, &signature);
-    let signature = eir_signature_with_object_reference_contracts(&signature);
+    // Closure descriptors adapt boxed eval reference markers to the declared payload slot.
+    // Keep the closure body on that same concrete ABI so descriptor and callee agree.
     // Generator closures lower their body as a Mixed-returning coroutine; see
     // `generator_body_return_type`.
     let closure_body_return_type = generator_body_return_type(body, &signature.return_type, signature.is_generator);
