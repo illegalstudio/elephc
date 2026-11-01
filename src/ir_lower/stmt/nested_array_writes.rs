@@ -108,7 +108,8 @@ pub(super) fn lower_captured_update(
         .expect("captured update retains its canonical self-read");
     let mut snapshots = Vec::new();
     let (read, write) = snapshot_nested_update_keys(ctx, target, &mut snapshots, true);
-    if runtime_property_root(target).is_some()
+    if ctx.classes.contains_key("SimpleXMLElement")
+        && runtime_property_root(target).is_some()
         && matches!(update, ElementUpdate::IncDec { .. })
     {
         lower_runtime_property_native_incdec(ctx, &read, &write, update, value, span);
@@ -128,6 +129,47 @@ pub(super) fn lower_captured_update(
 
 /// Gives a captured runtime-name property the native XML no-writeback incdec path first.
 fn lower_runtime_property_native_incdec(
+    ctx: &mut LoweringContext<'_, '_>,
+    read: &Expr,
+    write: &Expr,
+    update: ElementUpdate<'_>,
+    source_value: &Expr,
+    span: Span,
+) {
+    let (object, _) = runtime_property_root(read).expect("captured runtime property root");
+    let object = lower_expr(ctx, object);
+    let (object, owner) = root_static_update_receiver(ctx, object, span);
+    let class = ctx.intern_class_name("SimpleXMLElement");
+    let native = ctx.emit_value(Op::InstanceOf, vec![object.value], Some(Immediate::Data(class)),
+        PhpType::Bool, Op::InstanceOf.default_effects(), Some(span));
+    let selected = ctx.builder.create_named_block("xml.indexed_update.native", Vec::new());
+    let ordinary = ctx.builder.create_named_block("xml.indexed_update.ordinary", Vec::new());
+    let done = ctx.builder.create_named_block("xml.indexed_update.done", Vec::new());
+    let initial = ctx.initialized_slots_snapshot();
+    ctx.builder.terminate(Terminator::CondBr { cond: native.value,
+        then_target: selected, then_args: Vec::new(), else_target: ordinary, else_args: Vec::new() });
+    ctx.builder.position_at_end(selected);
+    lower_selected_runtime_property_native_incdec(ctx, read, write, update, source_value, span);
+    if !ctx.builder.insertion_block_is_terminated() {
+        ctx.builder.terminate(Terminator::Br { target: done, args: Vec::new() });
+    }
+    let native_slots = ctx.initialized_slots_snapshot();
+    ctx.builder.position_at_end(ordinary);
+    ctx.restore_initialized_slots(initial);
+    lower_boxed_static_nested_update(ctx, read, write, update, source_value, span);
+    if !ctx.builder.insertion_block_is_terminated() {
+        ctx.builder.terminate(Terminator::Br { target: done, args: Vec::new() });
+    }
+    let ordinary_slots = ctx.initialized_slots_snapshot();
+    ctx.builder.position_at_end(done);
+    ctx.restore_initialized_slots(native_slots.intersection(&ordinary_slots).copied().collect());
+    if let Some(owner) = owner {
+        crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span);
+    }
+}
+
+/// Selects a native property's child without applying ordinary array-slot writeback.
+fn lower_selected_runtime_property_native_incdec(
     ctx: &mut LoweringContext<'_, '_>,
     read: &Expr,
     write: &Expr,

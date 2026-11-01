@@ -69,6 +69,31 @@ unset($box, $copy);
     });
 }
 
+/// XML capability loading keeps ordinary typed and erased property incdec attached to storage.
+#[test]
+fn test_computed_indexed_names_keep_ordinary_storage_with_xml_loaded() {
+    if skip_without_xml_native("test_computed_indexed_names_keep_ordinary_storage_with_xml_loaded") { return; }
+    let output = compile_and_run_with_heap_debug(r#"<?php
+class OrdinaryIndexedWithXml {
+    public array $items = [2];
+    public function typed(): self { return $this; }
+    public function erased(): mixed { return $this; }
+}
+$activation = new SimpleXMLElement('<r/>');
+$box = new OrdinaryIndexedWithXml();
+$copy = $box->items;
+$name = $argc > 0 ? 'items' : 'other';
+$box->typed()->{$name}[0]++;
+echo json_encode($box->items), ':';
+--$box->erased()->{$name}[0];
+echo json_encode($box->items), ':', json_encode($copy);
+unset($activation, $box, $copy, $name);
+"#);
+    assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "[3]:[2]:[2]");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
 /// Erased object containers use offsetSet through readable readonly and private(set) properties.
 #[test]
 fn test_erased_declared_arrayaccess_property_writeback() {
