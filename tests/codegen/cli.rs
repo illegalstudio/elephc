@@ -946,6 +946,62 @@ fn test_cli_web_isolation_selects_entry_symbol_at_compile_time() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies the x86_64 web bridge reaches the handler and the application callbacks through
+/// entries that preserve rbx and r12-r15: an optimized bridge keeps its worker loop state in
+/// them across the handler call, and the worker died after its first request.
+#[test]
+fn test_cli_web_x86_64_bridge_calls_preserve_callee_saved_registers() {
+    let dir = make_cli_test_dir("elephc_cli_web_x86_rust_entries");
+    let php_path = dir.join("main.php");
+    // `--web` refuses `--emit-asm`, so this is a full build. `main.s` is written before the
+    // assembler runs, which is as far as a host without an x86_64 toolchain gets.
+    let compile = |source: &str, flags: &[&str]| {
+        fs::write(&php_path, source).unwrap();
+        let _ = fs::remove_file(dir.join("main.s"));
+        let output = elephc_cli_command(&dir)
+            .args(["--target", "linux-x86_64"])
+            .args(flags)
+            .arg(&php_path)
+            .output()
+            .expect("failed to compile web entry fixture");
+        fs::read_to_string(dir.join("main.s")).unwrap_or_else(|_| {
+            panic!("web entry compile wrote no assembly: {}", String::from_utf8_lossy(&output.stderr))
+        })
+    };
+    let preserving_entry = |asm: &str, body: &str| {
+        let entry = format!(
+            "{body}_rust_entry:\n    push rbx\n    push r12\n    push r13\n    push r14\n    push r15\n    call {body}\n    pop r15\n    pop r14\n    pop r13\n    pop r12\n    pop rbx\n    ret\n"
+        );
+        assert!(asm.contains(&entry), "missing the preserving entry for {body}");
+    };
+
+    let worker = compile("<?php echo 'ok';", &["--web"]);
+    preserving_entry(&worker, "_elephc_web_handler");
+    assert!(worker.contains("lea rdx, [rip + _elephc_web_handler_rust_entry]"), "the worker bridge must get the entry");
+
+    let application = compile(
+        r#"<?php
+final class App implements Elephc\Web\WorkerApplication {
+    public function handle(Elephc\Web\Request $request): void { echo 'ok'; }
+    public function shutdown(): void {}
+}
+Elephc\Web\Worker::register(new App());
+"#,
+        &["--web", "--web-lifecycle=application"],
+    );
+    for body in [
+        "_elephc_web_handler",
+        "_fn__u__u_elephc_u_web_u_application_u_ready",
+        "_fn__u__u_elephc_u_web_u_application_u_request",
+        "_fn__u__u_elephc_u_web_u_application_u_shutdown",
+    ] {
+        preserving_entry(&application, body);
+        assert!(application.contains(&format!(".quad {body}_rust_entry")), "the callback table must hold the entry for {body}");
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies web-isolation is rejected without web mode and reports invalid model names.
 #[test]
 fn test_cli_web_isolation_validation_errors_are_focused() {
