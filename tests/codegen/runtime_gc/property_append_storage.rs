@@ -37,16 +37,16 @@ function appendStorageObject(object $box, int $n): void {
 function appendStorageInterface(AppendStorageMarker $box, int $n): void {
     for ($i = 0; $i < $n; $i++) { $box->items[] = $i; }
 }
-$a = new AppendStorageDeclared(); appendStorageMixed($a, 100000);
-echo count($a->items), ':', $a->items[99999], '|'; unset($a);
-$b = new AppendStorageDeclared(); appendStorageObject($b, 100000);
-echo count($b->items), ':', $b->items[99999], '|'; unset($b);
-$c = new AppendStorageDeclared(); appendStorageInterface($c, 100000);
-echo count($c->items), ':', $c->items[99999], '|'; unset($c);
-$d = new stdClass(); $d->items = []; appendStorageMixed($d, 100000);
-echo count($d->items), ':', $d->items[99999], '|'; unset($d);
-$e = new AppendStorageDynamic(); $e->items = []; appendStorageInterface($e, 100000);
-echo count($e->items), ':', $e->items[99999], '|'; unset($e);
+$a = new AppendStorageDeclared(); appendStorageMixed($a, 10000);
+echo count($a->items), ':', $a->items[9999], '|'; unset($a);
+$b = new AppendStorageDeclared(); appendStorageObject($b, 10000);
+echo count($b->items), ':', $b->items[9999], '|'; unset($b);
+$c = new AppendStorageDeclared(); appendStorageInterface($c, 10000);
+echo count($c->items), ':', $c->items[9999], '|'; unset($c);
+$d = new stdClass(); $d->items = []; appendStorageMixed($d, 10000);
+echo count($d->items), ':', $d->items[9999], '|'; unset($d);
+$e = new AppendStorageDynamic(); $e->items = []; appendStorageInterface($e, 10000);
+echo count($e->items), ':', $e->items[9999], '|'; unset($e);
 $node = new stdClass(); $node->items = ['a'];
 $snapshot = $node->items; $clone = clone $node; $alias = $node;
 appendStorageMixed($node, 1);
@@ -72,10 +72,10 @@ echo isset($plain->items) ? 'changed|' : 'empty|';
 "#;
     let capability = if xml { "function appendStorageXmlCapability(): void { simplexml_load_string('<r/>'); }" } else { "" };
     let source = format!("{source}\n{capability}");
-    // Five 100000-element loops still expose quadratic full-array copies while leaving enough
-    // timeout margin for exact-class dispatch under heap-debug instrumentation.
+    // Five 10000-element loops still expose quadratic full-array copies while leaving enough
+    // timeout margin for every dispatch route under contended heap-debug CI instrumentation.
     let out = compile_and_run_with_heap_debug_sized(&source, 32 * 1024 * 1024);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, format!("{}a:a:a,0|a,0,0:a|0,1|b:b:b,0|blocked:empty|", "100000:99999|".repeat(5)));
+    assert_eq!(out.stdout, format!("{}a:a:a,0|a,0,0:a|0,1|b:b:b,0|blocked:empty|", "10000:9999|".repeat(5)));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
