@@ -127,12 +127,3 @@ fn property_empty(
     let value = eval_property_get_result(object, property, context, values)?;
     empty_value(value, context, values)
 }
-
-/// Reads a probe's truthiness and releases only an owned returned cell.
-fn empty_value(value: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps)
-    -> Result<bool, EvalStatus>
-{
-    let truthy = values.truthy(value);
-    let cleanup = release_expr_result(value, context, values);
-    truthy.and_then(|truthy| cleanup.map(|()| !truthy))
-}

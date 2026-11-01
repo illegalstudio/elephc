@@ -88,7 +88,7 @@ pub(in crate::interpreter) fn eval_empty_arg(
             return Ok(true);
         }
         let value = eval_property_get_result(object, property, context, values)?;
-        return Ok(!values.truthy(value)?);
+        return empty_value(value, context, values);
     }
     if let EvalExpr::DynamicPropertyGet { object, property } = arg {
         let (object, property) = if matches!(object.as_ref(), EvalExpr::LoadVar(_)) {
@@ -105,7 +105,7 @@ pub(in crate::interpreter) fn eval_empty_arg(
             return Ok(true);
         }
         let value = eval_property_get_result(object, &property, context, values)?;
-        return Ok(!values.truthy(value)?);
+        return empty_value(value, context, values);
     }
     if let EvalExpr::NullsafePropertyGet { object, property } = arg {
         let object = eval_expr(object, context, scope, values)?;
@@ -119,7 +119,7 @@ pub(in crate::interpreter) fn eval_empty_arg(
             return Ok(true);
         }
         let value = eval_property_get_result(object, property, context, values)?;
-        return Ok(!values.truthy(value)?);
+        return empty_value(value, context, values);
     }
     if let EvalExpr::NullsafeDynamicPropertyGet { object, property } = arg {
         let object = eval_expr(object, context, scope, values)?;
@@ -134,7 +134,7 @@ pub(in crate::interpreter) fn eval_empty_arg(
             return Ok(true);
         }
         let value = eval_property_get_result(object, &property, context, values)?;
-        return Ok(!values.truthy(value)?);
+        return empty_value(value, context, values);
     }
     if let EvalExpr::StaticPropertyGet {
         class_name,
@@ -145,7 +145,7 @@ pub(in crate::interpreter) fn eval_empty_arg(
             return Ok(true);
         }
         let value = eval_static_property_get_result(class_name, property, context, values)?;
-        return Ok(!values.truthy(value)?);
+        return empty_value(value, context, values);
     }
     if let EvalExpr::DynamicStaticPropertyGet {
         class_name,
@@ -158,7 +158,7 @@ pub(in crate::interpreter) fn eval_empty_arg(
             return Ok(true);
         }
         let value = eval_static_property_get_result(&class_name, property, context, values)?;
-        return Ok(!values.truthy(value)?);
+        return empty_value(value, context, values);
     }
     if let EvalExpr::DynamicStaticPropertyNameGet {
         class_name,
@@ -172,7 +172,7 @@ pub(in crate::interpreter) fn eval_empty_arg(
             return Ok(true);
         }
         let value = eval_static_property_get_result(&class_name, &property, context, values)?;
-        return Ok(!values.truthy(value)?);
+        return empty_value(value, context, values);
     }
     if let EvalExpr::ArrayGet { array, index } = arg {
         let mut empty = false;
@@ -193,8 +193,16 @@ pub(in crate::interpreter) fn eval_empty_arg(
             })?;
         return Ok(empty);
     }
-    let value = eval_expr(arg, context, scope, values)?;
-    Ok(!values.truthy(value)?)
+    eval_condition(arg, context, scope, values).map(|truthy| !truthy)
+}
+
+/// Reads a probe's truthiness and releases only an owned returned cell.
+fn empty_value(
+    value: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let truthy = values.truthy(value);
+    let cleanup = release_expr_result(value, context, values);
+    truthy.and_then(|truthy| cleanup.map(|()| !truthy))
 }
 
 /// Evaluates `empty($object[$key])` through `ArrayAccess::offsetExists()` and `offsetGet()`.

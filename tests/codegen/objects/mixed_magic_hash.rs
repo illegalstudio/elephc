@@ -122,17 +122,20 @@ class ReferenceMagicProbe {
 }
 function ReferenceMagicProbeExercise(mixed $object): void {
     var_dump(isset($object->missing), empty($object->missing), $object->missing ?? 'd');
+    $property = 'missing';
+    var_dump(empty($object->{$property}), empty($object?->{$property}));
 }
 $probe = new ReferenceMagicProbe();
 ReferenceMagicProbeExercise($probe);
 $probe->answer = true;
 ReferenceMagicProbeExercise($probe);
 unset($probe);
+var_dump(empty(str_repeat('x', 3)), empty(str_repeat('', 3)));
 "#;
     let renamed = source.replace("ReferenceMagicProbe", "EvalReferenceMagicProbe");
     let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
-    let expected = "bool(false)\nbool(true)\nstring(1) \"d\"\nbool(true)\nbool(false)\nint(5)\n";
+    let expected = "bool(false)\nbool(true)\nstring(1) \"d\"\nbool(true)\nbool(true)\nbool(true)\nbool(false)\nint(5)\nbool(false)\nbool(false)\nbool(false)\nbool(true)\n";
     assert_bundle_with(&[
         BundleCase { name: "reference_isset_aot", source, expected },
         BundleCase { name: "reference_isset_eval", source: &eval, expected },
