@@ -8,9 +8,7 @@
 //! - The checker accepts the typed call after `instanceof` narrowing, while EIR still carries
 //!   the source in the boxed `Mixed` representation used by array and property storage.
 //! - Call materialization must unbox that source before loading the typed-object ABI slot.
-//! - Curl's guarded multi-handle path depends on this after its public `mixed` parameter has
-//!   been narrowed; the public signature stays `mixed` because the checker still rejects an
-//!   unguarded Mixed array element where a typed object parameter is declared.
+//! - Direct `mixed` arguments use the same boundary guard before entering a typed object slot.
 
 use crate::support::*;
 
@@ -57,6 +55,26 @@ fn test_mixed_sourced_object_through_typed_param_is_unboxed() {
         out,
         "identity=same\ndirect-typed=resource/1\nmixed-param=resource/1\ntyped-param=resource/1\n"
     );
+}
+
+/// An unguarded `mixed` argument accepts the matching object and rejects a scalar at run time.
+#[test]
+fn test_mixed_argument_to_typed_object_parameter_checks_the_runtime_class() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+final class BoundaryBox { public string $label = "box"; }
+function takeBoundaryBox(BoundaryBox $box): string { return $box->label; }
+function relayBoundaryBox(mixed $value): string { return takeBoundaryBox($value); }
+echo relayBoundaryBox(new BoundaryBox()), "|";
+try { relayBoundaryBox(42); }
+catch (TypeError $error) { echo explode(', called in ', $error->getMessage())[0]; }
+unset($error);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(
+        out.stdout,
+        "box|takeBoundaryBox(): Argument #1 ($box) must be of type BoundaryBox, int given"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
 /// Verifies that an explicit Mixed parameter can still guard and read an object dynamically.
