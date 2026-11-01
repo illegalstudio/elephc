@@ -1,0 +1,17 @@
+[package]
+name = "elephc-zip"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Pure-Rust ZIP archive bridge for elephc's ext/zip surface"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+zip = { version = "9.2", default-features = false, features = ["aes-crypto", "bzip2", "deflate-flate2-zlib-rs", "deflate64", "lzma", "ppmd", "time", "xz"] }
+flate2 = "1"
+serde_json = "1"
+crc32fast = "1"
+regex = "1"

@@ -314,6 +314,19 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
+        lib_name: "elephc_zip",
+        env_var: "ELEPHC_ZIP_LIB_DIR",
+        crate_name: "elephc-zip",
+        flag_name: "zip",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        // The pure-Rust archive engine implements PHP's `zip` extension surface.
+        php_extensions: &["zip"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
         lib_name: "elephc_magician",
         env_var: "ELEPHC_MAGICIAN_LIB_DIR",
         crate_name: "elephc-magician",

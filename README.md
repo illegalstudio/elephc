@@ -38,6 +38,11 @@ PHP file information is available through `finfo`, the six fileinfo functions an
 all eleven `FILEINFO_*` constants. Run `elephc native add libmagic` in the project;
 use `--with-fileinfo` for opaque dynamic eval. See [fileinfo](docs/php/fileinfo.md).
 
+PHP archive handling is available through `ZipArchive` and the deprecated
+`zip_*` API, backed by a pure-Rust ZIP engine with AES encryption, extraction,
+comments, mtimes, external attributes, and glob/pattern adds. No native package
+is required; use `--with-zip` for opaque dynamic eval. See [Zip](docs/php/zip.md).
+
 ## Support the project
 
 elephc is built and maintained independently. You can support the project by either:
@@ -358,7 +363,7 @@ elephc --no-ir-opt hot.php
 # Link extra native libraries or frameworks for FFI
 elephc app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
 
-# Force-enable an optional bridge (pdo, mysqli, tls, crypto, bcmath, gmp, random, mbstring, iconv, phar, tz, image, pcntl, xml, fileinfo, tokenizer, eval, regex, curl, web)
+# Force-enable an optional bridge (pdo, mysqli, tls, crypto, bcmath, gmp, random, mbstring, iconv, phar, tz, image, pcntl, xml, fileinfo, zip, tokenizer, eval, regex, curl, web)
 elephc app.php --with-pdo --with-crypto
 # Force-inject the mysqli surface (links the shared elephc_pdo bridge, without the PDO classes)
 elephc app.php --with-mysqli
@@ -813,6 +818,7 @@ crates/
 ├── elephc-pcntl/        # Unix process control, wait, exec, and signal bridge
 ├── elephc-pdo/          # Multi-driver PDO bridge
 ├── elephc-phar/         # PHAR/tar/zip bridge
+├── elephc-zip/          # Pure-Rust ext/zip archive engine
 ├── elephc-probe/        # Sampled profiling and authenticated service endpoint
 ├── elephc-random/       # PHP ext/random engines, CSPRNG, and global Mt19937 state bridge
 ├── elephc-tls/          # TLS stream bridge

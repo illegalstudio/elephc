@@ -154,6 +154,11 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         php_extensions: &["curl"],
     },
     TestBridgeStaticlib {
+        lib_name: "elephc_zip",
+        package: "elephc-zip",
+        php_extensions: &["zip"],
+    },
+    TestBridgeStaticlib {
         lib_name: "elephc_fileinfo",
         package: "elephc-fileinfo",
         php_extensions: &["fileinfo"],

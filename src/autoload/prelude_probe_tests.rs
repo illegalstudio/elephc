@@ -159,3 +159,21 @@ fn probe_detects_web_environment_observers_in_autoloaded_classes() {
         assert_eq!(groups.contains("web_environment"), observes, "{body}");
     }
 }
+
+/// Verifies autoloaded files that reference ZipArchive or zip_* still inject the zip prelude.
+#[test]
+fn probe_detects_zip_in_autoloaded_classes() {
+    let project = ProbeProject::new();
+    let defines = std::collections::HashSet::new();
+    for body in [
+        r"return new \ZipArchive();",
+        r"return \zip_open('archive.zip');",
+    ] {
+        fs::write(project.0.join("src/Probe.php"), format!(
+            "<?php namespace App; class Probe {{ public function archive(): mixed {{ {body} }} }}",
+        )).unwrap();
+        let (registry, program) = Registry::build(&project.0, parse("<?php new App\\Probe();"));
+        let groups = autoloaded_prelude_groups(&program, &project.0, &registry, &defines);
+        assert!(groups.contains("zip"), "autoloaded body was missed: {body}");
+    }
+}

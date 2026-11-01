@@ -71,6 +71,7 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
         ("xml_prelude", crate::xml_prelude::xml_declarations()),
         ("fileinfo_prelude", crate::fileinfo_prelude::fileinfo_declarations()),
         ("tokenizer_prelude", crate::tokenizer_prelude::tokenizer_declarations()),
+        ("zip_prelude", crate::zip_prelude::zip_declarations()),
         ("testing_prelude", crate::testing_prelude::testing_declarations()),
         (
             "version_prelude",
@@ -218,7 +219,51 @@ fn catalog_hosted_preludes() -> Vec<(&'static str, String, bool)> {
 
 /// PHP-visible functions a catalog-hosted prelude declares WITHOUT a shared contract,
 /// with the reason each exclusion is correct rather than an oversight.
-const UNCONTRACTED_PRELUDE_DECLARATIONS: &[(&str, &str)] = &[(
+const UNCONTRACTED_PRELUDE_DECLARATIONS: &[(&str, &str)] = &[
+    (
+        "zip_open",
+        "a deprecated procedural alias implemented by the zip prelude over ZipArchive. It has \
+         no `builtin!` binding and no `eval_builtin!` home; the prelude is the whole \
+         implementation. The comparison table therefore counts the zip module from the \
+         registry (0/10), while ZipArchive and the procedural API remain prelude-provided.",
+    ),
+    (
+        "zip_close",
+        "see `zip_open`; the deprecated procedural API is prelude-provided over ZipArchive.",
+    ),
+    (
+        "zip_read",
+        "see `zip_open`; the deprecated procedural API is prelude-provided over ZipArchive.",
+    ),
+    (
+        "zip_entry_open",
+        "see `zip_open`; the deprecated procedural API is prelude-provided over ZipArchive.",
+    ),
+    (
+        "zip_entry_close",
+        "see `zip_open`; the deprecated procedural API is prelude-provided over ZipArchive.",
+    ),
+    (
+        "zip_entry_read",
+        "see `zip_open`; the deprecated procedural API is prelude-provided over ZipArchive.",
+    ),
+    (
+        "zip_entry_name",
+        "see `zip_open`; the deprecated procedural API is prelude-provided over ZipArchive.",
+    ),
+    (
+        "zip_entry_compressedsize",
+        "see `zip_open`; the deprecated procedural API is prelude-provided over ZipArchive.",
+    ),
+    (
+        "zip_entry_filesize",
+        "see `zip_open`; the deprecated procedural API is prelude-provided over ZipArchive.",
+    ),
+    (
+        "zip_entry_compressionmethod",
+        "see `zip_open`; the deprecated procedural API is prelude-provided over ZipArchive.",
+    ),
+    (
     "curl_file_create",
     "a plain alias of the CURLFile constructor. It has no `builtin!` binding (the prelude \
      is the whole implementation) and no `eval_builtin!` home either — inside eval() it \
@@ -227,7 +272,8 @@ const UNCONTRACTED_PRELUDE_DECLARATIONS: &[(&str, &str)] = &[(
      does not exist, or an EvalImplementationPending label that would be false because \
      eval() can already call it. Consequence, accepted: the PHP comparison page counts \
      the curl module 34/35 rather than 35/35.",
-)];
+    ),
+];
 
 /// Verifies no injected compiler prelude calls a PHP-visible extension builtin.
 ///

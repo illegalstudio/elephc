@@ -1292,6 +1292,15 @@ mod tests {
         assert!(!config.web);
     }
 
+    /// Verifies `--with-zip` records the archive bridge for force-linking and prelude forcing.
+    #[test]
+    fn with_zip_records_forced_crate() {
+        let args = vec!["elephc".into(), "--with-zip".into(), "app.php".into()];
+        let config = compile_config(&args);
+        assert!(config.with_crates.contains("zip"));
+        assert!(!config.web);
+    }
+
     /// Verifies `--with-regex` records the dynamic-code regex capability without web mode.
     #[test]
     fn with_regex_records_runtime_capability() {

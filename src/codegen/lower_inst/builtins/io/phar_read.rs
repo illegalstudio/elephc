@@ -27,7 +27,19 @@ pub(crate) fn lower_file_get_contents(
     inst: &Instruction,
 ) -> Result<()> {
     ensure_arg_count_between(inst, "file_get_contents", 1, 5)?;
-    require_absent_stream_context(ctx, inst, 2, "file_get_contents")?;
+    // The stream-context argument is consumed by the shared context state that
+    // `stream_context_create()` installs; the generic reader below opens user wrappers
+    // through `__rt_fopen`, which reads that state. Keeping the argument in the plan
+    // preserves PHP's call shape even though elephc currently models one active context.
+    // Known built-in remote schemes still reject it: those readers do not consume the
+    // options, so accepting the argument there would silently drop the caller's config.
+    let path_literal = match inst.operands.first().copied() {
+        Some(path) => optional_const_string_operand(ctx, path)?,
+        None => None,
+    };
+    if path_literal.as_deref().is_some_and(builtin_context_unsupported) {
+        require_absent_stream_context(ctx, inst, 2, "file_get_contents")?;
+    }
     let range = FileReadRange::from_operands(ctx, inst, 3, 4)?;
     range.emit_negative_length_guard(ctx, FILE_GET_CONTENTS_NEGATIVE_LENGTH_MESSAGE)?;
     emit_file_get_contents_bytes(ctx, inst, range.is_active())?;
@@ -89,12 +101,23 @@ fn emit_file_get_contents_bytes(
     Ok(())
 }
 
-/// Rejects a non-null `$context` argument instead of silently ignoring the stream context.
+/// Returns whether a literal path names a built-in reader that does not consume the
+/// `file_get_contents()` stream context. User-space wrapper schemes are intentionally absent:
+/// `__rt_file_get_contents_wrapper` opens them through the shared context state.
+fn builtin_context_unsupported(path: &str) -> bool {
+    [
+        "http://", "https://", "ftps://", "ftp://", "phar://", "data://", "php://",
+        "compress.zlib://", "compress.bzip2://", "file://",
+    ]
+    .iter()
+    .any(|prefix| path.starts_with(prefix))
+}
+
+/// Rejects a non-null `$context` argument for a built-in reader that cannot honor it.
 ///
-/// elephc has no stream-context plumbing on the read path, so honoring a real context is
-/// impossible. An omitted argument, a literal `null`, and the registry's `null` default all
-/// materialize a statically null operand and are accepted; anything else is a compile error
-/// naming the parameter rather than a read that quietly drops the caller's options.
+/// An omitted argument, a literal `null`, and the registry's `null` default all materialize a
+/// statically null operand and are accepted. User-space wrapper reads are handled by the
+/// path check above and reach `__rt_file_get_contents_wrapper`.
 fn require_absent_stream_context(
     ctx: &FunctionContext<'_>,
     inst: &Instruction,

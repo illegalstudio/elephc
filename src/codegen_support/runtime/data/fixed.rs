@@ -926,6 +926,8 @@ pub(crate) fn emit_runtime_data_fixed(
     ));
     out.push_str(".globl _instanceof_target_type_msg\n_instanceof_target_type_msg:\n    .ascii \"Fatal error: Class name must be a valid object or a string\\n\"\n");
     out.push_str(".globl _diag_file_get_contents_failed_msg\n_diag_file_get_contents_failed_msg:\n    .ascii \"Warning: file_get_contents(): Failed to open stream\\n\"\n");
+    out.push_str(".globl _diag_fgc_wrapper_prefix\n_diag_fgc_wrapper_prefix:\n    .ascii \"Warning: file_get_contents(\"\n");
+    out.push_str(".globl _diag_fgc_wrapper_suffix\n_diag_fgc_wrapper_suffix:\n    .ascii \"): Failed to open stream: operation failed\\n\"\n");
     out.push_str(".globl _diag_fopen_failed_msg\n_diag_fopen_failed_msg:\n    .ascii \"Warning: fopen(): Failed to open stream\\n\"\n");
     out.push_str(".globl _swr_bad_proto_msg\n_swr_bad_proto_msg:\n    .ascii \"Warning: stream_wrapper_register(): Invalid protocol scheme specified.\\n\"\n");
     out.push_str(".globl _swr_dup_proto_msg\n_swr_dup_proto_msg:\n    .ascii \"Warning: stream_wrapper_register(): Protocol is already defined.\\n\"\n");
@@ -1047,6 +1049,13 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".p2align 3\n.globl _cstr2_base\n_cstr2_base:\n    .quad _cstr_buf2\n");
     out.push_str(".p2align 3\n.globl _cstr2_cap\n_cstr2_cap:\n    .quad 4096\n");
     out.push_str(&comm_directive("_eof_flags", 256, target));
+    // Synthetic user-wrapper stream metadata: 256 handles, one kind byte and a
+    // 256-byte URI buffer each. Kind 1 is a native zip:// open, kind 2 is the
+    // ZipArchive::getStream memory wrapper.
+    out.push_str(&comm_directive("_zip_stream_kind", 256, target));
+    out.push_str(&comm_directive("_runtime_wrapper_class_buf", 1024, target));
+    out.push_str(&comm_directive("_zip_stream_uri_len", 2048, target));
+    out.push_str(&comm_directive("_zip_stream_uri", 65536, target));
     out.push_str(&comm_directive("_popen_files", 2048, target));
     out.push_str(&comm_directive("_dir_handles", 2048, target));
     // Per-fd glob:// state pointers (256 fds × 8B). Each slot is a pointer to
@@ -1835,6 +1844,12 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _meta_stype_stdio\n_meta_stype_stdio:\n    .ascii \"STDIO\"\n");
     out.push_str(".globl _meta_stype_socket\n_meta_stype_socket:\n    .ascii \"tcp_socket\"\n");
     out.push_str(".globl _meta_wrapper_plainfile\n_meta_wrapper_plainfile:\n    .ascii \"plainfile\"\n");
+    out.push_str(".globl _runtime_wrapper_class_empty\n_runtime_wrapper_class_empty:\n    .byte 0\n");
+    out.push_str(".globl _meta_stype_zip\n_meta_stype_zip:\n    .ascii \"zip\"\n");
+    out.push_str(".globl _meta_wrapper_zip\n_meta_wrapper_zip:\n    .ascii \"zip wrapper\"\n");
+    out.push_str(".globl _meta_stype_userspace\n_meta_stype_userspace:\n    .ascii \"user-space\"\n");
+    out.push_str(".globl _meta_wrapper_userspace\n_meta_wrapper_userspace:\n    .ascii \"user-space\"\n");
+    out.push_str(".globl _meta_mode_rb\n_meta_mode_rb:\n    .ascii \"rb\"\n");
     out.push_str(".globl _meta_mode_r\n_meta_mode_r:\n    .ascii \"r\"\n");
     out.push_str(".globl _meta_mode_w\n_meta_mode_w:\n    .ascii \"w\"\n");
     out.push_str(".globl _meta_mode_rw\n_meta_mode_rw:\n    .ascii \"r+\"\n");

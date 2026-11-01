@@ -47,6 +47,7 @@ env:
     -p elephc-pcntl
     -p elephc-xml
     -p elephc-fileinfo
+    -p elephc-zip
     -p elephc-tokenizer
     -p elephc-magician
     -p elephc-web

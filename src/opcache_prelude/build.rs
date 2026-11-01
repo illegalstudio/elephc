@@ -31,8 +31,9 @@
 use crate::parser::ast::{BinOp, CastType, Expr, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
     e_array, e_array_assoc, e_binop, e_bool, e_call, e_cast, e_const, e_float, e_index, e_int,
-    e_neg, e_new, e_not, e_null, e_str, e_ternary, e_var, function, s_array_assign, s_assign, s_break,
-    s_expr, s_foreach, s_if, s_return, s_static, s_throw, s_while, t_array, t_nullable, t_union,
+    e_neg, e_new, e_not, e_null, e_null_coalesce, e_str, e_ternary, e_var, function, s_array_assign,
+    s_assign, s_break, s_expr, s_foreach, s_global, s_if, s_return, s_static, s_throw,
+    s_while, t_array, t_nullable, t_union,
 };
 
 /// A BAKED integer, written the way the parser produces it from decimal source text: a NEGATIVE
@@ -1340,6 +1341,27 @@ pub(crate) fn cli_ini_set_decl() -> Stmt {
     let mut body = vec![crate::shared_ini_prelude::directive(
         elephc_builtin_contract::mbstring_abi::ini::INI_SET,
     )];
+    // The zip prelude observes `open_basedir` through the reserved
+    // `$__elephc_zip_open_basedir` global. Route this directive before the OPcache arms so
+    // a program that uses both surfaces gets one `ini_set()` that updates that state
+    // instead of the zip wrapper being shadowed.
+    body.push(s_global("__elephc_zip_open_basedir"));
+    body.push(s_if(
+        e_binop(e_var("option"), BinOp::StrictEq, e_str("open_basedir")),
+        vec![
+            s_assign(
+                "__elephc_previous_open_basedir",
+                e_null_coalesce(e_var("__elephc_zip_open_basedir"), e_str("")),
+            ),
+            s_assign(
+                "__elephc_zip_open_basedir",
+                e_cast(CastType::String, e_var("value")),
+            ),
+            s_return(e_var("__elephc_previous_open_basedir")),
+        ],
+        vec![],
+        None,
+    ));
     body.extend(opcache_ini_set_arms());
     body.push(s_return(e_bool(false)));
     function("ini_set")

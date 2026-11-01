@@ -81,6 +81,9 @@ fn string_literal(value: &str) -> String {
                 '"' => out.push_str("\\\""),
                 // Double-quoted PHP interpolates, so a literal `$` has to be escaped.
                 '$' => out.push_str("\\$"),
+                other if other.is_control() => {
+                    out.push_str(&format!("\\x{:02x}", other as u32));
+                }
                 other => out.push(other),
             }
         }
@@ -380,6 +383,15 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
         StmtKind::ArrayPush { array, value } => {
             format!("{indent}${array}[] = {};", expression(value))
         }
+        StmtKind::Global { vars } => format!(
+            "{indent}global ${};",
+            vars.join(", $")
+        ),
+        StmtKind::NestedArrayAssign { target, value } => format!(
+            "{indent}{} = {};",
+            expression(target),
+            expression(value)
+        ),
         StmtKind::StaticPropertyAssign {
             receiver,
             property,
