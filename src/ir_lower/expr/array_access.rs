@@ -299,7 +299,7 @@ fn lower_guarded_property_array_access(
         false,
         false,
     );
-    store_value_into_temp(ctx, &result, PhpType::Mixed, selected, expr.span);
+    store_silent_dimension_result(ctx, &result, selected, expr);
     branch_to(ctx, merge);
     let present_slots = ctx.initialized_slots_snapshot();
 
@@ -312,6 +312,67 @@ fn lower_guarded_property_array_access(
         true,
     ));
     take_owned_temp(ctx, &result, expr.span)
+}
+
+/// Stores a silent dimension read without turning its missing sentinel into a real scalar.
+///
+/// The property-initialization guard merges through boxed `Mixed` storage. Boxing a missing
+/// typed string or scalar read directly would preserve its scalar tag and make `isset()` see a
+/// value, while `??` would receive an empty string or sentinel payload. Test the typed result
+/// first and publish a boxed PHP null on the missing path instead.
+fn store_silent_dimension_result(
+    ctx: &mut LoweringContext<'_, '_>,
+    result: &str,
+    selected: LoweredValue,
+    expr: &Expr,
+) {
+    let is_null = ctx.emit_value(
+        Op::IsNull,
+        vec![selected.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        Some(expr.span),
+    );
+    let missing = ctx
+        .builder
+        .create_named_block("dimension.value.missing", Vec::new());
+    let present = ctx
+        .builder
+        .create_named_block("dimension.value.present", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("dimension.value.merge", Vec::new());
+    let initial = ctx.initialized_slots_snapshot();
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_null.value,
+        then_target: missing,
+        then_args: Vec::new(),
+        else_target: present,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(missing);
+    crate::ir_lower::ownership::release_if_owned(ctx, selected, Some(expr.span));
+    let null = lower_boxed_null(ctx, expr);
+    store_value_into_temp(ctx, result, PhpType::Mixed, null, expr.span);
+    branch_to(ctx, merge);
+    let missing_slots = ctx.initialized_slots_snapshot();
+
+    ctx.builder.position_at_end(present);
+    ctx.restore_initialized_slots(initial.clone());
+    store_value_into_temp(ctx, result, PhpType::Mixed, selected, expr.span);
+    branch_to(ctx, merge);
+    let present_slots = ctx.initialized_slots_snapshot();
+
+    ctx.builder.position_at_end(merge);
+    ctx.restore_initialized_slots(merge_initialized_slots_for_expr(
+        &initial,
+        missing_slots,
+        true,
+        present_slots,
+        true,
+    ));
 }
 
 /// Lowers array access once the receiver is already evaluated.

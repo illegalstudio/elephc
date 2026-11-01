@@ -33,6 +33,55 @@ function reviewYield(string $bytes) { yield $bytes[0] => 1; }
     }
 }
 
+/// Silent typed-property offset guards preserve misses before boxing on every target.
+#[test]
+fn silent_typed_property_offsets_normalize_misses_on_all_targets() {
+    use crate::ir::{Immediate, Op};
+    let source = r#"<?php
+class SilentOffsetProbe {
+    public string $bytes;
+    public function __construct(string $bytes) { $this->bytes = $bytes; }
+    public function probe(): void {
+        echo isset($this->bytes[5000]);
+        echo $this->bytes[5000] ?? "missing";
+    }
+}
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source,
+            std::path::Path::new("main.php"),
+            std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module
+            .class_methods
+            .iter()
+            .find(|function| function.name.ends_with("::probe"))
+            .expect("expected the silent offset probe method");
+        let reads = function
+            .instructions
+            .iter()
+            .filter(|instruction| {
+                instruction.op == Op::StrCharAt
+                    && instruction.immediate == Some(Immediate::Bool(false))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(reads.len(), 2, "{target}: isset and null coalescing stay silent");
+        for read in reads {
+            let value = read.result.expect("string offset read result");
+            assert!(function.instructions.iter().any(|instruction| {
+                instruction.op == Op::IsNull && instruction.operands == [value]
+            }), "{target}: test the missing sentinel before boxing");
+            assert!(function.instructions.iter().any(|instruction| {
+                instruction.op == Op::MixedBox && instruction.operands == [value]
+            }), "{target}: box only the present string byte");
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
 /// An offset view is copied before an owned receiver can be released on every target.
 #[test]
 fn string_offset_lifetime_stabilizes_views_on_all_targets() {
