@@ -11,6 +11,9 @@
 
 mod string_append;
 mod reference_results;
+mod dominators;
+
+use dominators::DominatorSets;
 
 use std::collections::{HashMap, HashSet};
 
@@ -289,7 +292,7 @@ fn validate_instruction_placement(function: &Function) -> Result<(), ValidationE
 /// Validates instruction operands, result metadata, immediates, effects, and dominance.
 fn validate_instructions(
     function: &Function,
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
+    dominators: &DominatorSets,
 ) -> Result<(), ValidationError> {
     for block in &function.blocks {
         for (index, inst_id) in block.instructions.iter().enumerate() {
@@ -751,7 +754,7 @@ fn validate_instruction_operands(
     inst_index: u32,
     _inst_id: InstId,
     inst: &Instruction,
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
+    dominators: &DominatorSets,
 ) -> Result<(), ValidationError> {
     for operand in &inst.operands {
         validate_use(function, *operand, block, Some(inst_index), dominators)?;
@@ -1515,7 +1518,7 @@ fn check_first_heap(
 /// Validates all block terminators and their CFG edge argument contracts.
 fn validate_terminators(
     function: &Function,
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
+    dominators: &DominatorSets,
 ) -> Result<(), ValidationError> {
     for block in &function.blocks {
         let Some(term) = &block.terminator else {
@@ -1586,7 +1589,7 @@ fn validate_switch_case(
     function: &Function,
     source_block: BlockId,
     case: &SwitchCase,
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
+    dominators: &DominatorSets,
 ) -> Result<(), ValidationError> {
     validate_branch_args(function, case.target, &case.args)?;
     validate_terminator_uses(function, source_block, &case.args, dominators)
@@ -1603,7 +1606,7 @@ fn validate_return(
     function: &Function,
     block: BlockId,
     value: Option<ValueId>,
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
+    dominators: &DominatorSets,
 ) -> Result<(), ValidationError> {
     if matches!(function.return_php_type, PhpType::Never) {
         return Err(ValidationError::NeverFunctionReturns);
@@ -1652,7 +1655,7 @@ fn validate_terminator_uses(
     function: &Function,
     block: BlockId,
     values: &[ValueId],
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
+    dominators: &DominatorSets,
 ) -> Result<(), ValidationError> {
     for value in values {
         validate_use(function, *value, block, None, dominators)?;
@@ -1729,7 +1732,7 @@ fn validate_use(
     value: ValueId,
     use_block: BlockId,
     use_inst_index: Option<u32>,
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
+    dominators: &DominatorSets,
 ) -> Result<(), ValidationError> {
     let Some(value_ref) = function.value(value) else {
         return Err(ValidationError::UnknownValue(value));
@@ -1742,9 +1745,7 @@ fn validate_use(
     // including when the definition also belongs to a dead continuation. Keep checking IDs, types,
     // and same-block ordering so malformed instructions still fail validation.
     let use_is_unreachable = use_block != function.entry
-        && dominators
-            .get(&use_block)
-            .is_some_and(|set| set.len() == 1 && set.contains(&use_block));
+        && dominators.is_singleton(use_block);
     let definition_block = match value_ref.def {
         ValueDef::BlockParam { block, .. } | ValueDef::Instruction { block, .. } => block,
     };
@@ -1766,23 +1767,17 @@ fn definition_dominates_use(
     def: ValueDef,
     use_block: BlockId,
     use_inst_index: Option<u32>,
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
+    dominators: &DominatorSets,
 ) -> bool {
     match def {
         ValueDef::BlockParam { block, .. } => {
             block == use_block
-                || dominators
-                    .get(&use_block)
-                    .map(|set| set.contains(&block))
-                    .unwrap_or(false)
+                || dominators.dominates(block, use_block)
         }
         ValueDef::Instruction { block, index, .. } if block == use_block => use_inst_index
             .map(|use_index| index < use_index)
             .unwrap_or(true),
-        ValueDef::Instruction { block, .. } => dominators
-            .get(&use_block)
-            .map(|set| set.contains(&block))
-            .unwrap_or(false),
+        ValueDef::Instruction { block, .. } => dominators.dominates(block, use_block),
     }
 }
 
@@ -1798,7 +1793,7 @@ fn definition_dominates_use(
 /// a later pass forwards into the loop. Unreachable blocks themselves resolve
 /// to `{self}`. Validation skips cross-block dominance for their uses while
 /// still rejecting same-block use-before-definition.
-fn compute_dominators(function: &Function) -> HashMap<BlockId, HashSet<BlockId>> {
+fn compute_dominators(function: &Function) -> DominatorSets {
     let predecessors = compute_predecessors(function);
     let reachable = reachable_from_entry(function, &predecessors);
     let block_count = function.blocks.len();
@@ -1831,7 +1826,7 @@ fn compute_dominators(function: &Function) -> HashMap<BlockId, HashSet<BlockId>>
             }
         }
     }
-    dominator_bitsets_to_map(function, &dominators)
+    DominatorSets::new(dominators)
 }
 
 /// Converts reachable predecessor block ids into dense block indices for bitset dominator scans.
@@ -1892,32 +1887,6 @@ fn bitset_and_assign(left: &mut [u64], right: &[u64]) {
     for (left_word, right_word) in left.iter_mut().zip(right.iter()) {
         *left_word &= *right_word;
     }
-}
-
-/// Converts dense dominator bitsets back to the validator's public block-id map.
-fn dominator_bitsets_to_map(
-    function: &Function,
-    dominators: &[Vec<u64>],
-) -> HashMap<BlockId, HashSet<BlockId>> {
-    let mut map = HashMap::with_capacity(function.blocks.len());
-    for (block_index, block) in function.blocks.iter().enumerate() {
-        let mut set = HashSet::new();
-        for (candidate_index, candidate) in function.blocks.iter().enumerate() {
-            if block_bit_is_set(&dominators[block_index], candidate_index) {
-                set.insert(candidate.id);
-            }
-        }
-        map.insert(block.id, set);
-    }
-    map
-}
-
-/// Returns whether a block index is present in a dominator bitset.
-fn block_bit_is_set(bits: &[u64], block_index: usize) -> bool {
-    let word = block_index / u64::BITS as usize;
-    let bit = block_index % u64::BITS as usize;
-    bits.get(word)
-        .is_some_and(|word_bits| (word_bits & (1_u64 << bit)) != 0)
 }
 
 /// Computes the set of blocks reachable from the entry over the same edge set as
