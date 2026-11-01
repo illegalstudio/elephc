@@ -572,7 +572,7 @@ pub(super) fn lower_dynamic_property_assign(
 pub(super) fn lower_dynamic_property_assign_prepared(
     ctx: &mut LoweringContext<'_, '_>, object: &Expr, property: &Expr, value: &Expr, span: Span,
 ) {
-    let (mut receiver, property, value) = if is_static_property_write_chain(object)
+    let (receiver, property, value) = if is_static_property_write_chain(object)
         || defer_native_property_write_receiver(ctx, object) {
         let property = lower_expr(ctx, property);
         let property = property_access::coerce_runtime_property_name(ctx, property, span);
