@@ -81,6 +81,10 @@ fn opaque_evals_demand_everything() {
         assert!(lowered.contains("ReflectionClass::getName"), "{source}");
         assert!(lowered.contains("ArrayObject::getArrayCopy"), "{source}");
         assert!(lowered.contains("ArrayIterator::getArrayCopy"), "{source}");
+        let serializer = module.class_methods.iter().find(|method|
+            method.name == "SplObjectStorage::__serialize").expect("opaque eval needs the serializer");
+        assert!(matches!(serializer.return_php_type,
+            crate::types::PhpType::AssocArray { .. }), "{source}: serializer must retain named entries");
     }
 }
 
