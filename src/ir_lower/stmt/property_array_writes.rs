@@ -17,6 +17,7 @@ mod compound;
 mod incdec;
 mod runtime_receivers;
 pub(super) use incdec::native as lower_native_incdec;
+pub(crate) use incdec::step as with_dimension_incdec_value;
 use compound::{compound_source, with_compound_value, write_ordinary_compound};
 
 /// Selects declaration initialization rules for a property used as a dimension container.

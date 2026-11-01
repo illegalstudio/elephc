@@ -19,6 +19,16 @@ pub(super) fn lower_assignment_expr(
     conditional_value_temp: Option<&str>,
     expr: &Expr,
 ) -> LoweredValue {
+    if let Some(result) = super::static_dimension_incdec::lower(
+        ctx, target, value, result_target, prelude, conditional_value_temp, expr,
+        |ctx, prelude| {
+            let mut capture = None;
+            let result = lower_ordinary_assignment_expr(
+                ctx, target, value, result_target, prelude, conditional_value_temp, expr, &mut capture,
+            );
+            super::ordinary_property_incdec::finish_old_capture(ctx, capture, result, expr.span)
+        },
+    ) { return result; }
     if let Some(result) = native_xml_updates::lower_assignment(
         ctx, target, value, result_target, prelude, conditional_value_temp, expr,
     ) { return result; }

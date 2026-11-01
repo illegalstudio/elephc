@@ -54,6 +54,7 @@ mod pipe;
 mod assignments;
 mod ordinary_property_incdec;
 mod native_xml_updates;
+mod static_dimension_incdec;
 pub(crate) use native_xml_updates::lower_statement as lower_native_xml_property_update;
 mod string_offset_assign;
 mod assignment_rhs_capture;

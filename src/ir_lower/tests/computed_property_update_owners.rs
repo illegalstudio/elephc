@@ -363,6 +363,12 @@ fn native_dimension_incdec_working_slot_has_one_owner_on_every_target() {
     let source = r#"<?php
 function dimensionOwnerStep(SimpleXMLElement $xml): void { $xml[0]++; }
 dimensionOwnerStep(new SimpleXMLElement('<r>7</r>'));
+class StaticDimensionOwnerStep { public static SimpleXMLElement $xml; }
+function staticDimensionOwnerStep(SimpleXMLElement $xml): mixed {
+    StaticDimensionOwnerStep::$xml = $xml;
+    return StaticDimensionOwnerStep::$xml[0]++;
+}
+echo (string)staticDimensionOwnerStep(new SimpleXMLElement('<r>7</r>'));
 "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let module = super::lower_source_at_for_target(
@@ -388,6 +394,17 @@ dimensionOwnerStep(new SimpleXMLElement('<r>7</r>'));
         assert_eq!(function.instructions.iter().filter(|inst| inst.op == Op::ReleaseLocalSlot
             && inst.immediate == Some(Immediate::LocalSlot(slot))).count(), 2,
             "{target}: overwrite retires the old owner and final cleanup retires the replacement");
+        let static_step = module.functions.iter().find(|function|
+            function.name == "staticDimensionOwnerStep").unwrap();
+        let methods: Vec<_> = static_step.instructions.iter().filter_map(|inst| {
+            if !matches!(inst.op, Op::MethodCall | Op::StaticMethodCall) { return None; }
+            let Some(Immediate::Data(name)) = inst.immediate else { return None; };
+            Some(module.data.strings[name.as_raw() as usize].as_str())
+        }).collect();
+        assert!(methods.iter().any(|name| name.ends_with("__elephc_dimension_select")),
+            "{target}: static postfix must use native write-context selection");
+        assert!(!methods.iter().any(|name| name.ends_with("__elephc_dimension_set")),
+            "{target}: static postfix must not write its arithmetic result into XML");
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }

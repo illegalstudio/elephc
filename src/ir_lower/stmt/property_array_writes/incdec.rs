@@ -19,7 +19,7 @@ pub(in crate::ir_lower::stmt) fn native(
     let selected = crate::ir_lower::expr::lower_native_dimension_incdec_select_from_values(
         ctx, child, index, &expression,
     );
-    step(ctx, selected, increment, span, |_, _| {});
+    step(ctx, selected, increment, false, span, |_, _| {});
 }
 
 /// Reads and writes one ordinary property element without replaying its receiver or key.
@@ -59,14 +59,14 @@ fn ordinary_from_array(
     let selected = crate::ir_lower::expr::lower_array_access_from_values(
         ctx, array, index, key, &expression, true, false,
     );
-    step(ctx, selected, increment, span, |ctx, stored| {
+    step(ctx, selected, increment, false, span, |ctx, stored| {
         lower_property_array_assign_value(ctx, object, property, index, stored, span, true);
     });
 }
 
 /// Preserves stable operator result types and roots heap-bearing working slots through the store.
-fn step(
-    ctx: &mut LoweringContext<'_, '_>, selected: LoweredValue, increment: bool, span: Span,
+pub(crate) fn step(
+    ctx: &mut LoweringContext<'_, '_>, selected: LoweredValue, increment: bool, post: bool, span: Span,
     finish: impl FnOnce(&mut LoweringContext<'_, '_>, LoweredValue),
 ) {
     let selected_type = ctx.builder.value_php_type(selected.value);
@@ -84,17 +84,30 @@ fn step(
     let slot = ctx.local_slots[&name];
     if rooted { crate::ir_lower::expr::register_owned_call_operand(ctx, slot, span); }
     crate::ir_lower::expr::store_value_into_temp(ctx, &name, temp_type, selected, span);
+    let previous = if post {
+        let old = ctx.load_local(&name, Some(span));
+        let old = ctx.box_value_as_mixed(old, PhpType::Mixed, Some(span));
+        let old = crate::ir_lower::ownership::copy_assignment_value(ctx, old, Some(span));
+        Some(crate::ir_lower::expr::root_owned_call_operand(ctx, old, span))
+    } else { None };
     warn_null_decrement(ctx, &name, increment, span);
-    let expression = Expr::new(if increment { ExprKind::PreIncrement(name) } else { ExprKind::PreDecrement(name) }, span);
+    // Publish a postfix snapshot before the prefix kernel can invoke user code or throw.
+    let operation = if increment { ExprKind::PreIncrement(name) } else { ExprKind::PreDecrement(name) };
+    let expression = Expr::new(operation, span);
     let result = lower_expr(ctx, &expression);
-    let ty = ctx.builder.value_php_type(result.value);
+    let returned = previous.map(|(value, _)| value).unwrap_or(result);
+    let ty = ctx.builder.value_php_type(returned.value);
     let borrowed = if Ownership::php_type_needs_lifetime_tracking(&ty) {
-        let borrowed = ctx.emit_value(Op::Borrow, vec![result.value], None, ty,
+        let borrowed = ctx.emit_value(Op::Borrow, vec![returned.value], None, ty,
             Op::Borrow.default_effects(), Some(span));
         ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
         borrowed
-    } else { result };
+    } else { returned };
     finish(ctx, borrowed);
+    crate::ir_lower::ownership::release_if_owned(ctx, result, Some(span));
+    if let Some((_, Some(owner))) = previous {
+        crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span);
+    }
     if rooted { crate::ir_lower::expr::unregister_owned_call_operand(ctx, slot, span); }
     ctx.emit_void(Op::ReleaseLocalSlot, vec![], Some(Immediate::LocalSlot(slot)),
         Op::ReleaseLocalSlot.default_effects(), Some(span));

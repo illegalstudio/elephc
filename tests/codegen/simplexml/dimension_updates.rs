@@ -137,6 +137,47 @@ restore_error_handler();
     assert_eq!(out.stdout, "key|<?xml version=\"1.0\"?>\n<r><mark>7</mark></r>\n8:Indirect modification of overloaded element of SimpleXMLElement has no effect|8:Indirect modification of overloaded element of SimpleXMLElement has no effect|8:Indirect modification of overloaded element of SimpleXMLElement has no effect|2:Decrement on type null has no effect, this will change in the next major version of PHP|8:Indirect modification of overloaded element of SimpleXMLElement has no effect|2:Decrement on type null has no effect, this will change in the next major version of PHP|<?xml version=\"1.0\"?>\n<r><mark>7</mark></r>\n8:Indirect modification of overloaded element of SimpleXMLElement has no effect|<?xml version=\"1.0\"?>\n<r><mark>7</mark></r>\n<p:a xmlns:p=\"urn:p\">kept</p:a>\n[5,8]:[2,2]:[1,3]\n");
 }
 
+/// Static incdec returns its PHP result while each XML selection remains unchanged.
+#[test]
+fn test_simplexml_static_dimension_incdec_expression_results() {
+    if skip_without_xml_native("test_simplexml_static_dimension_incdec_expression_results") { return; }
+    let source = r#"<?php
+class NativeStaticStep {
+    public static SimpleXMLElement $typed;
+    public static mixed $erased;
+}
+function nativeStaticStepKey(): int { echo 'key|'; return 0; }
+function reportNativeStaticStep(mixed $value, SimpleXMLElement $doc): void {
+    echo gettype($value), ':', (string)$value, ':', (string)$doc->a, '|';
+}
+$doc = new SimpleXMLElement('<r><a>7</a></r>');
+NativeStaticStep::$typed = $doc->a;
+NativeStaticStep::$erased = $doc->a;
+reportNativeStaticStep(NativeStaticStep::$typed[nativeStaticStepKey()]++, $doc);
+reportNativeStaticStep(++NativeStaticStep::$typed[0], $doc);
+reportNativeStaticStep(NativeStaticStep::$typed[0]--, $doc);
+reportNativeStaticStep(--NativeStaticStep::$typed[0], $doc);
+reportNativeStaticStep(NativeStaticStep::$erased[0]++, $doc);
+reportNativeStaticStep(++NativeStaticStep::$erased[0], $doc);
+reportNativeStaticStep(NativeStaticStep::$erased[0]--, $doc);
+reportNativeStaticStep(--NativeStaticStep::$erased[0], $doc);
+NativeStaticStep::$typed[0]++;
+echo 'discard:', (string)$doc->a, '|';
+$old = NativeStaticStep::$typed[0]++;
+$doc->a = 12;
+echo 'view:', (string)$old, '|';
+NativeStaticStep::$erased = [4, 9];
+echo NativeStaticStep::$erased[0]++, ':', ++NativeStaticStep::$erased[1], ':', json_encode(NativeStaticStep::$erased), '|';
+NativeStaticStep::$erased = null;
+unset($old, $doc);
+"#;
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+    let operations = "object:7:7|integer:8:7|object:7:7|integer:6:7|".repeat(2);
+    assert_eq!(output.stdout, format!("key|{operations}discard:7|view:12|4:10:[5,10]|"));
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
 /// Null decrement warnings can throw repeatedly without retaining selected XML views.
 #[test]
 fn test_simplexml_null_dimension_decrement_handler_unwind() {
