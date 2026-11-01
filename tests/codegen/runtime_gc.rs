@@ -26,6 +26,7 @@ mod string_offset_lifetime;
 mod stream_filter_owners;
 mod leaf_array_cycles;
 mod eval_method_adapter_owners;
+mod eval_builtin_argument_operands;
 mod eval_reflection_factory_owners;
 mod method_receiver_owners;
 mod file_write_owners;
