@@ -272,13 +272,7 @@ fn flush_eval_scope_locals_with_mask(
         if let Some((offset, skip)) = &skip {
             emit_branch_if_eval_name_unaccessed(ctx.emitter, &local.name, *offset, skip);
         }
-        let ty = ctx.load_eval_local_to_result(local.slot)?.codegen_repr();
-        if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
-            emit_box_current_value_as_mixed(ctx.emitter, &ty);
-        } else {
-            // Keep an independent snapshot while eval or another alias replaces the native slot.
-            abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
-        }
+        ctx.load_eval_local_snapshot_to_mixed(local.slot)?;
         let result_reg = abi::int_result_reg(ctx.emitter);
         abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
         emit_eval_scope_set(ctx, local, EVAL_SCOPE_FLAG_OWNED | EVAL_SCOPE_FLAG_NATIVE_SNAPSHOT);

@@ -994,9 +994,9 @@ mod tests {
         assert_eq!(analysis.stable_ref_cell_payload_type(target), Some(&PhpType::Str));
     }
 
-    /// A promotion keeps its instruction ABI when the target later narrows to callable storage.
+    /// A promotion uses the final callable frame storage that it loads while allocating the cell.
     #[test]
-    fn promoted_callable_uses_instruction_payload_type_instead_of_final_target_storage() {
+    fn promoted_callable_uses_final_target_storage_payload_type() {
         let mut function = Function::new(
             "promoted_callable".to_string(),
             IrType::Void,
@@ -1036,14 +1036,14 @@ mod tests {
         let analysis = LocalSlotAnalysis::new(&function);
         assert_eq!(
             analysis.stable_ref_cell_payload_type(target),
-            Some(&PhpType::Mixed)
+            Some(&PhpType::Callable)
         );
-        assert!(analysis.owns_mixed_ref_cell_payload(target));
+        assert!(!analysis.owns_mixed_ref_cell_payload(target));
     }
 
-    /// A concrete promotion keeps its instruction ABI after the target widens to Mixed storage.
+    /// A promotion uses the final Mixed frame storage that it loads while allocating the cell.
     #[test]
-    fn promoted_mixed_target_uses_concrete_instruction_payload_type() {
+    fn promoted_mixed_target_uses_final_storage_payload_type() {
         let mut function = Function::new(
             "promoted_mixed_target".to_string(),
             IrType::Void,
@@ -1083,9 +1083,9 @@ mod tests {
         let analysis = LocalSlotAnalysis::new(&function);
         assert_eq!(
             analysis.stable_ref_cell_payload_type(target),
-            Some(&PhpType::Str)
+            Some(&PhpType::Mixed)
         );
-        assert!(!analysis.owns_mixed_ref_cell_payload(target));
+        assert!(analysis.owns_mixed_ref_cell_payload(target));
     }
 
     /// An idempotent promotion does not override a transferred cell's concrete payload ABI.

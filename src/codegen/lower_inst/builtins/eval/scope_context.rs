@@ -104,6 +104,16 @@ fn promote_unsafe_eval_scope_access_to_full(
             &next,
         );
         if matches!(local.ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+            let payload_ty = ctx.ref_cell_payload_type(local.slot)?.codegen_repr();
+            if ctx.local_slot_ever_stores_ref_cell_pointer(local.slot)
+                && !matches!(payload_ty, PhpType::Mixed | PhpType::Union(_))
+            {
+                // Probing a concrete ref-cell payload through widened Mixed storage would allocate
+                // a temporary box. Full synchronization is conservative and needs no snapshot.
+                emit_branch_to_eval_scope_label(ctx, &full);
+                ctx.emitter.label(&next);
+                continue;
+            }
             ctx.load_eval_local_to_result(local.slot)?;
             emit_branch_if_mixed_numeric_scalar(ctx.emitter, &next);
         }
