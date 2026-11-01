@@ -178,6 +178,15 @@ pub(super) fn lower_array_access_with_missing_warning(
     expr: &Expr,
     warn_on_missing: bool,
 ) -> LoweredValue {
+    if !warn_on_missing {
+        if let ExprKind::PropertyAccess { object, property } = &array.kind {
+            if property_expr_can_be_uninitialized(ctx, object, property) {
+                return lower_guarded_property_array_access(
+                    ctx, object, property, index, expr,
+                );
+            }
+        }
+    }
     let array_value = if warn_on_missing {
         lower_expr(ctx, array)
     } else {
@@ -210,10 +219,99 @@ pub(super) fn lower_subscript_receiver_silently(
     if let ExprKind::ArrayAccess { array: inner_array, index: inner_index } = &array.kind {
         return lower_array_access_with_missing_warning(ctx, inner_array, inner_index, array, false);
     }
-    // Silent subscript probes must also suppress the uninitialized-property read at the root.
-    // This is the difference between `$object->items[0] ??= $value`, which may initialize an
-    // array-bearing slot, and an ordinary read or read-modify-write, which must still raise.
-    lower_null_coalesce_value(ctx, array)
+    lower_expr(ctx, array)
+}
+
+/// Probes a typed property before indexing it without erasing the initialized value's type.
+fn lower_guarded_property_array_access(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    index: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    let object_value = lower_member_receiver(ctx, object, expr);
+    let mut pending_object = [object_value];
+    let (index_value, object_pins) = lower_with_pending_owners(
+        ctx,
+        &mut pending_object,
+        expr.span,
+        |ctx| lower_expr(ctx, index),
+    );
+    let object_value = pending_object[0];
+    unpin_in_flight_owners(ctx, object_pins, expr.span);
+    let property_name = ctx.intern_string(property);
+    let initialized = ctx.emit_value(
+        Op::PropInitialized,
+        vec![object_value.value],
+        Some(Immediate::Data(property_name)),
+        PhpType::Bool,
+        Op::PropInitialized.default_effects(),
+        Some(expr.span),
+    );
+    let missing = ctx
+        .builder
+        .create_named_block("dimension.property.uninitialized", Vec::new());
+    let present = ctx
+        .builder
+        .create_named_block("dimension.property.initialized", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("dimension.property.merge", Vec::new());
+    let result = ctx.declare_owned_hidden_temp(PhpType::Mixed);
+    let initial = ctx.initialized_slots_snapshot();
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: initialized.value,
+        then_target: present,
+        then_args: Vec::new(),
+        else_target: missing,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(missing);
+    crate::ir_lower::ownership::release_if_owned(ctx, index_value, Some(index.span));
+    crate::ir_lower::ownership::release_marked_normalized_cast_copies(
+        ctx,
+        index_value,
+        Some(index.span),
+    );
+    release_owning_receiver_temporary(ctx, object_value, expr.span);
+    let null = lower_boxed_null(ctx, expr);
+    store_value_into_temp(ctx, &result, PhpType::Mixed, null, expr.span);
+    branch_to(ctx, merge);
+    let missing_slots = ctx.initialized_slots_snapshot();
+
+    ctx.builder.position_at_end(present);
+    ctx.restore_initialized_slots(initial.clone());
+    let property_value = lower_property_get_from_value(
+        ctx,
+        object_value,
+        property,
+        Op::PropGet,
+        expr,
+    );
+    let selected = lower_array_access_from_values(
+        ctx,
+        property_value,
+        index_value,
+        index,
+        expr,
+        false,
+        false,
+    );
+    store_value_into_temp(ctx, &result, PhpType::Mixed, selected, expr.span);
+    branch_to(ctx, merge);
+    let present_slots = ctx.initialized_slots_snapshot();
+
+    ctx.builder.position_at_end(merge);
+    ctx.restore_initialized_slots(merge_initialized_slots_for_expr(
+        &initial,
+        missing_slots,
+        true,
+        present_slots,
+        true,
+    ));
+    take_owned_temp(ctx, &result, expr.span)
 }
 
 /// Lowers array access once the receiver is already evaluated.

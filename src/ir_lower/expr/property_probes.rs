@@ -75,6 +75,47 @@ pub(super) fn property_can_be_uninitialized(
             && property_ty.codegen_repr() == PhpType::Mixed)
 }
 
+/// Returns whether a syntactic property receiver needs a typed initialization guard.
+pub(super) fn property_expr_can_be_uninitialized(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+) -> bool {
+    let Some(class_name) = instance_callable_object_class(ctx, object) else {
+        return false;
+    };
+    let class_name = class_name.trim_start_matches('\\');
+    if crate::types::builtin_classes::native_property_method(
+        class_name,
+        property,
+        elephc_builtin_contract::ObjectProperty::Get,
+        ctx.classes,
+    )
+    .is_some()
+    {
+        return false;
+    }
+    let Some(info) = ctx.classes.get(class_name) else {
+        return false;
+    };
+    if !property_is_accessible_for_ir(ctx, class_name, info, property) {
+        return false;
+    }
+    if info
+        .methods
+        .contains_key(&php_symbol_key(&property_hook_get_method(property)))
+        && !ctx.in_own_property_accessor(property)
+    {
+        return false;
+    }
+    let Some((index, (_, property_ty))) = info.visible_property(property) else {
+        return false;
+    };
+    info.property_slot_is_declared(index, property)
+        || (!info.property_slot_is_reference(index, property)
+            && property_ty.codegen_repr() == PhpType::Mixed)
+}
+
 /// Identifies one known object class in a probe union without treating unknown objects as that class.
 fn property_probe_object_class(php_type: &PhpType) -> Option<&str> {
     if let Some((class, _)) = singular_object_class(php_type) { return Some(class); }
