@@ -7,11 +7,12 @@
 //! Called from:
 //! - `crate::web_prelude::inject_if_web`, which prunes what the program cannot reach and wraps
 //!   the result in the catch-all `try`.
+//! - `crate::web_prelude::application::inject_on_compiler_stack` for per-request preparation.
 //!
 //! Key details:
 //! - Each helper below is one declaration of the former `WEB_PRELUDE_SRC`, transcribed from its
-//!   own parse and checked against it node for node before the text was deleted. The order in
-//!   `web_declarations` is the order the source had, which matters for the executable BOOTSTRAP
+//!   own parse and checked against it node for node before the text was deleted. The
+//!   `web_declarations_with_environment` builder preserves source order for executable BOOTSTRAP
 //!   statements interleaved with the declarations (they populate the superglobals and may start
 //!   the session, and they run where they sit).
 //! - THE THREE `__PLACEHOLDER__` SLOTS ARE NOW PARAMETERS. `__ELEPHC_PHP_VERSION_ID__` is an
@@ -5131,7 +5132,8 @@ fn decl_stmt_bootstrap_44() -> Stmt {
     )
 }
 
-/// Builds the complete web surface for application preparation and declaration audits.
+/// Builds the complete web surface for declaration audits and prelude tooling.
+#[cfg(test)]
 pub(crate) fn web_declarations(
     php_version: PhpVersion,
     ini_overrides: &[(String, String)],

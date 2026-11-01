@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:3522](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3522) (`session_cache_expire`)
+- **Lowering**: [`src/web_prelude/build.rs`:3523](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3523) (`session_cache_expire`)
 - **Function symbol**: `session_cache_expire()`
 
 
