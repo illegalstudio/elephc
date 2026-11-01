@@ -1005,6 +1005,15 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Upload stalled CLI fixture assembly
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fixture-diagnostics-cli-tests-macos-aarch64-${{ matrix.shard }}
+          path: target/codegen-diagnostics/
+          if-no-files-found: ignore
+          retention-days: 7
+
   cli-tests-linux-x86_64:
     name: CLI Eval Tests (linux-x86_64 ${{ matrix.shard }}/6)
     needs: [plan, build-archive-linux-x86_64]
@@ -1059,6 +1068,15 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Upload stalled CLI fixture assembly
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fixture-diagnostics-cli-tests-linux-x86_64-${{ matrix.shard }}
+          path: target/codegen-diagnostics/
+          if-no-files-found: ignore
+          retention-days: 7
+
   cli-tests-linux-aarch64:
     name: CLI Eval Tests (linux-aarch64 ${{ matrix.shard }}/6)
     needs: [plan, build-archive-linux-aarch64]
@@ -1110,6 +1128,15 @@ jobs:
         with:
           name: junit-cli-tests-linux-aarch64-${{ matrix.shard }}
           path: target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload stalled CLI fixture assembly
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fixture-diagnostics-cli-tests-linux-aarch64-${{ matrix.shard }}
+          path: target/codegen-diagnostics/
           if-no-files-found: ignore
           retention-days: 7
 

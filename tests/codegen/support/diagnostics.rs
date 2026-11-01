@@ -28,6 +28,15 @@ pub(super) fn preserve_assembler_failure(assembly: &str) {
     save_failure("assembler", None, assembly, "Assembler failed; see the job's stderr.");
 }
 
+/// Saves corrupt output before UTF-8 decoding aborts the ordinary fixture result path.
+pub(super) fn preserve_invalid_utf8_output(assembly: &str, output: &std::process::Output) {
+    let stdout = &output.stdout[..output.stdout.len().min(256)];
+    let stderr = &output.stderr[..output.stderr.len().min(4096)];
+    save_failure("utf8", None, assembly, &format!(
+        "stdout bytes (first 256): {stdout:?}\nstderr (first 4096 bytes):\n{}",
+        String::from_utf8_lossy(stderr)));
+}
+
 /// Saves one uniquely named diagnostic without making artifact I/O another test requirement.
 fn save_failure(kind: &str, source: Option<&str>, assembly: &str, output: &str) {
     if !matches!(std::env::var("GITHUB_ACTIONS").as_deref(), Ok("true")) { return; }

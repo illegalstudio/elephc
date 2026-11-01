@@ -1839,6 +1839,9 @@ pub(crate) fn assemble_and_run_capture(
 
     let output = run_binary(&bin_path, dir);
 
+    if std::str::from_utf8(&output.stdout).is_err() || std::str::from_utf8(&output.stderr).is_err() {
+        super::diagnostics::preserve_invalid_utf8_output(user_asm, &output);
+    }
     ProgramOutput {
         stdout: String::from_utf8(output.stdout).unwrap(),
         stderr: String::from_utf8(output.stderr).unwrap(),
