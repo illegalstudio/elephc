@@ -58,7 +58,11 @@ unset($first, $second, $root);
 #[test]
 fn test_simplexml_review_type_boundaries_bundle() {
     if skip_without_xml_native("test_simplexml_review_type_boundaries_bundle") { return; }
-    let arithmetic_eval = opaque_fixture(&ARITHMETIC.replace("LineageXml", "EvalLineageXml"));
+    let arithmetic_eval = opaque_fixture(
+        &ARITHMETIC
+            .replace("LineageXml", "EvalLineageXml")
+            .replace("lineageXml", "evalLineageXml"),
+    );
     let boundaries_eval = opaque_fixture(&BOUNDARIES.replace("BoundaryXml", "EvalBoundaryXml"));
     let boundaries_eval_expected = BOUNDARIES_EXPECTED.replace("BoundaryXml", "EvalBoundaryXml");
     // Magician rejects reference-return declarations and yield; compiled PHP covers both.
