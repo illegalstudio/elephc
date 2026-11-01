@@ -30,6 +30,23 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from module_pages import MODULE_PAGES, SECTION_ANCHOR  # noqa: E402
 
+# ext/filter is provided by `src/filter_prelude` rather than shared contracts, so its
+# functions/classes are absent from the generated registries. `classify()` adds them to
+# the comparison table explicitly.
+FILTER_PRELUDE_FUNCTIONS = (
+    "filter_var",
+    "filter_var_array",
+    "filter_input",
+    "filter_input_array",
+    "filter_has_var",
+    "filter_id",
+    "filter_list",
+)
+FILTER_PRELUDE_CLASSES = (
+    "Filter\\FilterException",
+    "Filter\\FilterFailedException",
+)
+
 VALID_STATUSES = ("supported", "partial", "planned", "unsupported")
 STATUS_LABELS = {
     "supported": "✅ Supported",
@@ -376,6 +393,32 @@ def classify(registry: list, symbols: dict, baseline: dict):
                 f"{php['value']} in PHP {baseline['php_version']}: fix the catalog value or "
                 f"record the divergence in KNOWN_VALUE_DIVERGENCES with its reason"
             )
+
+    # ext/filter is implemented by an injected synthetic prelude, not by shared contracts,
+    # so its functions/classes never appear in the generated registries. Count the complete
+    # surface explicitly; the filter PHPT corpus and docs/php/filter.md own its behavior.
+    for name in FILTER_PRELUDE_FUNCTIONS:
+        functions.add(
+            "filter",
+            {
+                "name": name,
+                "module": "filter",
+                "_aot": True,
+                "_eval": True,
+                "_aot_kind": "prelude",
+            },
+        )
+    for name in FILTER_PRELUDE_CLASSES:
+        classes.add(
+            "filter",
+            {
+                "name": name,
+                "module": "filter",
+                "_aot": True,
+                "_eval": True,
+                "_aot_kind": "prelude",
+            },
+        )
     return functions, classes, constants, constructs, beyond, pecl, newer, dynamic, unavailable, errors
 
 

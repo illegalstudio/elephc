@@ -16,7 +16,7 @@ use crate::parser::ast::{BinOp, CastType, Expr, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
     e_array, e_binop, e_bool, e_call, e_cast, e_concat_all, e_const, e_index, e_int, e_not,
     e_null, e_str, e_var, function, s_array_assign, s_assign, s_continue, s_foreach, s_if,
-    s_return, s_switch, s_throw, t_array, t_bool, t_int, t_mixed,
+    s_return, s_throw, t_array, t_bool, t_int, t_mixed,
 };
 
 /// Returns the input/array function declarations.
@@ -32,26 +32,11 @@ pub(super) fn declarations() -> Program {
     ]
 }
 
-/// Builds the copy helper body for one superglobal.
-fn copy_global(global: &str) -> Vec<Stmt> {
-    vec![
-        s_assign("copy", e_array(vec![])),
-        s_foreach(e_var(global), Some("key"), "value", vec![s_array_assign(
-            "copy",
-            e_var("key"),
-            e_var("value"),
-        )]),
-        s_if(
-            e_binop(e_call("count", vec![e_var("copy")]), BinOp::StrictEq, e_int(0)),
-            vec![s_return(e_null())],
-            vec![],
-            None,
-        ),
-        s_return(e_var("copy")),
-    ]
-}
-
-/// Builds `__elephc_filter_storage(int $type): ?array`, a copy of one request superglobal.
+/// Builds `__elephc_filter_storage(int $type): ?array`, a copy of one raw request array.
+///
+/// The raw snapshot is the only source: `filter_input*()` must not observe later writes to
+/// `$_GET`/`$_POST`/… and the CLI SAPI has no input at all. A missing or empty snapshot is
+/// `null`, which is PHP's `filter_input_array()` result for an empty input type.
 fn storage_function() -> Stmt {
     function("__elephc_filter_storage")
         .param("type", t_int())
@@ -62,27 +47,27 @@ fn storage_function() -> Stmt {
                     e_var("type"),
                     crate::synthetic_class::e_static_prop("__ElephcFilterState", "raw"),
                 ]),
-                vec![s_return(crate::synthetic_class::e_cast(
-                    crate::parser::ast::CastType::Array,
-                    e_index(
-                        crate::synthetic_class::e_static_prop("__ElephcFilterState", "raw"),
-                        e_var("type"),
+                vec![
+                    s_assign("copy", e_cast(
+                        crate::parser::ast::CastType::Array,
+                        e_index(
+                            crate::synthetic_class::e_static_prop("__ElephcFilterState", "raw"),
+                            e_var("type"),
+                        ),
+                    )),
+                    s_if(
+                        e_binop(e_call("count", vec![e_var("copy")]), BinOp::StrictEq, e_int(0)),
+                        vec![s_return(e_null())],
+                        vec![],
+                        None,
                     ),
-                ))],
+                    s_return(e_var("copy")),
+                ],
                 vec![],
                 None,
             ),
-            s_switch(
-            e_var("type"),
-            vec![
-                (vec![e_const("INPUT_POST")], copy_global("_POST")),
-                (vec![e_const("INPUT_GET")], copy_global("_GET")),
-                (vec![e_const("INPUT_COOKIE")], copy_global("_COOKIE")),
-                (vec![e_const("INPUT_ENV")], copy_global("_ENV")),
-                (vec![e_const("INPUT_SERVER")], copy_global("_SERVER")),
-            ],
-            Some(vec![s_return(e_null())]),
-        )])
+            s_return(e_null()),
+        ])
         .build()
 }
 
@@ -198,13 +183,12 @@ fn array_handler_decl() -> Stmt {
                 s_assign("filter", e_cast(CastType::Int, e_var("definition"))),
                 s_if(
                     e_not(e_call("__elephc_filter_filter_exists", vec![e_var("filter")])),
-                    vec![s_expr_call("trigger_error", vec![
+                    vec![s_expr_call("__elephc_builtin_warning", vec![
                         e_concat_all(vec![
                             e_var("caller"),
                             e_str("(): Unknown filter with ID "),
                             e_var("filter"),
                         ]),
-                        e_const("E_USER_WARNING"),
                     ])],
                     vec![],
                     None,
@@ -299,12 +283,11 @@ fn filter_var_array_decl() -> Stmt {
                 vec![s_if(
                     e_not(e_call("__elephc_filter_filter_exists", vec![e_var("options")])),
                     vec![
-                        s_expr_call("trigger_error", vec![
+                        s_expr_call("__elephc_builtin_warning", vec![
                             e_concat_all(vec![
                                 e_str("filter_var_array(): Unknown filter with ID "),
                                 e_var("options"),
                             ]),
-                            e_const("E_USER_WARNING"),
                         ]),
                         s_return(e_bool(false)),
                     ],
@@ -329,7 +312,7 @@ fn filter_var_array_decl() -> Stmt {
 fn filter_input_array_decl() -> Stmt {
     function("filter_input_array")
         .param("type", t_mixed())
-        .param("options", t_mixed())
+        .param_default("options", t_mixed(), e_const("FILTER_DEFAULT"))
         .param_default("add_empty", t_mixed(), e_bool(true))
         .returns(t_mixed())
         .body(vec![
@@ -349,12 +332,11 @@ fn filter_input_array_decl() -> Stmt {
                 vec![s_if(
                     e_not(e_call("__elephc_filter_filter_exists", vec![e_var("options")])),
                     vec![
-                        s_expr_call("trigger_error", vec![
+                        s_expr_call("__elephc_builtin_warning", vec![
                             e_concat_all(vec![
                                 e_str("filter_input_array(): Unknown filter with ID "),
                                 e_var("options"),
                             ]),
-                            e_const("E_USER_WARNING"),
                         ]),
                         s_return(e_bool(false)),
                     ],
@@ -484,12 +466,11 @@ fn filter_input_decl() -> Stmt {
             s_if(
                 e_not(e_call("__elephc_filter_filter_exists", vec![e_var("filter")])),
                 vec![
-                    s_expr_call("trigger_error", vec![
+                    s_expr_call("__elephc_builtin_warning", vec![
                         e_concat_all(vec![
                             e_str("filter_input(): Unknown filter with ID "),
                             e_var("filter"),
                         ]),
-                        e_const("E_USER_WARNING"),
                     ]),
                     s_return(e_bool(false)),
                 ],

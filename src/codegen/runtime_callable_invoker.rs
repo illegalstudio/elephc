@@ -2923,11 +2923,11 @@ fn call_target_with_pushed_args(
             "asr {}, {}, #2",
             abi::int_result_reg(emitter),
             abi::int_result_reg(emitter)
-        )),                                                                   // recover the weak/strict scope from its shifted profile word
+        )),                                                                     // recover the weak/strict scope from its shifted profile word
         Arch::X86_64 => emitter.instruction(&format!(
             "sar {}, 2",
             abi::int_result_reg(emitter)
-        )),                                                                   // recover the weak/strict scope from its shifted profile word
+        )),                                                                     // recover the weak/strict scope from its shifted profile word
     }
     abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
     let mut abi_arg_types = arg_types.to_vec();

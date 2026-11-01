@@ -250,8 +250,8 @@ var_dump(filter_var_array($data, ["test" => -1]));
 fn test_filter_input_surface_matches_php_request_storage() {
     let out = compile_and_run(
         r#"<?php
-$_GET = ["foo" => "<b>abc</b>", "a" => "1"];
-$_POST = ["d" => "12345.7"];
+__elephc_filter_seed_request(INPUT_GET, ["foo" => "<b>abc</b>", "a" => "1"], "unsafe_raw", 0, false);
+__elephc_filter_seed_request(INPUT_POST, ["d" => "12345.7"], "unsafe_raw", 0, false);
 var_dump(filter_has_var(INPUT_GET, "foo"));
 var_dump(filter_has_var(INPUT_GET, "missing"));
 var_dump(filter_input(INPUT_GET, "foo", FILTER_SANITIZE_SPECIAL_CHARS));
@@ -261,11 +261,12 @@ var_dump(filter_input(INPUT_GET, "missing"));
 var_dump(filter_input(INPUT_GET, "missing", FILTER_VALIDATE_INT, FILTER_NULL_ON_FAILURE));
 var_dump(filter_input_array(INPUT_GET, ["foo" => FILTER_SANITIZE_SPECIAL_CHARS]));
 var_dump(filter_input_array(INPUT_GET, ["missing" => FILTER_VALIDATE_INT]));
+var_dump(filter_input_array(INPUT_GET));
 "#,
     );
     assert_eq!(
         out,
-        "bool(true)\nbool(false)\nstring(26) \"&#60;b&#62;abc&#60;/b&#62;\"\nint(1)\nfloat(12345.7)\nNULL\nbool(false)\narray(1) {\n  [\"foo\"]=>\n  string(26) \"&#60;b&#62;abc&#60;/b&#62;\"\n}\narray(1) {\n  [\"missing\"]=>\n  NULL\n}\n"
+        "bool(true)\nbool(false)\nstring(26) \"&#60;b&#62;abc&#60;/b&#62;\"\nint(1)\nfloat(12345.7)\nNULL\nbool(false)\narray(1) {\n  [\"foo\"]=>\n  string(26) \"&#60;b&#62;abc&#60;/b&#62;\"\n}\narray(1) {\n  [\"missing\"]=>\n  NULL\n}\narray(2) {\n  [\"foo\"]=>\n  string(10) \"<b>abc</b>\"\n  [\"a\"]=>\n  string(1) \"1\"\n}\n"
     );
 }
 
@@ -308,6 +309,18 @@ echo $before > 0 && count($_ENV) === $before ? "kept" : "lost";
     assert_eq!(out, "kept");
 }
 
+/// Unknown filter warnings use PHP's engine `E_WARNING` level (2), not `E_USER_WARNING`.
+#[test]
+fn test_filter_unknown_filter_warning_uses_engine_level() {
+    let output = compile_and_run_capture(
+        r#"<?php
+set_error_handler(function (int $errno): bool { echo "errno=", $errno; return true; });
+filter_var("x", 999);
+"#,
+    );
+    assert_eq!(output.stdout.trim(), "errno=2");
+}
+
 /// Verifies function_exists, extension_loaded and literal eval see the filter surface.
 #[test]
 fn test_filter_surface_visibility_and_eval() {
@@ -322,18 +335,19 @@ var_dump(eval('return filter_var("42", FILTER_VALIDATE_INT);'));
     assert_eq!(out, "bool(true)\nbool(false)\nbool(true)\nint(42)\n");
 }
 
-/// `filter.default=int` turns a rejected request value into PHP's empty-string input value.
+/// `filter.default=int` keeps the filter's native result in the request superglobal.
 #[test]
-fn test_filter_default_rejected_request_value_becomes_empty_string() {
+fn test_filter_default_keeps_native_request_value_types() {
     let out = compile_and_run(
         r#"<?php
 __elephc_filter_seed_request(INPUT_GET, ["ok" => "12", "bad" => "nope"], "int", 0, false);
 var_dump($_GET["ok"], $_GET["bad"]);
 "#,
     );
-    assert!(out.contains("string(2) \"12\""), "stdout: {out:?}");
-    assert!(out.contains("string(0) \"\""), "stdout: {out:?}");
-    assert!(!out.contains("bool(false)"), "stdout: {out:?}");
+    assert!(out.contains("int(12)"), "stdout: {out:?}");
+    assert!(out.contains("bool(false)"), "stdout: {out:?}");
+    assert!(!out.contains("string(2) \"12\""), "stdout: {out:?}");
+    assert!(!out.contains("string(0) \"\""), "stdout: {out:?}");
 }
 
 

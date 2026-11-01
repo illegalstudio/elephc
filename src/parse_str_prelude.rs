@@ -49,6 +49,7 @@ pub(crate) fn parse_str_declarations(config: &FilterDefault) -> Program {
                             e_call("filter_id", vec![e_str(&config.name)]),
                         ),
                         e_int(config.flags),
+                        e_bool(true),
                     ],
                 ),
             )],

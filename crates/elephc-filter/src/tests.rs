@@ -32,6 +32,19 @@ const NO_PRIV: i64 = 0x0080_0000;
 /// FILTER_FLAG_HOSTNAME.
 const HOSTNAME: i64 = 0x0010_0000;
 
+/// Verifies binary hex transport rejects odd and non-hex payloads instead of truncating.
+#[test]
+fn hex_arg_rejects_malformed_payloads() {
+    use std::ffi::CString;
+    for text in ["abc", "zz", "0g"] {
+        let value = CString::new(text).expect("test hex has no NUL");
+        let decoded = unsafe { super::hex_arg(value.as_ptr()) };
+        assert!(decoded.is_empty(), "{text:?} must be rejected");
+    }
+    let value = CString::new("00ff").expect("test hex has no NUL");
+    assert_eq!(unsafe { super::hex_arg(value.as_ptr()) }, vec![0, 255]);
+}
+
 /// Verifies decimal integer validation and its exact overflow boundary.
 #[test]
 fn int_matches_php() {

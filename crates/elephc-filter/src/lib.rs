@@ -60,9 +60,12 @@ fn run(call: impl FnOnce() -> Outcome) -> i64 {
 unsafe fn hex_arg(ptr: *const c_char) -> Vec<u8> {
     if ptr.is_null() { return Vec::new(); }
     let text = CStr::from_ptr(ptr).to_bytes();
+    if text.len() % 2 != 0 {
+        return Vec::new();
+    }
     let mut out = Vec::with_capacity(text.len() / 2);
     let mut index = 0usize;
-    while index + 1 < text.len() {
+    while index < text.len() {
         let high = hex_digit(text[index]);
         let low = hex_digit(text[index + 1]);
         match (high, low) {

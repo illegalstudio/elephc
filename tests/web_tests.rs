@@ -3156,6 +3156,86 @@ fn web_filter_default_applies_without_a_filter_call() {
     assert!(response.ends_with("&#60;b&#62;x&#60;/b&#62;"), "response: {response:?}");
 }
 
+/// `filter.default` stores the filter's native result type, not a coerced string.
+#[test]
+fn web_filter_default_preserves_boolean_result_types() {
+    let dir = make_test_dir("web_filter_default_bool");
+    let src = r#"<?php var_dump($_GET["yes"], $_GET["no"]);"#;
+    let bin = compile_web_with_flags(&dir, src, "app", &["--ini", "filter.default=boolean"]);
+    let addr = format!("127.0.0.1:{}", free_port());
+    let _server = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/?yes=yes&no=nope");
+    assert!(response.contains("bool(true)"), "response: {response:?}");
+    assert!(response.contains("bool(false)"), "response: {response:?}");
+    assert!(!response.contains("string(1) \"1\""), "response: {response:?}");
+}
+
+/// `filter.default` resolves filter names case-insensitively like php-src.
+#[test]
+fn web_filter_default_name_is_case_insensitive() {
+    let dir = make_test_dir("web_filter_default_case");
+    let src = r#"<?php var_dump($_GET["a"], $_GET["b"]);"#;
+    let bin = compile_web_with_flags(&dir, src, "app", &["--ini", "filter.default=INT"]);
+    let addr = format!("127.0.0.1:{}", free_port());
+    let _server = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/?a=42&b=x");
+    assert!(response.contains("int(42)"), "response: {response:?}");
+    assert!(response.contains("bool(false)"), "response: {response:?}");
+}
+
+/// `filter.default=string` uses PHP's internal NO_ENCODE_QUOTES default flags.
+#[test]
+fn web_filter_default_string_keeps_default_no_encode_quotes() {
+    let dir = make_test_dir("web_filter_default_string_flags");
+    let src = r#"<?php var_dump($_GET["a"]);"#;
+    let bin = compile_web_with_flags(&dir, src, "app", &["--ini", "filter.default=string"]);
+    let addr = format!("127.0.0.1:{}", free_port());
+    let _server = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/?a=%22%3Cb%3E%22");
+    assert!(response.contains(r#"string(2) """#), "response: {response:?}");
+}
+
+/// `filter_input_array()` defaults `$options` to `FILTER_DEFAULT` like php-src.
+#[test]
+fn web_filter_input_array_defaults_options() {
+    let dir = make_test_dir("web_filter_input_array_default");
+    let src = r#"<?php echo json_encode(filter_input_array(INPUT_GET));"#;
+    let bin = compile_web(&dir, src, "app");
+    let addr = format!("127.0.0.1:{}", free_port());
+    let _server = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/?a=1&b=two");
+    assert!(
+        response.ends_with(r#"{"a":"1","b":"two"}"#),
+        "response: {response:?}"
+    );
+}
+
+/// `filter_input()` reads the original request snapshot, not a later superglobal mutation.
+#[test]
+fn web_filter_input_uses_raw_request_snapshot() {
+    let dir = make_test_dir("web_filter_input_raw");
+    let src = r#"<?php $_GET["a"] = "changed"; echo filter_input(INPUT_GET, "a"), "|", $_GET["a"];"#;
+    let bin = compile_web(&dir, src, "app");
+    let addr = format!("127.0.0.1:{}", free_port());
+    let _server = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/?a=original");
+    assert!(response.ends_with("original|changed"), "response: {response:?}");
+}
+
+/// A persistent worker snapshots fresh raw input for every request.
+#[test]
+fn web_filter_input_refreshes_raw_snapshot_per_request() {
+    let dir = make_test_dir("web_filter_input_refresh");
+    let src = r#"<?php echo filter_input(INPUT_GET, "a"), "|", $_GET["a"];"#;
+    let bin = compile_web(&dir, src, "app");
+    let addr = format!("127.0.0.1:{}", free_port());
+    let _server = spawn_server(&bin, &addr, "1");
+    for (query, expected) in [("/?a=first", "first|first"), ("/?a=second", "second|second")] {
+        let response = http_get(&addr, query);
+        assert!(response.ends_with(expected), "response: {response:?}");
+    }
+}
+
 #[path = "web/memory_metrics.rs"]
 mod memory_metrics;
 

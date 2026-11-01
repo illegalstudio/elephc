@@ -38,12 +38,11 @@ fn filter_var_decl() -> Stmt {
             s_if(
                 e_not(e_call("__elephc_filter_filter_exists", vec![e_var("filter")])),
                 vec![
-                    s_expr(e_call("trigger_error", vec![
+                    s_expr(e_call("__elephc_builtin_warning", vec![
                         e_concat_all(vec![
                             e_str("filter_var(): Unknown filter with ID "),
                             e_var("filter"),
                         ]),
-                        e_const("E_USER_WARNING"),
                     ])),
                     s_return(e_bool(false)),
                 ],

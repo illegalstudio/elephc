@@ -22,29 +22,117 @@ const EMAIL_ASCII: &str = r#"/^(?!(?:(?:\x22?\x5C[\x00-\x7E]\x22?)|(?:\x22?[^\x5
 const EMAIL_UNICODE: &str = r#"/^(?!(?:(?:\x22?\x5C[\x00-\x7E]\x22?)|(?:\x22?[^\x5C\x22]\x22?)){255,})(?!(?:(?:\x22?\x5C[\x00-\x7E]\x22?)|(?:\x22?[^\x5C\x22]\x22?)){65,}@)(?:(?:[\x21\x23-\x27\x2A\x2B\x2D\x2F-\x39\x3D\x3F\x5E-\x7E\pL\pN]+)|(?:\x22(?:[\x01-\x08\x0B\x0C\x0E-\x1F\x21\x23-\x5B\x5D-\x7F\pL\pN]|(?:\x5C[\x00-\x7F]))*\x22))(?:\.(?:(?:[\x21\x23-\x27\x2A\x2B\x2D\x2F-\x39\x3D\x3F\x5E-\x7E\pL\pN]+)|(?:\x22(?:[\x01-\x08\x0B\x0C\x0E-\x1F\x21\x23-\x5B\x5D-\x7F\pL\pN]|(?:\x5C[\x00-\x7F]))*\x22)))*@(?:(?:(?!.*[^.]{64,})(?:(?:(?:xn--)?[a-z0-9]+(?:-+[a-z0-9]+)*\.){1,126}){1,}(?:(?:[a-z][a-z0-9]*)|(?:(?:xn--)[a-z0-9]+))(?:-+[a-z0-9]+)*)|(?:\[(?:(?:IPv6:(?:(?:[a-f0-9]{1,4}(?::[a-f0-9]{1,4}){7})|(?:(?!(?:.*[a-f0-9][:\]]){7,})(?:[a-f0-9]{1,4}(?::[a-f0-9]{1,4}){0,5})?::(?:[a-f0-9]{1,4}(?::[a-f0-9]{1,4}){0,5})?)))|(?:(?:IPv6:(?:(?:[a-f0-9]{1,4}(?::[a-f0-9]{1,4}){5}:)|(?:(?!(?:.*[a-f0-9]:){5,})(?:[a-f0-9]{1,4}(?::[a-f0-9]{1,4}){0,3})?::(?:[a-f0-9]{1,4}(?::[a-f0-9]{1,4}){0,3}:)?)))?(?:(?:25[0-5])|(?:2[0-4][0-9])|(?:1[0-9]{2})|(?:[1-9]?[0-9]))(?:\.(?:(?:25[0-5])|(?:2[0-4][0-9])|(?:1[0-9]{2})|(?:[1-9]?[0-9]))){3}))\]))$/iDu"#;
 
 /// Splits a PHP `/pattern/mods` literal into its body and modifier string.
+///
+/// PHP uses the first unescaped closing delimiter; everything after it must be a known PCRE
+/// modifier. Paired delimiters (`()`, `{}`, `[]`, `<>`) keep their matching nesting.
 fn split_php_pattern(pattern: &str) -> Option<(&str, &str)> {
     let delimiter = pattern.chars().next()?;
     if delimiter.is_ascii_alphanumeric() || delimiter == '\\' || delimiter.is_whitespace() {
         return None;
     }
-    let mut closing = None;
+    let paired = match delimiter {
+        '(' => Some(')'),
+        '{' => Some('}'),
+        '[' => Some(']'),
+        '<' => Some('>'),
+        _ => None,
+    };
+    let mut depth = 1usize;
     let mut escaped = false;
     for (index, ch) in pattern.char_indices().skip(1) {
-        if escaped { escaped = false; continue; }
-        if ch == '\\' { escaped = true; continue; }
-        if ch == delimiter { closing = Some(index); }
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        match paired {
+            Some(_) if ch == delimiter => depth += 1,
+            Some(close) if ch == close => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((&pattern[delimiter.len_utf8()..index], &pattern[index + close.len_utf8()..]));
+                }
+            }
+            None if ch == delimiter => {
+                return Some((&pattern[delimiter.len_utf8()..index], &pattern[index + delimiter.len_utf8()..]));
+            }
+            _ => {}
+        }
     }
-    let closing = closing?;
-    Some((&pattern[1..closing], &pattern[closing + 1..]))
+    None
+}
+
+/// Returns true when every modifier is one PHP's PCRE accepts.
+fn valid_modifiers(modifiers: &str) -> bool {
+    const VALID: &str = "imsxADSXUJunr";
+    modifiers.chars().all(|flag| VALID.contains(flag))
+}
+
+/// Rewrites PCRE's `$` anchor to its precise end-of-subject semantics.
+///
+/// PCRE `$` matches at the end or immediately before a final newline; `D` restricts it to the
+/// end. Rust's regex engine implements only the strict-end form, so the body needs this pass.
+fn rewrite_dollar_anchors(body: &str, dollar_end_only: bool, multiline: bool) -> String {
+    let mut out = String::with_capacity(body.len());
+    let mut escaped = false;
+    let mut in_class = false;
+    for ch in body.chars() {
+        if escaped {
+            out.push(ch);
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' => {
+                out.push(ch);
+                escaped = true;
+            }
+            '[' => {
+                in_class = true;
+                out.push(ch);
+            }
+            ']' => {
+                in_class = false;
+                out.push(ch);
+            }
+            '$' if !in_class => {
+                if multiline {
+                    out.push_str("(?=\\n|\\z)");
+                } else if dollar_end_only {
+                    out.push_str("\\z");
+                } else {
+                    out.push_str("(?:\\n?\\z)");
+                }
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 /// Builds one fancy-regex from a PHP pattern body and its modifiers.
 fn build(body: &str, modifiers: &str) -> Option<Regex> {
+    if !valid_modifiers(modifiers) {
+        return None;
+    }
     let mut inline = String::new();
     for flag in ['i', 'm', 's', 'x'] {
-        if modifiers.contains(flag) { inline.push(flag); }
+        if modifiers.contains(flag) {
+            inline.push(flag);
+        }
     }
-    let source = if inline.is_empty() { body.to_string() } else { format!("(?{inline}){body}") };
+    let dollar_end_only = modifiers.contains('D');
+    let multiline = modifiers.contains('m');
+    let mut source = rewrite_dollar_anchors(body, dollar_end_only, multiline);
+    if modifiers.contains('A') {
+        source.insert_str(0, "\\A");
+    }
+    if !inline.is_empty() {
+        source = format!("(?{inline}){source}");
+    }
     RegexBuilder::new(&source).build().ok()
 }
 
@@ -52,7 +140,8 @@ fn build(body: &str, modifiers: &str) -> Option<Regex> {
 pub(crate) fn php_pattern(value: &[u8], pattern: &[u8]) -> bool {
     let Ok(pattern) = std::str::from_utf8(pattern) else { return false; };
     let Some((body, modifiers)) = split_php_pattern(pattern) else { return false; };
-    if modifiers.contains('D') && value.last().is_some_and(|byte| matches!(byte, b'\n' | b'\r')) {
+    // PHP's `u` modifier rejects invalid UTF-8 instead of replacing it.
+    if modifiers.contains('u') && std::str::from_utf8(value).is_err() {
         return false;
     }
     let value = String::from_utf8_lossy(value);
@@ -116,5 +205,18 @@ mod tests {
         assert!(php_pattern(b"DATA", b"/^data$/i"));
         assert!(!php_pattern(b"data\n", b"/^data$/D"));
         assert!(!php_pattern(b"data", b"/\\[/"));
+    }
+
+    /// Verifies PCRE's newline-sensitive `$` rules and first-delimiter parsing.
+    #[test]
+    fn regexp_dollar_and_delimiters_match_pcre() {
+        assert!(php_pattern(b"foo\n", b"/^foo$/"));
+        assert!(php_pattern(b"foo\n", b"/foo/D"));
+        assert!(!php_pattern(b"foo\n", b"/^foo$/D"));
+        assert!(!php_pattern(b"foo\r\n", b"/^foo$/"));
+        assert!(!php_pattern(b"foo/bar/", b"/foo/bar/"));
+        assert!(!php_pattern(b"foo", b"/foo/q"));
+        assert!(php_pattern(b"a/b", b"/a\\/b/"));
+        assert!(php_pattern(b"foo\nbar", b"/^bar$/m"));
     }
 }

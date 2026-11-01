@@ -16,7 +16,7 @@ use crate::synthetic_class::{
 };
 
 /// The ordered filter table exactly as php-src exposes it through filter_list().
-pub(super) const FILTER_TABLE: &[(&str, i64)] = &[
+pub(crate) const FILTER_TABLE: &[(&str, i64)] = &[
     ("int", 257),
     ("boolean", 258),
     ("float", 259),

@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3180 constants).
 
-Overall coverage: functions **1056 / 2169** (49%), classes **185 / 329** (56%), constants **1412 / 3180** (44%).
+Overall coverage: functions **1063 / 2169** (49%), classes **187 / 329** (57%), constants **1412 / 3180** (44%).
 
 ## Coverage by PHP module
 
@@ -31,7 +31,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | [`exif`](./image.md#functions) | 4 / 4 · 100% | - | 1 / 1 · 100% |
 | `ffi` | - | 0 / 5 · 0% | - |
 | [`fileinfo`](./fileinfo.md#functions) | 6 / 6 · 100% | 1 / 1 · 100% | 11 / 11 · 100% |
-| `filter` | 0 / 7 · 0% | 0 / 2 · 0% | 56 / 56 · 100% |
+| `filter` | 7 / 7 · 100% | 2 / 2 · 100% | 56 / 56 · 100% |
 | `ftp` | 0 / 36 · 0% | 0 / 1 · 0% | 0 / 11 · 0% |
 | [`gd`](./image.md#functions) | 83 / 106 · 78% | 1 / 2 · 50% | 67 / 89 · 75% |
 | `gettext` | 0 / 10 · 0% | - | - |

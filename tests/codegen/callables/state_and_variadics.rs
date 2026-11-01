@@ -441,6 +441,11 @@ echo $dynamic($x);
     let warning = "Warning: inspect(): Argument #1 ($value) must be passed by reference, value given";
     assert_eq!(output.stderr.lines().count(), 2, "stderr: {:?}", output.stderr);
     assert_eq!(output.stderr.matches(warning).count(), 2, "stderr: {:?}", output.stderr);
+    assert!(
+        output.stderr.lines().all(|line| line.contains("test.php")),
+        "by-reference warnings must name the source file: {:?}",
+        output.stderr
+    );
 }
 
 // --- Issue #1062: a by-reference variadic may retype the caller's variable -----------------

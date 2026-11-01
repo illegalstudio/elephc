@@ -314,9 +314,10 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // declaration-only preludes does not change startup order for the user program.
     crate::progress::phase("filter-prelude");
     let phase_started = Instant::now();
-    let ast = crate::filter_prelude::inject_if_used_with_ini(
+    let ast = crate::filter_prelude::inject_if_used_with_ini_for_sapi(
         ast,
         &ini_overrides,
+        web,
         &mut prelude_inventory,
     );
     timings.record_since("filter-prelude", phase_started);

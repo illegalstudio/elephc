@@ -133,10 +133,51 @@ pub fn seed_cli_populated_superglobals(
     if compiling_for_web() {
         return program;
     }
-    let spelled = crate::prelude_prune::usage::collect(&program).variables;
+    let usage = crate::prelude_prune::usage::collect(&program);
+    let filter_input_used = usage.references("filter_input") || usage.references("filter_has_var");
+    let explicit_filter_seed = program.iter().any(|stmt| match &stmt.kind {
+        StmtKind::ExprStmt(expr) => matches!(
+            &expr.kind,
+            crate::parser::ast::ExprKind::FunctionCall { name, .. }
+                if name.as_str() == "__elephc_filter_seed_request"
+        ),
+        _ => false,
+    });
+    let has_filter_seed = program.iter().any(|stmt| {
+        matches!(
+            &stmt.kind,
+            StmtKind::FunctionDecl { name, .. } if name == "__elephc_filter_seed_request"
+        )
+    });
+    let auto_filter_seed = filter_input_used && has_filter_seed && !explicit_filter_seed;
+    let mut spelled = usage.variables;
+    if auto_filter_seed {
+        // The filter prelude reads SAPI-owned CLI input from these two superglobals.
+        spelled.insert("_SERVER".to_string());
+        spelled.insert("_ENV".to_string());
+    }
     let mut seeds: Vec<Stmt> = Vec::new();
     for name in CLI_POPULATED_SUPERGLOBALS.iter().filter(|name| spelled.contains(**name)) {
         seeds.extend(seed_for(name));
+    }
+    if auto_filter_seed {
+        // Seed the filter prelude's raw snapshot after the CLI superglobals exist. This runs
+        // in the same synthetic group, so it sees the freshly seeded `_SERVER`/`_ENV` values.
+        for (constant, global) in [("INPUT_SERVER", "_SERVER"), ("INPUT_ENV", "_ENV")] {
+            seeds.push(crate::synthetic_class::s_expr(
+                crate::synthetic_class::e_call(
+                    "__elephc_filter_seed_request",
+                    vec![
+                        crate::synthetic_class::e_const(constant),
+                        crate::synthetic_class::e_var(global),
+                        crate::synthetic_class::e_str("unsafe_raw"),
+                        crate::synthetic_class::e_int(0),
+                        crate::synthetic_class::e_bool(false),
+                        crate::synthetic_class::e_bool(true),
+                    ],
+                ),
+            ));
+        }
     }
     if seeds.is_empty() {
         return program;
