@@ -360,14 +360,17 @@ unset($holder, $empty, $nested, $doc, $copy, $mixedCopy, $staticCopy);
     let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
     let expected = "<?xml version=\"1.0\"?>\n<r><a>y</a><b id=\"keep\"/></r>\n<?xml version=\"1.0\"?>\n<r><b id=\"keep\"/></r>\nkey|{\"1\":9}|<?xml version=\"1.0\"?>\n<r><b id=\"keep\"/></r>\n<?xml version=\"1.0\"?>\n<r><b/></r>\n<?xml version=\"1.0\"?>\n<r/>\nquiet|{\"0\":4,\"2\":6}:[4,5,6]|{\"j\":2}:{\"k\":1,\"j\":2}|{\"1\":5}:[4,5]|";
-    assert_bundle_with(&[
-        BundleCase { name: "property_unset_aot", source, expected },
-        BundleCase { name: "property_unset_eval", source: &eval, expected },
-    ], |source| {
-        let out = compile_and_run_with_heap_debug(source);
-        assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
-        assert!(!out.stderr.contains("Warning:") && !out.stderr.contains("Notice:"), "{}", out.stderr);
-        out.stdout
-    });
+    let source = format!("<?php if ($argc === 1) {{ {} }} else {{ {} }}",
+        source.strip_prefix("<?php").unwrap(), eval.strip_prefix("<?php").unwrap());
+    let (runs, _) = compile_and_run_with_heap_debug_and_asm_per_argv(&source, &[&[], &["eval"]]);
+    let mut failures = Vec::new();
+    for (mode, out) in runs.iter().enumerate() {
+        if !out.success || out.stdout != expected || !out.stderr.contains("HEAP DEBUG: leak summary: clean")
+            || out.stderr.contains("Warning:") || out.stderr.contains("Notice:")
+        {
+            failures.push(format!("mode={mode} success={} stdout={:?} stderr={}", out.success, out.stdout, out.stderr));
+        }
+    }
+    assert_eq!(runs.len(), 2);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
