@@ -305,6 +305,7 @@ services. See [Profiling](../beyond-php/profiling.md) for both in full.
 |---|---|---|---|
 | `<source-file>` | path | — | Required. A tagged `.php` or tagless `.lfc` file to compile. Other suffixes retain tagged-PHP behavior. |
 | `--emit KIND` / `--emit=KIND` | `executable` (`exe`, `bin`), `cdylib` (`dylib`, `shared`), `staticlib` (`static`, `lib`), `phpext` | `executable` | Output artifact kind. `cdylib` builds a C-ABI shared library; `staticlib` builds a C-ABI archive. `lib` is an alias of `staticlib`, not `cdylib`. `phpext` produces a real PHP 8.5 extension using the matching native development SDK. |
+| `--export-constant NAME` / `--export-constant=NAME` | Fully qualified constant name; repeatable | None | Select a top-level source constant for `--emit phpext`. Exported classes include their public class constants automatically. |
 | `--emit-asm` | — | off | Write generated assembly and stop before runtime-object preparation, native assembly, or linking; no target assembler is required. |
 | `--emit-ir` | — | off | Print the EIR textual form and stop. |
 | `--check` | — | off | Run checks and write nothing; exported code also receives EIR cdylib call-graph safety validation. |
@@ -1034,7 +1035,10 @@ in the resulting program.
 Linux aarch64 or macOS aarch64. iOS extension output is rejected. It produces
 `<source-stem>.so`, including a Mach-O bundle with that suffix on macOS.
 Exported parameters and returns need explicit type declarations; null defaults
-need an explicit nullable type such as `?int`.
+need an explicit nullable type such as `?int`. `#[Export] final` classes expose
+constructors, public methods, typed properties and public class constants.
+Repeat `--export-constant NAME` to select global or namespaced constants; a
+constant-only module is valid.
 
 | Environment variable | Default | Meaning |
 | --- | --- | --- |

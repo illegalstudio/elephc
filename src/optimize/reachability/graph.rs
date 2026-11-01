@@ -103,6 +103,18 @@ pub fn compute(
     state.reach.classes.extend(state.index.extern_classes.iter().cloned());
     for name in options.exported_functions {
         let name = php_symbol_key(name);
+        if let Some((class, method)) = name.split_once("::") {
+            state.reach.classes.insert(class.to_string());
+            state.behavioral.classes.insert(class.to_string());
+            if let Some(node) = state.index.classes.get(class) {
+                for (candidate, is_static) in node.methods.keys().filter(|(candidate, _)| candidate == method) {
+                    let key = (class.to_string(), candidate.clone(), *is_static);
+                    state.reach.methods.insert(key.clone());
+                    state.behavioral.methods.insert(key);
+                }
+            }
+            continue;
+        }
         state.reach.functions.insert(name.clone());
         state.behavioral.functions.insert(name);
     }

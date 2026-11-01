@@ -32,7 +32,9 @@ mod edge_cache;
 pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: gc_collect_cycles ---");
+    super::gc_host_roots::entry(emitter);
     emitter.label_global("__rt_gc_collect_cycles_explicit");
+    super::gc_host_roots::begin(emitter);
 
     // -- avoid recursive re-entry while the collector is already running --
     emitter.instruction("xor eax, eax");                                        // a nested collection reports zero collected nodes
@@ -375,6 +377,7 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("shr rcx, 18");                                         // move the snapshot-pin bit into the low bit
     emitter.instruction("and ecx, 1");                                          // isolate the one temporary collector owner
     emitter.instruction("sub r10, rcx");                                        // snapshot pins are not external PHP roots
+    super::gc_host_roots::subtract_wrapper(emitter);
     emitter.instruction("cmp r10, QWORD PTR [rbp - 48]");                       // does this candidate still have an external reference beyond heap-internal edges?
     emitter.instruction("jbe __rt_gc_collect_cycles_root_next");                // no — refcount less than or equal to incoming edges means the node is only heap-rooted
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the candidate user pointer before marking it reachable from an external root
@@ -392,6 +395,7 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
 
     // -- run protected destructors and recount, then sweep the final unreachable graph --
     emitter.label("__rt_gc_collect_cycles_free_init");
+    super::gc_host_roots::publish(emitter);
     emitter.instruction("call __rt_gc_destructors");                            // run destructors only after pinning all of their candidate data
     emitter.instruction("test rax, rax");                                       // did user code mutate the graph during a destructor pass?
     emitter.instruction("jnz __rt_gc_collect_cycles_recount");                  // re-evaluate real roots before sweeping any candidate
@@ -498,11 +502,13 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_collected");
     emitter.instruction("add QWORD PTR [r8], rax");                             // include this pass in the cumulative collected-node count
     emitter.label("__rt_gc_collect_cycles_stats_done");
+    super::gc_host_roots::finish(emitter);
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_collecting");
     emitter.instruction("mov QWORD PTR [r8], 0");                               // clear the collector-active flag now that the x86_64 cycle pass is complete
     emitter.instruction("leave");                                               // tear down the x86_64 collector frame before returning to generated code
     emitter.instruction("jmp __rt_gc_rethrow_pending");                         // propagate captured throws only after pins and collector flags are balanced
 
     emitter.label("__rt_gc_collect_cycles_done");
+    super::gc_host_roots::finish(emitter);
     emitter.instruction("ret");                                                 // return immediately when collection is skipped or after a full x86_64 cycle pass
 }

@@ -25,6 +25,19 @@ pub(super) fn lower(
     target: RuntimeCallTarget,
 ) -> Result<()> {
     match target {
+        RuntimeCallTarget::PhpextObjectRelease => {
+            ctx.load_value_to_result(expect_operand(inst, 0)?)?;
+            abi::emit_call_label(ctx.emitter, "__rt_decref_object");
+            Ok(())
+        }
+        RuntimeCallTarget::PhpextPublishObjectRoots => {
+            abi::emit_call_label(ctx.emitter, "__rt_gc_phpext_roots");
+            Ok(())
+        }
+        RuntimeCallTarget::PhpextCollectObjectCycles => {
+            abi::emit_call_label(ctx.emitter, "__rt_gc_collect_cycles_explicit");
+            Ok(())
+        }
         RuntimeCallTarget::WeakObjectId => {
             let receiver = expect_operand(inst, 0)?;
             ctx.load_value_to_result(receiver)?;

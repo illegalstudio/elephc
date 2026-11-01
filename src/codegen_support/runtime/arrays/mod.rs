@@ -128,6 +128,7 @@ mod decref_object;
 mod eval_array_references;
 pub(crate) mod gc_candidates;
 mod gc_collect_cycles;
+mod gc_host_roots;
 mod gc_collect_cycles_x86_64;
 mod gc_control;
 mod memory;
