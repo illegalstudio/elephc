@@ -14,6 +14,7 @@
 use std::sync::OnceLock;
 
 use fancy_regex::{Regex, RegexBuilder};
+use regex::bytes::RegexBuilder as BytesRegexBuilder;
 
 /// php-src `regexp1`, the ASCII email validator.
 const EMAIL_ASCII: &str = r#"/^(?!(?:(?:\x22?\x5C[\x00-\x7E]\x22?)|(?:\x22?[^\x5C\x22]\x22?)){255,})(?!(?:(?:\x22?\x5C[\x00-\x7E]\x22?)|(?:\x22?[^\x5C\x22]\x22?)){65,}@)(?:(?:[\x21\x23-\x27\x2A\x2B\x2D\x2F-\x39\x3D\x3F\x5E-\x7E]+)|(?:\x22(?:[\x01-\x08\x0B\x0C\x0E-\x1F\x21\x23-\x5B\x5D-\x7F]|(?:\x5C[\x00-\x7F]))*\x22))(?:\.(?:(?:[\x21\x23-\x27\x2A\x2B\x2D\x2F-\x39\x3D\x3F\x5E-\x7E]+)|(?:\x22(?:[\x01-\x08\x0B\x0C\x0E-\x1F\x21\x23-\x5B\x5D-\x7F]|(?:\x5C[\x00-\x7F]))*\x22)))*@(?:(?:(?!.*[^.]{64,})(?:(?:(?:xn--)?[a-z0-9]+(?:-+[a-z0-9]+)*\.){1,126}){1,}(?:(?:[a-z][a-z0-9]*)|(?:(?:xn--)[a-z0-9]+))(?:-+[a-z0-9]+)*)|(?:\[(?:(?:IPv6:(?:(?:[a-f0-9]{1,4}(?::[a-f0-9]{1,4}){7})|(?:(?!(?:.*[a-f0-9][:\]]){7,})(?:[a-f0-9]{1,4}(?::[a-f0-9]{1,4}){0,5})?::(?:[a-f0-9]{1,4}(?::[a-f0-9]{1,4}){0,5})?)))|(?:(?:IPv6:(?:(?:[a-f0-9]{1,4}(?::[a-f0-9]{1,4}){5}:)|(?:(?!(?:.*[a-f0-9]:){5,})(?:[a-f0-9]{1,4}(?::[a-f0-9]{1,4}){0,3})?::(?:[a-f0-9]{1,4}(?::[a-f0-9]{1,4}){0,3}:)?)))?(?:(?:25[0-5])|(?:2[0-4][0-9])|(?:1[0-9]{2})|(?:[1-9]?[0-9]))(?:\.(?:(?:25[0-5])|(?:2[0-4][0-9])|(?:1[0-9]{2})|(?:[1-9]?[0-9]))){3}))\]))$/iD"#;
@@ -26,9 +27,10 @@ const EMAIL_UNICODE: &str = r#"/^(?!(?:(?:\x22?\x5C[\x00-\x7E]\x22?)|(?:\x22?[^\
 /// PHP uses the first unescaped closing delimiter; everything after it must be a known PCRE
 /// modifier. Paired delimiters (`()`, `{}`, `[]`, `<>`) keep their matching nesting.
 fn split_php_pattern(pattern: &str) -> Result<(&str, &str), String> {
+    let pattern = pattern.trim();
     let delimiter = pattern.chars().next().ok_or_else(|| "Empty regular expression".to_string())?;
-    if delimiter.is_ascii_alphanumeric() || delimiter == '\\' || delimiter.is_whitespace() {
-        return Err("Delimiter must not be alphanumeric or backslash".to_string());
+    if delimiter.is_ascii_alphanumeric() || delimiter == '\\' || delimiter == '\0' || delimiter.is_whitespace() {
+        return Err("Delimiter must not be alphanumeric, backslash, or NUL byte".to_string());
     }
     let paired = match delimiter {
         '(' => Some(')'),
@@ -116,7 +118,19 @@ fn rewrite_dollar_anchors(body: &str, dollar_end_only: bool, multiline: bool) ->
 }
 
 /// Builds one fancy-regex from a PHP pattern body and its modifiers.
-fn build(body: &str, modifiers: &str) -> Option<Regex> {
+fn build_fancy(body: &str, modifiers: &str) -> Option<Regex> {
+    let source = build_source(body, modifiers);
+    RegexBuilder::new(&source).build().ok()
+}
+
+/// Builds one byte-oriented regex for PHP's non-`u` byte semantics.
+fn build_bytes(body: &str, modifiers: &str) -> Option<regex::bytes::Regex> {
+    let source = build_source(body, modifiers);
+    BytesRegexBuilder::new(&source).unicode(false).build().ok()
+}
+
+/// Applies PHP's modifier flags and `$` rewrite to a pattern body.
+fn build_source(body: &str, modifiers: &str) -> String {
     let mut inline = String::new();
     for flag in ['i', 'm', 's', 'x'] {
         if modifiers.contains(flag) {
@@ -132,10 +146,10 @@ fn build(body: &str, modifiers: &str) -> Option<Regex> {
     if !inline.is_empty() {
         source = format!("(?{inline}){source}");
     }
-    RegexBuilder::new(&source).build().ok()
+    source
 }
 
-/// Matches one value and reports PHP-level pattern spelling errors separately.
+/// Matches one value and reports PHP-level pattern spelling or compilation errors separately.
 pub(crate) fn php_pattern_with_error(
     value: &[u8],
     pattern: &[u8],
@@ -147,15 +161,26 @@ pub(crate) fn php_pattern_with_error(
         Ok(parts) => parts,
         Err(error) => return (false, Some(error)),
     };
-    // PHP's `u` modifier rejects invalid UTF-8 instead of replacing it.
-    if modifiers.contains('u') && std::str::from_utf8(value).is_err() {
-        return (false, None);
+    if modifiers.contains('u') {
+        if std::str::from_utf8(value).is_err() {
+            return (false, None);
+        }
+        let value = String::from_utf8_lossy(value);
+        return match build_fancy(body, modifiers) {
+            Some(regex) => (regex.is_match(&value).unwrap_or(false), None),
+            None => (false, Some("Compilation failed".to_string())),
+        };
     }
+    if let Some(regex) = build_bytes(body, modifiers) {
+        return (regex.is_match(value), None);
+    }
+    // Lookarounds and backreferences need fancy-regex. Its `str` input cannot preserve raw
+    // byte semantics, but it is still better than rejecting a PCRE pattern outright.
     let value = String::from_utf8_lossy(value);
-    let Some(regex) = build(body, modifiers) else {
-        return (false, None);
-    };
-    (regex.is_match(&value).unwrap_or(false), None)
+    match build_fancy(body, modifiers) {
+        Some(regex) => (regex.is_match(&value).unwrap_or(false), None),
+        None => (false, Some("Compilation failed".to_string())),
+    }
 }
 
 /// Matches one value against a PHP-style regexp literal (test helper).
@@ -179,7 +204,7 @@ fn email_unicode() -> &'static Regex {
 /// Compiles one hard-coded php-src email pattern.
 fn compile_email(pattern: &str) -> Option<Regex> {
     let (body, modifiers) = split_php_pattern(pattern).ok()?;
-    build(body, modifiers)
+    build_fancy(body, modifiers)
 }
 
 /// Runs `FILTER_VALIDATE_EMAIL` against one binary-safe value.
@@ -233,5 +258,9 @@ mod tests {
         assert!(!php_pattern(b"foo", b"/foo/q"));
         assert!(php_pattern(b"a/b", b"/a\\/b/"));
         assert!(php_pattern(b"foo\nbar", b"/^bar$/m"));
+        assert!(php_pattern(b"a", b" /a/ \n"));
+        // Non-`u` patterns run in byte mode: two bytes match `.` twice.
+        assert!(php_pattern(b"\xc3\xa9", b"/^..$/"));
+        assert!(php_pattern(b"12", b"/^\\d+$/"));
     }
 }

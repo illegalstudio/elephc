@@ -930,6 +930,7 @@ name = "elephc-filter"
 version = "0.1.0"
 dependencies = [
  "fancy-regex",
+ "regex",
 ]
 
 [[package]]

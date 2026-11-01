@@ -448,6 +448,31 @@ echo $dynamic($x);
     );
 }
 
+/// A closure by-reference warning uses PHP's `{closure:file:line}` display name.
+#[test]
+fn test_call_user_func_closure_by_reference_warning_uses_php_name() {
+    let output = compile_and_run_capture(
+        r#"<?php
+$callback = $argc > 0 ? function (&$value): void {} : function ($value): void {};
+function run_closure_warning(mixed $callback): void {
+    $x = 1;
+    call_user_func($callback, (string) $x);
+}
+run_closure_warning($callback);
+"#,
+    );
+    assert!(
+        output.stderr.contains("{closure:") && output.stderr.contains("test.php:"),
+        "stderr: {:?}",
+        output.stderr
+    );
+    assert!(
+        !output.stderr.contains("__eir_closure"),
+        "stderr: {:?}",
+        output.stderr
+    );
+}
+
 // --- Issue #1062: a by-reference variadic may retype the caller's variable -----------------
 //
 // `f(&...$items)` is the one by-reference form PHP's checker does not constrain: the callee

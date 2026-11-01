@@ -14,7 +14,7 @@
 
 use crate::parser::ast::{BinOp, Expr, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
-    e_binop, e_bool, e_call, e_concat, e_concat_all, e_const, e_float, e_int, e_new_fq, e_null,
+    e_binop, e_bool, e_call, e_cast, e_concat, e_concat_all, e_const, e_float, e_int, e_new_fq, e_null,
     e_str, e_var, function, s_array_assign, s_assign, s_expr, s_if, s_return, s_return_void, s_throw, t_array, t_bool, t_int, t_mixed,
     t_union,
 };
@@ -457,12 +457,32 @@ fn int_arg_decl() -> Stmt {
                 None,
             ),
             s_if(
-                e_binop(
-                    e_binop(
-                        e_call("is_float", vec![e_var("value")]),
-                        BinOp::Or,
-                        e_call("is_bool", vec![e_var("value")]),
+                e_call("is_float", vec![e_var("value")]),
+                vec![
+                    s_if(
+                        e_binop(
+                            e_var("value"),
+                            BinOp::StrictNotEq,
+                            e_cast(crate::parser::ast::CastType::Int, e_var("value")),
+                        ),
+                        vec![s_expr(e_call("__elephc_builtin_deprecated", vec![
+                            e_concat_all(vec![
+                                e_str("Implicit conversion from float "),
+                                e_cast(crate::parser::ast::CastType::String, e_var("value")),
+                                e_str(" to int loses precision"),
+                            ]),
+                        ]))],
+                        vec![],
+                        None,
                     ),
+                    s_return(e_cast(crate::parser::ast::CastType::Int, e_var("value"))),
+                ],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_binop(
+                    e_call("is_bool", vec![e_var("value")]),
                     BinOp::Or,
                     e_binop(
                         e_call("is_string", vec![e_var("value")]),
@@ -476,7 +496,19 @@ fn int_arg_decl() -> Stmt {
             ),
             s_if(
                 e_call("is_null", vec![e_var("value")]),
-                vec![s_return(e_int(0))],
+                vec![
+                    s_expr(e_call("__elephc_builtin_deprecated", vec![
+                        e_concat_all(vec![
+                            e_var("caller"),
+                            e_str("(): Passing null to parameter #"),
+                            e_var("arg"),
+                            e_str(" ($"),
+                            e_var("param"),
+                            e_str(") of type int is deprecated"),
+                        ]),
+                    ])),
+                    s_return(e_int(0)),
+                ],
                 vec![],
                 None,
             ),

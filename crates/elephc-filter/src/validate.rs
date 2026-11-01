@@ -98,7 +98,8 @@ fn prefixed_int(value: &[u8], flags: i64) -> Option<i64> {
     if rest.is_empty() { Some(0) } else { None }
 }
 
-/// Parses unsigned digits in one radix, rejecting values above `i64::MAX`.
+/// Parses unsigned digits in one radix, rejecting values that overflow `u64` and retaining
+/// php-src's bit-pattern wrap above `i64::MAX`.
 fn parse_radix(digits: &[u8], radix: u64) -> Option<i64> {
     let mut value = 0u64;
     for &byte in digits {
@@ -134,7 +135,6 @@ pub(crate) fn float(
 ) -> Option<f64> {
     let value = trim_default(value);
     let decimal = decimal.unwrap_or(b'.');
-    let decimal = if decimal.is_ascii() { decimal } else { b'.' };
     let thousand: &[u8] = thousand.unwrap_or(b"',.");
     let mut normalized = Vec::with_capacity(value.len());
     let mut index = 0usize;

@@ -265,11 +265,20 @@ pub extern "C" fn elephc_filter_result_bool() -> i64 {
 /// ABI boundary before the PHP wrapper calls `hex2bin()`.
 #[no_mangle]
 pub extern "C" fn elephc_filter_result_hex() -> *const c_char {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
     HEX.with(|slot| {
-        let rendered = RESULT.with(|result| match &*result.borrow() {
-            Outcome::Str(value) => value.iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
-            _ => String::new(),
+        let mut rendered = RESULT.with(|result| match &*result.borrow() {
+            Outcome::Str(value) => {
+                let mut bytes = Vec::with_capacity(value.len() * 2);
+                for byte in value {
+                    bytes.push(DIGITS[(byte >> 4) as usize]);
+                    bytes.push(DIGITS[(byte & 0x0f) as usize]);
+                }
+                bytes
+            }
+            _ => Vec::new(),
         });
+        rendered.shrink_to_fit();
         *slot.borrow_mut() = CString::new(rendered).unwrap_or_default();
         slot.borrow().as_ptr()
     })
