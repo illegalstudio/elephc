@@ -12,6 +12,64 @@ use super::super::*;
 use super::support::*;
 use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
+/// Array-key projection retires each produced key and index, including a failed insertion.
+#[test]
+fn array_keys_builder_releases_keys_indexes_and_partial_results() {
+    for failed_insert in [None, Some(0), Some(1)] {
+        let mut values = FakeOps::default();
+        let first = values.int(4).unwrap();
+        let second = values.int(5).unwrap();
+        let source = values.alloc(FakeValue::Assoc(vec![
+            (FakeKey::String(b"first".to_vec()), first), (FakeKey::Int(7), second),
+        ]));
+        let existing = values.values.keys().copied().collect::<Vec<_>>();
+        if let Some(index) = failed_insert { values.fail_array_set_call(index); }
+        let result = eval_array_keys_result(source, &mut values);
+        if failed_insert.is_some() {
+            assert_eq!(result, Err(EvalStatus::UnsupportedConstruct));
+        } else {
+            let result = result.unwrap();
+            assert!(matches!(values.get(result), FakeValue::Array(items) if items.len() == 2));
+            values.release(result).unwrap();
+        }
+        for id in values.values.keys().filter(|id| !existing.contains(id)) {
+            assert_eq!(values.cell_owners[id], 0, "failed={failed_insert:?}, cell={id}");
+        }
+        for source in [source, first, second] {
+            assert_eq!(values.cell_owners[&(source.as_ptr() as usize)], 1);
+        }
+    }
+}
+
+/// Joining consumes traversal leases on success and even when operand retirement fails.
+#[test]
+fn implode_releases_traversal_keys_and_values_on_every_exit() {
+    for fail_release in [false, true] {
+        let mut values = FakeOps::default();
+        let mut context = ElephcEvalContext::new();
+        let first = values.string("first").unwrap();
+        let second = values.string("second").unwrap();
+        let separator = values.string("|").unwrap();
+        let source = values.alloc(FakeValue::Array(vec![first, second]));
+        let existing = values.values.keys().copied().collect::<Vec<_>>();
+        if fail_release { values.fail_release_call = Some(0); }
+        let result = eval_implode_result(separator, source, &mut context, &mut values);
+        if fail_release {
+            assert_eq!(result, Err(EvalStatus::UncaughtThrowable));
+        } else {
+            let result = result.unwrap();
+            assert_eq!(values.stringify(result), "first|second");
+            values.release(result).unwrap();
+        }
+        for id in values.values.keys().filter(|id| !existing.contains(id)) {
+            assert_eq!(values.cell_owners[id], 0, "failed={fail_release}, cell={id}");
+        }
+        for source in [source, separator, first, second] {
+            assert_eq!(values.cell_owners[&(source.as_ptr() as usize)], 1);
+        }
+    }
+}
+
 /// String splitting retires segment keys and values and abandons partially populated arrays.
 #[test]
 fn explode_builder_releases_segment_operands_and_failed_results() {

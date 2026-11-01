@@ -9,6 +9,27 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Single-argument string views retire detached Mixed and Stringable coercion storage.
+#[test]
+fn test_borrowed_string_views_release_single_argument_casts() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function viewCastSource(): string|false { return str_repeat('x', 2) . ' '; }
+class ViewCastText { public function __toString(): string { return str_repeat(' ', 1) . 'kept '; } }
+function printCastViews(mixed $value): void {
+    echo trim($value), '|', ltrim($value), '|', rtrim($value), '|', chop($value), '|';
+}
+echo trim(viewCastSource()), '|';
+$saved = trim(viewCastSource()); echo $saved, '|';
+printCastViews(str_repeat(' ', 1) . 'ab ');
+printCastViews(42);
+echo trim(new ViewCastText()), '|';
+unset($saved);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "xx|xx|ab|ab | ab| ab|42|42|42|42|kept|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Later reference promotion retains ordinary unwind roots for a widened local read.
 #[test]
 fn test_borrowed_string_reads_later_boxed_local() {

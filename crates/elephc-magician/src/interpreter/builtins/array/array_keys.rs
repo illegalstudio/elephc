@@ -37,13 +37,11 @@ pub(in crate::interpreter) fn eval_array_keys_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let len = values.array_len(array)?;
-    let mut result = values.array_new(len)?;
+    let mut result = super::super::collection_builder::EvalArrayBuilder::indexed(values, len)?;
     for position in 0..len {
-        let key = values.array_iter_key(array, position)?;
-        let index = values.int(position as i64)?;
-        result = values.array_set(result, index, key)?;
+        result.index(position, |values| values.array_iter_key(array, position))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 /// Dispatches direct eval calls for the `array_keys` array builtin.
 pub(in crate::interpreter) fn eval_array_keys_declared_call(

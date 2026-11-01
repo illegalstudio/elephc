@@ -454,6 +454,7 @@ pub(super) fn emit_builtin_call_value(
                 && operands.first().is_some_and(|operand| {
                     value_is_call_argument_evaluation_pin(ctx, *operand)
                         || ctx.borrowed_string_call_operands.contains(operand)
+                        || ctx.value_is_owning_mixed_string_cast(*operand)
                 });
             let call = if stabilizes_evaluation_pin {
                 ctx.emit_owned_value(
