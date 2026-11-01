@@ -48,6 +48,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_function_call(
         .target
         .extern_symbol("__elephc_eval_call_function");
     abi::emit_call_label(ctx.emitter, &symbol);
+    retire_eval_call_argument_boxes(ctx, &inst.operands, args_offset)?;
     emit_eval_status_check(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
@@ -89,6 +90,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_function_call_array(
         .target
         .extern_symbol("__elephc_eval_call_function_array");
     abi::emit_call_label(ctx.emitter, &symbol);
+    retire_eval_metadata_operand_boxes(ctx, &[(arg_array, EVAL_TEMP_CELL_OFFSET)])?;
     emit_eval_status_check(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
@@ -130,6 +132,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_new(
     abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
     let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_new_object");
     abi::emit_call_label(ctx.emitter, &symbol);
+    retire_eval_call_argument_boxes(ctx, &inst.operands, args_offset)?;
     emit_eval_status_check(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
@@ -182,6 +185,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_new_dynamic_fa
         .target
         .extern_symbol("__elephc_eval_try_new_object");
     abi::emit_call_label(ctx.emitter, &symbol);
+    retire_eval_call_argument_boxes(ctx, constructor_args, args_offset)?;
     emit_branch_if_eval_c_int_negative(ctx, &eval_miss_label);
     emit_eval_status_check(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);
@@ -357,6 +361,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_static_method_call(
         .target
         .extern_symbol("__elephc_eval_static_method_call");
     abi::emit_call_label(ctx.emitter, &symbol);
+    retire_eval_call_argument_boxes(ctx, &inst.operands, args_offset + 8)?;
     emit_eval_status_check(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
@@ -410,6 +415,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_native_frame_static_m
         .target
         .extern_symbol("__elephc_eval_native_frame_static_method_call");
     abi::emit_call_label(ctx.emitter, &symbol);
+    retire_eval_call_argument_boxes(ctx, &inst.operands, args_offset + 8)?;
     emit_branch_if_eval_c_int_negative(ctx, &miss_stack_label);
     emit_eval_status_check(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);

@@ -27,6 +27,8 @@ mod stream_filter_owners;
 mod leaf_array_cycles;
 mod eval_method_adapter_owners;
 mod eval_builtin_argument_operands;
+#[path = "runtime_gc/eval_call_adapter_owners.rs"]
+mod eval_call_adapter_owners;
 mod eval_reflection_factory_owners;
 mod method_receiver_owners;
 mod file_write_owners;

@@ -3837,6 +3837,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if self.value_is_owning_builtin_temporary(value.value) {
             return true;
         }
+        if self.builder.value_defining_op(value.value) == Some(Op::LoadStaticProperty)
+            && self.builder.value_ownership(value.value) == Ownership::Owned
+        {
+            return true;
+        }
         if self.builder.value_ownership(value.value) == Ownership::Owned
             && self.builder.value_defining_op(value.value) == Some(Op::MixedUnbox)
             && (php_type.codegen_repr() == PhpType::Callable || php_type.is_refcounted())

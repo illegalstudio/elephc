@@ -73,11 +73,44 @@ unset($history, $error);
         .replace('\\', "\\\\").replace('\'', "\\'");
     let history_eval = format!("<?php $source = $argc > 0 ? '{history_body}' : ''; eval($source);");
     let history_expected = "{\"0\":1,\"1\":2,\"3\":9}\nCannot add element to the array as the next element is already occupied\n1\n";
+    let overwrites = r#"<?php
+class NativeStaticOverwrite {
+    public static array $items = [1, 2];
+    public static $packed = [1, 2];
+    public static string $text = 'seed';
+    public static object $object;
+    public static mixed $boxed = null;
+}
+class NativeStaticDisplaced {
+    public function __destruct() {
+        echo json_encode(NativeStaticOverwrite::$boxed), '|';
+        NativeStaticOverwrite::$boxed = ['callback'];
+    }
+}
+NativeStaticOverwrite::$object = new stdClass();
+NativeStaticOverwrite::$boxed = new NativeStaticDisplaced();
+$overwriteCode = $argc > 0 ? '
+NativeStaticOverwrite::$items = [3, 4]; NativeStaticOverwrite::$items = [5, 6];
+NativeStaticOverwrite::$packed = [3, 4]; NativeStaticOverwrite::$packed = [5, 6];
+NativeStaticOverwrite::$text = "first"; NativeStaticOverwrite::$text = "second";
+NativeStaticOverwrite::$object = new stdClass();
+NativeStaticOverwrite::$boxed = ["replacement"];
+NativeStaticOverwrite::$items = NativeStaticOverwrite::$items;
+' : '';
+eval($overwriteCode);
+echo json_encode(NativeStaticOverwrite::$items), ':', json_encode(NativeStaticOverwrite::$packed), ':',
+    NativeStaticOverwrite::$text, ':', get_class(NativeStaticOverwrite::$object), ':',
+    json_encode(NativeStaticOverwrite::$boxed), '|';
+NativeStaticOverwrite::$boxed = null;
+unset($overwriteCode);
+"#;
     assert_bundle_with(&[
         BundleCase { name: "eval_static_live_storage", source: &eval, expected: "2049:77:2:0:0:2048:kept\n42:2\n2050:2048\n" },
         BundleCase { name: "native_static_getter_snapshot", source: native, expected: "[9,3,4]:[1,3]\n" },
         BundleCase { name: "static_append_history_aot", source: history, expected: history_expected },
         BundleCase { name: "static_append_history_eval", source: &history_eval, expected: history_expected },
+        BundleCase { name: "native_static_overwrite_owners", source: overwrites,
+            expected: "[\"replacement\"]|[5,6]:[5,6]:second:stdClass:[\"callback\"]|" },
     ], |source| {
         let out = compile_and_run_with_heap_debug(source);
         assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);

@@ -114,6 +114,15 @@ pub(super) fn store_eval_mixed_operand_at(
     Ok(())
 }
 
+/// Retires a positional eval argument array while preserving the bridge status.
+pub(super) fn retire_eval_call_argument_boxes(
+    ctx: &mut FunctionContext<'_>, operands: &[ValueId], args_offset: usize,
+) -> Result<()> {
+    let boxes: Vec<_> = operands.iter().enumerate().map(|(index, &value)|
+        (value, args_offset + index * 8)).collect();
+    retire_eval_metadata_operand_boxes(ctx, &boxes)
+}
+
 /// Retires metadata-query adapter boxes while preserving the C status or scalar predicate result.
 /// Existing Mixed operands remain borrowed; native payloads retain their original EIR owner.
 pub(super) fn retire_eval_metadata_operand_boxes(

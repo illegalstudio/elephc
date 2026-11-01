@@ -1448,6 +1448,17 @@ pub(super) fn lower_static_property_get(ctx: &mut LoweringContext<'_, '_>, recei
     let name = format!("{}::{}", receiver_name(receiver), property);
     let data = ctx.intern_string(&name);
     let result_type = static_property_result_type(ctx, receiver, property, expr);
+    // Unknown classes with an eval context take the retained eval getter ABI.
+    // Ordinary native static slots lend their storage instead.
+    let retained_eval_read = static_receiver_class_name(ctx, receiver)
+        .is_some_and(|class| !ctx.classes.contains_key(class.as_str()))
+        && ctx.builder.function().locals.iter().any(|local| local.kind == crate::ir::LocalKind::EvalContext);
+    if retained_eval_read {
+        return ctx.emit_owned_value(
+            Op::LoadStaticProperty, Vec::new(), Some(Immediate::Data(data)), result_type,
+            Op::LoadStaticProperty.default_effects(), Some(expr.span),
+        );
+    }
     ctx.emit_value(
         Op::LoadStaticProperty,
         Vec::new(),
