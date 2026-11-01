@@ -99,6 +99,67 @@ $callback = function (ClosureObjectReferenceContract &$value): string {
     }
 }
 
+/// Named object references keep a boxed entry ABI while the body reads a concrete object view.
+#[test]
+fn named_object_reference_separates_physical_and_logical_types() {
+    let source = r#"<?php
+interface NamedObjectReferenceContract { public function label(): string; }
+function readNamedObjectReference(NamedObjectReferenceContract &$value): string {
+    return $value->label();
+}
+"#;
+    for target in TARGETS {
+        let module = super::lower_source_at_for_target(
+            source,
+            Path::new("main.php"),
+            Path::new("."),
+            Target::parse(target).unwrap(),
+        );
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == "readNamedObjectReference")
+            .unwrap_or_else(|| panic!("{target}: missing named function"));
+        let parameter = function
+            .params
+            .first()
+            .unwrap_or_else(|| panic!("{target}: missing function parameter"));
+        assert!(parameter.by_ref, "{target}: parameter must remain by-reference");
+        assert_eq!(
+            parameter.php_type.codegen_repr(),
+            crate::types::PhpType::Mixed,
+            "{target}: the runtime entry keeps its boxed reference ABI",
+        );
+        let local = function
+            .locals
+            .iter()
+            .find(|local| local.name.as_deref() == Some("value"))
+            .unwrap_or_else(|| panic!("{target}: missing logical parameter local"));
+        assert_eq!(
+            local.php_type.codegen_repr(),
+            crate::types::PhpType::Object("NamedObjectReferenceContract".to_string()),
+            "{target}: the body must retain the declared object view",
+        );
+        let loads = function
+            .instructions
+            .iter()
+            .filter(|instruction| instruction.op == Op::LoadRefCell)
+            .collect::<Vec<_>>();
+        assert!(!loads.is_empty(), "{target}: missing reference-cell loads");
+        assert!(
+            loads.iter().all(|load| {
+                load.result_php_type.codegen_repr()
+                    == crate::types::PhpType::Object(
+                        "NamedObjectReferenceContract".to_string(),
+                    )
+            }),
+            "{target}: every body read must expose the concrete object view",
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
 /// A hidden Mixed owner does not change the string payload ABI of its returned ref-cell.
 #[test]
 fn bound_string_reference_store_keeps_its_physical_payload_type() {

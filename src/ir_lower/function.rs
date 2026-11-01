@@ -203,6 +203,7 @@ pub(crate) fn lower_user_function(
     // callers; only the EIR body return type becomes Mixed so `return $x`
     // lowers to a plain boxed Mixed return instead of a Generator coercion.
     let body_return_type = generator_body_return_type(body, &eir_signature.return_type, signature.is_generator);
+    let body_signature = logical_object_reference_body_signature(signature, &eir_signature);
     let mut function = Function::new(
         name.to_string(),
         return_ir_type(&body_return_type),
@@ -234,7 +235,7 @@ pub(crate) fn lower_user_function(
         None,
         &mut module.data,
         body,
-        env_from_signature(&eir_signature, web),
+        env_from_signature(&body_signature, web),
         web_gated_global_env(&check_result.global_env, web),
         &check_result.functions,
         &check_result.extern_functions,
@@ -269,7 +270,7 @@ pub(crate) fn lower_user_function(
         None,
         body_return_type.clone(),
         signature.declared_return,
-        &eir_signature.params,
+        &body_signature.params,
         None,
         false,
         std::collections::HashSet::new(),
@@ -2221,6 +2222,29 @@ fn eir_signature_with_object_reference_contracts(signature: &FunctionSig) -> Fun
         }
     }
     eir_signature
+}
+
+/// Restores declared object-reference views for the body while retaining its boxed entry ABI.
+fn logical_object_reference_body_signature(
+    source_signature: &FunctionSig,
+    eir_signature: &FunctionSig,
+) -> FunctionSig {
+    let mut body_signature = eir_signature.clone();
+    for (index, (_, php_type)) in body_signature.params.iter_mut().enumerate() {
+        let Some((_, source_type)) = source_signature.params.get(index) else {
+            continue;
+        };
+        if source_signature
+            .ref_params
+            .get(index)
+            .copied()
+            .unwrap_or(false)
+            && matches!(source_type.codegen_repr(), PhpType::Object(_))
+        {
+            *php_type = source_type.clone();
+        }
+    }
+    body_signature
 }
 
 /// Marks boxed ABI parameters as materialization targets for reused runtime invokers.
