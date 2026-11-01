@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:1296](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L1296) (`setrawcookie`)
+- **Lowering**: [`src/web_prelude/build.rs`:1297](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L1297) (`setrawcookie`)
 - **Function symbol**: `setrawcookie()`
 
 
