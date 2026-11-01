@@ -19,6 +19,9 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[path = "support/bounded_output.rs"]
+mod bounded_output;
+
 static TEST_ID: AtomicUsize = AtomicUsize::new(0);
 
 /// Creates an isolated temp dir unique across parallel test threads/processes.
@@ -113,7 +116,7 @@ fn a_close_tag_in_eval_switches_to_inline_html_as_php_does() {
         .expect("failed to spawn elephc");
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     eprintln!("inline HTML fixture: executing");
-    let run = Command::new(dir.join("main")).output().expect("failed to run binary");
+    let run = bounded_output::output(&mut Command::new(dir.join("main")));
     eprintln!("inline HTML fixture: completed");
     assert_eq!(
         String::from_utf8_lossy(&run.stdout),
