@@ -176,7 +176,10 @@ pub(super) fn resolve_decl_stmt(
             methods,
             constants,
         } => {
-            let resolved_methods = resolve_methods(methods, namespace, imports, symbols)?;
+            let (resolved_properties, resolved_methods) = super::promoted_attributes::split(
+                resolve_properties(properties, namespace, imports, symbols),
+                resolve_methods(methods, namespace, imports, symbols)?,
+            );
             let trait_uses = trait_uses
                 .iter()
                 .map(|trait_use| resolve_trait_use(trait_use, namespace, imports, symbols))
@@ -198,7 +201,7 @@ pub(super) fn resolve_decl_stmt(
                     is_final: *is_final,
                     is_readonly_class: *is_readonly_class,
                     trait_uses,
-                    properties: resolve_properties(properties, namespace, imports, symbols),
+                    properties: resolved_properties,
                     methods: resolved_methods,
                     constants: resolve_class_consts(constants, namespace, imports, symbols),
                 },
@@ -333,7 +336,10 @@ pub(super) fn resolve_decl_stmt(
             methods,
             constants,
         } => {
-            let resolved_methods = resolve_methods(methods, namespace, imports, symbols)?;
+            let (resolved_properties, resolved_methods) = super::promoted_attributes::split(
+                resolve_properties(properties, namespace, imports, symbols),
+                resolve_methods(methods, namespace, imports, symbols)?,
+            );
             let trait_uses = trait_uses
                 .iter()
                 .map(|trait_use| resolve_trait_use(trait_use, namespace, imports, symbols))
@@ -343,7 +349,7 @@ pub(super) fn resolve_decl_stmt(
                     name: canonical_name_for_decl(namespace, name),
                     generics: resolve_generic_decl(generics, namespace, imports, symbols),
                     trait_uses,
-                    properties: resolve_properties(properties, namespace, imports, symbols),
+                    properties: resolved_properties,
                     methods: resolved_methods,
                     constants: resolve_class_consts(constants, namespace, imports, symbols),
                 },
