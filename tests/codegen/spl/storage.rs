@@ -26,13 +26,15 @@ class EvalSplSetter extends ArrayObject {
 $evalSpl = new ArrayObject(['x' => [new EvalSplRetired()]]);
 $evalSetter = new EvalSplSetter(['x' => [1]]);
 $source = $argc > 0 ? '$evalSpl["x"][0] = new EvalSplReplacement();
+echo "replaced|";
 $evalSetter["x"][] = 2;
+echo "appended|";
 return json_encode($evalSpl->getArrayCopy()) . "|" . json_encode($evalSetter->getArrayCopy());' : '';
 echo eval($source);
 unset($evalSetter, $evalSpl);
 "#);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "new|{\"x\":[\"retargeted\"]}|{\"x\":[1,2]}");
+    assert_eq!(out.stdout, "new|replaced|appended|{\"x\":[\"retargeted\"]}|{\"x\":[1,2]}");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
