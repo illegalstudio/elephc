@@ -92,7 +92,7 @@ echo EvalConstructorlessFactoryXml::$calls;
 unset($root, $child, $children, $attributes, $paths, $loaded, $imported);
 "#;
     let escaped = body.replace('\\', "\\\\").replace('\'', "\\'");
-    let out = compile_and_run_with_heap_debug(&format!("<?php $source = $argc > 0 ? '{escaped}' : ''; eval($source); unset($source);"));
+    let out = compile_and_run_with_heap_debug(&format!("<?php $activate = new SimpleXMLElement('<activate/>'); unset($activate); $source = $argc > 0 ? '{escaped}' : ''; eval($source); unset($source);"));
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "declared|root|child|children|attributes|xpath|loaded|imported|EvalConstructorlessFactoryXml:item|EvalConstructorlessFactoryXml:1|EvalConstructorlessFactoryXml:1|EvalConstructorlessFactoryXml:item|EvalConstructorlessFactoryXml:loaded|EvalConstructorlessFactoryXml:r|1");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
