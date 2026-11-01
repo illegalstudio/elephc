@@ -779,16 +779,32 @@ same function also serves the `session.*` block; see
 
 ### `ini_set()`
 
-`ini_set('opcache.*', …)` succeeds for **three** directives and returns `false`
-for the other 51:
+`ini_set('opcache.*', …)` succeeds for **four** directives and returns `false`
+for the other 50 — three as a plain store, and `opcache.enable`, which carries
+php-src's own three-way runtime behaviour rather than a plain store:
 
 | Directive | Effect |
 |---|---|
 | `opcache.revalidate_freq` | the [runtime script cache](#the-runtime-script-cache)'s revalidation interval |
 | `opcache.validate_timestamps` | whether it revalidates at all |
 | `opcache.file_update_protection` | how young a file it refuses to store |
+| `opcache.enable` | no-op when already enabled; `0` disables the cache for the rest of the request; re-enabling a disabled cache warns and returns `false` |
 
-These are exactly the intersection of two sets: the 18 directives php-src
+`opcache.enable` is php-src's `OnEnable`, whose runtime stage is not a store: a
+truthy value on an **already-enabled** cache is a silent no-op returning the
+previous value, a falsy value disables the cache for the rest of the request
+(returning the previous value), and a truthy value on a **disabled** cache is
+refused with `Warning: Zend OPcache can't be temporarily enabled (it may be only
+disabled until the end of request)` and returns `false`. A successful disable
+moves `ini_get()`, `opcache_get_configuration()` and the runtime script cache
+together. Pinned by `tests/opcache_ini_tests.rs` (`opcache_enable_noop_001` /
+`002`). The disable also reaches the API functions php-src gates on the live
+flag — `opcache_is_script_cached()`, `opcache_invalidate()` and
+`opcache_reset()` answer `false`, and `opcache_get_status()` reports
+`opcache_enabled => false` with the `scripts` key omitted.
+
+The three numeric directives are the plain-store members of the intersection of two sets:
+the 18 directives php-src
 registers `PHP_INI_ALL`, where reference PHP's own `ini_set()` succeeds, and the
 ones elephc's cache actually reads. A successful call returns the **previous**
 raw value and moves every surface together — `ini_get()`,
@@ -948,9 +964,11 @@ a strict `<` against the constant their message prints as an inclusive bound, so
 `--ini opcache.jit_max_recursive_returns=4` is refused by a warning that calls
 `4` legal. elephc reproduces both the accepted range and the message.
 
-The first two are silent because php-src reports them through
-`zend_accel_error()`, which is gated on `opcache.log_verbosity_level >= 2` — at
-the default verbosity reference PHP prints nothing either.
+The first two are silent at the default verbosity because php-src reports them
+through `zend_accel_error()`, gated on `opcache.log_verbosity_level >= 2` — and
+elephc emits the same timestamped line from that level on, through the shared
+channel (`bug79665`). `opcache.memory_consumption`'s 8 MiB floor and
+`opcache.max_wasted_percentage`'s `1..=50` range report the same way.
 
 `opcache.max_accelerated_files` is also one of only two integer directives read
 with C `atoi` rather than the quantity parser (the other is
@@ -1382,7 +1400,7 @@ on macOS arm64.
 | Cache population | Grows at run time as scripts are compiled/included | The compile-time manifest never *grows*; the [runtime script cache](#the-runtime-script-cache) does, for dynamically included files | The binary is the cache for everything compiled into it; only the dynamic tier can gain an entry at run time |
 | `opcache_compile_file()` on a file outside the manifest | Compiles it, returns `true`, and the file becomes cached | Inside `eval()`: compiles and caches it, returns `true`. In natively compiled code: still `false` | A dynamic include is a compile error at AOT top level, so a natively compiled `opcache_compile_file()` names a file that program could never run |
 | `opcache_is_script_cached()` on a file outside the manifest | `false` until something compiles it, then `true` | Inside `eval()`: `true` once it is cached. In natively compiled code: `false` | Same reason. `opcache_get_status()['scripts']` DOES report it from native code |
-| `ini_set('opcache.*', …)` | Succeeds for all 18 `PHP_INI_ALL` directives, returning the previous value | Succeeds for **3** of them — `revalidate_freq`, `validate_timestamps`, `file_update_protection` — and returns `false` for the other 15 | Those three are the only `PHP_INI_ALL` directives elephc's cache actually reads, and for them the whole surface moves together, byte-identical to reference. The other 15 are inert here (14 JIT knobs and `dups_fix`), so succeeding would report a value nothing honors. Exact for the 36 `PHP_INI_SYSTEM` directives |
+| `ini_set('opcache.*', …)` | Succeeds for all 18 `PHP_INI_ALL` directives, returning the previous value | Succeeds for **4** of them — `revalidate_freq`, `validate_timestamps`, `file_update_protection`, and `opcache.enable` (with php-src's no-op / disable / refuse semantics) — and returns `false` for the other 14 | The three numerics are the `PHP_INI_ALL` directives elephc's cache actually reads, and for them the whole surface moves together, byte-identical to reference. The other 14 are inert here (the remaining `PHP_INI_ALL` knobs), so succeeding would report a value nothing honors. Exact for the 36 `PHP_INI_SYSTEM` directives |
 | `oom_restarts`, `hash_restarts` | Live counters | Always `0` | The runtime cache refuses rather than restarting when it fills. `hits`, `misses`, `opcache_hit_rate`, `blacklist_misses` and `blacklist_miss_ratio` are NOT in this row any more: they are live for the [runtime script cache](#the-runtime-script-cache) |
 
 | `memory_usage` / `interned_strings_usage` *absolute figures* | Real shared-memory accounting | Synthetic baselines, plus Σ of the manifest's source-file sizes, plus the runtime cache's real accounted bytes | No shared-memory segment exists. The *invariants* are exact: `free = total − used − wasted`, `free = buffer_size − used`, `0 < used < buffer_size`, and the whole `interned_strings_usage` key is omitted for a zero buffer. `max_cached_keys` is the exact php-src prime rounding |
@@ -1399,7 +1417,8 @@ on macOS arm64.
 | When the `opcache.file_cache` fatal is raised | Before the first statement runs, so nothing is output | At the first `eval()`, so output written before that point is already flushed | Same cause as the row above. The fatal, its message and its exit status 254 are identical; only its position relative to the program's own output can differ |
 | `version.version` | The running patch release (`8.5.6`) | The targeted language version (`8.5.0`) | elephc targets a PHP minor, not a patch. Understating is the safe direction — a caller gating on `>= 8.5.6` applies a redundant workaround rather than skipping a fix elephc may not have. See [System and I/O](system-and-io.md) for the full rationale and its cost |
 | Diagnostics | `Warning: … in <file> on line <n>` | Same text, no ` in <file> on line <n>` suffix | elephc does not synthesize the call-site suffix |
-| `opcache.max_accelerated_files` / `opcache.interned_strings_buffer` out of range | Refuses the store and logs through `zend_accel_error`, which is silent below `opcache.log_verbosity_level = 2` | Refuses the store, silently | The refusal is exact, and it happens at COMPILE time, where there is no running process to log from. The `zend_accel_error` channel itself now exists — it is what carries the [`opcache.file_cache`](#opcachefile_cache) fatals — but only at run time. At reference PHP's default verbosity these two lines are not printed either |
+| `opcache.max_accelerated_files` / `opcache.interned_strings_buffer` out of range | Refuses the store and logs through `zend_accel_error`, silent below `opcache.log_verbosity_level = 2` | Refuses the store; logs the refusal through the same channel from 2 on | The refusal is exact. The `zend_accel_error` line is emitted at COMPILE time — the AOT analogue of startup — through the shared channel (`src/opcache/accel_log.rs`), gated on the effective `opcache.log_verbosity_level` and shaped as reference's timestamped line (including its blank line). At the default verbosity 1 both are silent, as they are in reference. `opcache.memory_consumption`'s 8 MiB floor and `opcache.max_wasted_percentage`'s range log the same way |
+| `zzz_basic_logging.phpt`'s per-script `Message Cached script` / reset `Debug Restart Scheduled! Reason: user` | Logged at `opcache.log_verbosity_level >= 3`/`4` | Emitted: `Message Cached script '<path>'` at COMPILE time for each manifest script, and `Debug Restart Scheduled! Reason: user` at run time from `opcache_reset()` | The compile-time line is the AOT analogue of the cache being populated; the run-time line is emitted inline in the prelude, so neither needs the dynamic tier. Still not emitted: the dynamic tier's own per-include `Message Cached script` (Magician's `script_cache` stores no line), and reference's sibling `Message Added key '<file>:<hash>:<stamp>'` |
 | `ini_get_all()` unfiltered | Every directive of every loaded module (403 on the reference build) | Only the blocks elephc owns — 54 on CLI, 87 under `--web` | The filter *rule* is reproduced; the population is elephc's |
 | `ini_get_all('pdo')` in a `--with-pdo` build | `[]` (known module) | `false` + `E_WARNING` | The known-module list is rendered before codegen decides the link set |
 | Per-directive environment override | Does not exist (`PHP_INI_opcache_jit`, `opcache_jit`, `opcache.jit` in the environment all do nothing) | `ELEPHC_INI_*` re-points 36 of the 54 directives at run time | An elephc extension, not parity: an AOT binary has no `php.ini` to edit |

@@ -113515,7 +113515,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_compile_file",
-      "codegen_line": 956,
+      "codegen_line": 1086,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -113571,7 +113571,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_get_configuration",
-      "codegen_line": 204,
+      "codegen_line": 285,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -113627,7 +113627,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_get_status",
-      "codegen_line": 489,
+      "codegen_line": 610,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -113698,7 +113698,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_invalidate",
-      "codegen_line": 849,
+      "codegen_line": 979,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -113769,7 +113769,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_is_script_cached",
-      "codegen_line": 737,
+      "codegen_line": 862,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -113833,7 +113833,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_is_script_cached_in_file_cache",
-      "codegen_line": 974,
+      "codegen_line": 1104,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -113897,7 +113897,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_jit_blacklist",
-      "codegen_line": 1037,
+      "codegen_line": 1167,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -113953,7 +113953,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_reset",
-      "codegen_line": 231,
+      "codegen_line": 360,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],

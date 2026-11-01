@@ -140,8 +140,8 @@ pub(super) fn collect_manifest_orders_entry_then_includes_then_autoloaded() {
 pub(super) fn substitutes_a_name_resolution_identical_body() {
         let manifest = sample_manifest();
         let bodies = [
-            rendered(get_status_declaration(PhpVersion::Php85, true, &manifest, &[], false, None)),
-            rendered(is_script_cached_declaration(PhpVersion::Php85, true, &manifest, &[])),
+            rendered(get_status_declaration(PhpVersion::Php85, true, &manifest, &[], false, None, None)),
+            rendered(is_script_cached_declaration(PhpVersion::Php85, true, &manifest, &[], None)),
             rendered(compile_file_declaration(PhpVersion::Php85, true, &manifest, &[])),
         ];
         for body in &bodies {

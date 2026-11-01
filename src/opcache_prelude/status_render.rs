@@ -89,6 +89,7 @@ pub(super) fn get_status_declaration(
     overrides: &[(String, String)],
     restricted: bool,
     preload: Option<&PreloadStatistics>,
+    runtime_gate: Option<Expr>,
 ) -> Stmt {
     let version_id = php_version.version_id();
 
@@ -115,6 +116,8 @@ pub(super) fn get_status_declaration(
         // A restricted API always returns false, so the gate constant is forced regardless of SAPI.
         enabled: !restricted
             && opcache_cache_enabled_with_overrides(version_id, web, overrides),
+        // The restricted body's array exit is dead, so it carries no live gate.
+        runtime_gate: if restricted { None } else { runtime_gate },
         warning: restrict_api_warning(restricted),
         memory_used,
         // INVARIANT (class-B): free = total - used - wasted, with wasted = 0.

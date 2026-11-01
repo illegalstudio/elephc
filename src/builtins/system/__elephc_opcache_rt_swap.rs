@@ -3,7 +3,7 @@
 //! cache directive by id and answers the value it replaced.
 //!
 //! Called from:
-//! - The injected OPcache prelude's `ini_set()` body, for the three `opcache.*` directives
+//! - The injected OPcache prelude's `ini_set()` body, for the `opcache.*` directives
 //!   php-src registers as `PHP_INI_ALL` and elephc's cache actually reads.
 //!
 //! Key details:

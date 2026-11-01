@@ -25,19 +25,23 @@ pub(super) fn directive_runtime_value_expr(
     ini_set_injected: bool,
 ) -> Expr {
     let literal = directive_value_expr(value);
-    // An `ini_set()` outranks everything below, so the three settable directives resolve
-    // through the override store first. They are NOT runtime-overridable through
-    // `ELEPHC_INI_*` (they bake behaviour), so without this arm they would return the
-    // compiled literal and `opcache_get_configuration()` would disagree with `ini_get()`
-    // after a successful `ini_set()`.
+    // An `ini_set()` outranks everything below, so the `ini_set()`-able directives (the three
+    // numeric ones and `opcache.enable`) resolve through the override store first. They are NOT
+    // runtime-overridable through `ELEPHC_INI_*` (they bake behaviour), so without this arm they
+    // would return the compiled literal and `opcache_get_configuration()` would disagree with
+    // `ini_get()` after a successful `ini_set()`.
     // Only when `ini_set()` is actually in this binary. Without it no override can ever
     // exist, so the plain literal is not merely cheaper but the only correct reading — and
     // the override helper is injected with the INI surface, so referencing it here would
     // otherwise be an undefined function in a program that just reads the configuration.
     if ini_set_injected
-        && build::INI_SETTABLE_DIRECTIVES
+        && (build::INI_SETTABLE_DIRECTIVES
             .iter()
             .any(|(settable, _, _)| *settable == name)
+            // `opcache.enable` is not in the table — its `ini_set()` arm is bespoke — but a
+            // successful temporary DISABLE does move its reported value, so it reads through
+            // the same override store.
+            || name == "opcache.enable")
     {
         let raw = e_call(
             "__elephc_opcache_ini_override",

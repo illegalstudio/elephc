@@ -290,7 +290,7 @@ pub(super) fn renders_preload_statistics_in_reference_key_order() {
         .expect("statistics");
 
         let body =
-            rendered(get_status_declaration(PhpVersion::Php85, true, &manifest, &[], false, Some(&stats)));
+            rendered(get_status_declaration(PhpVersion::Php85, true, &manifest, &[], false, Some(&stats), None));
 
         assert!(body.contains("$status['preload_statistics'] = ["), "{body}");
         assert!(body.contains("'memory_consumption' => 13023,"), "{body}");
@@ -376,7 +376,7 @@ pub(super) fn renders_preload_statistics_omitting_empty_symbol_lists() {
 pub(super) fn absent_preload_renders_byte_identical_status_body() {
         let manifest = sample_manifest();
         let body =
-            rendered(get_status_declaration(PhpVersion::Php85, true, &manifest, &[], false, None));
+            rendered(get_status_declaration(PhpVersion::Php85, true, &manifest, &[], false, None, None));
         assert!(
             !body.contains("preload_statistics"),
             "no preload key may appear on the default path: {body}"
