@@ -8,16 +8,20 @@
 //! - Backward reachability distinguishes returns and breaks from continuing paths.
 //! - Nested targets count switches, and finally blocks can override pending jumps.
 
-use crate::parser::ast::{Expr, Stmt, StmtKind};
+use crate::parser::ast::{CatchClause, Expr, Stmt, StmtKind};
+use crate::types::PhpType;
 
-use super::loop_storage::{collect_value_assignment_stmt, collect_value_assignments_from_expr, LoopWrites};
+use super::loop_storage::{
+    collect_value_assignment_stmt, collect_value_assignments_from_expr, AssignedValue, LoopWrites,
+};
 
 /// Collects writes on possible back edges, including a trailing update or condition.
 pub(super) fn backedge_writes<'a>(
     body: &'a [Stmt], update: Option<&'a Stmt>, condition: Option<&'a Expr>,
     diverges: &dyn Fn(&Expr) -> bool,
+    catch_entries: &dyn Fn(&[Stmt], &[CatchClause]) -> Vec<Option<PhpType>>,
 ) -> LoopWrites<'a> {
-    let mut scan = Backedges { writes: LoopWrites::default(), diverges };
+    let mut scan = Backedges { writes: LoopWrites::default(), diverges, catch_entries };
     if let Some(expr) = condition { scan.expr(expr, true); }
     let tail = update.map_or(true, |stmt| scan.stmt(stmt, true, &[]));
     if scan.block(body, tail, &[(false, tail)]) { scan.writes }
@@ -28,6 +32,8 @@ pub(super) fn backedge_writes<'a>(
 struct Backedges<'a, 'b> {
     writes: LoopWrites<'a>,
     diverges: &'b dyn Fn(&Expr) -> bool,
+    /// Resolved binding types for reachable handlers, with `None` for unreachable handlers.
+    catch_entries: &'b dyn Fn(&[Stmt], &[CatchClause]) -> Vec<Option<PhpType>>,
 }
 
 impl<'a> Backedges<'a, '_> {
@@ -125,7 +131,17 @@ impl<'a> Backedges<'a, '_> {
                     }
                 }
                 let mut entry = self.block(try_body, live, &nested);
-                for catch in catches { entry |= self.block(&catch.body, live, &nested); }
+                let entries = (self.catch_entries)(try_body, catches);
+                for (catch, ty) in catches.iter().zip(entries) {
+                    let Some(ty) = ty else { continue; };
+                    let reaches = self.block(&catch.body, live, &nested);
+                    if reaches {
+                        if let Some(variable) = &catch.variable {
+                            self.writes.values.push((variable, AssignedValue::Known(ty)));
+                        }
+                    }
+                    entry |= reaches;
+                }
                 // Any throwing operation in the try may reach a catch, including one before
                 // a terminal statement. Keep its write evidence when a catch can continue.
                 if !catches.is_empty() && entry {

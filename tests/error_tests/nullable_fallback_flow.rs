@@ -9,6 +9,94 @@
 
 use super::*;
 
+/// Continuing catch bindings cannot retain an integer proof at a later loop header.
+#[test]
+fn test_nullable_fallback_flow_r47_catch_backedge_admission() {
+    for prefix in ["$e ??= 1;", "$e = $e ?? 1;", "if ($e === null) { return; }"] {
+        for body in [
+            "foreach ($xs as $x) { BODY }",
+            "$i = 0; while ($i < 2) { $i++; BODY }",
+            "for ($i = 0; $i < 2; $i++) { BODY }",
+            "$i = 0; do { $i++; BODY } while ($i < 2);",
+        ] {
+            for handler in [
+                "catch (Exception $e) {}", "catch (Exception $e) { continue; }",
+                "catch (RuntimeException|LogicException $e) {}",
+            ] {
+                let step = format!("need($e); try {{ throw new RuntimeException('x'); }} {handler}");
+                let source = format!("<?php function need(int $e): void {{}} function run(?int $e, array $xs): void {{ {prefix} {} }}", body.replace("BODY", &step));
+                expect_error(&source, "expects int");
+            }
+        }
+    }
+    for (declarations, operation, handler) in [
+        ("function trigger(): void { throw new Exception('x'); }", "TRIGGER();", "Exception"),
+        ("class Boom { public function __toString(): string { throw new Exception('x'); } }", "echo new Boom();", "Exception"),
+    ] {
+        let source = format!("<?php {declarations} function need(int $e): void {{}} function run(?int $e, array $xs): void {{ $e ??= 1; foreach ($xs as $x) {{ need($e); try {{ {operation} }} catch ({handler} $e) {{}} }} }}");
+        expect_error(&source, "expects int");
+    }
+    expect_error("<?php function need(int $e): void {} function run(?int $e, array $xs, mixed $value): int { $e ??= 1; foreach ($xs as $x) { need($e); try { return $value; } catch (TypeError $e) {} } return 0; }", "expects int");
+}
+
+/// Catch bindings that cannot reach another iteration preserve the entry integer view.
+#[test]
+fn test_nullable_fallback_flow_r47_catch_terminal_precision() {
+    for handler in [
+        "catch (Exception $e) { break; }", "catch (Exception $e) { return; }",
+        "catch (Exception $other) {}", "catch (Exception) {}",
+        "catch (Exception $e) { continue; } finally { return; }",
+    ] {
+        for prefix in ["$e ??= 1;", "$e = $e ?? 1;", "if ($e === null) { return; }"] {
+            let source = format!("<?php function need(int $e): void {{}} function run(?int $e, array $xs): void {{ {prefix} foreach ($xs as $x) {{ need($e); try {{ throw new Exception('x'); }} {handler} }} }}");
+            check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+    }
+}
+
+/// Unreachable handlers and resolved catch contracts do not erase a valid loop-entry type.
+#[test]
+fn test_nullable_fallback_flow_r47_catch_reachability_precision() {
+    for body in [
+        "try {} catch (Exception $e) {}",
+        "try { $safe = 1; } catch (Exception $e) {}",
+        "try { throw new TypeError('x'); } catch (Exception $e) {}",
+        "try { throw new RuntimeException('x'); } catch (Exception $other) {} catch (RuntimeException $e) {}",
+    ] {
+        let source = format!("<?php function need(int $e): void {{}} function run(?int $e, array $xs): void {{ if ($e === null) return; foreach ($xs as $x) {{ need($e); {body} }} }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+    for (initial, operation) in [("", "$safe = 1;"), ("", "$e = 1;"),
+        ("", "($safe = 1);"), ("$safe = 0;", "unset($safe);"), ("", "unset($safe);")] {
+        let source = format!("<?php class ColdThrower {{ public function __destruct() {{ throw new Exception('x'); }} }} function need(int $e): void {{ var_dump($e); }} function run(?int $e, array $xs): void {{ if ($e === null) return; {initial} foreach ($xs as $x) {{ need($e); try {{ {operation} }} catch (Exception $e) {{}} }} }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+    for (declarations, owner, parameter, handler) in [
+        ("class SelfCatch extends Exception", "SelfCatch", "SelfCatch", "self"),
+        ("class ParentCatch extends Exception {} class ChildCatch extends ParentCatch", "ChildCatch", "ParentCatch", "parent"),
+    ] {
+        let source = format!("<?php function need({parameter} $e): void {{}} {declarations} {{ public function run(?{parameter} $e, array $xs): void {{ if ($e === null) return; foreach ($xs as $x) {{ need($e); try {{ throw new {parameter}('x'); }} catch ({handler} $e) {{}} }} }} }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{owner}: {source}: {error}"));
+    }
+    check_source("<?php function need(Exception $e): void {} function run(?Exception $e, array $xs): void { if ($e === null) return; foreach ($xs as $x) { need($e); try { throw new RuntimeException('x'); } catch (RuntimeException|LogicException $e) {} } }").unwrap();
+}
+
+/// Real retirement throws retain catch backedges across references and nested frames.
+#[test]
+fn test_nullable_fallback_flow_r47_catch_destructor_admission() {
+    for (initial, operation) in [
+        ("$held = new LoopDestructor();", "$held = null;"),
+        ("$held = new LoopDestructor();", "unset($held);"),
+        ("$held = 0;", "replaceHeld($held); $held = null;"),
+        ("$held = 0;", "(function(): void { $held = new LoopDestructor(); $held = null; })();"),
+        ("", "try { throw new LoopException(); } catch (LoopException $held) {} $held = null;"),
+    ] {
+        let source = format!("<?php class LoopDestructor {{ public function __destruct() {{ throw new Exception('x'); }} }} class LoopException extends Exception {{ public function __destruct() {{ throw new Exception('x'); }} }} function replaceHeld(mixed &$held): void {{ $held = new LoopDestructor(); }} function need(int $e): void {{}} function run(?int $e, array $xs): void {{ if ($e === null) return; {initial} foreach ($xs as $x) {{ need($e); try {{ {operation} }} catch (Exception $e) {{}} }} }}");
+        expect_error(&source, "expects int");
+    }
+    expect_error("<?php class LoopDestructor { public function __destruct() { throw new Exception('x'); } } function need(int $e): void {} function run(?int $e, array $xs, ?LoopDestructor $object): void { if ($e === null) return; $held = [1]; foreach ($xs as $x) { need($e); foreach ($held as &$alias) { $alias = $object; } unset($alias); $object = null; try { $held = []; } catch (Exception $e) {} } }", "expects int");
+}
+
 /// Array-preserving reference operations retain guarded nullable array read contracts.
 #[test]
 fn test_nullable_fallback_flow_r46_guarded_array_mutations() {

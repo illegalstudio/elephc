@@ -472,6 +472,7 @@ Two gaps remain: array callables (`[$obj, "method"]`, `["Class", "method"]`) are
 
 ### Known incompatibilities with PHP
 
+- A guarded `++` or `--` on an incoming `?int &$value` reference raises a runtime storage error on integer overflow, where PHP promotes the value to float. Use `mixed &$value` when the reference must support float promotion.
 - `$argv[0]` returns the compiled binary path, not the `.php` file path.
 - Dynamic property names accept statically typed strings, integers, and `mixed` values. A statically typed `Stringable` object is still rejected rather than converted through `__toString()` as PHP does.
 - A runtime-name property lookup that misses declared object slots can return `null` without PHP's `Undefined property` warning. This separate diagnostic gap also applies when a later write correctly throws an `Error` for that null result.

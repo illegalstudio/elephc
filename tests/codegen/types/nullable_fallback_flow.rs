@@ -9,6 +9,84 @@
 
 use super::*;
 
+/// The production CLI rejects object-to-integer backedge projections in both IR modes.
+#[test]
+fn test_nullable_fallback_flow_r47_catch_cli_rejection() {
+    /// Owns only the temporary compiler artifacts from these refusal fixtures.
+    struct FixtureDirectory(std::path::PathBuf);
+    impl Drop for FixtureDirectory {
+        /// Removes this fixture after a successful assertion or an unwind.
+        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+    }
+    let directory = FixtureDirectory(make_cli_test_dir("elephc_nullable_catch_rejection"));
+    let path = directory.0.join("main.php");
+    for body in [
+        "foreach ([1, 2] as $x) { need($e); try { throw new Exception('x'); } catch (Exception $e) {} }",
+        "$i = 0; while ($i < 2) { $i++; need($e); try { throw new Exception('x'); } catch (Exception $e) {} }",
+    ] {
+        let source = format!("<?php function need(int $e): void {{ var_dump($e); }} function run(?int $e): void {{ $e ??= 1; {body} }} run(null);");
+        std::fs::write(&path, source).unwrap();
+        for mode in ["on", "off"] {
+            let output = elephc_cli_command(&directory.0)
+                .args(["--heap-debug", &format!("--ir-opt={mode}")]).arg(&path).output().unwrap();
+            let error = String::from_utf8_lossy(&output.stderr);
+            assert!(!output.status.success(), "an exception object reached an integer-only call");
+            assert!(error.contains("expects int"), "{error}");
+        }
+    }
+}
+
+/// Terminal or distinct catch bindings keep valid integer calls and balanced ownership.
+#[test]
+fn test_nullable_fallback_flow_r47_catch_precision_runtime() {
+    let source = r#"<?php
+function needCatchInt(int $e): void { var_dump($e); }
+function catchBreak(?int $e): void {
+    $e ??= 1; foreach ([1, 2] as $x) {
+        needCatchInt($e); try { throw new Exception('x'); } catch (Exception $e) { break; }
+    }
+}
+function catchReturn(?int $e): void {
+    $e ??= 1; foreach ([1, 2] as $x) {
+        needCatchInt($e); try { throw new Exception('x'); } catch (Exception $e) { return; }
+    }
+}
+function catchOther(?int $e): void {
+    $e ??= 1; foreach ([1, 2] as $x) {
+        needCatchInt($e); try { throw new Exception('x'); } catch (Exception $other) {}
+    }
+}
+function catchUnnamed(?int $e): void {
+    $e ??= 1; foreach ([1, 2] as $x) {
+        needCatchInt($e); try { throw new Exception('x'); } catch (Exception) {}
+    }
+}
+catchBreak(null); catchReturn(null); catchOther(null); catchUnnamed(null);
+"#;
+    assert_nullable_flow_cli_heap_output(source, &"int(1)\n".repeat(6));
+}
+
+/// Unused throwing destructors do not make scalar loop catches reachable.
+#[test]
+fn test_nullable_fallback_flow_r47_scalar_cleanup_runtime() {
+    let source = r#"<?php
+class ColdLoopDestructor { public function __destruct() { throw new Exception('x'); } }
+function needScalarCleanup(int $e): void { var_dump($e); }
+function scalarCleanup(?int $e): void {
+    if ($e === null) return;
+    foreach ([1, 2] as $x) {
+        needScalarCleanup($e);
+        try { $safe = 1; } catch (Exception $e) {}
+        try { $e = 1; } catch (Exception $e) {}
+        try { ($safe = 1); } catch (Exception $e) {}
+        try { unset($safe); } catch (Exception $e) {}
+    }
+}
+scalarCleanup(1);
+"#;
+    assert_nullable_flow_cli_heap_output(source, "int(1)\nint(1)\n");
+}
+
 /// Guarded nullable array mutations preserve arguments, typed returns and runtime contents.
 #[test]
 fn test_nullable_fallback_flow_r46_guarded_array_runtime() {

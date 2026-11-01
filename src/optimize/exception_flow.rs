@@ -103,6 +103,8 @@ pub(super) struct ExceptionFlowAnalysis {
     /// program that also contains an unrelated throwing destructor; absence is the
     /// conservative answer and reproduces the previous behavior.
     scalar_frame_callables: HashSet<String>,
+    /// Checker-proven upper bounds for local retirement within one lexical frame.
+    checker_retirement_types: Option<Rc<crate::types::TypeEnv>>,
 }
 
 /// Returns whether argument binding can throw before entering an otherwise clean body.
@@ -396,6 +398,7 @@ impl ExceptionFlowAnalysis {
                 &mut static_method_unresolved_defaults, &mut instance_method_unresolved_defaults);
         }
         let mut analysis = Self {
+            checker_retirement_types: None,
             has_internal_object_operators: class_contexts.keys().any(|name|
                 elephc_builtin_contract::lookup_class(name).is_some_and(|class| class.operators.is_some())),
             hierarchy,
@@ -566,7 +569,12 @@ impl ExceptionFlowAnalysis {
         bindings: &HashMap<String, ThrownTypes>,
         class_context: Option<&ExceptionClassContext>,
     ) -> ThrownTypes {
-        self.stmt_throws_at_boundary(stmt, bindings, class_context, true, None)
+        let retired = match &stmt.kind {
+            StmtKind::Assign { name, .. } | StmtKind::TypedAssign { name, .. } =>
+                self.checker_retirement_types.as_ref().and_then(|types| types.get(name)),
+            _ => None,
+        };
+        self.stmt_throws_at_boundary(stmt, bindings, class_context, true, retired)
     }
 
     /// Separates a statement's callbacks and cleanup from operands already visited by the checker.
@@ -870,13 +878,14 @@ impl ExceptionFlowAnalysis {
             }
             ExprKind::FunctionCall { name, args } => {
                 let name = self.canonical_exception_function_name(name.as_str());
-                let mut thrown = operands(args)
-                    .combined(self.operand_cleanup_throws(args, class_context));
+                let mut thrown = operands(args);
                 // `unset` is a PHP language CONSTRUCT the parser models as a call node, not a
                 // callee this analysis dispatches on: it retires the storage it names.
                 if name.eq_ignore_ascii_case("unset") {
-                    return thrown.combined(self.overwrite_cleanup_throws());
+                    return args.iter().fold(thrown, |thrown, target|
+                        thrown.combined(self.local_retirement_throws(target)));
                 }
+                thrown = thrown.combined(self.operand_cleanup_throws(args, class_context));
                 if self.function_object_ref_checks.contains(name)
                     && !all_arguments_are_fresh_objects(args)
                 {
@@ -1050,7 +1059,7 @@ impl ExceptionFlowAnalysis {
                 .combined(operand(value))
                 // The assignment retires whatever the target held before this write.
                 .combined(if matches!(target.kind, ExprKind::Variable(_)) {
-                    self.overwrite_cleanup_throws()
+                    self.local_retirement_throws(target)
                 } else { ThrownTypes::unknown() })
                 .combined(
                     result_target
@@ -1141,7 +1150,14 @@ impl ExceptionFlowAnalysis {
             ExprKind::Closure { params, return_type, body, .. } => {
                 let facts = ReturnBoundaryFacts::new(return_type.as_ref(),
                     params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), body);
-                with_return_boundary_facts(Some(&facts), || self.block_throws(body, bindings, class_context))
+                // The callee owns different locals even when their spellings match the caller.
+                let mut callee_analysis;
+                let analysis = if self.checker_retirement_types.is_some() {
+                    callee_analysis = self.clone();
+                    callee_analysis.checker_retirement_types = None;
+                    &callee_analysis
+                } else { self };
+                with_return_boundary_facts(Some(&facts), || analysis.block_throws(body, bindings, class_context))
             }
             ExprKind::FirstClassCallable(CallableTarget::Function(name)) => self
                 .function_throws

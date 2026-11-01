@@ -9,6 +9,27 @@
 
 use crate::ir::{Immediate, IrHeapKind, IrType, Op};
 
+/// Every target refuses a stale catch projection and emits the valid terminal-catch paths.
+#[test]
+fn test_nullable_fallback_flow_r47_catch_backedges_all_targets() {
+    let negative = "<?php function need(int $e): void {} function run(?int $e, array $xs): void { $e ??= 1; foreach ($xs as $x) { need($e); try { throw new Exception('x'); } catch (Exception $e) {} } }";
+    let tokens = crate::lexer::tokenize(negative).unwrap();
+    let program = crate::parser::parse(&tokens).unwrap();
+    let positive = "<?php function need(int $e): void { var_dump($e); } function run(?int $e): void { $e ??= 1; foreach ([1, 2] as $x) { need($e); try { throw new Exception('x'); } catch (Exception $e) { break; } } } run(null);";
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = crate::codegen::platform::Target::parse(name).unwrap();
+        let error = crate::types::check_with_target(&program, target).err().expect("stale catch proof");
+        assert!(error.to_string().contains("expects int"), "{name}: {error}");
+        let scalar = "<?php class ColdLoopDestructor { public function __destruct() { throw new Exception('x'); } } function need(int $e): void {} function run(?int $e): void { if ($e === null) return; foreach ([1, 2] as $x) { need($e); try { $safe = 1; $e = 1; ($safe = 1); unset($safe); } catch (Exception $e) {} } } run(1);";
+        let scalar_module = super::lower_source_at_for_target(scalar, std::path::Path::new("main.php"),
+            std::path::Path::new("."), target);
+        crate::codegen::generate_user_asm_from_ir(&scalar_module, false, false).unwrap();
+        let module = super::lower_source_at_for_target(positive, std::path::Path::new("main.php"),
+            std::path::Path::new("."), target);
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Nullable array mutation chains lower and emit through every supported target ABI.
 #[test]
 fn test_nullable_fallback_flow_r46_guarded_arrays_all_targets() {

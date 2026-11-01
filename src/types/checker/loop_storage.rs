@@ -90,6 +90,10 @@ pub(super) struct LoopWrites<'a> {
     pub unbound: HashSet<&'a str>,
     /// Opaque caller-local effects can replace or remove every binding.
     pub unbind_all: bool,
+    /// Shared cells, including by-reference foreach roots, cannot prove local retirement.
+    pub shared_bindings: HashSet<&'a str>,
+    /// Avoids extra exception inference for the common case of a loop without handlers.
+    pub has_catches: bool,
 }
 
 /// Stable physical contracts and the evidence used to reason about iteration entry reads.
@@ -771,9 +775,14 @@ pub(super) fn collect_value_assignment_stmt<'a>(
             array,
             key_var,
             value_var,
+            value_by_ref,
             body,
             ..
         } => {
+            if *value_by_ref {
+                out.shared_bindings.insert(value_var);
+                if let Some(root) = local_container_write_root(array) { out.shared_bindings.insert(root); }
+            }
             collect_value_assignments_from_expr(array, out);
             if let Some(key_var) = key_var {
                 out.values.push((key_var, AssignedValue::Opaque));
@@ -849,6 +858,7 @@ pub(super) fn collect_value_assignment_stmt<'a>(
             catches,
             finally_body,
         } => {
+            out.has_catches |= !catches.is_empty();
             collect_value_assignments(try_body, out);
             for catch in catches {
                 if let Some(variable) = &catch.variable {
@@ -877,9 +887,13 @@ pub(super) fn collect_value_assignment_stmt<'a>(
         | StmtKind::Echo(expr)
         | StmtKind::Throw(expr)
         | StmtKind::Include { path: expr, .. }
-        | StmtKind::ConstDecl { value: expr, .. }
-        | StmtKind::StaticVar { init: expr, .. } => {
+        | StmtKind::ConstDecl { value: expr, .. } => {
             collect_value_assignments_from_expr(expr, out);
+        }
+        StmtKind::Global { vars } => out.shared_bindings.extend(vars.iter().map(String::as_str)),
+        StmtKind::StaticVar { name, init } => {
+            out.shared_bindings.insert(name);
+            collect_value_assignments_from_expr(init, out);
         }
         StmtKind::Return(Some(expr)) => collect_value_assignments_from_expr(expr, out),
         _ => {}

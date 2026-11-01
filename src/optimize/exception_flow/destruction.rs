@@ -193,6 +193,14 @@ impl ExceptionFlowAnalysis {
         class_context: Option<&ExceptionClassContext>,
     ) -> ThrownTypes {
         match &expr.kind {
+            ExprKind::FunctionCall { name, .. } if self.checker_retirement_types.is_some()
+                && name.as_str().trim_start_matches('\\').eq_ignore_ascii_case("unset") =>
+                    ThrownTypes::default(),
+            ExprKind::Variable(_) if self.checker_retirement_types.is_some() =>
+                self.local_retirement_throws(expr),
+            ExprKind::Assignment { target, result_target, .. }
+                if self.checker_retirement_types.is_some() =>
+                    self.local_retirement_throws(result_target.as_deref().unwrap_or(target)),
             // Non-heap operands: there is no runtime value here for this site to retire.
             ExprKind::StringLiteral(_)
             | ExprKind::IntLiteral(_)

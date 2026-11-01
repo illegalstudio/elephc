@@ -53,12 +53,16 @@ impl Checker {
         Some(is_null ^ negated)
     }
 
-    /// Rejects type-only proofs for bindings that user code can write through hidden aliases.
+    /// Requires both stable storage shape and absence of hidden reference writes.
     pub(in crate::types::checker) fn local_flow_read_is_stable(&self, name: &str) -> bool {
+        !self.mixed_storage_locals.contains(name) && self.local_binding_is_unaliased(name)
+    }
+
+    /// Separates reference volatility from a local's boxed physical representation.
+    pub(in crate::types::checker) fn local_binding_is_unaliased(&self, name: &str) -> bool {
         !(self.eval_barrier_active || self.ref_aliased_locals.contains(name)
             || self.by_ref_captured_locals.contains(name)
             || self.boxed_ref_aliased_locals.contains(name)
-            || self.mixed_storage_locals.contains(name)
             || self.active_ref_params.contains(name)
             || self.active_external_ref_bindings.contains(name)
             || self.active_globals.contains(name) || self.static_local_names.contains(name)

@@ -61,8 +61,8 @@ pub(super) fn stabilize_loop_storage(
         checker.guarded_local_storage_type(&Expr::var(name), &snapshot)
             .filter(|physical| *physical != ty).map(|_| name.clone())
     }).collect();
-    let backedges = super::super::loop_backedges::backedge_writes(body, update, condition,
-        &|expr| checker.expr_is_declared_never_call(expr));
+    let backedges = super::loop_catches::backedge_writes(
+        checker, loop_span, body, update, condition, &snapshot, &evidence);
     let mut raw_proof_kills: HashSet<String> = backedges.values.iter().map(|(name, _)| (*name).to_string())
         .chain(backedges.references.iter().map(|name| (*name).to_string()))
         .chain(backedges.unbound.iter().map(|name| (*name).to_string())).collect();
