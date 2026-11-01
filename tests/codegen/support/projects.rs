@@ -533,12 +533,20 @@ fn compile_and_run_files_with_defines_per_argv(
     )
     .expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved).expect("alias collection failed");
+    // Mirrors `pipeline::compile`: the filter surface is injected while the AST is still the
+    // user program, before name resolution and the other declaration-only preludes.
+    let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
+    let resolved = elephc::filter_prelude::inject_if_used_with_ini_for_sapi(
+        resolved,
+        &[],
+        false,
+        &mut prelude_inventory,
+    );
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
         elephc::autoload::run(resolved, base_dir, &autoload_registry).expect("autoload failed");
     // Mirrors `pipeline::compile`: the object-cast prelude is injected AFTER autoloading, so a
     // `(object)` cast that only appears in an autoloaded class file is still detected.
-    let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let resolved = elephc::dom_html_prelude::inject_after_autoload(resolved, &mut prelude_inventory)
         .expect("autoload DOM prelude injection failed");
     let resolved = elephc::testing_prelude::inject_after_autoload(resolved, &mut prelude_inventory)

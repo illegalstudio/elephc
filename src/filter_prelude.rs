@@ -22,6 +22,7 @@ mod input;
 mod options;
 mod public;
 pub(crate) mod request;
+pub(crate) mod strict;
 mod surface;
 
 /// Public filter functions, matched case-insensitively by the usage walk.
@@ -108,6 +109,7 @@ pub(crate) fn filter_declarations(
         declarations.extend(public::declarations());
         declarations.extend(surface::declarations());
         declarations.extend(input::declarations());
+        declarations.extend(strict::declarations());
         declarations.extend(request::declarations(&config));
         if initialize && web {
             declarations.push(crate::synthetic_class::s_expr(
@@ -210,8 +212,17 @@ fn inject_if_used_with_config(
     if !used {
         return program;
     }
+    // Strict wrappers are selected during lowering, after declaration reachability ran.
+    // Retain them only when at least one physical file in this program opted into strict
+    // parameter binding; weak-only programs keep the pay-for-use pruning.
+    let strict_sources = program.iter().any(|stmt| stmt.strict_types);
     let mut declarations = filter_declarations(config, initialize, web);
     inventory.record_program("filter", &declarations);
+    if strict_sources {
+        for wrapper in strict::retained_functions() {
+            inventory.record_retained_function("filter", wrapper);
+        }
+    }
     declarations.extend(program);
     declarations
 }

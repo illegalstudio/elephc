@@ -35,12 +35,12 @@ description: "Compiler internals for __elephc_builtin_deprecated(): lowering pat
 ## Signature summary
 
 ```php
-function __elephc_builtin_deprecated(string $message): bool
+function __elephc_builtin_deprecated(string $message, string $file = '', int $line = 0): bool
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 1–3 arguments (2 optional).
 
 ## Eval interpreter (magician)
 

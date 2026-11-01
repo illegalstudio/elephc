@@ -243,6 +243,8 @@ fn seed_request_decl() -> Stmt {
                             vec![
                                 s_expr(e_call("__elephc_builtin_deprecated", vec![
                                     e_str("The filter.default ini setting is deprecated"),
+                                    e_str("Unknown"),
+                                    e_int(0),
                                 ])),
                                 s_expr(e_assign(
                                     e_static_prop("__ElephcFilterState", "deprecated"),

@@ -620,6 +620,13 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
         ExprKind::NewDynamic { name_expr, args } => {
             expr_has_regex_call(name_expr) || args.iter().any(expr_has_regex_call)
         }
+        // FILTER_VALIDATE_REGEXP selects the filter bridge's PCRE2 diagnostic path. The
+        // constant is the only link-time marker the user program carries for it; the filter
+        // switch itself uses the numeric id.
+        ExprKind::ConstRef(name) => name
+            .as_str()
+            .trim_start_matches('\\')
+            .eq_ignore_ascii_case("FILTER_VALIDATE_REGEXP"),
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)
@@ -630,7 +637,6 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
         | ExprKind::PostIncrement(_)
         | ExprKind::PreDecrement(_)
         | ExprKind::PostDecrement(_)
-        | ExprKind::ConstRef(_)
         | ExprKind::This
         | ExprKind::MagicConstant(_) => false,
     }

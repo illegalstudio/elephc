@@ -56,7 +56,21 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_builtin_deprecated"),
         name: "__elephc_builtin_deprecated", area: Area::System, module: PhpModule::Elephc,
         since: None, kind: BuiltinKind::Function,
-        params: &[ParamSpec { name: "message", ty: TypeSpec::Str, default: None, by_ref: false }],
+        params: &[
+            ParamSpec { name: "message", ty: TypeSpec::Str, default: None, by_ref: false },
+            ParamSpec {
+                name: "file",
+                ty: TypeSpec::Str,
+                default: Some(DefaultSpec::Str("")),
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "line",
+                ty: TypeSpec::Int,
+                default: Some(DefaultSpec::Int(0)),
+                by_ref: false,
+            },
+        ],
         variadic: None, variadic_by_ref: false, min_args: None, max_args: None,
         arity_error: None, returns: TypeSpec::Bool, by_ref_return: false,
         summary: "Raises an engine deprecation through the active PHP error handler.",

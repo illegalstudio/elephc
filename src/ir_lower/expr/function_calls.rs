@@ -55,6 +55,15 @@ fn lower_function_call_unviewed(ctx: &mut LoweringContext<'_, '_>, name: &Name, 
         .get(&(ctx.loop_storage_scope.clone(), expr.span))
         .cloned();
     let canonical = instantiated.as_deref().unwrap_or_else(|| name.as_str());
+    // Filter functions keep mixed parameters so weak-mode coercion can stay at runtime. A file
+    // that declared strict_types gets the wrapper that validates the PHP signature before the
+    // weak implementation runs. The wrapper itself is internal source, so its own call back into
+    // the public function is not rewritten again.
+    let canonical = if crate::source::current_strict_types() {
+        crate::filter_prelude::strict::wrapper_name(canonical).unwrap_or(canonical)
+    } else {
+        canonical
+    };
     if let Some(value) = lower_class_introspection(ctx, canonical, args, expr) {
         return value;
     }

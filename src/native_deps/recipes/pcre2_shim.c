@@ -292,6 +292,38 @@ void elephc_pcre2_v1_mime_free(void *handle) {
     pcre2_code_free((pcre2_code *)handle);
 }
 
+/* Compiles one PHP regexp body for diagnostics only. Returns zero on success, a positive
+ * diagnostic length in `message`, or a negative PCRE2 error on an ABI failure. */
+int32_t elephc_pcre2_v1_php_compile_check(
+    const uint8_t *pattern,
+    uint64_t length,
+    uint32_t options,
+    uint8_t *message,
+    uint64_t capacity,
+    uint64_t *offset_out
+) {
+    int errorcode = 0;
+    PCRE2_SIZE erroffset = 0;
+    pcre2_code *code;
+
+    if (message == NULL || capacity > PTRDIFF_MAX || (pattern == NULL && length != 0)) {
+        return PCRE2_ERROR_BADDATA;
+    }
+    if (offset_out != NULL) {
+        *offset_out = 0;
+    }
+    code = pcre2_compile(pattern == NULL ? (const uint8_t *)"" : pattern,
+        (PCRE2_SIZE)length, options, &errorcode, &erroffset, NULL);
+    if (code != NULL) {
+        pcre2_code_free(code);
+        return 0;
+    }
+    if (offset_out != NULL) {
+        *offset_out = (uint64_t)erroffset;
+    }
+    return (int32_t)pcre2_get_error_message(errorcode, message, (PCRE2_SIZE)capacity);
+}
+
 /* Copies a NUL-terminated PCRE2 diagnostic and returns its length excluding NUL.
  * A short buffer returns PCRE2_ERROR_NOMEMORY and remains NUL-terminated. */
 int32_t elephc_pcre2_v1_error_message(int32_t error, uint8_t *buffer, uint64_t capacity) {

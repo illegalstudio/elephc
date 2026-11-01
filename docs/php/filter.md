@@ -32,6 +32,14 @@ $email = filter_var("ada@example.com", FILTER_VALIDATE_EMAIL);
 var_dump($email); // string(15) "ada@example.com"
 ```
 
+## Strict types
+
+A direct `filter_*()` call made from a file with `declare(strict_types=1)` validates
+the argument against PHP's documented signature before the filter runs. Passing
+`"1"` where an `int $filter` is expected throws the same `TypeError`; `array|int`
+accepts only arrays or integers. Files without the directive keep PHP's coercive
+mode, including null/float deprecations and range errors.
+
 ## Validation filters
 
 - `FILTER_VALIDATE_INT` with `FILTER_FLAG_ALLOW_OCTAL` / `FILTER_FLAG_ALLOW_HEX`,
@@ -43,9 +51,10 @@ var_dump($email); // string(15) "ada@example.com"
 - `FILTER_VALIDATE_REGEXP` with the `regexp` option.
 - `FILTER_VALIDATE_DOMAIN` with `FILTER_FLAG_HOSTNAME`.
 - `FILTER_VALIDATE_URL` with `FILTER_FLAG_PATH_REQUIRED`,
-  `FILTER_FLAG_QUERY_REQUIRED` and `uri_parser_class`. The parser classes
-  (`Uri\Rfc3986\Uri`, `Uri\WhatWg\Url`) are accepted; validation uses the
-  RFC 3986-compatible parser, with the WhatWg parser's backslash-host acceptance.
+  `FILTER_FLAG_QUERY_REQUIRED` and `uri_parser_class`. `Uri\Rfc3986\Uri` uses
+  the RFC 3986-compatible path; `Uri\WhatWg\Url` uses a WHATWG-compatible URL
+  parser, including special-scheme backslashes, port ranges and IPv4
+  normalization.
 - `FILTER_VALIDATE_EMAIL` with `FILTER_FLAG_EMAIL_UNICODE`.
 - `FILTER_VALIDATE_IP` with `FILTER_FLAG_IPV4`, `FILTER_FLAG_IPV6`,
   `FILTER_FLAG_NO_PRIV_RANGE`, `FILTER_FLAG_NO_RES_RANGE` and
@@ -102,11 +111,15 @@ reads, which emit PHP's deprecation diagnostic.
 
 ## Regular expressions
 
-Email and `FILTER_VALIDATE_REGEXP` validation run through a pure-Rust
-PCRE-compatible engine in the `elephc-filter` bridge, so the filter surface needs
-no managed native package. Delimiters and PHP's `i`, `m`, `s`, `x`, `A`, `D` and
-`u` modifiers are honoured; `$` matches before a final newline unless `D` is set,
-matching PCRE.
+Email and `FILTER_VALIDATE_REGEXP` matching run through a pure-Rust
+PCRE-compatible engine in the `elephc-filter` bridge. Delimiters and PHP's `i`,
+`m`, `s`, `x`, `A`, `D` and `u` modifiers are honoured; `$` matches before a final
+newline unless `D` is set, matching PCRE.
+
+Programs that use `FILTER_VALIDATE_REGEXP` link the managed `pcre2` package so
+invalid patterns report PCRE2's exact `Compilation failed: … at offset N`
+diagnostic. Install it with `elephc native add pcre2` when a project does not
+already declare it.
 
 ## Request input and `filter.default`
 
@@ -137,12 +150,9 @@ sanitized string; nested arrays are walked recursively.
 
 ## Known gaps
 
-- `declare(strict_types=1)` does not yet tighten the scalar `filter`, `options`, `type` or
-  `var_name` arguments; the prelude retains PHP's weak-mode coercion.
-- `FILTER_VALIDATE_REGEXP` matches PCRE's delimiter, anchor and common modifier semantics and
-  reports unknown modifiers/terminators as engine warnings; deeper PCRE compilation diagnostics
-  may still differ from PCRE's exact text.
-- `Uri\Rfc3986\Uri` and `Uri\WhatWg\Url` are accepted by `uri_parser_class`; the WhatWg
-  route currently adds its backslash-host acceptance while still sharing the RFC 3986 checks.
-- The `filter.default` deprecation points at the baked setup site rather than PHP's INI-startup
-  `Unknown on line 0` location.
+- Strict scalar checks cover direct filter calls. A first-class callable or other dynamic
+  invocation still uses the generic descriptor path and PHP's weak-mode coercion.
+- `FILTER_VALIDATE_REGEXP` compile errors come from PCRE2, while matching uses a pure-Rust
+  PCRE-compatible engine; exotic matching constructs may still differ from PCRE2.
+- `Uri\Rfc3986\Uri` and `Uri\WhatWg\Url` are accepted by `uri_parser_class` for URL
+  validation. The URI objects' component methods are not exposed outside the filter surface.

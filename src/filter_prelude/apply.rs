@@ -1281,6 +1281,34 @@ fn url_decl() -> Stmt {
                     e_str("Uri\\WhatWg\\Url"),
                 ),
             ),
+            s_if(
+                e_var("whatwg"),
+                vec![
+                    s_if(
+                        e_binop(
+                            e_call("elephc_filter_validate_url_whatwg", vec![
+                                e_call("bin2hex", vec![e_var("sanitized")]),
+                                e_cast(
+                                    CastType::Int,
+                                    e_binop(
+                                        e_binop(e_var("flags"), BinOp::BitAnd, e_const("FILTER_FLAG_QUERY_REQUIRED")),
+                                        BinOp::StrictNotEq,
+                                        e_int(0),
+                                    ),
+                                ),
+                            ]),
+                            BinOp::StrictEq,
+                            e_int(0),
+                        ),
+                        vec![s_return(failure.clone())],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_bool(true)),
+                ],
+                vec![],
+                None,
+            ),
             s_assign("parts", e_call("parse_url", vec![e_var("value")])),
             s_if(
                 e_not(e_call("is_array", vec![e_var("parts")])),
@@ -1336,25 +1364,6 @@ fn url_decl() -> Stmt {
                             BinOp::StrictNotEq,
                             e_bool(false),
                         ))]),
-                    ),
-                    s_if(
-                        e_binop(
-                            e_binop(e_var("whatwg"), BinOp::StrictEq, e_bool(true)),
-                            BinOp::And,
-                            e_not(e_var("host_ok")),
-                        ),
-                        vec![s_if(
-                            e_binop(
-                                e_call("strpos", vec![e_var("host_text"), e_str("\\")]),
-                                BinOp::StrictNotEq,
-                                e_bool(false),
-                            ),
-                            vec![s_assign("host_ok", e_bool(true))],
-                            vec![],
-                            None,
-                        )],
-                        vec![],
-                        None,
                     ),
                     s_if(
                         e_not(e_var("host_ok")),

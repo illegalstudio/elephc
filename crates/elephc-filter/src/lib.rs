@@ -19,6 +19,7 @@ mod regex;
 mod sanitize;
 mod strip_tags;
 mod validate;
+mod whatwg;
 
 /// One successful filter outcome; `Failed` is PHP's `false`/`null` sentinel.
 #[derive(Clone, Debug, PartialEq)]
@@ -226,6 +227,20 @@ pub unsafe extern "C" fn elephc_filter_apply_regexp(
 #[no_mangle]
 pub extern "C" fn elephc_filter_regexp_error() -> *const c_char {
     REGEX_ERROR.with(|slot| slot.borrow().as_ptr())
+}
+
+/// Returns whether one sanitized URL is valid under PHP's `Uri\WhatWg\Url` parser.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_filter_validate_url_whatwg(
+    value_hex: *const c_char,
+    query_required: i64,
+) -> i64 {
+    let value = hex_arg(value_hex);
+    let accepted = catch_unwind(AssertUnwindSafe(|| {
+        whatwg::validate(&value, query_required != 0)
+    }))
+    .unwrap_or(false);
+    i64::from(accepted)
 }
 
 /// Returns the kind of the last outcome: 0 fail, 1 string, 2 int, 3 float, 4 bool, 5 null.

@@ -12,3 +12,4 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 fancy-regex = "0.14"
 regex = "1"
+url = "2"

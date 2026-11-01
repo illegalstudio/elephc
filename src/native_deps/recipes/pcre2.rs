@@ -111,6 +111,7 @@ mod tests {
         assert!(SHIM_SOURCE.contains("elephc_pcre2_v1_mime_compile"));
         assert!(SHIM_SOURCE.contains("elephc_pcre2_v1_mime_match"));
         assert!(SHIM_SOURCE.contains("elephc_pcre2_v1_mime_free"));
+        assert!(SHIM_SOURCE.contains("elephc_pcre2_v1_php_compile_check"));
         assert!(SHIM_SOURCE.contains("elephc_pcre2_v1_error_message"));
         assert!(!SHIM_SOURCE.contains("extern regex_t"));
     }
