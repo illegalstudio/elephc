@@ -40,6 +40,12 @@ echo ($counter->receiver()->number += 3), '|';
 echo $counter->number, '|';
 echo ($counter->receiver()->{str_repeat('text', 1)} .= str_repeat('c', 2)), '|';
 echo $counter->text, '|';
+$counter->number = 1;
+$result = ($counter->number += 1.0); echo is_int($result), ':', $result, ':', $counter->number, '|';
+$counter->text = '3';
+$result = ($counter->text += 2); echo is_string($result), ':', $result, ':', $counter->text, '|';
+$result = ++$counter->text; echo is_string($result), ':', $result, ':', $counter->text, '|';
+unset($result);
 unset($counter, $xml);
 "#;
     let aot = format!("{setup}{body}");
@@ -47,7 +53,7 @@ unset($counter, $xml);
     let eval_body = body.replace("OrdinaryXmlEnabled", "EvalOrdinaryXmlEnabled")
         .replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("{eval_setup}\n$code = $argc > 0 ? '{eval_body}' : ''; eval($code);");
-    let expected = "r|5|r|6|r|6|r|ab|n|8|r|11|11|r|abcc|abcc|";
+    let expected = "r|5|r|6|r|6|r|ab|n|8|r|11|11|r|abcc|abcc|1:2:2|1:5:5|1:6:6|";
     let names = r#"<?php
 class SnapshotDynamicName {
     public int $operand = 5;

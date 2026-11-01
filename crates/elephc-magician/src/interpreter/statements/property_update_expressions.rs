@@ -54,6 +54,7 @@ pub(super) fn eval_property_compound_assign_value(
     let current = if current.is_borrowed() { values.retain(current)? } else { current };
     let result = (|| {
         let value = eval_binary_result(op, current, right, context, values)?;
+        let value = normalize_update_storage(object, property, value, context, values)?;
         if let Err(status) = eval_property_set_result(object, property, value, context, values) {
             let _ = release_expr_result(value, context, values);
             return Err(status);
@@ -83,9 +84,59 @@ pub(super) fn eval_property_inc_dec_value(
         Ok(updated) => updated,
         Err(status) => return finish_synthesized_method_arguments(Err(status), vec![current], context, values),
     };
+    let updated = match normalize_update_storage(object, property, updated, context, values) {
+        Ok(updated) => updated,
+        Err(status) => return finish_synthesized_method_arguments(Err(status), vec![current], context, values),
+    };
     if let Err(status) = eval_property_set_result(object, property, updated, context, values) {
         return finish_synthesized_method_arguments(Err(status), vec![current, updated], context, values);
     }
     let (result, retired) = if prefix { (updated, current) } else { (current, updated) };
     finish_synthesized_method_arguments(Ok(result), vec![retired], context, values)
+}
+
+/// Keeps plain storage and its expression result identical while hooks retain computed results.
+fn normalize_update_storage(
+    object: RuntimeCellHandle, property: &str, value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let normalized = (|| {
+        let Some((owner, ty)) = property_dimension_guards::update_storage_contract(object, property, context, values)?
+            else { return Ok(value); };
+        if ty.is_intersection() || !ty.variants().iter().any(|variant| matches!(variant,
+            EvalParameterTypeVariant::Int | EvalParameterTypeVariant::Float
+                | EvalParameterTypeVariant::Bool | EvalParameterTypeVariant::String))
+            || eval_method_parameter_type_accepts_exact(&ty, value, context, values)?
+        { return Ok(value); }
+        let tag = values.type_tag(value)?;
+        for variant in ty.variants() {
+            if matches!(variant, EvalParameterTypeVariant::Int) && tag == EVAL_TAG_FLOAT {
+                let bytes = values.string_bytes(value)?;
+                let number = std::str::from_utf8(&bytes).ok().and_then(|text| text.parse::<f64>().ok())
+                    .ok_or(EvalStatus::RuntimeFatal)?;
+                if !number.is_finite() || number < i64::MIN as f64 || number >= -(i64::MIN as f64) { continue; }
+                let integer = eval_int_value(value, values)?;
+                return values.int(integer);
+            }
+            if let Some(coerced) = eval_method_parameter_scalar_coercion(variant, value, context, values)? {
+                return Ok(coerced);
+            }
+        }
+        let actual = match tag {
+            EVAL_TAG_OBJECT => {
+                let identity = values.object_identity(value)?;
+                match context.dynamic_object_class_name(identity) {
+                    Some(class) => class.to_string(), None => eval_runtime_object_class_name(value, values)?,
+                }
+            }
+            EVAL_TAG_INT => "int".into(), EVAL_TAG_FLOAT => "float".into(), EVAL_TAG_BOOL => "bool".into(),
+            EVAL_TAG_STRING => "string".into(), EVAL_TAG_NULL => "null".into(), _ => eval_gettype_name(tag).into(),
+        };
+        let expected = property_dimension_guards::type_label(&ty, &owner, context)?;
+        eval_throw_type_error(&format!("Cannot assign {actual} to property {owner}::${property} of type {expected}"), context, values)
+    })();
+    match normalized {
+        Ok(normalized) if normalized == value => Ok(value),
+        normalized => finish_synthesized_method_arguments(normalized, vec![value], context, values),
+    }
 }

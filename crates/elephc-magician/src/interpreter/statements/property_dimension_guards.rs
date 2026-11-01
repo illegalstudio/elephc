@@ -23,6 +23,26 @@ struct Slot {
     write_visibility: EvalVisibility,
 }
 
+/// Returns a writable physical property's type without invoking hooks or changing access errors.
+pub(super) fn update_storage_contract(
+    object: RuntimeCellHandle, property: &str, context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(String, EvalParameterType)>, EvalStatus> {
+    let Some(slot) = slot(object, property, context, values)? else { return Ok(None); };
+    if validate_eval_member_access(&slot.owner, slot.write_visibility, context).is_err() {
+        return Ok(None);
+    }
+    if slot.readonly {
+        let identity = values.object_identity(object)?;
+        let storage = context.dynamic_object_class(identity)
+            .and_then(|class| eval_dynamic_property_for_access(class.name(), property, context))
+            .map(|(owner, property)| eval_instance_property_storage_name(&owner, &property))
+            .unwrap_or_else(|| property.to_string());
+        if !context.clone_property_can_be_reinitialized(identity, &storage) { return Ok(None); }
+    }
+    Ok(slot.ty.map(|ty| (slot.owner, ty)))
+}
+
 /// Reads and validates one ordinary property, returning an independently owned container lease.
 pub(super) fn ordinary_property(
     object: RuntimeCellHandle, property: &str, mode: DimensionFetchMode,
@@ -251,7 +271,7 @@ fn generic_admits_array(ty: &elephc_generics::Type) -> bool {
 }
 
 /// Resolves lexical class names while preserving PHP's nullable shorthand in diagnostics.
-fn type_label(ty: &EvalParameterType, owner: &str, context: &ElephcEvalContext) -> Result<String, EvalStatus> {
+pub(super) fn type_label(ty: &EvalParameterType, owner: &str, context: &ElephcEvalContext) -> Result<String, EvalStatus> {
     let label = eval_null_boundary_type_label(ty, Some(owner), Some(owner), context)?;
     if ty.allows_null() && !ty.is_intersection() {
         let names = label.split('|').map(String::from).collect::<Vec<_>>();

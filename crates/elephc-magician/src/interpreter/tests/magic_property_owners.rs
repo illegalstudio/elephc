@@ -11,6 +11,34 @@
 use super::super::*;
 use super::support::*;
 
+/// Physical scalar fields return their stored type while accessor updates return computed values.
+#[test]
+fn property_update_expression_results_follow_storage_coercion() {
+    let source = br#"
+class StorageResultBox {
+    public int $number = 1;
+    public string $text = '3';
+    public float $decimal = 1.0;
+    public int $hook { get { echo 'get|'; return 1; } set(int|float $value) { echo 'set|'; } }
+}
+$box = new StorageResultBox();
+$result = ($box->number += 1.0); echo gettype($result), ':', $result, ':', $box->number, '|';
+$result = ($box->text += 2); echo gettype($result), ':', $result, ':', $box->text, '|';
+$result = ++$box->text; echo gettype($result), ':', $result, ':', $box->text, '|';
+$result = ($box->decimal += 0.5); echo gettype($result), ':', $result, '|';
+$result = ($box->hook += 0.5); echo gettype($result), ':', $result, '|';
+try { $box->number .= 'x'; } catch (TypeError $error) { echo 'invalid:', $box->number, '|'; }
+unset($box, $result, $error);
+"#;
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let program = parse_fragment(source).unwrap();
+    let returned = execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+    eval_release_value(&mut context, &mut values, returned).unwrap();
+    assert_eq!(values.output, "integer:2:2|string:5:5|string:6:6|double:1.5|get|set|double:1.5|invalid:2|");
+}
+
 /// Property expression values survive writeback and retire after normal and throwing setters.
 #[test]
 fn property_update_expression_results_keep_balanced_owners() {
