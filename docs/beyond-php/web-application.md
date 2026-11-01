@@ -97,6 +97,14 @@ finishes an active session, and releases request owners. Output buffers and
 temporary formatting buffers are drained or retired before returning to the
 server. PHP exceptions remain inside generated native callbacks.
 
+The compiler omits per-request environment population when source and autoloaded
+code cannot observe `$_ENV`, using the same conservative demand check as the
+request lifecycle. Direct access, global or variable-table inspection, eval, and
+unknown callable targets retain population. `getenv()` reads the process
+environment independently. Bootstrap always receives the complete environment
+in both `$_ENV` and `$_SERVER`; request preparation still resets `$_ENV` to a
+valid array for internal session storage even when population is omitted.
+
 Ordinary globals, function statics, static properties, and application-owned
 objects live for the worker. Process registrations, including error handlers
 and stream wrapper/filter definitions, also remain worker state. Applications

@@ -59,7 +59,8 @@ Source (.php or .lfc)
 │              │  resolved source usage, forced bridge flags, or --web. Before
 │              │  injection, src/autoload/prelude_probe.rs scans an autoloaded
 │              │  copy for PDO/mysqli/tz/image/hash/curl/xml/var_export usage.
-│              │  The same probe retains web environment copies for autoloaded observers.
+│              │  The same probe retains per-request web environment copies for
+│              │  autoloaded observers in both request and application lifecycles.
 └─────┬────────┘
       │
       ▼

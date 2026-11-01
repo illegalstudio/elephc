@@ -3,6 +3,7 @@
 //!
 //! Called from:
 //! - `super::inject_if_web_on_compiler_stack` and `super::program_observes_environment`.
+//! - `super::application::inject_on_compiler_stack` for application request preparation.
 //!
 //! Key details:
 //! - Scans all declarations, including callbacks and included code, without assuming reachability.

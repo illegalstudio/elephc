@@ -8,6 +8,7 @@
 //! - The original top level remains the bootstrap, preserving its PHP global scope.
 //! - Portable contracts contain no native API; native calls live in the adapter.
 //! - Exception boundaries surround generated callbacks before they enter Rust.
+//! - Request environment population follows source/autoload demand; bootstrap keeps its full copy.
 
 use crate::parser::ast::{CType, Program, Stmt, StmtKind};
 use crate::synthetic_class::{e_call, e_static_call, e_var, extern_fn, function, s_expr};
@@ -46,8 +47,20 @@ pub fn inject(
     inventory: &mut crate::optimize::reachability::PreludeInventory,
     preload: Option<&std::path::Path>,
 ) -> Program {
+    inject_with_autoload_usage(program, version, ini, inventory, preload, false)
+}
+
+/// Installs application callbacks while retaining environment observers discovered by autoload.
+pub(crate) fn inject_with_autoload_usage(
+    program: Program,
+    version: PhpVersion,
+    ini: &[(String, String)],
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+    preload: Option<&std::path::Path>,
+    autoload_observes_environment: bool,
+) -> Program {
     crate::compiler_stack::with_compiler_stack(|| inject_on_compiler_stack(
-        program, version, ini, inventory, preload,
+        program, version, ini, inventory, preload, autoload_observes_environment,
     ))
 }
 
@@ -58,14 +71,17 @@ fn inject_on_compiler_stack(
     ini: &[(String, String)],
     inventory: &mut crate::optimize::reachability::PreludeInventory,
     preload: Option<&std::path::Path>,
+    autoload_observes_environment: bool,
 ) -> Program {
     let program = super::lift_preload_to_startup(program, preload);
     let usage = super::usage::collect(&program);
+    let populate_environment = autoload_observes_environment
+        || super::environment::is_observable(&usage);
     let needs_callable_session_handler = usage.references("session_set_save_handler")
         || usage.dynamic_function_call;
     let mut declarations_only = Vec::new();
     let mut prepare = Vec::new();
-    for statement in super::build::web_declarations(version, ini) {
+    for statement in super::build::web_declarations_with_environment(version, ini, populate_environment) {
         if !needs_callable_session_handler && super::is_callable_session_handler_decl(&statement.kind) {
             continue;
         }

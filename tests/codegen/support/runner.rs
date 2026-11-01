@@ -1811,6 +1811,8 @@ pub(crate) struct ProgramOutput {
     pub(crate) stderr: String,
     // true if the process exited with a successful (zero) exit code.
     pub(crate) success: bool,
+    // Preserves the exit code or terminating signal for failure diagnostics.
+    pub(crate) status: std::process::ExitStatus,
 }
 
 /// Assembles user assembly, links it with a runtime object, runs the binary,
@@ -1846,6 +1848,7 @@ pub(crate) fn assemble_and_run_capture(
         stdout: String::from_utf8(output.stdout).unwrap(),
         stderr: String::from_utf8(output.stderr).unwrap(),
         success: output.status.success(),
+        status: output.status,
     }
 }
 
@@ -1881,6 +1884,7 @@ pub(crate) fn assemble_and_run_capture_merged(
         stdout: String::from_utf8(output.stdout).unwrap(),
         stderr: String::new(),
         success: output.status.success(),
+        status: output.status,
     }
 }
 
@@ -1920,6 +1924,7 @@ pub(crate) fn assemble_and_run_capture_per_argv(
                 stdout: String::from_utf8(output.stdout).unwrap(),
                 stderr: String::from_utf8(output.stderr).unwrap(),
                 success: output.status.success(),
+                status: output.status,
             }
         })
         .collect()

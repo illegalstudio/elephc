@@ -1382,6 +1382,45 @@ fn test_null_coalesce_this_keeps_the_receiver_type() {
         PhpType::Object("SelfRepo".to_string()));
 }
 
+/// An uninitialized non-null property can still select the fallback through `??`.
+#[test]
+fn test_null_coalesce_uninitialized_property_keeps_the_fallback_type() {
+    let result = check_source_full(&format!(
+        "<?php {NULL_COALESCE_CLASSES} class PropertyRepo {{ \
+         public Implementation $value; \
+         public function pick() {{ return $this->value ?? new Other(); }} }}"
+    )).expect("uninitialized property coalesce must type-check");
+    assert_eq!(
+        result.classes["PropertyRepo"].methods["pick"].return_type,
+        PhpType::Union(vec![
+            PhpType::Object("Implementation".to_string()),
+            PhpType::Object("Other".to_string()),
+        ]),
+    );
+}
+
+/// Calls on `$this` discard a fallback only when the declared return excludes null.
+#[test]
+fn test_null_coalesce_this_method_uses_the_declared_return_nullability() {
+    let result = check_source_full(&format!(
+        "<?php {NULL_COALESCE_CLASSES} class ThisRepo extends Repo {{ \
+         public function maybeFind(): ?Implementation {{ return null; }} \
+         public function pick() {{ return $this->find() ?? new Other(); }} \
+         public function pickMaybe() {{ return $this->maybeFind() ?? new Other(); }} }}"
+    )).expect("this method coalesces must type-check");
+    assert_eq!(
+        result.classes["ThisRepo"].methods["pick"].return_type,
+        PhpType::Union(vec![PhpType::Object("Implementation".to_string()), PhpType::False]),
+    );
+    assert_eq!(
+        result.classes["ThisRepo"].methods["pickmaybe"].return_type,
+        PhpType::Union(vec![
+            PhpType::Object("Implementation".to_string()),
+            PhpType::Object("Other".to_string()),
+        ]),
+    );
+}
+
 /// All lexical static-call spellings trust the same declared non-null return contract.
 #[test]
 fn test_null_coalesce_lexical_static_calls_drop_the_default() {

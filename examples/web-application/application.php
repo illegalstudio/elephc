@@ -13,6 +13,7 @@ final class CounterApplication implements WorkerApplication
         $this->requests++;
         header('Content-Type: text/plain');
         echo 'worker=', getmypid(), "\n";
+        echo 'environment=', getenv('APP_ENV') ?: 'development', "\n";
         echo 'application requests=', $this->requests, "\n";
         echo 'previous path=', $this->previousPath, "\n";
         echo 'current path=', $request->path, "\n";

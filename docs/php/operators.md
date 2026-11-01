@@ -77,9 +77,12 @@ $c = "5";
 if ($c >= '0' && $c <= '9') { echo "digit\n"; }   // the character-range idiom
 ```
 
-Mixing a string with a *number* (`$s < 1`) is still rejected at compile time: PHP casts the
-number to a string when the string is non-numeric, and elephc does not implement that
-conversion — see
+`<`, `<=`, `>`, `>=` and `<=>` also accept a string beside a `mixed` value, in either operand
+position. They use PHP's runtime comparison rules for the mixed value's actual type. A single
+`is_string($left)` guard therefore allows `$left <=> $right` while `$right` remains `mixed`.
+
+Mixing a string with a *concrete number* (`$s < 1`) is still rejected at compile time. Use a
+`mixed` operand when runtime comparison with a number is required. See
 [Known incompatibilities with PHP](types.md#known-incompatibilities-with-php).
 
 Two **integer** strings compare exactly, as `int`, not by rounding both through a `float`
