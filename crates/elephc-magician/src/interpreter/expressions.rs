@@ -55,6 +55,36 @@ pub(in crate::interpreter) fn eval_owned_expr(
     }
 }
 
+/// Evaluates the quiet property probe required by PHP null coalescing.
+fn eval_null_coalesce_value(
+    expr: &EvalExpr,
+    own_result: bool,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match expr {
+        EvalExpr::PropertyGet { object, property } => {
+            with_owned_receiver(object, context, scope, values, |object, context, _, values| {
+                if !eval_property_isset_result(object, property, context, values)? {
+                    return values.null();
+                }
+                eval_property_get_with_result_ownership(object, property, context, values, true)
+            })
+        }
+        EvalExpr::DynamicPropertyGet { object, property } => {
+            with_owned_receiver(object, context, scope, values, |object, context, scope, values| {
+                let property = eval_dynamic_member_name(property, context, scope, values)?;
+                if !eval_property_isset_result(object, &property, context, values)? {
+                    return values.null();
+                }
+                eval_property_get_with_result_ownership(object, &property, context, values, true)
+            })
+        }
+        _ => eval_expr_with_result_ownership(expr, context, scope, values, own_result),
+    }
+}
+
 /// Preserves expression evaluation order while optionally owning the selected result.
 fn eval_expr_with_result_ownership(
     expr: &EvalExpr,
@@ -334,7 +364,7 @@ fn eval_expr_with_result_ownership(
                     None => values.null()?,
                 }
             } else {
-                eval_expr_with_result_ownership(value, context, scope, values, own_result)?
+                eval_null_coalesce_value(value, own_result, context, scope, values)?
             };
             if values.is_null(value)? {
                 release_expr_result(value, context, values)?;

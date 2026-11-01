@@ -2513,10 +2513,11 @@ fn push_loaded_mixed_hash_value_ref_arg(
 
     emitter.label(&entry_reference_label);
     match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction("ldr x0, [x4, #24]"),              // load the managed reference from its hash entry
-        Arch::X86_64 => emitter.instruction("mov rax, QWORD PTR [r8 + 24]"),    // load the managed reference from its hash entry
+        Arch::AArch64 => emitter.instruction("ldr x1, [x4, #24]"),              // load the managed reference from its hash entry
+        Arch::X86_64 => emitter.instruction("mov rdi, QWORD PTR [r8 + 24]"),    // load the managed reference from its hash entry
     }
-    abi::emit_push_result_value(emitter, &PhpType::Int);
+    abi::emit_load_int_immediate(emitter, raw_hi_reg, 7);                       // hash reference cells own one boxed Mixed payload
+    push_invoker_ref_storage_address(raw_lo_reg, raw_hi_reg, target_ty, emitter, ctx);
     abi::emit_jump(emitter, &done_label);
 
     emitter.label(&direct_marker_label);
@@ -3861,9 +3862,9 @@ mod tests {
         assert!(!output.contains("ldur x10, [x29, #-3"));
     }
 
-    /// Direct associative ref markers adapt their caller slot before a concrete object callee.
+    /// Associative references adapt both managed entries and direct markers for object callees.
     #[test]
-    fn direct_hash_ref_markers_use_target_storage_adaptation_on_all_targets() {
+    fn hash_reference_storage_uses_target_adaptation_on_all_targets() {
         for name in [
             "macos-aarch64",
             "ios-arm64",
@@ -3886,6 +3887,10 @@ mod tests {
             );
 
             let assembly = emitter.output();
+            let entry_label = assembly
+                .lines()
+                .find(|line| line.contains("hash_invoker_entry_reference") && line.ends_with(':'))
+                .unwrap_or_else(|| panic!("{name}: missing managed-entry label: {assembly}"));
             let direct_label = assembly
                 .lines()
                 .find(|line| line.contains("hash_invoker_ref_direct") && line.ends_with(':'))
@@ -3894,15 +3899,19 @@ mod tests {
                 .lines()
                 .find(|line| line.contains("hash_invoker_ref_boxed") && line.ends_with(':'))
                 .unwrap_or_else(|| panic!("{name}: missing boxed-marker label: {assembly}"));
+            let entry_start = assembly.find(entry_label).unwrap();
             let direct_start = assembly.find(direct_label).unwrap();
             let boxed_start = assembly.find(boxed_label).unwrap();
+            let entry_path = &assembly[entry_start..direct_start];
             let direct_path = &assembly[direct_start..boxed_start];
             let payload_address = match target.arch {
                 Arch::AArch64 => "add x0, x0, #8",
                 Arch::X86_64 => "add rax, 8",
             };
-            assert!(direct_path.contains("__rt_heap_kind"), "{name}: {direct_path}");
-            assert!(direct_path.contains(payload_address), "{name}: {direct_path}");
+            for (path_name, path) in [("managed entry", entry_path), ("direct marker", direct_path)] {
+                assert!(path.contains("__rt_heap_kind"), "{name} {path_name}: {path}");
+                assert!(path.contains(payload_address), "{name} {path_name}: {path}");
+            }
         }
     }
 
