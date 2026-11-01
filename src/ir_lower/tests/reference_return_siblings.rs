@@ -92,9 +92,9 @@ function &widenedReferenceString(WidenedReferenceHolder $holder, bool $first): s
     }
 }
 
-/// Typed reference staging gives each consuming container conversion an independent owner.
+/// Typed reference staging gives each returned container an independent owner.
 #[test]
-fn reference_return_container_conversions_acquire_their_input_on_every_target() {
+fn reference_return_container_staging_acquires_its_input_on_every_target() {
     let source = r#"<?php
 function &uniqueReferenceContainerIr(): array<mixed> { array<int> $items = [1, 2]; return $items; }
 function &sharedReferenceContainerIr(array<int> $input): array<mixed> { array<int> $items = $input; return $items; }
@@ -104,11 +104,17 @@ function &sharedReferenceContainerIr(array<int> $input): array<mixed> { array<in
             std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
         for name in ["uniqueReferenceContainerIr", "sharedReferenceContainerIr"] {
             let function = module.functions.iter().find(|function| function.name == name).unwrap();
-            let converted = function.instructions.iter().find(|inst| inst.op == crate::ir::Op::ArrayToMixed).unwrap();
-            let value = function.value(converted.operands[0]).unwrap();
-            let crate::ir::ValueDef::Instruction { inst, .. } = value.def else { panic!("conversion needs an owned producer"); };
-            assert_eq!(function.instruction(inst).unwrap().op, crate::ir::Op::Acquire,
-                "{target}: {name} must not consume the source slot's reference");
+            let retained = function.instructions.iter().rev().find(|inst| {
+                inst.op == crate::ir::Op::Acquire
+                    && matches!(inst.result_php_type.codegen_repr(), crate::types::PhpType::Array(_))
+            }).unwrap_or_else(|| panic!("{target}: {name} needs an independent return owner"));
+            let retained = retained.result.expect("Acquire produces a value");
+            if let Some(converted) = function.instructions.iter()
+                .find(|inst| inst.op == crate::ir::Op::ArrayToMixed)
+            {
+                assert_eq!(converted.operands[0], retained,
+                    "{target}: {name} conversion must consume the independent owner");
+            }
         }
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
