@@ -9,6 +9,22 @@
 
 use crate::ir::{Immediate, IrHeapKind, IrType, Op};
 
+/// Unproved nullable backedge stores retain float-capable loop returns on every target.
+#[test]
+fn test_nullable_fallback_flow_r44_backedge_all_targets() {
+    let source = "<?php function backedge(?int $value, ?int $other, int $key) { $ints = [10]; $other ??= 3; $result = 1; if ($value !== null) { foreach ([1, 2] as $item) { if ($value !== null) { $other = $ints[$key]; $value = $other; continue; } $result = 2.5; break; } } return $result; } function showBackedge(?int $value, int $key): void { $ints = [10]; if ($value !== null) { foreach ([1, 2] as $item) { var_dump($value); $value = $ints[$key]; } } } var_dump(backedge(5, 1, 4)); showBackedge(5, 4);";
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = crate::codegen::platform::Target::parse(name).unwrap();
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), target);
+        let function = module.functions.iter().find(|function| function.name == "backedge").unwrap();
+        let result = &function.return_php_type;
+        assert!(*result == crate::types::PhpType::Mixed || matches!(result, crate::types::PhpType::Union(members)
+            if members.contains(&crate::types::PhpType::Float)), "{name}: {result:?}");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Assignment guards retain reachable float returns before emission on every target.
 #[test]
 fn test_nullable_fallback_flow_r43_entry_guard_all_targets() {

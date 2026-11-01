@@ -9,6 +9,37 @@
 
 use super::*;
 
+/// Continuing nullable stores retain null payloads and reachable float exits in both IR modes.
+#[test]
+fn test_nullable_fallback_flow_r44_backedge_runtime() {
+    let mut source = String::from("<?php\n");
+    let mut expected = String::new();
+    for (index, (entry, tail, guard, store)) in [
+        ("if ($value !== null) {", "}", "$value !== null", "$value = $ints[$key];"),
+        ("if ($value === null) { return 0; }", "", "$value !== null", "$value = $ints[$key];"),
+        ("if ($value !== null) {", "}", "!is_null($value)", "$value = $ints[$key];"),
+        ("$other ??= 3; if ($value !== null) {", "}", "$value !== null", "$other = $ints[$key]; $value = $other;"),
+    ].into_iter().enumerate() {
+        source.push_str(&format!("function backedge{index}(?int $value, ?int $other, int $key) {{ $ints = [10]; $result = 1; {entry} foreach ([1, 2] as $item) {{ if ({guard}) {{ {store} continue; }} $result = 2.5; break; }} {tail} return $result; }}\nvar_dump(backedge{index}(5, 1, 4)); echo backedge{index}(5, 1, 0), \"\\n\";\n"));
+        // Base already promotes a skipped float alternative on an integer hit.
+        expected.push_str("float(2.5)\n1\n");
+    }
+    source.push_str(r#"function showBackedge(?int $value, int $key): void {
+    $ints = [10];
+    if ($value !== null) {
+        foreach ([1, 2] as $item) { var_dump($value); $value = $ints[$key]; }
+    }
+}
+showBackedge(5, 4); showBackedge(5, 0);
+"#);
+    expected.push_str("int(5)\nNULL\nint(5)\nint(10)\n");
+    for (index, store) in ["$value = 7;", "$value = $other;"].into_iter().enumerate() {
+        source.push_str(&format!("function provenBackedge{index}(?int $value, ?int $other) {{ $other ??= 3; $result = 1; if ($value !== null) {{ foreach ([1, 2] as $item) {{ if ($value !== null) {{ {store} continue; }} $result = 2.5; break; }} }} return $result; }}\nvar_dump(provenBackedge{index}(5, 1));\n"));
+        expected.push_str("int(1)\n");
+    }
+    assert_nullable_flow_cli_heap_output(&source, &expected);
+}
+
 /// Strict assignment guards preserve float exits in loops, switches and sibling chains.
 #[test]
 fn test_nullable_fallback_flow_r43_entry_guard_runtime() {

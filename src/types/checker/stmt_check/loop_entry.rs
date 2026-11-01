@@ -107,6 +107,7 @@ pub(super) fn stabilize_loop_storage(
             .or_else(|| entry_origins.get(*name).map(|entry| &entry.origin));
         if let Some(storage) = storage { incoming.push(((*name).to_string(), storage.clone())); }
     }
+    let mut incoming_values = Vec::new();
     for (name, value) in &backedges.values {
         if !narrowed.contains(*name) { continue; }
         use super::super::loop_storage::AssignedValue;
@@ -116,9 +117,18 @@ pub(super) fn stabilize_loop_storage(
             AssignedValue::Opaque => PhpType::Mixed,
             AssignedValue::Increment(_) => analysis.fixed.get(*name).cloned().unwrap_or(PhpType::Mixed),
         };
-        incoming.push(((*name).to_string(), ty));
+        incoming_values.push((*name, value, ty));
     }
-    for call in &backedges.calls { let _ = infer(call, &analysis.fixed); }
+    for call in &evidence.calls { let _ = infer(call, &analysis.fixed); }
+    let mut written_sources: HashSet<_> = evidence.values.iter().map(|(name, _)| (*name).to_string())
+        .chain(evidence.references.iter().map(|name| (*name).to_string()))
+        .chain(evidence.unbound.iter().map(|name| (*name).to_string())).collect();
+    for call in &evidence.calls {
+        if let Some(outputs) = checker.boxed_reference_outputs.get(&(
+            checker.current_loop_storage_scope.clone(), call.span)) {
+            written_sources.extend(outputs.keys().cloned());
+        }
+    }
     for call in &backedges.calls {
         if let Some(outputs) = checker.boxed_reference_outputs.get(&(
             checker.current_loop_storage_scope.clone(), call.span)) {
@@ -134,6 +144,23 @@ pub(super) fn stabilize_loop_storage(
     checker.pending_ref_capture_invalidations = entry_pending_captures;
     checker.definitely_bound_locals = entry_bound;
     checker.pending_null_probe_roots.truncate(entry_pending_probes);
+    for (name, value, mut ty) in incoming_values {
+        if let super::super::loop_storage::AssignedValue::Expr(expr) = value {
+            let nullable_storage = checker.guarded_local_storage_type(&Expr::var(name), &snapshot)
+                .is_some_and(Checker::binding_storage_admits_null);
+            // A source written anywhere in the body cannot reuse its entry value proof.
+            let stable_source = match &expr.kind {
+                ExprKind::Variable(source) => !evidence.unbind_all && !written_sources.contains(source),
+                _ => true,
+            };
+            if nullable_storage && super::type_is_definitely_non_null(&ty)
+                && !(stable_source && checker.stored_value_is_non_null(expr, &ty, &analysis.fixed))
+            {
+                ty = checker.normalize_union_type(vec![ty, PhpType::Void]);
+            }
+        }
+        incoming.push((name.to_string(), ty));
+    }
     checker.guarded_union_types.retain(|name, storage| {
         !Checker::is_raw_non_null_contract(&storage.ty)
             || (!backedges.unbind_all && !raw_proof_kills.contains(name))

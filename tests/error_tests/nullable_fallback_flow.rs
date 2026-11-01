@@ -9,6 +9,51 @@
 
 use super::*;
 
+/// Unproved continuing stores preserve null at narrowed nullable loop reads and exits.
+#[test]
+fn test_nullable_fallback_flow_r44_backedge_store_reads() {
+    for (entry, tail, guard, store) in [
+        ("if ($value !== null) {", "}", "$value !== null", "$value = $ints[$key];"),
+        ("if ($value === null) { return 0; }", "", "$value !== null", "$value = $ints[$key];"),
+        ("if ($value !== null) {", "}", "!is_null($value)", "$value = $ints[$key];"),
+        ("$other ??= 3; if ($value !== null) {", "}", "$value !== null", "$other = $ints[$key]; $value = $other;"),
+    ] {
+        let source = format!("<?php function run(?int $value, ?int $other, int $key) {{ $ints = [10]; $result = 1; {entry} foreach ([1, 2] as $item) {{ if ({guard}) {{ {store} continue; }} $result = 2.5; break; }} {tail} return $result; }}");
+        let checked = check_source_full(&source).unwrap();
+        let result = &checked.functions["run"].return_type;
+        assert!(*result == types::PhpType::Mixed || matches!(result, types::PhpType::Union(members)
+            if members.contains(&types::PhpType::Float)), "{source}: {result:?}");
+    }
+    for store in ["$value = 7;", "$value = $other;"] {
+        let source = format!("<?php function run(?int $value, ?int $other) {{ $other ??= 3; $result = 1; if ($value !== null) {{ foreach ([1, 2] as $item) {{ if ($value !== null) {{ {store} continue; }} $result = 2.5; break; }} }} return $result; }}");
+        let checked = check_source_full(&source).unwrap();
+        assert_eq!(checked.functions["run"].return_type, types::PhpType::Int, "{source}");
+    }
+}
+
+/// Null on a continuing back edge cannot be discarded before a later non-null typed call.
+#[test]
+fn test_nullable_fallback_flow_r44_backedge_admission() {
+    for coalesce in ["$w ??= 1;", "$w = $w ?? 1;"] {
+        for (entry, tail) in [
+            ("if ($value !== null) {", "}"),
+            ("if ($value === null) { return; }", ""),
+            ("$value ??= 5;", ""),
+        ] {
+            for body in [
+                "foreach ([1, 2] as $item) { if ($value !== null) { $value = $ints[$key]; continue; } $w = null; break; }",
+                "$other ??= 3; foreach ([1, 2] as $item) { if ($value !== null) { $other = $ints[$key]; $value = $other; continue; } $w = null; break; }",
+                "$i = 0; while ($i < 2) { $i++; if ($value !== null) { $value = $ints[$key]; continue; } $w = null; break; }",
+                "for ($i = 0; $i < 2; $value = $ints[$key]) { $i++; if ($value !== null) { continue; } $w = null; break; }",
+            ] {
+                let source = format!("<?php function need(int $value): void {{}} function run(?int $value, ?int $other, ?int $w, int $key): void {{ {coalesce} $ints = [10]; {entry} {body} {tail} need($w); }}");
+                let error = check_source(&source).expect_err(&source);
+                assert!(error.contains("expects int") && error.contains("null"), "{source}: {error}");
+            }
+        }
+    }
+}
+
 /// Assignment guards retain every reachable suffix exit, including old-null entry states.
 #[test]
 fn test_nullable_fallback_flow_r43_entry_guard_effects() {
