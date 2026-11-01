@@ -20,7 +20,6 @@ const TARGETS: [&str; 5] = [
 #[test]
 fn recursive_by_ref_capture_separates_physical_and_logical_types() {
     let source = r#"<?php
-$callback = null;
 $callback = function (int $value) use (&$callback): int {
     return $value <= 1 ? 1 : $value * $callback($value - 1);
 };
@@ -38,6 +37,19 @@ echo $callback(5);
         let local = closure.locals.iter().find(|local| local.name.as_deref() == Some("callback"))
             .unwrap_or_else(|| panic!("{target}: missing logical capture local"));
         assert_eq!(local.php_type.codegen_repr(), crate::types::PhpType::Callable, "{target}: body view");
+        let main = module.functions.iter().find(|function| function.name == "main")
+            .unwrap_or_else(|| panic!("{target}: missing main function"));
+        let callback = main.locals.iter().find(|local| local.name.as_deref() == Some("callback"))
+            .unwrap_or_else(|| panic!("{target}: missing callback local"));
+        let store = main.instructions.iter().find(|instruction| {
+            instruction.op == Op::StoreRefCell
+                && instruction.immediate == Some(Immediate::LocalSlot(callback.id))
+        }).unwrap_or_else(|| panic!("{target}: missing recursive callback store"));
+        assert_eq!(
+            store.result_php_type.codegen_repr(),
+            crate::types::PhpType::Mixed,
+            "{target}: recursive assignment must preserve the capture cell payload ABI",
+        );
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{target}: {error:?}"));
     }

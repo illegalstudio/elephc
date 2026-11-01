@@ -2071,6 +2071,25 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.ref_cell_owner_locals.get(variable).copied()
     }
 
+    /// Returns the physical payload type a store through `variable`'s ref-cell must publish.
+    ///
+    /// Recursive closures deliberately expose a narrower logical `Callable` view while their
+    /// shared capture cell stores boxed `Mixed`. Prefer the promotion owner or incoming by-ref
+    /// ABI parameter over that logical view so `StoreRefCell` never writes a raw callable pointer
+    /// into a slot whose readers expect a Mixed cell.
+    fn ref_cell_store_type(&self, variable: &str, fallback: &PhpType) -> PhpType {
+        if let Some(owner) = self.ref_cell_owner_slot(variable) {
+            return self.builder.local_php_type(owner);
+        }
+        self.builder
+            .function()
+            .params
+            .iter()
+            .find(|parameter| parameter.by_ref && parameter.name == variable)
+            .map(|parameter| parameter.php_type.clone())
+            .unwrap_or_else(|| fallback.clone())
+    }
+
     /// PHP-visible name of the body being lowered (`"Class::method"` for methods), as
     /// runtime error messages spell it.
     pub(crate) fn owner_name(&self) -> &str {
@@ -2661,6 +2680,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
         let is_ref_bound =
             self.is_ref_bound_local(name) && !uses_global && previous_kind == LocalKind::PhpLocal;
+        let ref_cell_store_type =
+            is_ref_bound.then(|| self.ref_cell_store_type(name, &previous_type));
         let op = match (is_ref_bound, previous_kind) {
             (true, _) => Op::StoreRefCell,
             (false, LocalKind::StaticLocal) => Op::StoreStaticLocal,
@@ -2694,8 +2715,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             None
         };
         if is_ref_bound {
-            let value = self.box_typed_array_for_mixed_ref_cell(value, &previous_type, span);
-            self.store_ref_cell_slot(slot, value, previous_type.clone(), span);
+            let store_type = ref_cell_store_type
+                .expect("a ref-bound local has a physical store type");
+            let value = self.box_typed_array_for_mixed_ref_cell(value, &store_type, span);
+            self.store_ref_cell_slot(slot, value, store_type, span);
         } else {
             self.store_slot_with_op(slot, value, op, span);
         }
@@ -3046,7 +3069,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             self.release_stored_local_value(name, slot, span);
         }
         match (is_ref_bound, previous_kind) {
-            (true, _) => self.store_ref_cell_slot(slot, value, php_type, span),
+            (true, _) => {
+                let store_type = self.ref_cell_store_type(name, &php_type);
+                self.store_ref_cell_slot(slot, value, store_type, span);
+            }
             (false, LocalKind::StaticLocal) => {
                 self.store_slot_with_op(slot, value, Op::StoreStaticLocal, span);
             }
