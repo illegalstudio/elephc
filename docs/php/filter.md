@@ -140,8 +140,10 @@ sanitized string; nested arrays are walked recursively.
 
 - `declare(strict_types=1)` does not yet tighten the scalar `filter`, `options`, `type` or
   `var_name` arguments; the prelude retains PHP's weak-mode coercion.
-- `FILTER_VALIDATE_REGEXP` matches PCRE's delimiter, anchor and common modifier semantics, but
-  invalid-pattern diagnostics are reported as a failed validation rather than PCRE's exact
-  compilation warning text.
+- `FILTER_VALIDATE_REGEXP` matches PCRE's delimiter, anchor and common modifier semantics and
+  reports unknown modifiers/terminators as engine warnings; deeper PCRE compilation diagnostics
+  may still differ from PCRE's exact text.
 - The `Uri\Rfc3986Uri` / `Uri\WhatWgUri` parser classes are not implemented; `uri_parser_class`
   is accepted for call-shape compatibility and validation uses the RFC 3986-compatible parser.
+- The `filter.default` deprecation points at the baked setup site rather than PHP's INI-startup
+  `Unknown on line 0` location.

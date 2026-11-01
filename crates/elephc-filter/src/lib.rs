@@ -39,6 +39,7 @@ impl Default for Outcome {
 thread_local! {
     static RESULT: RefCell<Outcome> = const { RefCell::new(Outcome::Failed) };
     static HEX: RefCell<CString> = RefCell::new(CString::default());
+    static REGEX_ERROR: RefCell<CString> = RefCell::new(CString::default());
 }
 
 /// Runs one bridge call and stores its outcome for the getter calls.
@@ -213,8 +214,18 @@ pub unsafe extern "C" fn elephc_filter_apply_regexp(
     run(|| {
         let value = hex_arg(value_hex);
         let pattern = hex_arg(pattern_hex);
-        Outcome::Bool(regex::php_pattern(&value, &pattern))
+        let (matched, error) = regex::php_pattern_with_error(&value, &pattern);
+        REGEX_ERROR.with(|slot| {
+            *slot.borrow_mut() = CString::new(error.unwrap_or_default()).unwrap_or_default();
+        });
+        Outcome::Bool(matched)
     })
+}
+
+/// Returns FILTER_VALIDATE_REGEXP's PHP-level pattern spelling error, or an empty string.
+#[no_mangle]
+pub extern "C" fn elephc_filter_regexp_error() -> *const c_char {
+    REGEX_ERROR.with(|slot| slot.borrow().as_ptr())
 }
 
 /// Returns the kind of the last outcome: 0 fail, 1 string, 2 int, 3 float, 4 bool, 5 null.

@@ -47,6 +47,9 @@ pub(super) fn declarations() -> Program {
             .param("pattern", CType::Str)
             .returns(CType::Int)
             .build(),
+        extern_fn("elephc_filter_regexp_error", "elephc_filter")
+            .returns(CType::Str)
+            .build(),
         extern_fn("elephc_filter_apply_domain", "elephc_filter")
             .param("flags", CType::Int)
             .param("value", CType::Str)
