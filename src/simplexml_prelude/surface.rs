@@ -366,7 +366,9 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     }
     final public function __elephc_dimension_select(mixed $offset, bool $throwOnFailure = true, bool $create = true): mixed {
         $selected = $this->__elephc_dimension_get($offset);
-        if ($selected !== null) { return $selected; }
+        if ($selected !== null) {
+            return !$throwOnFailure && $create ? $selected->__elephc_number() : $selected;
+        }
         if (!$create || !is_int($offset)) {
             __elephc_simplexml_warning("Notice: Indirect modification of overloaded element of " . get_class($this) . " has no effect\n");
             return null;
@@ -386,7 +388,10 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
             }
             if ($offset >= 0 && $mode !== 0) {
                 $added = elephc_xml_sx_mutate($handle, 24, '', '', '', 0, 0);
-                if ($added > 0) { return __elephc_simplexml_wrap($added, get_class($this)); }
+                if ($added > 0) {
+                    $selected = __elephc_simplexml_wrap($added, get_class($this));
+                    return !$throwOnFailure && $create ? $selected->__elephc_number() : $selected;
+                }
                 if ($throwOnFailure) { throw new Error('SimpleXMLElement is not properly initialized'); }
                 return null;
             }
