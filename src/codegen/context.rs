@@ -937,6 +937,61 @@ impl<'a> FunctionContext<'a> {
         Ok(ty)
     }
 
+    /// Loads one eval-synchronized local as an independently owned Mixed snapshot.
+    ///
+    /// A widened slot can hold either a borrowed raw Mixed cell or a concrete payload behind an
+    /// attached reference-cell pointer. Retain only the borrowed path; boxing a concrete payload
+    /// already creates the owner that the eval scope consumes.
+    pub(super) fn load_eval_local_snapshot_to_mixed(
+        &mut self,
+        slot: LocalSlotId,
+    ) -> Result<()> {
+        let storage_ty = self.local_php_type(slot)?;
+        if !self.local_slot_ever_stores_ref_cell_pointer(slot) {
+            self.load_raw_local_to_result(slot)?;
+            self.own_loaded_eval_snapshot_as_mixed(&storage_ty);
+            return Ok(());
+        }
+        let payload_ty = self.ref_cell_payload_type(slot)?;
+        let Some(state_offset) = self.ref_cell_state_offset(slot) else {
+            self.load_ref_cell_payload_to_result(slot, &payload_ty)?;
+            self.own_loaded_eval_snapshot_as_mixed(&payload_ty);
+            return Ok(());
+        };
+        let ref_cell = self.next_label("eval_snapshot_load_ref_cell");
+        let done = self.next_label("eval_snapshot_load_done");
+        let state_reg = abi::secondary_scratch_reg(self.emitter);
+        abi::load_at_offset(self.emitter, state_reg, state_offset);
+        match self.emitter.target.arch {
+            Arch::AArch64 => {
+                self.emitter
+                    .instruction(&format!("cbnz {state_reg}, {ref_cell}")); // attached aliases snapshot their physical cell payload
+            }
+            Arch::X86_64 => {
+                self.emitter
+                    .instruction(&format!("test {state_reg}, {state_reg}")); // inspect the authoritative eval-time representation flag
+                self.emitter.instruction(&format!("jne {ref_cell}")); // attached aliases snapshot their physical cell payload
+            }
+        }
+        self.load_raw_local_to_result(slot)?;
+        self.own_loaded_eval_snapshot_as_mixed(&storage_ty);
+        self.emit_branch(&done);
+        self.emitter.label(&ref_cell);
+        self.load_ref_cell_payload_to_result(slot, &payload_ty)?;
+        self.own_loaded_eval_snapshot_as_mixed(&payload_ty);
+        self.emitter.label(&done);
+        Ok(())
+    }
+
+    /// Converts the loaded snapshot to one Mixed owner without retaining a freshly boxed value.
+    fn own_loaded_eval_snapshot_as_mixed(&mut self, source_ty: &PhpType) {
+        if matches!(source_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+            abi::emit_incref_if_refcounted(self.emitter, &PhpType::Mixed);
+        } else {
+            emit_box_current_value_as_mixed(self.emitter, source_ty);
+        }
+    }
+
     /// Loads a local slot using its raw frame representation without consulting ref-cell state.
     pub(super) fn load_raw_local_to_result(&mut self, slot: LocalSlotId) -> Result<PhpType> {
         let ty = self.local_php_type(slot)?;
