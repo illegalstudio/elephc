@@ -8,7 +8,7 @@
 //! - Walks validated physical headers without allocating or exposing strings or payload pointers.
 //! - Object class ids and Mixed tags are range checked before reporting their type identity.
 //! - Reports at most 64 blocks, with offsets relative to the managed heap rather than addresses.
-//! - String fingerprints inspect at most 8 validated payload bytes without printing their content.
+//! - String and integer fingerprints inspect at most 8 validated bytes without printing values.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -191,7 +191,64 @@ fn emit_type_identity(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(emitter, value, -1);
     emitter.label("__rt_heap_debug_live_tag_valid");
     write_integer(emitter);
+    emit_integer_fingerprint(emitter);
     emitter.label("__rt_heap_debug_live_type_done");
+}
+
+/// Fingerprints a validated integer cell's low word without following or displaying its payload.
+fn emit_integer_fingerprint(emitter: &mut Emitter) {
+    let value = abi::int_result_reg(emitter);
+    abi::load_at_offset(emitter, value, 40);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x0, #40");                                 // require the complete canonical Mixed cell before reading its low word
+            emitter.instruction("b.lo __rt_heap_debug_live_type_done");         // truncated cells cannot supply a validated scalar payload
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp rax, 40");                                 // require the complete canonical Mixed cell before reading its low word
+            emitter.instruction("jb __rt_heap_debug_live_type_done");           // truncated cells cannot supply a validated scalar payload
+        }
+    }
+    emit_first_payload_word(emitter);
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction("cbnz x0, __rt_heap_debug_live_type_done"), // only tag zero denotes an integer rather than a pointer payload
+        Arch::X86_64 => {
+            emitter.instruction("test rax, rax");                               // only tag zero denotes an integer rather than a pointer payload
+            emitter.instruction("jnz __rt_heap_debug_live_type_done");          // leave pointer-bearing Mixed variants uninterpreted
+        }
+    }
+    write_label(emitter, "_heap_dbg_block_fingerprint", 13);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::load_at_offset(emitter, "x9", 8);
+            emitter.instruction("add x9, x9, #24");                             // address the low word inside this validated Mixed allocation
+            emitter.instruction("mov x10, #8");                                 // fingerprint all eight scalar bytes including zero bytes
+            emitter.instruction("movz w0, #0x9dc5");                            // initialize the low half of the unsigned FNV-1a basis
+            emitter.instruction("movk w0, #0x811c, lsl #16");                   // complete the unsigned FNV-1a basis
+            emitter.instruction("movz w12, #0x0193");                           // initialize the low half of the FNV-1a multiplier
+            emitter.instruction("movk w12, #0x0100, lsl #16");                  // complete the wrapping 32-bit multiplier
+            emitter.label("__rt_heap_debug_live_integer_loop");
+            emitter.instruction("ldrb w11, [x9], #1");                          // read one byte without leaving the validated low word
+            emitter.instruction("eor w0, w0, w11");                             // combine the scalar byte without displaying it
+            emitter.instruction("mul w0, w0, w12");                             // apply wrapping 32-bit FNV-1a multiplication
+            emitter.instruction("subs x10, x10, #1");                           // consume one of the eight scalar bytes
+            emitter.instruction("b.ne __rt_heap_debug_live_integer_loop");      // stop exactly at the end of the low word
+        }
+        Arch::X86_64 => {
+            abi::load_at_offset(emitter, "r10", 8);
+            emitter.instruction("add r10, 24");                                 // address the low word inside this validated Mixed allocation
+            emitter.instruction("mov edx, 8");                                  // fingerprint all eight scalar bytes including zero bytes
+            emitter.instruction("mov eax, 2166136261");                         // initialize the unsigned 32-bit FNV-1a basis
+            emitter.label("__rt_heap_debug_live_integer_loop");
+            emitter.instruction("movzx ecx, BYTE PTR [r10]");                   // read one byte without leaving the validated low word
+            emitter.instruction("xor eax, ecx");                                // combine the scalar byte without displaying it
+            emitter.instruction("imul eax, eax, 16777619");                     // apply wrapping 32-bit FNV-1a multiplication
+            emitter.instruction("inc r10");                                     // advance within the validated low word
+            emitter.instruction("dec edx");                                     // consume one of the eight scalar bytes
+            emitter.instruction("jnz __rt_heap_debug_live_integer_loop");       // stop exactly at the end of the low word
+        }
+    }
+    write_integer(emitter);
 }
 
 /// Prints a 32-bit FNV-1a prefix fingerprint, stopping at NUL or the validated payload boundary.
@@ -371,10 +428,12 @@ mod tests {
             let asm = emitter.output();
             assert!(asm.contains("_heap_off") && asm.contains("__rt_heap_debug_live_blocks_next:"), "{target}");
             assert!(asm.contains("cmp x0, #64") || asm.contains("cmp rax, 64"), "{target}");
-            assert_eq!(asm.matches("__rt_itoa").count(), 8, "{target}");
+            assert_eq!(asm.matches("__rt_itoa").count(), 9, "{target}");
             assert!(asm.contains("_heap_dbg_block_class") && asm.contains("_heap_dbg_block_tag"), "{target}");
             assert!(asm.contains("_heap_dbg_block_length"), "{target}");
             assert!(asm.contains("_heap_dbg_block_fingerprint"), "{target}");
+            assert!(asm.contains("__rt_heap_debug_live_integer_loop:"), "{target}");
+            assert!(asm.contains("cmp x0, #40") || asm.contains("cmp rax, 40"), "{target}");
             assert!(asm.contains("mov x11, #8") || asm.contains("mov edx, 8"), "{target}");
             assert!(asm.contains("_class_name_count") && asm.contains("_class_name_entries"), "{target}");
             assert!(!asm.contains("__rt_heap_alloc") && !asm.contains("__rt_incref"), "{target}");
