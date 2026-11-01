@@ -1100,7 +1100,7 @@ pub(super) fn lower_dynamic_property_fetch_from_value(
 }
 
 /// Preserves typed buffer handles while allowing silent property probes to return null.
-fn dynamic_property_fetch_result_type(
+pub(super) fn dynamic_property_fetch_result_type(
     ctx: &LoweringContext<'_, '_>, object: ValueId, property: &Expr,
     mode: PropertyFetchMode, expr: &Expr,
 ) -> PhpType {

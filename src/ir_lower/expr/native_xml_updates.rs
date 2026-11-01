@@ -201,7 +201,7 @@ fn ordinary(
     let receiver = load(ctx, &parent, expr.span);
     let current = match property {
         Property::Named(property) => lower_property_get_from_value(ctx, receiver, property, Op::PropGet, expr),
-        Property::Dynamic(_) => lower_dynamic_property_fetch_from_value(ctx, receiver, name, PropertyFetchMode::Read, expr),
+        Property::Dynamic(_) => prepared_dynamic_property_fetch(ctx, receiver, name, expr),
     };
     let current = capture(ctx, current, &mut owners, expr.span);
     let operation = Expr::new(ExprKind::BinaryOp {
@@ -214,13 +214,24 @@ fn ordinary(
     match property {
         Property::Named(property) => crate::ir_lower::stmt::lower_stmt(ctx, &Stmt::new(
             StmtKind::PropertyAssign { object: Box::new(receiver), property: property.into(), value: assigned }, expr.span)),
-        Property::Dynamic(_) => lower_dynamic_property_assign(ctx, &receiver, name, &assigned, expr.span),
+        Property::Dynamic(_) => {
+            let receiver = load(ctx, &parent, expr.span);
+            let name = lower_expr(ctx, name);
+            let assigned = lower_expr(ctx, &assigned);
+            super::assignments::lower_dynamic_property_assign_from_values(
+                ctx,
+                receiver,
+                name,
+                assigned,
+                expr.span,
+            );
+        }
     }
     let result = if reread {
         let receiver = load(ctx, &parent, expr.span);
         match property {
             Property::Named(property) => lower_property_get_from_value(ctx, receiver, property, Op::PropGet, expr),
-            Property::Dynamic(_) => lower_dynamic_property_fetch_from_value(ctx, receiver, name, PropertyFetchMode::Read, expr),
+            Property::Dynamic(_) => prepared_dynamic_property_fetch(ctx, receiver, name, expr),
         }
     } else { load(ctx, if post { &current } else { &next }, expr.span) };
     // The ordinary getter/arithmetic may produce a concrete scalar or string. The
@@ -229,6 +240,32 @@ fn ordinary(
     stage_call_result(ctx, staging.as_ref(), result, expr.span);
     retire(ctx, owners, expr.span);
     take_prepublished_call_result(ctx, staging, result, expr.span)
+}
+
+/// Reads a runtime-name property through the string operand captured by `prepare_inputs`.
+fn prepared_dynamic_property_fetch(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+    name: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    let result_type = property_access::dynamic_property_fetch_result_type(
+        ctx,
+        receiver.value,
+        name,
+        PropertyFetchMode::Read,
+        expr,
+    );
+    let name = lower_expr(ctx, name);
+    property_access::lower_dynamic_property_fetch_from_operands(
+        ctx,
+        receiver,
+        name,
+        result_type,
+        PropertyFetchMode::Read,
+        false,
+        expr,
+    )
 }
 
 /// Publishes a receiver slot before traversing leases that must unwind above it.

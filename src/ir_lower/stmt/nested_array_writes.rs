@@ -108,7 +108,11 @@ pub(super) fn lower_captured_update(
         .expect("captured update retains its canonical self-read");
     let mut snapshots = Vec::new();
     let (read, write) = snapshot_nested_update_keys(ctx, target, &mut snapshots, true);
-    if let Some((read, write)) = bind_concrete_static_update_root(ctx, &read, &write) {
+    if runtime_property_root(target).is_some()
+        && matches!(update, ElementUpdate::IncDec { .. })
+    {
+        lower_runtime_property_native_incdec(ctx, &read, &write, update, value, span);
+    } else if let Some((read, write)) = bind_concrete_static_update_root(ctx, &read, &write) {
         lower_boxed_static_nested_update(ctx, &read, &write, update, value, value.span);
     } else if nested_static_root_is_boxed(ctx, target)
         || nested_target_has_local_array_root(ctx, target)
@@ -120,6 +124,63 @@ pub(super) fn lower_captured_update(
         lower_nested_array_assign_inner(ctx, &write, &value, span, true);
     }
     retire_update_keys(ctx, snapshots, span);
+}
+
+/// Gives a captured runtime-name property the native XML no-writeback incdec path first.
+fn lower_runtime_property_native_incdec(
+    ctx: &mut LoweringContext<'_, '_>,
+    read: &Expr,
+    write: &Expr,
+    update: ElementUpdate<'_>,
+    source_value: &Expr,
+    span: Span,
+) {
+    let ExprKind::ArrayAccess { array, index } = &read.kind else {
+        unreachable!("a runtime property dimension update retains its leaf index")
+    };
+    let parent = lower_nested_assign_parent_with_diagnosed_key(ctx, array, span, true);
+    let parent = if ctx.builder.value_php_type(parent.value).codegen_repr() == PhpType::Mixed {
+        let resolved = ctx.emit_owned_value(
+            Op::RuntimeCall,
+            vec![parent.value],
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::MixedCellResolveForWrite)),
+            PhpType::Mixed,
+            effects_lookup::runtime_effects(),
+            Some(span),
+        );
+        crate::ir_lower::ownership::release_if_owned(ctx, parent, Some(span));
+        resolved
+    } else {
+        parent
+    };
+    let (parent, owner) = root_static_update_receiver(ctx, parent, span);
+    let ElementUpdate::IncDec { increment } = update else {
+        unreachable!("runtime property native routing is limited to incdec")
+    };
+    if !super::native_dimension_incdec::lower(ctx, parent, index, increment, span, |ctx, parent| {
+        lower_boxed_nested_update_from_parent(
+            ctx,
+            parent,
+            read,
+            write,
+            update,
+            source_value,
+            span,
+        );
+    }) {
+        lower_boxed_nested_update_from_parent(
+            ctx,
+            parent,
+            read,
+            write,
+            update,
+            source_value,
+            span,
+        );
+    }
+    if let Some(owner) = owner {
+        crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span);
+    }
 }
 
 /// Returns the runtime-name root without inspecting unrelated dimensions or captured operands.

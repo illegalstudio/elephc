@@ -601,6 +601,32 @@ pub(super) fn lower_dynamic_property_assign_prepared(
         unpin_in_flight_owners(ctx, property_pins, span);
         (receiver, property, ctx.borrow_write_operand_if_needed(value, span))
     };
+    lower_dynamic_property_assign_with_values(ctx, receiver, property, value, span);
+}
+
+/// Writes a runtime-name property from operands whose name was already coerced once.
+pub(super) fn lower_dynamic_property_assign_from_values(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: LoweredValue,
+    value: LoweredValue,
+    span: Span,
+) {
+    let object = refine_member_receiver_at_span(ctx, object, span);
+    let receiver = crate::ir_lower::stmt::property_write_receiver::PropertyWriteReceiver::new(
+        ctx, object, span,
+    );
+    lower_dynamic_property_assign_with_values(ctx, receiver, property, value, span);
+}
+
+/// Completes a dynamic property write without replaying any prepared operand expression.
+fn lower_dynamic_property_assign_with_values(
+    ctx: &mut LoweringContext<'_, '_>,
+    mut receiver: crate::ir_lower::stmt::property_write_receiver::PropertyWriteReceiver,
+    property: LoweredValue,
+    value: LoweredValue,
+    span: Span,
+) {
     receiver.narrow_for_dynamic_assignment(ctx, property, value, span);
     let object = receiver.value;
     // The NAME is only known at run time, so a statically known receiver can still land this
