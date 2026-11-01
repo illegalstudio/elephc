@@ -40,20 +40,25 @@ echo ($counter->receiver()->number += 3), '|';
 echo $counter->number, '|';
 echo ($counter->receiver()->{str_repeat('text', 1)} .= str_repeat('c', 2)), '|';
 echo $counter->text, '|';
+"#;
+    // Weak scalar property coercions run through eval; AOT rejects these known type mismatches.
+    let coercions = r#"
 $counter->number = 1;
 $result = ($counter->number += 1.0); echo is_int($result), ':', $result, ':', $counter->number, '|';
 $counter->text = '3';
 $result = ($counter->text += 2); echo is_string($result), ':', $result, ':', $counter->text, '|';
 $result = ++$counter->text; echo is_string($result), ':', $result, ':', $counter->text, '|';
 unset($result);
-unset($counter, $xml);
 "#;
-    let aot = format!("{setup}{body}");
+    let cleanup = "unset($counter, $xml);";
+    let aot = format!("{setup}{body}{cleanup}");
     let eval_setup = setup.replace("OrdinaryXmlEnabled", "EvalOrdinaryXmlEnabled");
-    let eval_body = body.replace("OrdinaryXmlEnabled", "EvalOrdinaryXmlEnabled")
+    let eval_body = format!("{body}{coercions}{cleanup}")
+        .replace("OrdinaryXmlEnabled", "EvalOrdinaryXmlEnabled")
         .replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("{eval_setup}\n$code = $argc > 0 ? '{eval_body}' : ''; eval($code);");
-    let expected = "r|5|r|6|r|6|r|ab|n|8|r|11|11|r|abcc|abcc|1:2:2|1:5:5|1:6:6|";
+    let expected = "r|5|r|6|r|6|r|ab|n|8|r|11|11|r|abcc|abcc|";
+    let eval_expected = format!("{expected}1:2:2|1:5:5|1:6:6|");
     let names = r#"<?php
 class SnapshotDynamicName {
     public int $operand = 5;
@@ -75,7 +80,7 @@ unset($snapshotBox, $snapshotName);
     let names_expected = "rhs|name|2|name|3|name|3|4|name|9:9|";
     assert_bundle_with(&[
         BundleCase { name: "ordinary_xml_enabled_aot", source: &aot, expected },
-        BundleCase { name: "ordinary_xml_enabled_eval_bridge", source: &eval, expected },
+        BundleCase { name: "ordinary_xml_enabled_eval_bridge", source: &eval, expected: &eval_expected },
         BundleCase { name: "dynamic_property_name_aot", source: names, expected: names_expected },
         BundleCase { name: "dynamic_property_name_eval", source: &names_eval, expected: names_expected },
     ], |source| {
