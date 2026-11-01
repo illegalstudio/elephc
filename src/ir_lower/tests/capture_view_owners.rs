@@ -55,6 +55,52 @@ echo $callback(5);
     }
 }
 
+/// A hidden Mixed owner does not change the string payload ABI of its returned ref-cell.
+#[test]
+fn bound_string_reference_store_keeps_its_physical_payload_type() {
+    let source = r#"<?php
+class BoundStringReferenceHost { public string $value = 'initial'; }
+$host = new BoundStringReferenceHost();
+$bound = \Closure::bind(fn &() => $this->value, $host, $host);
+$reference = &$bound();
+$reference = 'changed';
+echo $host->value;
+"#;
+    for target in TARGETS {
+        let module = super::lower_source_at_for_target(
+            source,
+            Path::new("main.php"),
+            Path::new("."),
+            Target::parse(target).unwrap(),
+        );
+        let main = module
+            .functions
+            .iter()
+            .find(|function| function.name == "main")
+            .unwrap_or_else(|| panic!("{target}: missing main function"));
+        let reference = main
+            .locals
+            .iter()
+            .find(|local| local.name.as_deref() == Some("reference"))
+            .unwrap_or_else(|| panic!("{target}: missing reference local"));
+        let store = main
+            .instructions
+            .iter()
+            .find(|instruction| {
+                instruction.op == Op::StoreRefCell
+                    && instruction.immediate == Some(Immediate::LocalSlot(reference.id))
+            })
+            .unwrap_or_else(|| panic!("{target}: missing string reference store"));
+        assert_eq!(
+            store.result_php_type.codegen_repr(),
+            crate::types::PhpType::Str,
+            "{target}: the cell payload remains a raw string despite its hidden Mixed owner",
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
 /// Rebindable method closures keep their boxed receiver type in both ABI and body storage.
 #[test]
 fn rebindable_this_capture_separates_body_storage_from_signature_inference() {

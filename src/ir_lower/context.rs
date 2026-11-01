@@ -2074,12 +2074,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Returns the physical payload type a store through `variable`'s ref-cell must publish.
     ///
     /// Recursive closures deliberately expose a narrower logical `Callable` view while their
-    /// shared capture cell stores boxed `Mixed`. Prefer the promotion owner or incoming by-ref
-    /// ABI parameter over that logical view so `StoreRefCell` never writes a raw callable pointer
-    /// into a slot whose readers expect a Mixed cell.
+    /// shared capture cell stores boxed `Mixed`. The local slot records that physical payload
+    /// type, while a hidden promotion owner only keeps the cell alive and may itself use Mixed
+    /// storage for concrete string, float, or integer payloads. Prefer the local slot or incoming
+    /// by-ref ABI parameter so `StoreRefCell` follows the cell's actual payload layout.
     fn ref_cell_store_type(&self, variable: &str, fallback: &PhpType) -> PhpType {
-        if let Some(owner) = self.ref_cell_owner_slot(variable) {
-            return self.builder.local_php_type(owner);
+        if let Some(slot) = self.local_slots.get(variable).copied() {
+            return self.builder.local_php_type(slot);
         }
         self.builder
             .function()
