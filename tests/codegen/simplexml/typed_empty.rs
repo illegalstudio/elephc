@@ -263,18 +263,44 @@ for ($i = 0; $i < 4; $i++) {
 /// XML capability must not turn unsupported erased storage unsets into discarded-copy mutations.
 #[test]
 fn test_simplexml_erased_unset_storage_is_rejected() {
-    if skip_without_xml_native("test_simplexml_erased_unset_storage_is_rejected") { return; }
-    for body in [
-        "class ErasedStaticUnset { public static mixed $data = ['a' => 1]; } unset(ErasedStaticUnset::$data['a']);",
-        "class ErasedDynamicUnset { public mixed $data = ['a' => 1]; } $h = new ErasedDynamicUnset(); $name = $argc > 0 ? 'data' : 'other'; unset($h->{$name}['a']);",
-        "function erasedRefSeed(): mixed { return ['a' => 1, 'b' => 2]; } function &erasedRefUnset(mixed &$data): mixed { return $data; } $data = erasedRefSeed(); unset(erasedRefUnset($data)['a']);",
-        "class ErasedMethodRefUnset { public mixed $data = ['a' => 1, 'b' => 2]; public function &bag(): mixed { return $this->data; } } $h = new ErasedMethodRefUnset(); unset($h->bag()['a']);",
-        "class ErasedStaticRefUnset { public static mixed $data = ['a' => 1, 'b' => 2]; public static function &bag(): mixed { $value = self::$data; return $value; } } unset(ErasedStaticRefUnset::bag()['a']);",
-    ] {
-        let source = format!("<?php $xml = simplexml_load_string('<r/>'); echo $xml->getName(); {body}");
-        let error = compile_source_expect_backend_error(&source);
-        assert!(error.contains("unset target shape"), "{error}");
-    }
+    assert_erased_unset_storage_is_rejected("test_simplexml_erased_unset_storage_is_rejected",
+        "class ErasedStaticUnset { public static mixed $data = ['a' => 1]; } unset(ErasedStaticUnset::$data['a']);");
+}
+
+/// Runtime-named erased properties keep the explicit unsupported-storage diagnostic.
+#[test]
+fn test_simplexml_erased_dynamic_unset_storage_is_rejected() {
+    assert_erased_unset_storage_is_rejected("test_simplexml_erased_dynamic_unset_storage_is_rejected",
+        "class ErasedDynamicUnset { public mixed $data = ['a' => 1]; } $h = new ErasedDynamicUnset(); $name = $argc > 0 ? 'data' : 'other'; unset($h->{$name}['a']);");
+}
+
+/// Erased function reference returns cannot silently mutate detached unset storage.
+#[test]
+fn test_simplexml_erased_function_ref_unset_storage_is_rejected() {
+    assert_erased_unset_storage_is_rejected("test_simplexml_erased_function_ref_unset_storage_is_rejected",
+        "function erasedRefSeed(): mixed { return ['a' => 1, 'b' => 2]; } function &erasedRefUnset(mixed &$data): mixed { return $data; } $data = erasedRefSeed(); unset(erasedRefUnset($data)['a']);");
+}
+
+/// Erased instance reference returns preserve their unsupported-storage diagnostic.
+#[test]
+fn test_simplexml_erased_method_ref_unset_storage_is_rejected() {
+    assert_erased_unset_storage_is_rejected("test_simplexml_erased_method_ref_unset_storage_is_rejected",
+        "class ErasedMethodRefUnset { public mixed $data = ['a' => 1, 'b' => 2]; public function &bag(): mixed { return $this->data; } } $h = new ErasedMethodRefUnset(); unset($h->bag()['a']);");
+}
+
+/// Erased static reference returns preserve their unsupported-storage diagnostic.
+#[test]
+fn test_simplexml_erased_static_ref_unset_storage_is_rejected() {
+    assert_erased_unset_storage_is_rejected("test_simplexml_erased_static_ref_unset_storage_is_rejected",
+        "class ErasedStaticRefUnset { public static mixed $data = ['a' => 1, 'b' => 2]; public static function &bag(): mixed { $value = self::$data; return $value; } } unset(ErasedStaticRefUnset::bag()['a']);");
+}
+
+/// Schedules one rejected source per test while retaining all original backend assertions.
+fn assert_erased_unset_storage_is_rejected(test: &str, body: &str) {
+    if skip_without_xml_native(test) { return; }
+    let source = format!("<?php $xml = simplexml_load_string('<r/>'); echo $xml->getName(); {body}");
+    let error = compile_source_expect_backend_error(&source);
+    assert!(error.contains("unset target shape"), "{error}");
 }
 
 /// An erased array element is refused at runtime while the original parent remains unchanged.
