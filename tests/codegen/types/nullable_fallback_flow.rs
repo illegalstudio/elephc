@@ -9,6 +9,39 @@
 
 use super::*;
 
+/// Reused counters lose the absent-branch null while retaining their physical numeric slots.
+#[test]
+fn test_nullable_fallback_flow_ci_rebound_counter_runtime() {
+    let source = r#"<?php
+function emitCounter(int $index): void { echo $index; }
+function forCounter(int $count, bool $flag): void {
+    if ($flag) { for ($i = 0; $i < $count; $i++) { emitCounter($i); } return; }
+    for ($i = 0; $i < $count; $i++) { emitCounter($i); }
+}
+function whileCounter(int $count, bool $flag): void {
+    if ($flag) { $i = 0; $i++; return; }
+    $i = 0;
+    while ($i < $count) { emitCounter($i); $i++; }
+}
+function reopenedStream(bool $flag): void {
+    if ($flag) {
+        $stream = fopen('php://temp', 'w+b');
+        if ($stream === false) { return; }
+        fwrite($stream, 'a'); rewind($stream); echo stream_get_contents($stream);
+        fclose($stream); return;
+    }
+    $stream = fopen('php://temp', 'w+b');
+    if ($stream === false) { return; }
+    fwrite($stream, 'b'); rewind($stream); echo stream_get_contents($stream);
+    fclose($stream);
+}
+forCounter(3, true); echo '|'; forCounter(3, false); echo '|';
+whileCounter(3, false); echo '|';
+reopenedStream(true); reopenedStream(false); echo "\n";
+"#;
+    assert_nullable_flow_cli_heap_output(source, "012|012|012|ab\n");
+}
+
 /// Loop back edges retract facts killed by unset before captures, arrays and direct reads.
 #[test]
 fn test_nullable_fallback_flow_review_r35_loop_unset_runtime() {

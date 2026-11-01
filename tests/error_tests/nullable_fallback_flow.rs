@@ -9,6 +9,30 @@
 
 use super::*;
 
+/// A successful store removes the missing-binding null from reused branch-local counters.
+#[test]
+fn test_nullable_fallback_flow_ci_rebound_counter_presence() {
+    for first in ["for ($i = 0; $i < $count; $i++) {}", "$i = 0; $i++;"] {
+        for tail in [
+            "for ($i = 0; $i < $count; $i++) { needIndex($i); }",
+            "$i = 0; needIndex($i);",
+            "$i = 0; while ($i < $count) { needIndex($i); $i++; }",
+        ] {
+            let source = format!("<?php function needIndex(int $index): void {{}} function run(int $count, bool $flag): void {{ if ($flag) {{ {first} return; }} {tail} }}");
+            check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+    }
+    expect_error("<?php function needIndex(int $index): void {} function run(?int $input, bool $flag): void { if ($flag) { $value = $input; } needIndex($value); }", "expects int");
+}
+
+/// Reopening a stream in another branch removes absence without discarding fopen failure.
+#[test]
+fn test_nullable_fallback_flow_ci_rebound_stream_presence() {
+    let source = "<?php function run(bool $flag): void { if ($flag) { $stream = fopen('php://temp', 'w+b'); if ($stream === false) { return; } fclose($stream); return; } $stream = fopen('php://temp', 'w+b'); if ($stream === false) { return; } fclose($stream); }";
+    check_source(source).unwrap();
+    expect_error("<?php function run(bool $flag): void { if ($flag) { $stream = fopen('php://temp', 'w+b'); } fclose($stream); }", "fclose() expects resource");
+}
+
 /// A continuing unset retracts the integer fact before the next loop-body read.
 #[test]
 fn test_nullable_fallback_flow_review_r35_loop_unset_contracts() {

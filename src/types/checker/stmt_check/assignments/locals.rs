@@ -253,6 +253,7 @@ fn check_assign_value_type(
     update_reflection_class_assignment_metadata(checker, name, reflection_class_target);
     let previous_view = env.get(name).cloned();
     let previous_storage = checker.guarded_union_types.get(name).cloned();
+    let previously_bound = checker.definitely_bound_locals.contains(name);
     // A new ordinary store is measured against the binding, then owns its merge result.
     // It must not inherit a read-only flow view or have a widening overwritten afterwards.
     if null_coalesce_default.is_none()
@@ -263,6 +264,20 @@ fn check_assign_value_type(
     }
     let merged = merge_local_assignment_type(checker, name, &ty, value, span, env, stmt_form);
     if merged.is_ok() {
+        // A completed non-null store ends the missing-binding alternative. Keep the physical
+        // contract while retracting the null that an earlier conditional binding added.
+        if !previously_bound && type_is_definitely_non_null(&ty)
+            && checker.local_flow_read_is_stable(name)
+        {
+            if let Some(read) = env.get(name).filter(|read| Checker::union_contains_void(read)).cloned() {
+                let storage = checker.guarded_local_storage_type(&Expr::var(name), env)
+                    .unwrap_or(&read).clone();
+                env.insert(name.to_string(), checker.strip_void_from_union(&read));
+                checker.guarded_union_types.insert(name.to_string(), GuardedLocalStorage {
+                    ty: storage, coalesced: false,
+                });
+            }
+        }
         if null_coalesce_default.is_none() {
             // A compatible non-null store can keep the current read view even when the
             // coalescing contract had to be consulted to validate the write.
