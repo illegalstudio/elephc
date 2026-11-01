@@ -24,14 +24,22 @@ $source = $argc > 0 ? 'class ReturnedEvalFactoryXml extends SimpleXMLElement {
 }' : '';
 eval($source);
 $class = 'ReturnedEvalFactoryXml';
+echo 'declared|';
 object $root = new $class('<r id="x"><item>1</item></r>', 7);
+echo 'root|';
 $child = $root->item;
+echo 'child|';
 $children = $root->children();
+echo 'children|';
 $attributes = $root->attributes();
+echo 'attributes|';
 $paths = $root->xpath('//item');
+echo 'xpath|';
 $loaded = simplexml_load_string('<loaded/>', $class);
+echo 'loaded|';
 if (!is_object($root)) { throw new TypeError('eval factory root'); }
 $imported = simplexml_import_dom($root, $class);
+echo 'imported|';
 echo (int)nativeEvalFactoryClassCheck($class, true), ':', (int)nativeEvalFactoryClassCheck($class, false), '|';
 echo get_class($child), ':', $child->getName(), '|';
 echo get_class($children), ':', count($children), '|';
@@ -43,7 +51,7 @@ echo ReturnedEvalFactoryXml::$calls;
 unset($root, $child, $children, $attributes, $paths, $loaded, $imported, $class, $source);
 "#);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "1:0|ReturnedEvalFactoryXml:item|ReturnedEvalFactoryXml:1|ReturnedEvalFactoryXml:1|ReturnedEvalFactoryXml:item|ReturnedEvalFactoryXml:loaded|ReturnedEvalFactoryXml:r|1");
+    assert_eq!(out.stdout, "declared|root|child|children|attributes|xpath|loaded|imported|1:0|ReturnedEvalFactoryXml:item|ReturnedEvalFactoryXml:1|ReturnedEvalFactoryXml:1|ReturnedEvalFactoryXml:item|ReturnedEvalFactoryXml:loaded|ReturnedEvalFactoryXml:r|1");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
@@ -59,13 +67,21 @@ class EvalConstructorlessFactoryXml extends SimpleXMLElement {
         parent::__construct($xml);
     }
 }
+echo 'declared|';
 $root = new EvalConstructorlessFactoryXml('<r id="x"><item>1</item></r>', 7);
+echo 'root|';
 $child = $root->item;
+echo 'child|';
 $children = $root->children();
+echo 'children|';
 $attributes = $root->attributes();
+echo 'attributes|';
 $paths = $root->xpath('//item');
+echo 'xpath|';
 $loaded = simplexml_load_string('<loaded/>', EvalConstructorlessFactoryXml::class);
+echo 'loaded|';
 $imported = simplexml_import_dom($root, EvalConstructorlessFactoryXml::class);
+echo 'imported|';
 echo get_class($child), ':', $child->getName(), '|';
 echo get_class($children), ':', count($children), '|';
 echo get_class($attributes), ':', count($attributes), '|';
@@ -78,7 +94,7 @@ unset($root, $child, $children, $attributes, $paths, $loaded, $imported);
     let escaped = body.replace('\\', "\\\\").replace('\'', "\\'");
     let out = compile_and_run_with_heap_debug(&format!("<?php $source = $argc > 0 ? '{escaped}' : ''; eval($source); unset($source);"));
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "EvalConstructorlessFactoryXml:item|EvalConstructorlessFactoryXml:1|EvalConstructorlessFactoryXml:1|EvalConstructorlessFactoryXml:item|EvalConstructorlessFactoryXml:loaded|EvalConstructorlessFactoryXml:r|1");
+    assert_eq!(out.stdout, "declared|root|child|children|attributes|xpath|loaded|imported|EvalConstructorlessFactoryXml:item|EvalConstructorlessFactoryXml:1|EvalConstructorlessFactoryXml:1|EvalConstructorlessFactoryXml:item|EvalConstructorlessFactoryXml:loaded|EvalConstructorlessFactoryXml:r|1");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
