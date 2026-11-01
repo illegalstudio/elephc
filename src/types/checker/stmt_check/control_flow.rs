@@ -974,6 +974,7 @@ impl Checker {
                     let reachable = self.enter_catch_flow(index, &try_tail, env);
                     self.boxed_ref_aliased_locals = branch_entry_boxed_refs.clone();
                     if let Some(variable) = &catch_clause.variable {
+                        let retired = self.binding_retirement_type(variable, env);
                         self.definitely_bound_locals.insert(variable.clone());
                         self.record_loop_binding_end(variable);
                         self.invalidate_local_flow_narrowing(variable, env);
@@ -981,6 +982,7 @@ impl Checker {
                             variable.clone(),
                             PhpType::Object(self.common_catch_type_name(&resolved_types)),
                         );
+                        if reachable { self.record_binding_retirement_exception_flow(&retired, env); }
                     }
                     let catch_exit_counts = self.pending_finally_exit_counts();
                     let catch_loop_counts = self.pending_loop_exit_counts();

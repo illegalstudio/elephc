@@ -1,11 +1,11 @@
 //! Purpose:
-//! Checks ownership when nullable value bindings gain boxed storage after coalescing.
+//! Checks ownership when flow-sensitive bindings change type or gain boxed storage.
 //!
 //! Called from:
 //! - The runtime GC codegen integration suite.
 //!
 //! Key details:
-//! - Loop-entry conversion and arithmetic stores must retire the previous boxed cell.
+//! - Loop-entry conversion, arithmetic stores and catch binding preserve every owner.
 
 use crate::support::{compile_and_run_with_heap_debug, without_ir_opt};
 
@@ -43,6 +43,31 @@ echo localCounter(true), '|', localCounter(false), '|', localAccumulator(true), 
             let out = compile_and_run_with_heap_debug(source);
             assert!(out.success, "{}", out.stderr);
             assert_eq!(out.stdout, "012|12|3|13\n012|12|3|13\n");
+            assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+        };
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// A replacement catch value survives the displaced value's throwing destructor.
+#[test]
+fn test_nullable_flow_catch_replacement_keeps_owners_on_throw() {
+    let source = r#"<?php
+class CatchSlotD { public function __destruct() { throw new Exception('d'); } }
+function catchSlot(int $flag): void {
+    $e = new CatchSlotD();
+    try {
+        try { throw new Exception('a'); } catch (Exception $e) {}
+        if ($flag < 0) { throw new LogicException('keep'); }
+    } catch (Exception $c) { echo $e->getMessage(), ':', $c->getMessage(), "\n"; }
+}
+catchSlot($argc);
+"#;
+    for optimized in [true, false] {
+        let run = || {
+            let out = compile_and_run_with_heap_debug(source);
+            assert!(out.success, "{}", out.stderr);
+            assert_eq!(out.stdout, "a:d\n");
             assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
         };
         if optimized { run(); } else { without_ir_opt(run); }

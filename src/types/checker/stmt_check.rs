@@ -63,7 +63,8 @@ impl Checker {
         let result = crate::strict_php::with_source_mode(stmt.source_mode, || {
             self.check_stmt_in_current_source_mode(stmt, env)
         });
-        if result.is_ok() && !matches!(stmt.kind, StmtKind::Foreach { .. }) {
+        // Global bindings record retirement separately before each source-order alias change.
+        if result.is_ok() && !matches!(stmt.kind, StmtKind::Foreach { .. } | StmtKind::Global { .. }) {
             self.record_statement_exception_flow(stmt, env, retirement.as_ref(), before_write);
         }
         self.strict_types = outer_strict_types;

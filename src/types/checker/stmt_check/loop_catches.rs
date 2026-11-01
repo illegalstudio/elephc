@@ -8,6 +8,7 @@
 //! - Catch bindings enter the type fixed point only after their handlers become reachable.
 //! - References, shared bindings, container writes, and opaque caller writes lose precision.
 //! - Failed inference remains Mixed; syntactic scalar guesses cannot suppress cleanup throws.
+//! - A node budget widens recursive type growth before another fixed-point round clones it.
 
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -56,7 +57,11 @@ fn retirement_types(
     checker: &mut Checker, entry: &TypeEnv, evidence: &LoopWrites<'_>,
     reachable_bindings: &HashSet<String>,
 ) -> TypeEnv {
-    let mut fixed = entry.clone();
+    let mut fixed = entry.iter().map(|(name, ty)| {
+        let mut remaining = MAX_RETIREMENT_TYPE_NODES;
+        let bound = if retirement_type_fits(ty, &mut remaining) { ty.clone() } else { PhpType::Mixed };
+        (name.clone(), bound)
+    }).collect::<TypeEnv>();
     for (name, _) in &evidence.values { fixed.entry((*name).to_string()).or_insert(PhpType::Void); }
     for name in &evidence.unbound { fixed.entry((*name).to_string()).or_insert(PhpType::Void); }
     let mut invalid = evidence.references.iter().chain(&evidence.containers)
@@ -74,8 +79,8 @@ fn retirement_types(
         for ty in fixed.values_mut() { *ty = PhpType::Mixed; }
         return fixed;
     }
-    // Recursive array construction can grow types indefinitely. An unresolved upper bound
-    // remains unknown rather than allowing the cleanup proof to depend on an iteration cap.
+    // The per-value node budget bounds memory before each join and subsequent clone.
+    // The iteration cap remains a convergence backstop for the whole environment.
     for _ in 0..64 {
         let previous = fixed.clone();
         for (name, value) in &evidence.values {
@@ -93,11 +98,35 @@ fn retirement_types(
                     inferred
                 }
             };
+            let incoming = bounded_retirement_type(incoming);
             let old = fixed.get(*name).cloned().unwrap_or(PhpType::Void);
-            fixed.insert((*name).to_string(), checker.normalize_union_type(vec![old, incoming]));
+            let joined = checker.normalize_union_type(vec![old, incoming]);
+            fixed.insert((*name).to_string(), bounded_retirement_type(joined));
         }
         if fixed == previous { return fixed; }
     }
     for ty in fixed.values_mut() { *ty = PhpType::Mixed; }
     fixed
+}
+
+/// Maximum structural nodes retained for one local's speculative retirement upper bound.
+const MAX_RETIREMENT_TYPE_NODES: usize = 64;
+
+/// Widens an oversized bound to the sound unknown value before it can grow recursively.
+fn bounded_retirement_type(ty: PhpType) -> PhpType {
+    let mut remaining = MAX_RETIREMENT_TYPE_NODES;
+    if retirement_type_fits(&ty, &mut remaining) { ty } else { PhpType::Mixed }
+}
+
+/// Counts nested payloads with an early stop, bounding both traversal depth and node count.
+fn retirement_type_fits(ty: &PhpType, remaining: &mut usize) -> bool {
+    let Some(next) = remaining.checked_sub(1) else { return false; };
+    *remaining = next;
+    match ty {
+        PhpType::Array(element) | PhpType::Buffer(element) => retirement_type_fits(element, remaining),
+        PhpType::AssocArray { key, value } =>
+            retirement_type_fits(key, remaining) && retirement_type_fits(value, remaining),
+        PhpType::Union(members) => members.iter().all(|member| retirement_type_fits(member, remaining)),
+        _ => true,
+    }
 }

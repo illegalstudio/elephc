@@ -9,6 +9,50 @@
 
 use super::*;
 
+/// Recursive loop values stay bounded when catch reachability requests retirement facts.
+#[test]
+fn test_nullable_fallback_flow_r48_recursive_retirement_completion() {
+    for body in [
+        "try {} catch (Exception $other) {} $a = [$a];",
+        "try { $x = 1; } catch (Exception $other) {} $a = [$a, $a];",
+        "try { $a = [$a]; } catch (Exception $other) {}",
+        "$a = [$a];",
+    ] {
+        let source = format!("<?php function run(array $xs): void {{ $a = [1]; foreach ($xs as $x) {{ {body} }} var_dump(count($a)); }} run([1, 2, 3]);");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+}
+
+/// Implicit binding cleanup cannot hide a handler that invalidates a nullable value.
+#[test]
+fn test_nullable_fallback_flow_r48_implicit_retirement_admission() {
+    for prefix in ["$v ??= 1;", "$v = $v ?? 1;", "if ($v === null) return;"] {
+        for (initial, operation) in [
+            ("$e = new R48Destructor();", "try { throw new Exception('a'); } catch (Exception $e) {}"),
+            ("$g = new R48Destructor();", "global $g;"),
+        ] {
+            for body in [
+                format!("{initial} foreach ($xs as $x) {{ need($v); try {{ {operation} }} catch (Exception $c) {{ $v = null; }} }}"),
+                format!("{initial} try {{ {operation} }} catch (Exception $c) {{ $v = null; }} need($v);"),
+            ] {
+                let source = format!("<?php class R48Destructor {{ public function __destruct() {{ throw new Exception('d'); }} }} function need(int $v): void {{}} function run(?int $v, array $xs): void {{ {prefix} {body} }}");
+                let error = check_source(&source).err().unwrap_or_else(|| panic!("accepted: {source}"));
+                assert!(error.to_string().contains("expects int"), "{source}: {error}");
+            }
+        }
+    }
+}
+
+/// Terminal and unreachable cleanup handlers preserve valid continuation value contracts.
+#[test]
+fn test_nullable_fallback_flow_r48_implicit_retirement_precision() {
+    for handler in ["catch (Exception $c) { return; }", "catch (TypeError $c) { $v = null; }"] {
+        let source = format!("<?php class R48Destructor {{ public function __destruct() {{ throw new Exception('d'); }} }} function need(int $v): void {{}} function run(?int $v): void {{ $v ??= 1; $e = new R48Destructor(); try {{ try {{ throw new Exception('a'); }} catch (Exception $e) {{}} }} {handler} need($v); }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+    check_source("<?php function need(int $v): void {} function run(?int $v, array $xs): void { $v ??= 1; foreach ($xs as $x) { need($v); try { try { throw new Exception('a'); } catch (Exception $other) {} } catch (Exception $c) { $v = null; } } }").unwrap();
+}
+
 /// Continuing catch bindings cannot retain an integer proof at a later loop header.
 #[test]
 fn test_nullable_fallback_flow_r47_catch_backedge_admission() {

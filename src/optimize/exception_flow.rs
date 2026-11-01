@@ -586,7 +586,7 @@ impl ExceptionFlowAnalysis {
         if !include_operands && !matches!(stmt.kind,
             StmtKind::Echo(_) | StmtKind::ExprStmt(_) | StmtKind::StaticVar { .. }
             | StmtKind::ListUnpack { .. } | StmtKind::Assign { .. } | StmtKind::TypedAssign { .. }
-            | StmtKind::RefAssign { .. }
+            | StmtKind::RefAssign { .. } | StmtKind::Global { .. }
             | StmtKind::StaticPropertyAssign { .. } | StmtKind::ArrayPush { .. }
             | StmtKind::StaticPropertyArrayPush { .. } | StmtKind::ArrayAssign { .. }
             | StmtKind::PropertyArrayAssign { .. } | StmtKind::StaticPropertyArrayAssign { .. }
@@ -624,6 +624,8 @@ impl ExceptionFlowAnalysis {
             StmtKind::StaticVar { init: expr, .. }
             | StmtKind::ListUnpack { value: expr, .. } => operand(expr)
                 .combined(overwrite()),
+            StmtKind::Global { vars } => vars.iter().fold(ThrownTypes::default(), |thrown, name|
+                thrown.combined(self.local_retirement_throws(&Expr::var(name)))),
             StmtKind::ConstDecl { value: expr, .. } => operand(expr),
             StmtKind::Return(Some(expr)) => operand(expr).combined(
                 if super::return_boundaries::active_return_boundary_may_throw(expr) {
@@ -778,6 +780,8 @@ impl ExceptionFlowAnalysis {
             }
             let mut catch_bindings = bindings.clone();
             if let Some(variable) = &catch.variable {
+                // Binding runs outside the protected try; its cleanup escapes to outer handlers.
+                escaping = escaping.combined(self.local_retirement_throws(&Expr::var(variable)));
                 catch_bindings.insert(variable.clone(), route.incoming);
             }
             escaping = escaping.combined(self.block_throws(

@@ -111,6 +111,21 @@ impl Checker {
         self.record_exception_flow(thrown, env);
     }
 
+    /// Captures the value type retired by an implicit binding replacement.
+    pub(super) fn binding_retirement_type(&self, name: &str, env: &TypeEnv) -> PhpType {
+        if self.local_flow_read_is_stable(name) {
+            env.get(name).cloned().unwrap_or(PhpType::Void)
+        } else { PhpType::Mixed }
+    }
+
+    /// Records retirement after the new binding is visible to a destructor or outer handler.
+    pub(super) fn record_binding_retirement_exception_flow(&mut self, retired: &PhpType, env: &TypeEnv) {
+        if self.finally_flow_frames.is_empty() { return; }
+        let Some(analysis) = &self.exception_analysis else { return; };
+        let thrown = analysis.retirement_throws(retired);
+        self.record_exception_flow(thrown, env);
+    }
+
     /// Records statement callbacks after operand effects and post-store cleanup.
     pub(super) fn record_statement_exception_flow(&mut self, stmt: &Stmt, env: &TypeEnv, retired_type: Option<&PhpType>, before_write: Option<FlowSnapshot>) {
         if self.finally_flow_frames.is_empty() { return; }

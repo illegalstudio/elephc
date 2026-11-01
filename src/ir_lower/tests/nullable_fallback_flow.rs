@@ -9,6 +9,25 @@
 
 use crate::ir::{Immediate, IrHeapKind, IrType, Op};
 
+/// Implicit retirement edges and bounded recursive facts check on every supported target.
+#[test]
+fn test_nullable_fallback_flow_r48_implicit_retirement_all_targets() {
+    let negative = "<?php class R48D { public function __destruct() { throw new Exception('d'); } } function need(int $v): void {} function run(?int $v): void { $v ??= 1; $e = new R48D(); try { try { throw new Exception('a'); } catch (Exception $e) {} } catch (Exception $c) { $v = null; } need($v); }";
+    let recursive = "<?php function run(array $xs): void { $a = [1]; foreach ($xs as $x) { try {} catch (Exception $other) {} $a = [$a]; } var_dump(count($a)); } run([1, 2, 3]);";
+    let positive = "<?php class R48D { public function __destruct() { throw new Exception('d'); } } function run(): void { $e = new R48D(); try { try { throw new Exception('a'); } catch (Exception $e) {} } catch (Exception $c) { echo $c->getMessage(); } } run();";
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = crate::codegen::platform::Target::parse(name).unwrap();
+        let program = crate::parser::parse(&crate::lexer::tokenize(negative).unwrap()).unwrap();
+        let error = crate::types::check_with_target(&program, target).err().expect("implicit retirement");
+        assert!(error.to_string().contains("expects int"), "{name}: {error}");
+        let program = crate::parser::parse(&crate::lexer::tokenize(recursive).unwrap()).unwrap();
+        crate::types::check_with_target(&program, target).unwrap();
+        let module = super::lower_source_at_for_target(positive, std::path::Path::new("main.php"),
+            std::path::Path::new("."), target);
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Every target refuses a stale catch projection and emits the valid terminal-catch paths.
 #[test]
 fn test_nullable_fallback_flow_r47_catch_backedges_all_targets() {

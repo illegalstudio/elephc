@@ -1586,6 +1586,7 @@ pub(super) fn check_global(
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
     for var in vars {
+        let retired = checker.binding_retirement_type(var, env);
         checker.record_loop_binding_end(var);
         checker.invalidate_local_flow_narrowing(var, env);
         checker.active_globals.insert(var.clone());
@@ -1601,6 +1602,7 @@ pub(super) fn check_global(
                 env.insert(var.clone(), PhpType::Mixed);
             }
         }
+        checker.record_binding_retirement_exception_flow(&retired, env);
     }
     Ok(())
 }

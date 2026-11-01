@@ -454,6 +454,7 @@ pub(super) fn lower_catch_bind(ctx: &mut LoweringContext<'_, '_>, catch: &CatchC
         Op::CatchBind.default_effects(),
         Some(span),
     );
+    let incoming_pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[caught.value], span);
     // Only a matched user catch consumes a replacement here. Internal CatchBind users rethrow
     // after cleanup and must preserve the pending host predecessor automatically.
     ctx.emit_void(
@@ -465,7 +466,27 @@ pub(super) fn lower_catch_bind(ctx: &mut LoweringContext<'_, '_>, catch: &CatchC
         crate::ir::Effects::all(),
         Some(span),
     );
+    // Keep the old PHP value alive until the replacement is visible. Its last release can
+    // throw, and an outer catch must already observe the newly bound exception at that point.
+    let previous_owner = catch.variable.as_ref().filter(|name| ctx.has_local_slot(name)).and_then(|name| {
+        let previous = ctx.load_local(name, Some(span));
+        crate::ir_lower::expr::root_value_for_later_use(ctx, previous, span).1
+    });
+    // Reorder only owner records, preserving their values: the incoming transfer must be
+    // disarmed before retiring the old value can throw. Owner records are a strict stack.
+    if let Some(owner) = previous_owner {
+        crate::ir_lower::expr::unregister_owned_call_operand(ctx, owner, span);
+    }
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, incoming_pins, span);
+    if let Some(owner) = previous_owner {
+        crate::ir_lower::expr::register_owned_call_operand(ctx, owner, span);
+    }
+    let store_pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[caught.value], span);
     ctx.store_local(&variable, caught, php_type, Some(span));
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, store_pins, span);
+    if let Some(owner) = previous_owner {
+        crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span);
+    }
 }
 
 /// Returns the local type to use for a catch variable.

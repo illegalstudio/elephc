@@ -69,6 +69,11 @@ impl CheckerExceptionAnalysis {
             self.analysis.stmt_throws_at_boundary(stmt, &HashMap::new(), context.as_ref(), false, retired_type)))
     }
 
+    /// Reports destruction of a binding's old value before an implicit replacement.
+    pub(crate) fn retirement_throws(&self, retired_type: &PhpType) -> CheckerThrownTypes {
+        CheckerThrownTypes(self.analysis.type_destruction_throws(retired_type))
+    }
+
     /// Creates an isolated query with loop-wide upper bounds for local retirement.
     pub(crate) fn catch_query(&self, types: crate::types::TypeEnv) -> CheckerCatchAnalysis<'_> {
         let mut analysis = self.analysis.clone();

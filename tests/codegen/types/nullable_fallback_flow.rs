@@ -87,6 +87,27 @@ scalarCleanup(1);
     assert_nullable_flow_cli_heap_output(source, "int(1)\nint(1)\n");
 }
 
+/// Destruction during catch binding keeps the enclosing handler through AST pruning.
+#[test]
+fn test_nullable_fallback_flow_r48_catch_retirement_runtime() {
+    let source = r#"<?php
+class R48RuntimeDestructor { public function __destruct() { throw new Exception('d'); } }
+function r48UnsetCleanup(): void {
+    $e = new R48RuntimeDestructor();
+    try { unset($e); } catch (Exception $c) { echo 'assign caught ', $c->getMessage(), "\n"; }
+}
+function r48CatchCleanup(): void {
+    $e = new R48RuntimeDestructor();
+    try {
+        try { throw new Exception('a'); } catch (Exception $e) { echo "inner\n"; }
+    } catch (Exception $c) { echo 'bind caught ', $c->getMessage(), ':', $e->getMessage(), "\n"; }
+    echo "after\n";
+}
+r48UnsetCleanup(); r48CatchCleanup(); echo "done\n";
+"#;
+    assert_nullable_flow_cli_heap_output(source, "assign caught d\nbind caught d:a\nafter\ndone\n");
+}
+
 /// Guarded nullable array mutations preserve arguments, typed returns and runtime contents.
 #[test]
 fn test_nullable_fallback_flow_r46_guarded_array_runtime() {
