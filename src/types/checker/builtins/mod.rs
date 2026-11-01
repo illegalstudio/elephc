@@ -258,11 +258,19 @@ impl Checker {
                             .is_some_and(|storage| !Self::is_raw_non_null_contract(storage))
                     {
                         let actual = self.infer_type(arg, env)?;
+                        let output = if def.spec.semantics.preserves_array_reference(index)
+                            && (actual.is_php_array()
+                                || matches!(actual, PhpType::Array(_) | PhpType::AssocArray { .. }))
+                        {
+                            PhpType::php_array()
+                        } else {
+                            PhpType::Mixed
+                        };
                         self.require_boxed_by_ref_storage(
-                            &PhpType::Mixed, &actual, arg, env, can_widen_local,
+                            &output, &actual, arg, env, can_widen_local,
                             &format!("Builtin '{}'", name),
                         )?;
-                        self.record_boxed_reference_output(arg, &PhpType::Mixed, &actual, span, env);
+                        self.record_boxed_reference_output(arg, &output, &actual, span, env);
                     }
                     continue;
                 }

@@ -9,6 +9,22 @@
 
 use crate::ir::{Immediate, IrHeapKind, IrType, Op};
 
+/// Nullable array mutation chains lower and emit through every supported target ABI.
+#[test]
+fn test_nullable_fallback_flow_r46_guarded_arrays_all_targets() {
+    let source = "<?php function sortedArray(?array $a): array { if ($a === null) return []; sort($a); rsort($a); return $a; } function pushedArray(?array $a): array { if ($a !== null) { array_push($a, 9); array_pop($a); array_unshift($a, 8); array_shift($a); return $a; } return []; } echo implode(',', sortedArray([3, 1, 2])), implode(',', pushedArray([1, 2]));";
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = crate::codegen::platform::Target::parse(name).unwrap();
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), target);
+        for function_name in ["sortedArray", "pushedArray"] {
+            let function = module.functions.iter().find(|function| function.name == function_name).unwrap();
+            assert!(function.return_php_type.is_php_array(), "{name}: {function_name}");
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Array mutation chains and structural guarded stores lower on all supported targets.
 #[test]
 fn test_nullable_fallback_flow_r45_structural_all_targets() {

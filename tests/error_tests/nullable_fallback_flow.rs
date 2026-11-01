@@ -9,6 +9,40 @@
 
 use super::*;
 
+/// Array-preserving reference operations retain guarded nullable array read contracts.
+#[test]
+fn test_nullable_fallback_flow_r46_guarded_array_mutations() {
+    for body in [
+        "sort($a); rsort($a);", "ksort($a); sort($a);", "krsort($a); sort($a);",
+        "array_push($a, 9); array_pop($a);", "array_unshift($a, 9); array_shift($a);",
+        "array_splice($a, 0, 1, [4]); sort($a);",
+        "usort($a, fn($x, $y) => $x <=> $y); sort($a);",
+        "uasort($a, fn($x, $y) => $x <=> $y); sort($a);",
+        "uksort($a, fn($x, $y) => $x <=> $y); sort($a);",
+        "array_multisort($a, $b); array_pop($a); array_pop($b);",
+        "reset($a); end($a); next($a); prev($a); sort($a);",
+    ] {
+        for guarded in [
+            format!("if ($a === null) {{ return []; }} {body} need($a); return $a;"),
+            format!("if ($a !== null) {{ {body} need($a); return $a; }} return [];"),
+        ] {
+            let source = format!("<?php function need(array $a): int {{ return count($a); }} function run(?array $a, array $b): array {{ {guarded} }}");
+            check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+    }
+    check_source("<?php class C { public function run(?array $a): array { if ($a === null) return []; ksort($a); return $a; } }").unwrap();
+    check_source("<?php function mutate(array &$a): void {} function run(?array $a): array { if ($a === null) return []; mutate($a); return $a; }").unwrap();
+}
+
+/// Arbitrary reference writes still erase an array guard when they can replace its value.
+#[test]
+fn test_nullable_fallback_flow_r46_array_reference_invalidations() {
+    for effect in ["settype($a, 'string');", "replaceValue($a);"] {
+        let source = format!("<?php function replaceValue(mixed &$a): void {{ $a = null; }} function run(?array $a): array {{ if ($a === null) return []; sort($a); {effect} return $a; }}");
+        expect_error(&source, "return type expects array");
+    }
+}
+
 /// Same-type array proofs do not turn successive mutating builtins into Mixed outputs.
 #[test]
 fn test_nullable_fallback_flow_r45_mutating_array_chains() {

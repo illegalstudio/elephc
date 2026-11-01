@@ -225,10 +225,12 @@ impl Checker {
     ) {
         // A narrowed value can still occupy a nullable or union slot. Use that slot for
         // layout decisions and restore its full view after a callee can write through it.
+        let array_value = actual.is_php_array()
+            || matches!(actual, PhpType::Array(_) | PhpType::AssocArray { .. });
         let guarded_storage = self.guarded_local_storage_type(arg, env).cloned();
         let actual = guarded_storage.as_ref().unwrap_or(actual);
         let output_ty = if expected.is_php_array()
-            && matches!(actual, PhpType::Array(_) | PhpType::AssocArray { .. })
+            && array_value
         {
             PhpType::php_array()
         } else if (expected.codegen_repr() == PhpType::Mixed

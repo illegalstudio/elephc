@@ -9,6 +9,26 @@
 
 use super::*;
 
+/// Guarded nullable array mutations preserve arguments, typed returns and runtime contents.
+#[test]
+fn test_nullable_fallback_flow_r46_guarded_array_runtime() {
+    let mut source = String::from("<?php function needArray(array $a): void { echo count($a), ':'; }\n");
+    let mut expected = String::new();
+    for (index, (body, output)) in [
+        ("sort($a); rsort($a);", "3,2,1"),
+        ("array_push($a, 9); array_pop($a);", "3,1,2"),
+        ("array_unshift($a, 9); array_shift($a);", "3,1,2"),
+        ("array_splice($a, 1, 1, [4]); sort($a);", "2,3,4"),
+        ("usort($a, fn($x, $y) => $x <=> $y); sort($a);", "1,2,3"),
+    ].into_iter().enumerate() {
+        source.push_str(&format!("function guardedArray{index}(?array $a): array {{ if ($a === null) {{ return []; }} {body} needArray($a); return $a; }}\necho implode(',', guardedArray{index}([3, 1, 2])), \"\\n\";\necho count(guardedArray{index}(null)), \"\\n\";\n"));
+        expected.push_str(&format!("3:{output}\n0\n"));
+    }
+    source.push_str("class GuardedArrayBox { public function run(?array $a): array { if ($a !== null) { ksort($a); return $a; } return []; } }\n$box = new GuardedArrayBox(); echo implode(',', array_keys($box->run(['b' => 2, 'a' => 1]))), \"\\n\";\n");
+    expected.push_str("a,b\n");
+    assert_nullable_flow_cli_heap_output(&source, &expected);
+}
+
 /// Successive array mutations retain their native array layouts and PHP results.
 #[test]
 fn test_nullable_fallback_flow_r45_mutating_array_runtime() {
