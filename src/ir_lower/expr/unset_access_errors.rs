@@ -110,7 +110,7 @@ pub(super) fn require_unset_array_access(
     let name = ctx.emit_value(Op::RuntimeCall, vec![object.value],
         Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target))),
         PhpType::Str, target.effects(), Some(span));
-    let temp = ctx.declare_owned_hidden_temp(PhpType::Str);
+    let temp = ctx.declare_hidden_temp(PhpType::Str);
     store_value_into_temp(ctx, &temp, PhpType::Str, name, span);
     let slot = ctx.local_slots[&temp];
     register_owned_call_operand(ctx, slot, span);

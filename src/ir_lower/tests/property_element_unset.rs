@@ -14,7 +14,7 @@
 //!   type as the fix.
 
 use crate::codegen::platform::Target;
-use crate::ir::{Function, Op};
+use crate::ir::{Function, Immediate, LocalKind, Op, RuntimeCallTarget, RuntimeFnId};
 use crate::ir_lower::LoweringError;
 use std::path::Path;
 
@@ -56,6 +56,49 @@ try { unset($holder->value[runtime_offset_key($argc)]); } catch (TypeError $erro
         let module = super::lower_source_at_for_target(
             source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
         );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+}
+
+/// Erased-property object errors keep the runtime class-name owner live while composing the message.
+#[test]
+fn erased_property_unset_error_borrows_published_class_name_on_every_target() {
+    let source = r#"<?php
+$activation = new SimpleXMLElement('<r/>');
+$erased = json_decode('{}');
+$plain = new stdClass();
+$erased->p = $plain;
+try { unset($erased->p[1]); } catch (Error $error) {}
+"#;
+    for name in TARGETS {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let function = module.functions.iter().find(|function| function.name == "main").unwrap();
+        let (lookup, class_name) = function.instructions.iter().enumerate().find_map(|(index, inst)| {
+            matches!(inst.immediate, Some(Immediate::RuntimeCall(
+                RuntimeCallTarget::Function(RuntimeFnId::GetClass)
+            ))).then(|| (index, inst.result.unwrap()))
+        }).unwrap_or_else(|| panic!("{name}: missing erased-object class-name lookup"));
+        let acquired = function.instructions[lookup + 1..].iter().find(|inst| {
+            inst.op == Op::Acquire && inst.operands == [class_name]
+        }).and_then(|inst| inst.result).unwrap_or_else(|| panic!("{name}: missing class-name lease"));
+        let store = function.instructions[lookup + 1..].iter().find(|inst| {
+            inst.op == Op::StoreLocal && inst.operands == [acquired]
+        }).unwrap_or_else(|| panic!("{name}: missing class-name owner store"));
+        let Some(Immediate::LocalSlot(slot)) = store.immediate else {
+            panic!("{name}: class-name owner store has no slot");
+        };
+        assert_eq!(function.locals[slot.as_raw() as usize].kind, LocalKind::HiddenTemp,
+            "{name}: published class names need stable owner slots");
+        let loads = function.instructions.iter().filter(|inst| {
+            inst.op == Op::LoadLocal && inst.immediate == Some(Immediate::LocalSlot(slot))
+        }).filter_map(|inst| inst.result).collect::<Vec<_>>();
+        assert!(!loads.is_empty(), "{name}: class-name message must read the published slot");
+        assert!(!function.instructions.iter().any(|inst| {
+            inst.op == Op::Release && inst.operands.first().is_some_and(|value| loads.contains(value))
+        }), "{name}: message concatenation must not consume the published class name");
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
     }
