@@ -37,6 +37,7 @@ fn literal_eval_without_date_or_reflection_names_lowers_neither_surface() {
     let lowered = lowered_methods(&module);
     assert!(!lowered.contains("DateTime::createFromFormat"), "{lowered:?}");
     assert!(!lowered.contains("ReflectionClass::getName"), "{lowered:?}");
+    assert!(!lowered.contains("ArrayObject::getArrayCopy"), "{lowered:?}");
 }
 
 /// Naming a date alias function inside the fragment lowers the DateTime alias surface.
@@ -78,7 +79,24 @@ fn opaque_evals_demand_everything() {
         let lowered = lowered_methods(&module);
         assert!(lowered.contains("DateTime::createFromFormat"), "{source}");
         assert!(lowered.contains("ReflectionClass::getName"), "{source}");
+        assert!(lowered.contains("ArrayObject::getArrayCopy"), "{source}");
+        assert!(lowered.contains("ArrayIterator::getArrayCopy"), "{source}");
     }
+}
+
+/// Methods invoked only by a bridge fragment still need their native SPL implementation.
+#[test]
+fn literal_eval_calling_spl_method_on_outer_object_lowers_native_body() {
+    let module = lower_source(
+        "<?php $bag = new ArrayObject([1]); eval('class EvalDemandSpl {} echo json_encode($bag->getArrayCopy());');",
+    );
+    let EvalDemand::Names(names) = eval_demand(&module) else {
+        panic!("a literal fragment must produce a named demand");
+    };
+    assert!(names.wildcard_methods.contains("getarraycopy"));
+    let lowered = lowered_methods(&module);
+    assert!(lowered.contains("ArrayObject::getArrayCopy"), "{lowered:?}");
+    assert!(lowered.contains("ArrayIterator::getArrayCopy"), "{lowered:?}");
 }
 
 /// A fragment calling a date method on an object the outer program built lowers that method

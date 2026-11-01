@@ -51,6 +51,18 @@ pub(super) fn lower_referenced_builtin_spl_methods(
 /// Finds builtin SPL methods whose symbols are required by already-lowered EIR.
 pub(super) fn referenced_builtin_spl_methods(module: &Module) -> Vec<(String, String)> {
     let mut methods = Vec::new();
+    let demand = eval_demand(module);
+    for (class_name, info) in &module.class_infos {
+        for method_key in info.methods.keys() {
+            if demand.names_class(class_name)
+                || demand.names_wildcard_method(|name| name == method_key)
+            {
+                push_supported_builtin_spl_method_for_receiver(
+                    &mut methods, module, class_name, method_key,
+                );
+            }
+        }
+    }
     for function in module
         .functions
         .iter()
