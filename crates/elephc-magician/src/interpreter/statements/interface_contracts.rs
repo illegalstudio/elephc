@@ -345,19 +345,57 @@ pub(super) fn class_has_aot_interface_method(
     class: &EvalClass,
     requirement: &EvalAotInterfaceMethodRequirement,
     context: &ElephcEvalContext,
-) -> bool {
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
     if let Some((declaring_class, method)) = pending_class_method(class, &requirement.name, context)
     {
-        return class_method_satisfies_aot_interface_requirement(
+        return Ok(class_method_satisfies_aot_interface_requirement(
             &method,
             &declaring_class,
             requirement,
             Some(class),
             context,
             true,
-        );
+        ));
     }
-    false
+    let Some(parent) = pending_native_parent_implementing_interface(
+        class, &requirement.owner, context, values,
+    )? else { return Ok(false); };
+    let Some(flags) = values.reflection_method_flags(&parent, &requirement.name)? else {
+        return Ok(false);
+    };
+    Ok(flags & EVAL_REFLECTION_MEMBER_FLAG_PUBLIC != 0
+        && flags & EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT == 0
+        && (flags & EVAL_REFLECTION_MEMBER_FLAG_STATIC != 0) == requirement.is_static)
+}
+
+/// Keeps inherited native property implementations without excusing an invalid eval override.
+pub(super) fn class_has_aot_interface_property(
+    class: &EvalClass, owner: &str, requirement: &EvalInterfaceProperty,
+    context: &ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if pending_class_property_with_owner(class, requirement.name(), context).is_some() {
+        return Ok(class_has_interface_property(class, owner, requirement, context));
+    }
+    let Some(parent) = pending_native_parent_implementing_interface(class, owner, context, values)?
+        else { return Ok(false); };
+    let Some(flags) = values.reflection_property_flags(&parent, requirement.name())? else {
+        return Ok(false);
+    };
+    Ok(flags & EVAL_REFLECTION_MEMBER_FLAG_PUBLIC != 0
+        && flags & (EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT | EVAL_REFLECTION_MEMBER_FLAG_STATIC) == 0)
+}
+
+/// Finds a native ancestor whose compiler-validated interface implementation can be inherited.
+fn pending_native_parent_implementing_interface(
+    class: &EvalClass, interface: &str, context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<String>, EvalStatus> {
+    let Some(parent) = pending_class_native_parent_name(class, context) else { return Ok(None); };
+    let names = values.reflection_class_interface_names(&parent)?;
+    let names = crate::interpreter::builtins::eval_owned_runtime_string_array_to_vec(names, values)?;
+    Ok(names.iter().any(|name| name.trim_start_matches('\\')
+        .eq_ignore_ascii_case(interface.trim_start_matches('\\'))).then_some(parent))
 }
 
 /// Returns whether a class or its eval parents satisfy one interface method signature.

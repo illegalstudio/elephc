@@ -66,12 +66,39 @@ eval('class RefusedNativeInterfaceCtor extends RequiredNativeInterfaceCtor { pub
 /// Native interface constructors remain required through an intermediate eval parent.
 #[test]
 fn test_eval_constructor_overrides_preserve_native_interface_ancestry() {
-    assert_constructor_contract_rejected(r#"<?php
+    let output = compile_and_run_capture(r#"<?php
 interface RequiredNativeCtorAncestor { public function __construct(string $name); }
 class RequiredNativeCtorRoot implements RequiredNativeCtorAncestor { public function __construct(string $name) {} }
-eval('class RequiredEvalCtorMiddle extends RequiredNativeCtorRoot {}
-class RefusedEvalCtorLeaf extends RequiredEvalCtorMiddle { public function __construct(int $id) {} }');
+eval('class RequiredEvalCtorMiddle extends RequiredNativeCtorRoot {}');
+echo 'middle|';
+eval('class RefusedEvalCtorLeaf extends RequiredEvalCtorMiddle { public function __construct(int $id) {} }');
 "#);
+    assert_eq!(output.stdout, "middle|", "{}", output.stderr);
+    assert!(!output.success && output.stderr.contains("Fatal error: eval() runtime failed"), "{}", output.stderr);
+}
+
+/// Native implementations remain available through eval descendants without an override.
+#[test]
+fn test_eval_inherits_native_interface_implementations() {
+    let out = compile_and_run(r#"<?php
+interface InheritedNativeContract {
+    public function __construct(string $name);
+    public function label(): string;
+    public string $name { get; set; }
+}
+class InheritedNativeImplementation implements InheritedNativeContract {
+    public string $name;
+    public function __construct(string $name) { $this->name = $name; }
+    public function label(): string { return $this->name; }
+}
+eval('class InheritedEvalMiddle extends InheritedNativeImplementation {}
+class InheritedEvalLeaf extends InheritedEvalMiddle {}
+$box = new InheritedEvalLeaf("native");
+echo $box->label(), ":", $box->name, "|";
+class InheritedEvalError extends Error {}
+echo (new InheritedEvalError("error"))->getMessage();');
+"#);
+    assert_eq!(out, "native:native|error");
 }
 
 /// A concrete eval parent still carries its interface constructor contract.
