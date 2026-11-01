@@ -168,8 +168,11 @@ fn write_fixture_files(dir: &Path) {
 fn assert_program_output(prefix: &str, source: &str, expected: &str) {
     let dir = make_test_dir(prefix);
     write_fixture_files(&dir);
+    eprintln!("fixture {prefix}: compiling");
     let bin = compile(&dir, source, prefix);
+    eprintln!("fixture {prefix}: executing");
     assert_eq!(run_binary_in(&dir, &bin), expected);
+    eprintln!("fixture {prefix}: completed");
     let _ = fs::remove_dir_all(&dir);
 }
 
