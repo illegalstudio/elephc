@@ -20,6 +20,8 @@ use std::collections::{HashMap, HashSet};
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod comparison_tests;
 mod placement;
 use crate::ir_passes::numeric_domain as domain;
 
@@ -189,6 +191,7 @@ impl Proof<'_> {
                         .result
                         .is_some_and(|result| self.value_uses(result, producer, seen, stores)),
                     Op::Cast | Op::ReturnBoundaryMixedToInt => scalar_observation(user),
+                    _ if domain::comparison(user) && self.numeric_inputs(&user.operands) => true,
                     _ if tagged_producer(user) && self.numeric_inputs(&user.operands) => true,
                     Op::StoreLocal => match user.immediate {
                         Some(Immediate::LocalSlot(slot)) => {

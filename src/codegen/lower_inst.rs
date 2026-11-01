@@ -54,6 +54,7 @@ pub(super) mod exceptions;
 mod mixed_narrowing;
 mod numeric_payloads;
 mod numeric_comparisons;
+mod numeric_cast;
 mod externs;
 mod floats;
 mod hashes;
