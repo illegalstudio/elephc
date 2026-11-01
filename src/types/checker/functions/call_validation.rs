@@ -549,17 +549,10 @@ impl Checker {
             (PhpType::Mixed, _) => true,
             (_, PhpType::Never) => true, // never is the bottom type — compatible with any expected type
             (PhpType::Bool, PhpType::False) => true,
-            // The backend has explicit boxed-Mixed cast funnels for scalar boundaries and
-            // runtime class guards for object boundaries. Keep other refcounted boundaries
-            // statically rejected until they have the same checked conversion contract.
-            (
-                PhpType::Int
-                | PhpType::Float
-                | PhpType::Bool
-                | PhpType::Str
-                | PhpType::Object(_),
-                PhpType::Mixed,
-            ) => true,
+            // The backend has explicit boxed-Mixed cast funnels for scalar boundaries.
+            // Object parameters use the narrower `ParamBinding::ObjectGuard` route below;
+            // accepting them here would also admit unchecked Mixed function returns.
+            (PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str, PhpType::Mixed) => true,
             (PhpType::Iterable, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable) => true,
             (PhpType::Union(expected_members), PhpType::Union(actual_members)) => actual_members
                 .iter()

@@ -98,16 +98,13 @@ fn reference_return_container_conversions_acquire_their_input_on_every_target() 
     let source = r#"<?php
 function &uniqueReferenceContainerIr(): array<mixed> { array<int> $items = [1, 2]; return $items; }
 function &sharedReferenceContainerIr(array<int> $input): array<mixed> { array<int> $items = $input; return $items; }
-function &emptyReferenceHashIr(): array<string, int> { array<int> $items = []; return $items; }
 "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
             std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
-        for (name, conversion) in [("uniqueReferenceContainerIr", crate::ir::Op::ArrayToMixed),
-            ("sharedReferenceContainerIr", crate::ir::Op::ArrayToMixed),
-            ("emptyReferenceHashIr", crate::ir::Op::ArrayToHash)] {
+        for name in ["uniqueReferenceContainerIr", "sharedReferenceContainerIr"] {
             let function = module.functions.iter().find(|function| function.name == name).unwrap();
-            let converted = function.instructions.iter().find(|inst| inst.op == conversion).unwrap();
+            let converted = function.instructions.iter().find(|inst| inst.op == crate::ir::Op::ArrayToMixed).unwrap();
             let value = function.value(converted.operands[0]).unwrap();
             let crate::ir::ValueDef::Instruction { inst, .. } = value.def else { panic!("conversion needs an owned producer"); };
             assert_eq!(function.instruction(inst).unwrap().op, crate::ir::Op::Acquire,

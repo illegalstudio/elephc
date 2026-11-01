@@ -8,13 +8,13 @@
 //! - Backend-created boxes are not EIR local owners and need their own cleanup records.
 //! - String loads from widened slots retire copies without consuming concrete local borrows.
 
-/// Bare object parameters accept boxed instances without asking for an empty class name.
+/// Bare object parameters accept Mixed instances without asking for an empty class name.
 #[test]
-fn nullable_to_bare_object_arguments_check_the_object_tag_on_every_target() {
+fn mixed_to_bare_object_arguments_check_the_object_tag_on_every_target() {
     let source = r#"<?php
 class BareObjectArgumentNode {}
 function acceptBareObjectArgument(object $node): string { return get_class($node); }
-function passBareObjectArgument(?BareObjectArgumentNode $node): string { return acceptBareObjectArgument($node); }
+function passBareObjectArgument(mixed $node): string { return acceptBareObjectArgument($node); }
 echo passBareObjectArgument(new BareObjectArgumentNode());
 "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
