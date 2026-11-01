@@ -91,8 +91,12 @@ pub(super) fn eval_static_property_inc_dec_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let current = eval_static_property_get_result(class_name, property, context, values)?;
-    let value = eval_inc_dec_value(current, increment, values)?;
-    eval_static_property_set_result(class_name, property, value, context, values)
+    with_eval_value_lease(current, context, values, |current, context, values| {
+        let value = eval_inc_dec_value(current, increment, values)?;
+        with_eval_value_lease(value, context, values, |value, context, values| {
+            eval_static_property_set_result(class_name, property, value, context, values)
+        })
+    })
 }
 
 /// Consumes an eval owner even when its dynamic destructor throws, preserving the pending exception.
