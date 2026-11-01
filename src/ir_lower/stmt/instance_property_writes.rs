@@ -559,10 +559,7 @@ pub(super) fn lower_property_assign_without_native(
     // even when source syntax used a literal. The complete runtime dispatcher uses that name to
     // distinguish declared slots, existing dynamic-hash entries, and missing names handled by
     // `__set`. The immediate-only `PropSet` ladder cannot materialize the guarded magic call.
-    let runtime_shaped_receiver = matches!(
-        ctx.builder.value_php_type(object.value).codegen_repr(),
-        PhpType::Mixed | PhpType::Union(_)
-    );
+    let runtime_shaped_receiver = receiver_requires_literal_runtime_dispatch(ctx, object, span);
     if preserve_property_operand || runtime_shaped_receiver {
         let property_name = ctx.emit_value(
             Op::ConstStr,
@@ -605,6 +602,30 @@ pub(super) fn lower_property_assign_without_native(
     // object extracted from a boxed nullable static property. Its caller retires those leases
     // after this store returns. Releasing `object` here as well would free that narrowed object
     // twice and leave any freshly published property payload dangling.
+}
+
+/// Returns whether a literal property name must remain a runtime operand for this receiver.
+///
+/// Some statically known object and union receivers use boxed storage after a guarded load. Their
+/// checked source view still selects the ordinary immediate `PropSet` ladder. Only a genuinely
+/// opaque or conflicting `mixed` source needs the full runtime-name dispatcher for `__set` and
+/// existing dynamic-hash precedence.
+fn receiver_requires_literal_runtime_dispatch(
+    ctx: &LoweringContext<'_, '_>,
+    object: LoweredValue,
+    span: Span,
+) -> bool {
+    if !matches!(
+        ctx.builder.value_php_type(object.value).codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        return false;
+    }
+    matches!(
+        ctx.member_receiver_types
+            .get(&(ctx.loop_storage_scope.clone(), span)),
+        None | Some(None) | Some(Some(PhpType::Mixed))
+    )
 }
 
 /// Returns whether this receiver can dispatch the write through an inherited abstract setter.
