@@ -67,6 +67,8 @@ pub(super) const FAKE_STD_STREAM_MAX_PAYLOAD: i64 = 2;
 pub(super) struct FakeOps {
     pub(super) next_id: usize,
     pub(super) values: HashMap<usize, FakeValue>,
+    /// Boxed native callable descriptors use tag 10 instead of ordinary Closure object storage.
+    pub(super) native_callable_cells: std::collections::HashSet<usize>,
     /// Independent fake storage history for automatic associative-array indices.
     pub(super) array_next_indices: HashMap<usize, i64>,
     pub(super) references: HashMap<usize, RuntimeCellHandle>,

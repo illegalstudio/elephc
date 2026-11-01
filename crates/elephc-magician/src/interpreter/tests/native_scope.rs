@@ -12,6 +12,35 @@ use super::support::*;
 
 mod argument_ownership;
 
+/// Native descriptor results satisfy callable, object and Closure contracts without losing ownership.
+#[test]
+fn native_callable_return_contracts_preserve_descriptor_owners() {
+    for (variant, accepted) in [
+        (EvalParameterTypeVariant::Callable, true),
+        (EvalParameterTypeVariant::Object, true),
+        (EvalParameterTypeVariant::Class("Closure".into()), true),
+        (EvalParameterTypeVariant::Class("UnrelatedReturnClass".into()), false),
+    ] {
+        let program = parse_fragment(b"return native_answer();").unwrap();
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let descriptor = values.new_object("Closure").unwrap();
+        values.native_callable_cells.insert(descriptor.as_ptr() as usize);
+        let mut native = NativeFunction::new(descriptor.as_ptr().cast(), fake_native_return_descriptor, 0);
+        native.set_return_type(EvalParameterType::new(vec![variant], false));
+        assert!(context.define_native_function("native_answer", native).is_ok());
+        let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values);
+        if accepted {
+            assert_eq!(result, Ok(descriptor));
+            assert!(!values.releases.contains(&descriptor));
+        } else {
+            assert_eq!(result, Err(EvalStatus::RuntimeFatal));
+            assert_eq!(values.releases.iter().filter(|cell| **cell == descriptor).count(), 1);
+        }
+    }
+}
+
 /// Same-cell native writeback dirties the local or global snapshot without replacing its owner.
 #[test]
 fn native_same_cell_reference_writeback_marks_the_owning_snapshot_dirty() {
