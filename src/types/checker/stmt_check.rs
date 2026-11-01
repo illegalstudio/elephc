@@ -92,11 +92,13 @@ impl Checker {
                 // The guard lowers to a real runtime branch (`Op::IncludeOnceGuard`), so its
                 // body is conditional exactly like an `if` body.
                 let entry = self.definitely_bound_locals.clone();
+                let entry_storage = self.guarded_union_types.clone();
                 let result = self.in_conditional_scope(env, |checker, env| {
                     for stmt in body { checker.check_stmt(stmt, env)?; }
                     Ok(())
                 });
                 self.definitely_bound_locals.retain(|name| entry.contains(name));
+                self.retain_raw_entry_proofs(&entry_storage);
                 self.publish_binding_read_views(env);
                 result
             }

@@ -13,6 +13,28 @@ use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 use crate::types::{PhpType, TypeEnv};
 
 impl Checker {
+    /// Runs a diagnostic-only walk without publishing binding or value-flow changes.
+    pub(super) fn with_preserved_binding_flow<T>(&mut self, body: impl FnOnce(&mut Self) -> T) -> T {
+        let bound = self.definitely_bound_locals.clone();
+        let storage = self.guarded_union_types.clone();
+        let origins = self.narrowed_local_origins.clone();
+        let result = body(self);
+        self.definitely_bound_locals = bound;
+        self.guarded_union_types = storage;
+        self.narrowed_local_origins = origins;
+        result
+    }
+
+    /// Keeps raw proofs only when both an optional path and its entry hold that contract.
+    pub(super) fn retain_raw_entry_proofs(
+        &mut self, entry: &std::collections::HashMap<String, GuardedLocalStorage>,
+    ) {
+        self.guarded_union_types.retain(|name, storage| {
+            !Self::is_raw_non_null_contract(&storage.ty)
+                || entry.get(name).is_some_and(|before| before.ty == storage.ty)
+        });
+    }
+
     /// Distinguishes raw value proofs from retained boxed or tagged storage contracts.
     pub(super) fn is_raw_non_null_contract(ty: &PhpType) -> bool {
         super::stmt_check::type_is_definitely_non_null(ty)

@@ -9,6 +9,24 @@
 
 use super::*;
 
+/// Else and elseif bodies observe the original array miss rather than a sibling's fresh store.
+#[test]
+fn test_nullable_fallback_flow_r40_sibling_runtime() {
+    for branch in ["else", "elseif (!$flag)"] {
+        let source = format!("<?php function run(bool $flag, int $key) {{ $ints = [10]; $result = 1; $value = $ints[$key]; if ($flag) {{ $value = 7; }} {branch} {{ foreach ([1, 2] as $item) {{ if ($value !== null) {{ continue; }} $result = 2.5; break; }} }} return $result; }} var_dump(run(false, 5)); echo run(false, 0), \"\\n\", run(true, 5), \"\\n\";");
+        assert_nullable_flow_cli_heap_output(&source, "float(2.5)\n1\n1\n");
+    }
+}
+
+/// Compatible raw defaults compile and skipped default assignments keep their side effects skipped.
+#[test]
+fn test_nullable_fallback_flow_r40_raw_coalesce_runtime() {
+    for assignment in ["$x ??=", "$x = $x ??"] {
+        let source = format!("<?php class P {{ public int $n = 4; }} function property(bool $flag, P $p): void {{ if ($flag) {{ $x = 3; }} {assignment} $p->n; var_dump($x); }} function skipped(): void {{ $x = 3; $y = 0; {assignment} ($y = 7); var_dump($x, $y); }} property(false, new P()); property(true, new P()); skipped();");
+        assert_nullable_flow_cli_heap_output(&source, "int(4)\nint(3)\nint(3)\nint(0)\n");
+    }
+}
+
 /// Raw proofs do not survive skipped stores, unproved parameter writes or finally continuations.
 #[test]
 fn test_nullable_fallback_flow_r39_raw_proof_runtime() {

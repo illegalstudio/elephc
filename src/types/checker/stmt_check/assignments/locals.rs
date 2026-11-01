@@ -67,7 +67,8 @@ fn null_coalesce_assignment_type(
     span: Span,
     env: &TypeEnv,
 ) -> Result<PhpType, CompileError> {
-    let default_ty = if type_is_definitely_non_null(default_ty)
+    let default_ty = if (*existing == PhpType::Void || Checker::union_contains_void(existing))
+        && type_is_definitely_non_null(default_ty)
         && !checker.stored_value_is_non_null(default, default_ty, env)
     {
         checker.normalize_union_type(vec![default_ty.clone(), PhpType::Void])
@@ -194,16 +195,15 @@ fn check_assign_value_type(
                 let default_ty = if existing == PhpType::Void {
                     checker.infer_type_with_assignment_effects(default, env)?
                 } else if type_is_definitely_non_null(&existing)
-                    && checker.local_flow_read_is_stable(name)
+                    && checker.stored_value_is_non_null(&Expr::var(name), &existing, env)
                 {
                     // Only a retained coalescing proof justifies skipping compatibility.
                     // A bare non-null type can also belong to a possibly undefined local.
                     let coalesced = checker.definitely_bound_locals.contains(name)
                         && checker.guarded_union_types.get(name).is_some_and(|storage| storage.coalesced);
                     let mut default_env = env.clone();
-                    let bound = checker.definitely_bound_locals.clone();
-                    let checked = checker.infer_type_with_assignment_effects(default, &mut default_env);
-                    checker.definitely_bound_locals = bound;
+                    let checked = checker.with_preserved_binding_flow(|checker|
+                        checker.infer_type_with_assignment_effects(default, &mut default_env));
                     let ty = checked?;
                     if coalesced { return Ok(existing); }
                     ty

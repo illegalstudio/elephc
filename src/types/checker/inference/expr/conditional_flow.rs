@@ -171,6 +171,7 @@ impl Checker {
 
     /// Restores tracked storage between statement branches without removing new guard facts.
     pub(in crate::types::checker) fn restore_statement_flow_storage(&mut self, flow: &ConditionalFlow) {
+        self.retain_raw_entry_proofs(&flow.storage);
         for name in flow.views.keys() {
             self.restore_conditional_local_storage(flow, name);
         }

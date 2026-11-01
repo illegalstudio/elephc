@@ -9,6 +9,67 @@
 
 use super::*;
 
+/// A proof from an earlier clause cannot prune a later sibling's nullable loop exit.
+#[test]
+fn test_nullable_fallback_flow_r40_sibling_proofs() {
+    for branch in ["else", "elseif (!$flag)"] {
+        let source = format!("<?php function run(bool $flag, int $key) {{ $ints = [10]; $result = 1; $value = $ints[$key]; if ($flag) {{ $value = 7; }} {branch} {{ foreach ([1, 2] as $item) {{ if ($value !== null) {{ continue; }} $result = 2.5; break; }} }} return $result; }}");
+        let checked = check_source_full(&source).unwrap();
+        let result = &checked.functions["run"].return_type;
+        assert!(*result == types::PhpType::Mixed || matches!(result, types::PhpType::Union(members)
+            if members.contains(&types::PhpType::Float)), "{source}: {result:?}");
+    }
+}
+
+/// Non-null raw destinations retain compatible default checks for both coalescing spellings.
+#[test]
+fn test_nullable_fallback_flow_r40_raw_coalesce_defaults() {
+    for assignment in ["$x ??=", "$x = $x ??"] {
+        let property = format!("<?php class P {{ public int $n = 4; }} function run(bool $flag, P $p): void {{ if ($flag) {{ $x = 3; }} {assignment} $p->n; var_dump($x); }}");
+        check_source(&property).unwrap_or_else(|error| panic!("{property}: {error}"));
+        let skipped = format!("<?php function run(): void {{ $x = 3; $y = 0; {assignment} ($y = 7); var_dump($x, $y); }}");
+        check_source(&skipped).unwrap_or_else(|error| panic!("{skipped}: {error}"));
+    }
+}
+
+/// Pure argument and skipped-default inference cannot publish a conditional store's proof.
+#[test]
+fn test_nullable_fallback_flow_r40_speculative_proofs() {
+    for expression in [
+        "observe($flag ? ($value = 7) : 0);",
+        "observe($input ?? ($value = 7));",
+        "$stable = 3; $stable ??= (int)($value = 7);",
+        "$stable = 3; $stable = $stable ?? (int)($value = 7);",
+    ] {
+        let source = format!("<?php function observe(int $value): void {{}} function run(bool $flag, ?int $input, int $key) {{ $ints = [10]; $result = 1; $value = $ints[$key]; {expression} foreach ([1, 2] as $item) {{ if ($value !== null) {{ continue; }} $result = 2.5; break; }} return $result; }}");
+        let checked = check_source_full(&source).unwrap();
+        let result = &checked.functions["run"].return_type;
+        assert!(*result == types::PhpType::Mixed || matches!(result, types::PhpType::Union(members)
+            if members.contains(&types::PhpType::Float)), "{source}: {result:?}");
+    }
+}
+
+/// Resolver-generated include-once guards cannot export a fresh raw proof from a skipped body.
+#[test]
+fn test_nullable_fallback_flow_r40_include_once_proofs() {
+    use elephc::parser::ast::{ExprKind, StmtKind};
+    let source = "<?php function run(int $key) { $ints = [10]; $result = 1; $value = $ints[$key]; $value = 7; foreach ([1, 2] as $item) { if ($value !== null) { continue; } $result = 2.5; break; } return $result; }";
+    let mut program = parse(&tokenize(source).unwrap()).unwrap();
+    let body = program.iter_mut().find_map(|stmt| match &mut stmt.kind {
+        StmtKind::FunctionDecl { body, .. } => Some(body), _ => None,
+    }).unwrap();
+    let store = body.iter_mut().find(|stmt| matches!(&stmt.kind,
+        StmtKind::Assign { name, value } if name == "value" && matches!(value.kind, ExprKind::IntLiteral(7))))
+        .unwrap();
+    let guarded = store.clone();
+    store.kind = StmtKind::IncludeOnceGuard { label: "r40_once".to_string(), body: vec![guarded] };
+    let program = elephc::name_resolver::resolve(program).unwrap();
+    let checked = types::check(&program).unwrap();
+    let result = &checked.functions["run"].return_type;
+    assert!(*result == types::PhpType::Mixed || matches!(result, types::PhpType::Union(members)
+        if members.contains(&types::PhpType::Float)), "{result:?}");
+}
+
 /// Optional stores, overwritten parameters and finally edges cannot erase a nullable exit.
 #[test]
 fn test_nullable_fallback_flow_r39_raw_proof_joins() {
