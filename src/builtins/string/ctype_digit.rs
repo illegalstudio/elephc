@@ -13,7 +13,10 @@
 
 builtin! {
     contract: "ctype_digit",
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::CtypeDigit,
+    // php-src takes `mixed`: an int is a character code or its digits, every other non-string
+    // is false. The operand keeps its own type so the backend can tell them apart.
+    semantics: crate::builtins::semantics::with_argument_lowering(
+        crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::CtypeDigit),
+        crate::builtins::semantics::BuiltinArgumentLowering::PreserveValues,
     ),
 }
