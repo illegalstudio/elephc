@@ -58,9 +58,23 @@ unset($xml, $file, $node, $mixed, $object, $dynamic, $computed, $saved, $swap, $
     let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
     let expected = "<?xml version=\"1.0\"?>\n<r><a>2</a></r>\n<?xml version=\"1.0\"?>\n<f><a>2</a></f>\n<?xml version=\"1.0\"?>\n<r/>\n<?xml version=\"1.0\"?>\n<m><a>2</a></m>\n<?xml version=\"1.0\"?>\n<o><a>2</a></o>\nkey|<?xml version=\"1.0\"?>\n<d><a>2</a></d>\nbase|name-value|key|convert|<?xml version=\"1.0\"?>\n<old/>\n<?xml version=\"1.0\"?>\n<new><a>new</a></new>\nswap|<?xml version=\"1.0\"?>\n<old><a>1</a><a>2</a></old>\n<?xml version=\"1.0\"?>\n<new><a>2</a></new>\nkey|key|quiet|key|key|quiet|";
+    let widened_name = r#"<?php
+function unsetWidenedNativeName(mixed $target): void {
+    $name = str_repeat('a', 1);
+    unset($target->{$name}[0]);
+    $name = json_decode('{}');
+    echo gettype($name), '|';
+}
+$xml = new SimpleXMLElement('<w><a>1</a><a>2</a></w>');
+unsetWidenedNativeName($xml);
+echo $xml->asXML();
+unset($xml);
+"#;
     assert_bundle_with(&[
         BundleCase { name: "opaque_property_unset_aot", source, expected },
         BundleCase { name: "opaque_property_unset_eval", source: &eval, expected },
+        BundleCase { name: "opaque_unset_widened_name", source: widened_name,
+            expected: "object|<?xml version=\"1.0\"?>\n<w><a>2</a></w>\n" },
     ], |source| {
         let out = compile_and_run_with_heap_debug(source);
         assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);

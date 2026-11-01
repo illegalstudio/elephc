@@ -472,11 +472,9 @@ pub(super) fn park_lowered_unset_operand(
 ) -> Expr {
     let ty = ctx.builder.value_php_type(value.value);
     let name = ctx.declare_hidden_temp(ty.clone());
-    let retained = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
-    ctx.store_local(&name, retained, ty, Some(span));
-    if ctx.value_is_owning_temporary(value) {
-        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
-    }
+    // Local reads can acquire conversion storage only after frame types settle.
+    // Use the shared retaining-store cleanup, which preserves that provisional release.
+    store_value_into_temp(ctx, &name, ty, value, span);
     let slot = ctx.local_slots[&name];
     register_owned_call_operand(ctx, slot, span);
     owners.push(slot);
