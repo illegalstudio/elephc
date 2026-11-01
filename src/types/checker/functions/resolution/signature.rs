@@ -162,6 +162,7 @@ impl Checker {
                 checker.boxed_parameter_locals.extend(decl.params.iter().enumerate()
                     .filter(|(index, _)| decl.param_types.get(*index).is_none_or(Option::is_none))
                     .map(|(_, name)| name.clone()));
+                checker.seed_parameter_value_proofs(&local_env);
                 for stmt in &decl.body {
                     if let Err(error) = checker.check_stmt(stmt, &mut local_env) {
                         errors.extend(error.flatten());

@@ -318,14 +318,14 @@ fn check_assign_value_type(
                 checker.guarded_union_types.remove(name);
             }
             if checker.local_flow_read_is_stable(name) {
-                if stored_non_null && env.get(name).is_some_and(type_is_definitely_non_null) {
+                if stored_non_null && env.get(name).is_some_and(Checker::is_raw_non_null_contract) {
                     // Keep a successful fresh-value proof available to later local copies.
                     // A same-type contract changes no physical representation.
                     let storage = env.get(name).expect("successful assignment").clone();
                     checker.guarded_union_types.entry(name.to_string())
                         .or_insert(GuardedLocalStorage { ty: storage, coalesced: false });
                 } else if checker.guarded_union_types.get(name)
-                    .is_some_and(|storage| type_is_definitely_non_null(&storage.ty))
+                    .is_some_and(|storage| Checker::is_raw_non_null_contract(&storage.ty))
                 {
                     // An unproved replacement ends a previous raw-value proof.
                     checker.guarded_union_types.remove(name);

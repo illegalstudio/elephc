@@ -150,9 +150,7 @@ impl Checker {
                 | ExprKind::Print(_) => true,
             ExprKind::Variable(name) => self.local_flow_read_is_stable(name)
                 && self.definitely_bound_locals.contains(name)
-                && (self.guarded_local_storage_type(value, env).is_some()
-                    || (self.local_parameter_names.contains(name)
-                        && !self.boxed_parameter_locals.contains(name))),
+                && self.guarded_local_storage_type(value, env).is_some(),
             ExprKind::FunctionCall { name, .. }
                 if self.builtin_call_types.contains_key(&value.span) => {
                 crate::builtins::registry::lookup(name.as_str()).is_some_and(|def| {

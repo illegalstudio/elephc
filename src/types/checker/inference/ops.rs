@@ -596,6 +596,7 @@ impl Checker {
                     .filter(|(_, annotation, _, _)| annotation.is_none())
                     .map(|(name, _, _, _)| name.clone()));
                 checker.ref_assign_aliased_locals.extend(ref_assign_captures);
+                checker.seed_parameter_value_proofs(&closure_sig.env);
                 for stmt in body {
                     checker.check_stmt(stmt, &mut closure_sig.env)?;
                 }

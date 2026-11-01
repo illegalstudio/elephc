@@ -63,6 +63,9 @@ pub(super) fn stabilize_loop_storage(
     }).collect();
     let backedges = super::super::loop_backedges::backedge_writes(body, update, condition,
         &|expr| checker.expr_is_declared_never_call(expr));
+    let mut raw_proof_kills: HashSet<String> = backedges.values.iter().map(|(name, _)| (*name).to_string())
+        .chain(backedges.references.iter().map(|name| (*name).to_string()))
+        .chain(backedges.unbound.iter().map(|name| (*name).to_string())).collect();
     let mut infer = |expr: &Expr, analysis_env: &TypeEnv| {
         let is_call = matches!(
             expr.kind,
@@ -119,6 +122,7 @@ pub(super) fn stabilize_loop_storage(
     for call in &backedges.calls {
         if let Some(outputs) = checker.boxed_reference_outputs.get(&(
             checker.current_loop_storage_scope.clone(), call.span)) {
+            raw_proof_kills.extend(outputs.keys().cloned());
             incoming.extend(outputs.iter().filter(|(name, _)| narrowed.contains(*name))
                 .map(|(name, ty)| (name.clone(), ty.clone())));
         }
@@ -130,6 +134,10 @@ pub(super) fn stabilize_loop_storage(
     checker.pending_ref_capture_invalidations = entry_pending_captures;
     checker.definitely_bound_locals = entry_bound;
     checker.pending_null_probe_roots.truncate(entry_pending_probes);
+    checker.guarded_union_types.retain(|name, storage| {
+        !Checker::is_raw_non_null_contract(&storage.ty)
+            || (!backedges.unbind_all && !raw_proof_kills.contains(name))
+    });
     let mut unbound = backedges.unbound;
     if backedges.unbind_all { unbound.extend(snapshot.keys().map(String::as_str)); }
     for name in unbound {

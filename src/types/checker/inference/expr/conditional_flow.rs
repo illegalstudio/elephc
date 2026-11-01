@@ -351,7 +351,12 @@ impl Checker {
                 let old_storage = edge.storage.get(name).map(|entry| &entry.ty).unwrap_or(&before);
                 let new_storage = after.storage.get(name).map(|entry| &entry.ty).unwrap_or(ty);
                 let storage = self.join_flow_views(old_storage, new_storage);
-                edge.storage.insert(name.clone(), GuardedLocalStorage { ty: storage, coalesced: false });
+                // Physical joins do not recreate a raw proof that the finally store killed.
+                if storage != read || !Self::is_raw_non_null_contract(&storage)
+                    || after.storage.get(name).is_some_and(|entry| entry.ty == storage)
+                {
+                    edge.storage.insert(name.clone(), GuardedLocalStorage { ty: storage, coalesced: false });
+                } else { edge.storage.remove(name); }
                 edge.views.insert(name.clone(), read);
                 edge.origins.remove(name);
             }
@@ -524,6 +529,13 @@ impl Checker {
     /// Updates tracked reads and invalidates contracts that no longer cover all possible writes.
     fn publish_conditional_flow(&mut self, flow: ConditionalFlow, env: &mut TypeEnv) {
         self.definitely_bound_locals = flow.bound_joined.unwrap_or(flow.bound_entry);
+        // Raw entries are value proofs, so an optional arm cannot publish a new one.
+        // Include keys absent from flow.views: their unchanged Int read hides the write.
+        self.guarded_union_types.retain(|name, storage| {
+            !Self::is_raw_non_null_contract(&storage.ty)
+                || (!flow.changed.contains(name)
+                    && flow.storage.get(name).is_some_and(|entry| entry.ty == storage.ty))
+        });
         for name in flow.changed {
             let ty = flow.joined.get(&name).unwrap_or(&flow.views[&name]).clone();
             let storage = flow.physical[&name].clone();

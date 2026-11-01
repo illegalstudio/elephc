@@ -260,6 +260,7 @@ impl Checker {
                             checker.boxed_parameter_locals.extend(method.params.iter()
                                 .filter(|(_, annotation, _, _)| annotation.is_none())
                                 .map(|(name, _, _, _)| name.clone()));
+                            checker.seed_parameter_value_proofs(&method_env);
                             for s in &method.body {
                                 if let Err(error) = checker.check_stmt(s, &mut method_env) {
                                     method_errors.extend(error.flatten());

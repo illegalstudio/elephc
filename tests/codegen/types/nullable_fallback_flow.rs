@@ -9,6 +9,41 @@
 
 use super::*;
 
+/// Raw proofs do not survive skipped stores, unproved parameter writes or finally continuations.
+#[test]
+fn test_nullable_fallback_flow_r39_raw_proof_runtime() {
+    for (body, receiver, outer_for) in [
+        ("$value = $ints[$key]; if ($flag) { $value = 7; }", "$value", false),
+        ("$value = $ints[$key]; if ($flag) { $value = 7; }", "$value", true),
+        ("$value = $ints[$key]; switch ($key) { case 1: $value = 7; break; }", "$value", false),
+        ("$value = $ints[$key]; if ($flag) { $value = 7; } $copy = $value;", "$copy", false),
+        ("$default = $ints[$key]; $copy = $default;", "$copy", false),
+        ("do { try { $value = 7; continue; } finally { $value = $ints[$key]; } } while (false);", "$value", false),
+        ("$value = $ints[$key]; do { try { $value = 7; continue; } finally { $value = $ints[$key]; } } while (false);", "$value", false),
+    ] {
+        let header = if outer_for { "for ($item = 0; $item < 2; $item++)" }
+            else { "foreach ([1, 2] as $item)" };
+        // Compare the hit's numeric output: base already promotes its skipped float alternative.
+        let source = format!("<?php function run(int $default, bool $flag, int $key) {{ $ints = [10]; $result = 1; {header} {{ {body} if ({receiver} !== null) {{ continue; }} $result = 2.5; break; }} return $result; }} var_dump(run(7, false, 5)); echo run(7, false, 0), \"\\n\";");
+        assert_nullable_flow_cli_heap_output(&source, "float(2.5)\n1\n");
+    }
+}
+
+/// Each function-like scope retains its declared parameter proof until a write invalidates it.
+#[test]
+fn test_nullable_fallback_flow_r39_parameter_proofs_runtime() {
+    let source = r#"<?php
+function readFallback(?int $value, int $default): int { $value ??= $default; return $value; }
+final class FallbackOwner {
+    public function read(?int $value, int $default): int { $value ??= $default; return $value; }
+}
+$owner = new FallbackOwner();
+$read = function (?int $value, int $default): int { $value ??= $default; return $value; };
+var_dump(readFallback(null, 7), $owner->read(null, 8), $read(null, 9));
+"#;
+    assert_nullable_flow_cli_heap_output(source, "int(7)\nint(8)\nint(9)\n");
+}
+
 /// Fallible stores preserve null through conditional bindings, guards and prior fallbacks.
 #[test]
 fn test_nullable_fallback_flow_r38_fallible_store_runtime() {

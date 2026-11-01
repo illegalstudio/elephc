@@ -9,6 +9,37 @@
 
 use super::*;
 
+/// Optional stores, overwritten parameters and finally edges cannot erase a nullable exit.
+#[test]
+fn test_nullable_fallback_flow_r39_raw_proof_joins() {
+    for (body, receiver, outer_for) in [
+        ("$value = $ints[$key]; if ($flag) { $value = 7; }", "$value", false),
+        ("$value = $ints[$key]; if ($flag) { $value = 7; }", "$value", true),
+        ("$value = $ints[$key]; switch ($key) { case 1: $value = 7; break; }", "$value", false),
+        ("$value = $ints[$key]; if ($flag) { $value = 7; } $copy = $value;", "$copy", false),
+        ("$default = $ints[$key]; $copy = $default;", "$copy", false),
+        ("do { try { $value = 7; continue; } finally { $value = $ints[$key]; } } while (false);", "$value", false),
+        ("$value = $ints[$key]; do { try { $value = 7; continue; } finally { $value = $ints[$key]; } } while (false);", "$value", false),
+    ] {
+        let header = if outer_for { "for ($item = 0; $item < 2; $item++)" }
+            else { "foreach ([1, 2] as $item)" };
+        let source = format!("<?php function run(int $default, bool $flag, int $key) {{ $ints = [10]; $result = 1; {header} {{ {body} if ({receiver} !== null) {{ continue; }} $result = 2.5; break; }} return $result; }}");
+        let checked = check_source_full(&source).unwrap();
+        let result = &checked.functions["run"].return_type;
+        assert!(*result == types::PhpType::Mixed || matches!(result, types::PhpType::Union(members)
+            if members.len() == 2 && members.contains(&types::PhpType::Int)
+                && members.contains(&types::PhpType::Float)), "{source}: {result:?}");
+    }
+}
+
+/// Function, method and closure parameters seed proofs from their own declared entry values.
+#[test]
+fn test_nullable_fallback_flow_r39_parameter_proofs() {
+    let source = "<?php function readFallback(?int $value, int $default): int { $value ??= $default; return $value; } final class FallbackOwner { public function read(?int $value, int $default): int { $value ??= $default; return $value; } } $read = function (?int $value, int $default): int { $value ??= $default; return $value; };";
+    check_source(source).unwrap();
+    expect_error("<?php function run(?int $value, int $default, int $key): int { $ints = [10]; $default = $ints[$key]; $value ??= $default; return $value; }", "return type expects int");
+}
+
 /// A fallible RHS cannot prove a nullable binding suitable for a non-null parameter.
 #[test]
 fn test_nullable_fallback_flow_r38_fallible_store_contracts() {
