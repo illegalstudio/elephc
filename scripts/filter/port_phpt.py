@@ -5,7 +5,8 @@ Called from:
 - Repository maintenance: `python3 scripts/filter/port_phpt.py`.
 
 Key details:
-- Reads the vendored php-src 8.5.10 ext/filter tests directory.
+- Reads the vendored php-src 8.5.10 ext/filter tests directory; override it with
+  `ELEPHC_PHP_SRC_FILTER_TESTS` when regenerating outside this workstation.
 - Materialises request superglobals and filter.default from the PHPT sections so CLI
   fixtures exercise the same filter semantics as the web SAPI originals.
 - Emits tests/fixtures/filter_phpt/cases.json plus one Rust test entry point per PHPT.
@@ -14,14 +15,24 @@ Key details:
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from urllib.parse import unquote_plus
 
 ROOT = Path(__file__).resolve().parents[2]
 PHP_SRC = Path(
-    "/Users/guillaumeloulier/PhpstormProjects/oss/php-src-8.5.10-oracle/ext/filter/tests"
+    os.environ.get(
+        "ELEPHC_PHP_SRC_FILTER_TESTS",
+        "/Users/guillaumeloulier/PhpstormProjects/oss/php-src-8.5.10-oracle/ext/filter/tests",
+    )
 )
+if not PHP_SRC.is_dir():
+    raise SystemExit(
+        "ext/filter PHPT source not found at "
+        f"{PHP_SRC}; set ELEPHC_PHP_SRC_FILTER_TESTS to the php-src 8.5.10 "
+        "ext/filter/tests directory"
+    )
 FIXTURE_DIR = ROOT / "tests" / "fixtures" / "filter_phpt"
 TEST_FILE = ROOT / "tests" / "codegen" / "filter_phpt.rs"
 
@@ -101,7 +112,7 @@ def php_array(value) -> str:
         return "[" + ", ".join(php_array(item) for item in value) + "]"
     return php_single(str(value))
 
-def setup_code(path_name: str, section: dict[str, str]) -> str:
+def setup_code(path_name: str, section: dict[str, str], needs_input: bool = False) -> str:
     """Builds the request-superglobal and filter.default setup prefix."""
     lines: list[str] = []
     ini = section.get("INI", "")
@@ -167,6 +178,31 @@ def setup_code(path_name: str, section: dict[str, str]) -> str:
             seed("INPUT_GET", {})
         return "\n".join(lines)
 
+    # `filter_input*()` reads the raw SAPI payload, not live superglobals. Seed the prelude's
+    # raw snapshot from the PHPT --GET--/--POST--/--COOKIE--/--ENV-- sections before the body.
+    if needs_input:
+        seed = lambda constant, values: lines.append(
+            f"__elephc_filter_seed_request({constant}, {php_array(values)}, "
+            f"'unsafe_raw', 0, false);"
+        )
+        if get_values is not None:
+            seed("INPUT_GET", get_values)
+        if post_values is not None:
+            seed("INPUT_POST", post_values)
+        if cookie is not None:
+            seed("INPUT_COOKIE", cookie_values)
+        if env_values:
+            seed("INPUT_ENV", env_values)
+            seed("INPUT_SERVER", env_values)
+            for name, value in env_values.items():
+                lines.append(f"putenv({php_single(name + '=' + value)});")
+        else:
+            # CLI PHP exposes its SAPI-owned `$_SERVER` keys and `$_ENV` to
+            # filter_input(); snapshot the live arrays after the CLI seeds them.
+            lines.append("__elephc_filter_seed_request(INPUT_SERVER, $_SERVER, 'unsafe_raw', 0, false);")
+            lines.append("__elephc_filter_seed_request(INPUT_ENV, $_ENV, 'unsafe_raw', 0, false);")
+        return "\n".join(lines)
+
     if get_values is not None:
         lines.append(f"$_GET = {php_array(get_values)};")
     if post_values is not None:
@@ -200,7 +236,8 @@ def source_for(path_name: str, section: dict[str, str]) -> str:
     body = file[len("<?php") :]
     body = re.sub(r"\?>\s*$", "", body)
     body = re.sub(r"^\s*ini_set\('html_errors'.*\)\s*;?\s*$", "", body, flags=re.M)
-    setup = setup_code(path_name, section)
+    needs_input = any(name in body for name in ("filter_input", "filter_has_var"))
+    setup = setup_code(path_name, section, needs_input)
     return "<?php\n" + (setup + "\n" if setup else "") + body
 
 

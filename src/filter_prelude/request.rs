@@ -29,10 +29,25 @@ pub(crate) struct FilterDefault {
 }
 
 impl Default for FilterDefault {
-    /// Returns php-src's default: no filtering beyond `unsafe_raw`.
+    /// Returns php-src's default: no filtering beyond `unsafe_raw`, with the internal
+    /// `filter.default_flags` default `FILTER_FLAG_NO_ENCODE_QUOTES`.
     fn default() -> Self {
-        Self { name: "unsafe_raw".to_string(), flags: 0 }
+        Self {
+            name: "unsafe_raw".to_string(),
+            flags: 0x80,
+        }
     }
+}
+
+/// Resolves a filter.default name with php-src's case-insensitive `strcasecmp` rule.
+///
+/// Unknown and empty values fall back to `unsafe_raw`, exactly like `UpdateDefaultFilter`.
+fn canonical_filter_name(value: &str) -> &'static str {
+    let value = value.trim();
+    super::surface::FILTER_TABLE
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(value))
+        .map_or("unsafe_raw", |(name, _)| *name)
 }
 
 /// Returns the filter.default configuration from the compiler's `--ini` overrides.
@@ -40,7 +55,7 @@ pub(crate) fn config_from_overrides(overrides: &[(String, String)]) -> FilterDef
     let mut config = FilterDefault::default();
     for (name, value) in overrides {
         match name.as_str() {
-            "filter.default" => config.name = value.clone(),
+            "filter.default" => config.name = canonical_filter_name(value).to_string(),
             "filter.default_flags" => config.flags = leading_integer(value),
             _ => {}
         }
@@ -82,12 +97,16 @@ fn state_class() -> Stmt {
         .build()
 }
 
-/// Builds `__elephc_filter_apply_default(mixed, int, int): mixed`, recursing through arrays.
+/// Builds `__elephc_filter_apply_default(mixed, int, int, bool): mixed`, recursing through arrays.
+///
+/// `filter.default` stores the filter's own result in superglobals. `parse_str()` is the one
+/// caller that stringifies, because PHP's PARSE_STRING input path converts each filtered value.
 fn apply_default_decl() -> Stmt {
     function("__elephc_filter_apply_default")
         .param("value", t_mixed())
         .param("filter", t_int())
         .param("flags", t_int())
+        .param_default("stringify", crate::synthetic_class::t_bool(), e_bool(false))
         .returns(t_mixed())
         .body(vec![
             s_if(
@@ -101,6 +120,7 @@ fn apply_default_decl() -> Stmt {
                             e_var("element"),
                             e_var("filter"),
                             e_var("flags"),
+                            e_var("stringify"),
                         ]),
                     )]),
                     s_return(e_var("out")),
@@ -118,11 +138,21 @@ fn apply_default_decl() -> Stmt {
                     BinOp::Or,
                     e_call("is_null", vec![e_var("filtered")]),
                 ),
-                vec![s_return(e_str(""))],
+                vec![s_if(
+                    e_var("stringify"),
+                    vec![s_return(e_str(""))],
+                    vec![],
+                    Some(vec![s_return(e_var("filtered"))]),
+                )],
                 vec![],
                 None,
             ),
-            s_return(e_cast(crate::parser::ast::CastType::String, e_var("filtered"))),
+            s_if(
+                e_var("stringify"),
+                vec![s_return(e_cast(crate::parser::ast::CastType::String, e_var("filtered")))],
+                vec![],
+                Some(vec![s_return(e_var("filtered"))]),
+            ),
         ])
         .build()
 }
@@ -139,38 +169,46 @@ fn assign_global(name: &str) -> Vec<Stmt> {
     ]
 }
 
-/// Builds `__elephc_filter_seed_request(int, array, string, int, bool): void`.
+/// Builds `__elephc_filter_seed_request(int, mixed, string, int, bool, bool): void`.
 fn seed_request_decl() -> Stmt {
     function("__elephc_filter_seed_request")
         .param("type", t_int())
-        .param("values", t_array())
+        .param("values", t_mixed())
         .param("default", TypeExpr::Str)
         .param("flags", t_int())
         .param_default("deprecate", crate::synthetic_class::t_bool(), e_bool(true))
+        .param_default("snapshot", crate::synthetic_class::t_bool(), e_bool(true))
         .returns(TypeExpr::Void)
         .body(vec![
-            s_assign("raw", e_array(vec![])),
-            s_foreach(e_var("values"), Some("key"), "value", vec![s_array_assign(
-                "raw",
-                e_var("key"),
-                e_var("value"),
-            )]),
             s_if(
-                crate::synthetic_class::e_not(e_call(
-                    "is_array",
-                    vec![e_static_prop("__ElephcFilterState", "raw")],
-                )),
-                vec![s_expr(e_assign(
-                    e_static_prop("__ElephcFilterState", "raw"),
-                    e_array(vec![]),
-                ))],
+                e_var("snapshot"),
+                vec![
+                    s_assign("raw", e_array(vec![])),
+                    s_foreach(e_var("values"), Some("key"), "value", vec![s_array_assign(
+                        "raw",
+                        e_var("key"),
+                        e_var("value"),
+                    )]),
+                    s_if(
+                        crate::synthetic_class::e_not(e_call(
+                            "is_array",
+                            vec![e_static_prop("__ElephcFilterState", "raw")],
+                        )),
+                        vec![s_expr(e_assign(
+                            e_static_prop("__ElephcFilterState", "raw"),
+                            e_array(vec![]),
+                        ))],
+                        vec![],
+                        None,
+                    ),
+                    s_expr(e_assign(
+                        e_index(e_static_prop("__ElephcFilterState", "raw"), e_var("type")),
+                        e_var("raw"),
+                    )),
+                ],
                 vec![],
-                None,
+                Some(vec![s_assign("raw", e_var("values"))]),
             ),
-            s_expr(e_assign(
-                e_index(e_static_prop("__ElephcFilterState", "raw"), e_var("type")),
-                e_var("raw"),
-            )),
             s_assign("filtered", e_var("raw")),
             s_if(
                 e_binop(
@@ -189,6 +227,7 @@ fn seed_request_decl() -> Stmt {
                                 e_var("value"),
                                 e_cast(crate::parser::ast::CastType::Int, e_call("filter_id", vec![e_var("default")])),
                                 e_var("flags"),
+                                e_bool(false),
                             ]),
                         )]),
                         s_if(
@@ -201,9 +240,8 @@ fn seed_request_decl() -> Stmt {
                                 )),
                             ),
                             vec![
-                                s_expr(e_call("trigger_error", vec![
+                                s_expr(e_call("__elephc_builtin_deprecated", vec![
                                     e_str("The filter.default ini setting is deprecated"),
-                                    e_const("E_USER_DEPRECATED"),
                                 ])),
                                 s_expr(e_assign(
                                     e_static_prop("__ElephcFilterState", "deprecated"),
@@ -260,6 +298,10 @@ fn seed_request_decl() -> Stmt {
 
 /// Builds the top-level initializer that snapshots every request array and applies the baked
 /// `filter.default` configuration.
+///
+/// `$snapshot_raw` is true for web builds, where `filter_input()` must keep the original
+/// request payload. CLI builds use the optimizer's SAPI seed instead and never call this
+/// initializer; the test harness seeds request arrays directly through `seed_request`.
 fn initialize_request_decl(config: &FilterDefault) -> Stmt {
     let call = |constant: &str, global: &str| {
         s_expr(e_call("__elephc_filter_seed_request", vec![
@@ -267,9 +309,12 @@ fn initialize_request_decl(config: &FilterDefault) -> Stmt {
             e_var(global),
             e_str(&config.name),
             e_int(config.flags),
+            e_bool(true),
+            e_var("snapshot_raw"),
         ]))
     };
     function("__elephc_filter_initialize_request")
+        .param_default("snapshot_raw", crate::synthetic_class::t_bool(), e_bool(true))
         .returns(TypeExpr::Void)
         .body(vec![
             call("INPUT_GET", "_GET"),
@@ -280,4 +325,48 @@ fn initialize_request_decl(config: &FilterDefault) -> Stmt {
             s_return_void(),
         ])
         .build()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Uses php-src's case-insensitive filter.default table and falls back to unsafe_raw.
+    #[test]
+    fn filter_default_name_resolution_matches_php() {
+        let config = config_from_overrides(&[
+            ("filter.default".to_string(), "INT".to_string()),
+            ("filter.default_flags".to_string(), "4".to_string()),
+        ]);
+        assert_eq!(config.name, "int");
+        assert_eq!(config.flags, 4);
+
+        let stripped = config_from_overrides(&[(
+            "filter.default".to_string(),
+            "STRIPPED".to_string(),
+        )]);
+        assert_eq!(stripped.name, "stripped");
+
+        for value in ["", "not-a-filter", "  "] {
+            let fallback = config_from_overrides(&[(
+                "filter.default".to_string(),
+                value.to_string(),
+            )]);
+            assert_eq!(fallback.name, "unsafe_raw", "{value:?}");
+        }
+    }
+
+    /// Keeps PHP's internal default flags when filter.default_flags is absent.
+    #[test]
+    fn filter_default_flags_default_to_no_encode_quotes() {
+        assert_eq!(FilterDefault::default().flags, 0x80);
+        let config = config_from_overrides(&[(
+            "filter.default".to_string(),
+            "string".to_string(),
+        )]);
+        assert_eq!(config.flags, 0x80);
+        let explicit =
+            config_from_overrides(&[("filter.default_flags".to_string(), "0".to_string())]);
+        assert_eq!(explicit.flags, 0);
+    }
 }

@@ -96,7 +96,11 @@ pub(crate) const CONSTANTS: &[&str] = &[
 ];
 
 /// Returns the complete filter declaration set, before name resolution.
-pub(crate) fn filter_declarations(config: request::FilterDefault, initialize: bool) -> Program {
+pub(crate) fn filter_declarations(
+    config: request::FilterDefault,
+    initialize: bool,
+    web: bool,
+) -> Program {
     internal_declarations(|| {
         let mut declarations = externs::declarations();
         declarations.extend(options::declarations());
@@ -105,9 +109,12 @@ pub(crate) fn filter_declarations(config: request::FilterDefault, initialize: bo
         declarations.extend(surface::declarations());
         declarations.extend(input::declarations());
         declarations.extend(request::declarations(&config));
-        if initialize && config.name != request::FilterDefault::default().name {
+        if initialize && web {
             declarations.push(crate::synthetic_class::s_expr(
-                crate::synthetic_class::e_call("__elephc_filter_initialize_request", vec![]),
+                crate::synthetic_class::e_call(
+                    "__elephc_filter_initialize_request",
+                    vec![crate::synthetic_class::e_bool(true)],
+                ),
             ));
         }
         declarations
@@ -140,10 +147,11 @@ pub fn inject_if_used(
     program: Program,
     inventory: &mut PreludeInventory,
 ) -> Program {
-    inject_if_used_with_config(program, request::FilterDefault::default(), false, inventory)
+    inject_if_used_with_config(program, request::FilterDefault::default(), false, false, inventory)
 }
 
 /// Prepends the filter surface with the program's `--ini filter.default` configuration.
+#[allow(dead_code)]
 pub fn inject_if_used_with_ini(
     program: Program,
     ini_overrides: &[(String, String)],
@@ -152,11 +160,28 @@ pub fn inject_if_used_with_ini(
     inject_if_used_with_ini_and_initializer(program, ini_overrides, true, inventory)
 }
 
+/// Prepends the filter surface, recording whether this is a web build for raw-input capture.
+pub fn inject_if_used_with_ini_for_sapi(
+    program: Program,
+    ini_overrides: &[(String, String)],
+    web: bool,
+    inventory: &mut PreludeInventory,
+) -> Program {
+    inject_if_used_with_config(
+        program,
+        request::config_from_overrides(ini_overrides),
+        true,
+        web,
+        inventory,
+    )
+}
+
 /// Prepends the filter surface with an explicit choice about the request-state initializer.
 ///
 /// The production pipeline bakes and seeds request state at startup. Test harnesses that
 /// populate superglobals with their own setup statements pass `false`: an initializer running
 /// before those statements would snapshot empty raw input and hide it from `filter_input()`.
+#[allow(dead_code)]
 pub fn inject_if_used_with_ini_and_initializer(
     program: Program,
     ini_overrides: &[(String, String)],
@@ -167,6 +192,7 @@ pub fn inject_if_used_with_ini_and_initializer(
         program,
         request::config_from_overrides(ini_overrides),
         initialize,
+        false,
         inventory,
     )
 }
@@ -176,6 +202,7 @@ fn inject_if_used_with_config(
     program: Program,
     config: request::FilterDefault,
     initialize: bool,
+    web: bool,
     inventory: &mut PreludeInventory,
 ) -> Program {
     let used = program_uses_surface(&program)
@@ -183,7 +210,7 @@ fn inject_if_used_with_config(
     if !used {
         return program;
     }
-    let mut declarations = filter_declarations(config, initialize);
+    let mut declarations = filter_declarations(config, initialize, web);
     inventory.record_program("filter", &declarations);
     declarations.extend(program);
     declarations

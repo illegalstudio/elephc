@@ -64,7 +64,7 @@
   },
   {
     "name": "006.phpt",
-    "source": "<?php\n$_POST = ['foo' => '<b>abc</b>'];\n$_REQUEST = ['foo' => '<b>abc</b>'];\n\necho filter_input(INPUT_POST, 'foo', FILTER_SANITIZE_SPECIAL_CHARS);\n",
+    "source": "<?php\n__elephc_filter_seed_request(INPUT_POST, ['foo' => '<b>abc</b>'], 'unsafe_raw', 0, false);\n__elephc_filter_seed_request(INPUT_SERVER, $_SERVER, 'unsafe_raw', 0, false);\n__elephc_filter_seed_request(INPUT_ENV, $_ENV, 'unsafe_raw', 0, false);\n\necho filter_input(INPUT_POST, 'foo', FILTER_SANITIZE_SPECIAL_CHARS);\n",
     "expected": "&#60;b&#62;abc&#60;/b&#62;",
     "expectf": false,
     "xfail": false,
@@ -73,7 +73,7 @@
   },
   {
     "name": "007.phpt",
-    "source": "<?php\n$_GET = ['a' => 'qwe', 'abc' => '<a>href</a>'];\n$_POST = ['b' => 'qwe', 'bbc' => '<a>href</a>'];\n$_REQUEST = ['a' => 'qwe', 'abc' => '<a>href</a>', 'b' => 'qwe', 'bbc' => '<a>href</a>'];\n\n\nvar_dump(filter_has_var(INPUT_GET, \"a\"));\nvar_dump(filter_has_var(INPUT_GET, \"abc\"));\nvar_dump(filter_has_var(INPUT_GET, \"nonex\"));\nvar_dump(filter_has_var(INPUT_GET, \" \"));\nvar_dump(filter_has_var(INPUT_GET, \"\"));\n\nvar_dump(filter_has_var(INPUT_POST, \"b\"));\nvar_dump(filter_has_var(INPUT_POST, \"bbc\"));\nvar_dump(filter_has_var(INPUT_POST, \"nonex\"));\nvar_dump(filter_has_var(INPUT_POST, \" \"));\nvar_dump(filter_has_var(INPUT_POST, \"\"));\n\necho \"Done\\n\";\n",
+    "source": "<?php\n__elephc_filter_seed_request(INPUT_GET, ['a' => 'qwe', 'abc' => '<a>href</a>'], 'unsafe_raw', 0, false);\n__elephc_filter_seed_request(INPUT_POST, ['b' => 'qwe', 'bbc' => '<a>href</a>'], 'unsafe_raw', 0, false);\n__elephc_filter_seed_request(INPUT_SERVER, $_SERVER, 'unsafe_raw', 0, false);\n__elephc_filter_seed_request(INPUT_ENV, $_ENV, 'unsafe_raw', 0, false);\n\n\nvar_dump(filter_has_var(INPUT_GET, \"a\"));\nvar_dump(filter_has_var(INPUT_GET, \"abc\"));\nvar_dump(filter_has_var(INPUT_GET, \"nonex\"));\nvar_dump(filter_has_var(INPUT_GET, \" \"));\nvar_dump(filter_has_var(INPUT_GET, \"\"));\n\nvar_dump(filter_has_var(INPUT_POST, \"b\"));\nvar_dump(filter_has_var(INPUT_POST, \"bbc\"));\nvar_dump(filter_has_var(INPUT_POST, \"nonex\"));\nvar_dump(filter_has_var(INPUT_POST, \" \"));\nvar_dump(filter_has_var(INPUT_POST, \"\"));\n\necho \"Done\\n\";\n",
     "expected": "bool(true)\nbool(true)\nbool(false)\nbool(false)\nbool(false)\nbool(true)\nbool(true)\nbool(false)\nbool(false)\nbool(false)\nDone",
     "expectf": false,
     "xfail": false,
@@ -114,7 +114,7 @@
   },
   {
     "name": "011.phpt",
-    "source": "<?php\n$_GET = ['a' => '<b>test</b>', 'b' => 'http://example.com'];\n$_POST = ['c' => '<p>string</p>', 'd' => '12345.7'];\n$_REQUEST = ['a' => '<b>test</b>', 'b' => 'http://example.com', 'c' => '<p>string</p>', 'd' => '12345.7'];\n\nvar_dump(filter_input(INPUT_GET, \"b\", FILTER_SANITIZE_URL));\nvar_dump(filter_input(INPUT_GET, \"a\", FILTER_SANITIZE_SPECIAL_CHARS, array(1,2,3,4,5)));\ntry {\n    filter_input(INPUT_GET, \"b\", FILTER_VALIDATE_FLOAT, new stdClass);\n} catch (TypeError $exception) {\n    echo $exception->getMessage() . \"\\n\";\n}\nvar_dump(filter_input(INPUT_POST, \"d\", FILTER_VALIDATE_FLOAT));\nvar_dump(filter_input(INPUT_POST, \"c\", FILTER_SANITIZE_SPECIAL_CHARS));\nvar_dump(filter_input(INPUT_POST, \"d\", FILTER_VALIDATE_INT));\n\necho \"Done\\n\";\n",
+    "source": "<?php\n__elephc_filter_seed_request(INPUT_GET, ['a' => '<b>test</b>', 'b' => 'http://example.com'], 'unsafe_raw', 0, false);\n__elephc_filter_seed_request(INPUT_POST, ['c' => '<p>string</p>', 'd' => '12345.7'], 'unsafe_raw', 0, false);\n__elephc_filter_seed_request(INPUT_SERVER, $_SERVER, 'unsafe_raw', 0, false);\n__elephc_filter_seed_request(INPUT_ENV, $_ENV, 'unsafe_raw', 0, false);\n\nvar_dump(filter_input(INPUT_GET, \"b\", FILTER_SANITIZE_URL));\nvar_dump(filter_input(INPUT_GET, \"a\", FILTER_SANITIZE_SPECIAL_CHARS, array(1,2,3,4,5)));\ntry {\n    filter_input(INPUT_GET, \"b\", FILTER_VALIDATE_FLOAT, new stdClass);\n} catch (TypeError $exception) {\n    echo $exception->getMessage() . \"\\n\";\n}\nvar_dump(filter_input(INPUT_POST, \"d\", FILTER_VALIDATE_FLOAT));\nvar_dump(filter_input(INPUT_POST, \"c\", FILTER_SANITIZE_SPECIAL_CHARS));\nvar_dump(filter_input(INPUT_POST, \"d\", FILTER_VALIDATE_INT));\n\necho \"Done\\n\";\n",
     "expected": "string(18) \"http://example.com\"\nstring(27) \"&#60;b&#62;test&#60;/b&#62;\"\nfilter_input(): Argument #4 ($options) must be of type array|int, stdClass given\nfloat(12345.7)\nstring(29) \"&#60;p&#62;string&#60;/p&#62;\"\nbool(false)\nDone",
     "expectf": false,
     "xfail": false,
@@ -128,7 +128,7 @@
   },
   {
     "name": "012.phpt",
-    "source": "<?php\n\n\nvar_dump(filter_input(INPUT_GET, \"test\"));\nvar_dump(filter_input(INPUT_POST, \"test\"));\nvar_dump(filter_input(INPUT_COOKIE, \"\"));\n\nvar_dump(filter_input(INPUT_GET, \"test\", FILTER_DEFAULT, FILTER_NULL_ON_FAILURE));\nvar_dump(filter_input(INPUT_POST, \"test\", FILTER_DEFAULT, FILTER_NULL_ON_FAILURE));\nvar_dump(filter_input(INPUT_COOKIE, \"\", FILTER_DEFAULT, FILTER_NULL_ON_FAILURE));\n\necho \"Done\\n\";\n",
+    "source": "<?php\n__elephc_filter_seed_request(INPUT_SERVER, $_SERVER, 'unsafe_raw', 0, false);\n__elephc_filter_seed_request(INPUT_ENV, $_ENV, 'unsafe_raw', 0, false);\n\n\nvar_dump(filter_input(INPUT_GET, \"test\"));\nvar_dump(filter_input(INPUT_POST, \"test\"));\nvar_dump(filter_input(INPUT_COOKIE, \"\"));\n\nvar_dump(filter_input(INPUT_GET, \"test\", FILTER_DEFAULT, FILTER_NULL_ON_FAILURE));\nvar_dump(filter_input(INPUT_POST, \"test\", FILTER_DEFAULT, FILTER_NULL_ON_FAILURE));\nvar_dump(filter_input(INPUT_COOKIE, \"\", FILTER_DEFAULT, FILTER_NULL_ON_FAILURE));\n\necho \"Done\\n\";\n",
     "expected": "NULL\nNULL\nNULL\nbool(false)\nbool(false)\nbool(false)\nDone",
     "expectf": false,
     "xfail": false,
@@ -340,7 +340,7 @@
   },
   {
     "name": "035.phpt",
-    "source": "<?php\n$_GET = ['ar' => ['elm1' => '1234', 'elm2' => '0660'], 'a' => '0234'];\n$_POST = ['d' => '379'];\n$_REQUEST = ['ar' => ['elm1' => '1234', 'elm2' => '0660'], 'a' => '0234', 'd' => '379'];\n\n$ret = filter_input(INPUT_GET, 'a', FILTER_VALIDATE_INT);\nvar_dump($ret);\n\n$ret = filter_input(INPUT_GET, 'a', FILTER_VALIDATE_INT, array('flags'=>FILTER_FLAG_ALLOW_OCTAL));\nvar_dump($ret);\n\n$ret = filter_input(INPUT_GET, 'ar', FILTER_VALIDATE_INT, array('flags'=>FILTER_REQUIRE_ARRAY));\nvar_dump($ret);\n\n$ret = filter_input(INPUT_GET, 'ar', FILTER_VALIDATE_INT, array('flags'=>FILTER_FLAG_ALLOW_OCTAL|FILTER_REQUIRE_ARRAY));\nvar_dump($ret);\n\n",
+    "source": "<?php\n__elephc_filter_seed_request(INPUT_GET, ['ar' => ['elm1' => '1234', 'elm2' => '0660'], 'a' => '0234'], 'unsafe_raw', 0, false);\n__elephc_filter_seed_request(INPUT_POST, ['d' => '379'], 'unsafe_raw', 0, false);\n__elephc_filter_seed_request(INPUT_SERVER, $_SERVER, 'unsafe_raw', 0, false);\n__elephc_filter_seed_request(INPUT_ENV, $_ENV, 'unsafe_raw', 0, false);\n\n$ret = filter_input(INPUT_GET, 'a', FILTER_VALIDATE_INT);\nvar_dump($ret);\n\n$ret = filter_input(INPUT_GET, 'a', FILTER_VALIDATE_INT, array('flags'=>FILTER_FLAG_ALLOW_OCTAL));\nvar_dump($ret);\n\n$ret = filter_input(INPUT_GET, 'ar', FILTER_VALIDATE_INT, array('flags'=>FILTER_REQUIRE_ARRAY));\nvar_dump($ret);\n\n$ret = filter_input(INPUT_GET, 'ar', FILTER_VALIDATE_INT, array('flags'=>FILTER_FLAG_ALLOW_OCTAL|FILTER_REQUIRE_ARRAY));\nvar_dump($ret);\n\n",
     "expected": "bool(false)\nint(156)\narray(2) {\n  [\"elm1\"]=>\n  int(1234)\n  [\"elm2\"]=>\n  bool(false)\n}\narray(2) {\n  [\"elm1\"]=>\n  int(1234)\n  [\"elm2\"]=>\n  int(432)\n}",
     "expectf": false,
     "xfail": false,
@@ -358,7 +358,7 @@
   },
   {
     "name": "037.phpt",
-    "source": "<?php\n$_GET = ['a' => '1', 'b' => '2'];\n$_REQUEST = ['a' => '1', 'b' => '2'];\n\nfunction myfunc($val) {\n    return $val . '_callback';\n}\necho filter_input(INPUT_GET, 'a', FILTER_CALLBACK, array(\"options\"=>'myfunc'));\necho \"\\n\";\necho filter_input(INPUT_GET, 'b', FILTER_VALIDATE_INT);\necho \"\\n\";\n$data = \"data\";\n\necho filter_var($data, FILTER_CALLBACK, array(\"options\"=>'myfunc'));\necho \"\\n\";\n\n$res = filter_input_array(INPUT_GET, array(\n                'a' => array(\n                    'filter' => FILTER_CALLBACK,\n                    'options' => 'myfunc'\n                    ),\n                'b' => FILTER_VALIDATE_INT\n        )\n    );\n\nvar_dump($res);\n",
+    "source": "<?php\n__elephc_filter_seed_request(INPUT_GET, ['a' => '1', 'b' => '2'], 'unsafe_raw', 0, false);\n__elephc_filter_seed_request(INPUT_SERVER, $_SERVER, 'unsafe_raw', 0, false);\n__elephc_filter_seed_request(INPUT_ENV, $_ENV, 'unsafe_raw', 0, false);\n\nfunction myfunc($val) {\n    return $val . '_callback';\n}\necho filter_input(INPUT_GET, 'a', FILTER_CALLBACK, array(\"options\"=>'myfunc'));\necho \"\\n\";\necho filter_input(INPUT_GET, 'b', FILTER_VALIDATE_INT);\necho \"\\n\";\n$data = \"data\";\n\necho filter_var($data, FILTER_CALLBACK, array(\"options\"=>'myfunc'));\necho \"\\n\";\n\n$res = filter_input_array(INPUT_GET, array(\n                'a' => array(\n                    'filter' => FILTER_CALLBACK,\n                    'options' => 'myfunc'\n                    ),\n                'b' => FILTER_VALIDATE_INT\n        )\n    );\n\nvar_dump($res);\n",
     "expected": "1_callback\n2\ndata_callback\narray(2) {\n  [\"a\"]=>\n  string(10) \"1_callback\"\n  [\"b\"]=>\n  int(2)\n}",
     "expectf": false,
     "xfail": false,
@@ -385,7 +385,7 @@
   },
   {
     "name": "040.phpt",
-    "source": "<?php\n$_GET = ['a' => '1', 'b' => '2', 'c' => '0'];\n$_POST = ['ap' => ['' => '1'], 'bp' => 'test', 'cp' => ''];\n$_REQUEST = ['a' => '1', 'b' => '2', 'c' => '0', 'ap' => ['' => '1'], 'bp' => 'test', 'cp' => ''];\n\n\nvar_dump(filter_has_var(INPUT_GET,\"\"));\nvar_dump(filter_has_var(INPUT_POST, \"ap\"));\nvar_dump(filter_has_var(INPUT_POST, \"cp\"));\nvar_dump(filter_has_var(INPUT_GET, \"a\"));\nvar_dump(filter_has_var(INPUT_GET, \"c\"));\nvar_dump(filter_has_var(INPUT_GET, \"abc\"));\nvar_dump(filter_has_var(INPUT_GET, \"cc\"));\ntry {\n    filter_has_var(-1, \"cc\");\n} catch (ValueError $exception) {\n    echo $exception->getMessage() . \"\\n\";\n}\n\nvar_dump(filter_has_var(0, \"cc\"));\n\necho \"Done\\n\";\n",
+    "source": "<?php\n__elephc_filter_seed_request(INPUT_GET, ['a' => '1', 'b' => '2', 'c' => '0'], 'unsafe_raw', 0, false);\n__elephc_filter_seed_request(INPUT_POST, ['ap' => ['' => '1'], 'bp' => 'test', 'cp' => ''], 'unsafe_raw', 0, false);\n__elephc_filter_seed_request(INPUT_SERVER, $_SERVER, 'unsafe_raw', 0, false);\n__elephc_filter_seed_request(INPUT_ENV, $_ENV, 'unsafe_raw', 0, false);\n\n\nvar_dump(filter_has_var(INPUT_GET,\"\"));\nvar_dump(filter_has_var(INPUT_POST, \"ap\"));\nvar_dump(filter_has_var(INPUT_POST, \"cp\"));\nvar_dump(filter_has_var(INPUT_GET, \"a\"));\nvar_dump(filter_has_var(INPUT_GET, \"c\"));\nvar_dump(filter_has_var(INPUT_GET, \"abc\"));\nvar_dump(filter_has_var(INPUT_GET, \"cc\"));\ntry {\n    filter_has_var(-1, \"cc\");\n} catch (ValueError $exception) {\n    echo $exception->getMessage() . \"\\n\";\n}\n\nvar_dump(filter_has_var(0, \"cc\"));\n\necho \"Done\\n\";\n",
     "expected": "bool(false)\nbool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(false)\nbool(false)\nfilter_has_var(): Argument #1 ($input_type) must be an INPUT_* constant\nbool(false)\nDone",
     "expectf": false,
     "xfail": false,
@@ -673,7 +673,7 @@
   },
   {
     "name": "bug44779.phpt",
-    "source": "<?php\n\nvar_dump(filter_input(INPUT_SERVER, \"PHP_SELF\"));\n",
+    "source": "<?php\n__elephc_filter_seed_request(INPUT_SERVER, $_SERVER, 'unsafe_raw', 0, false);\n__elephc_filter_seed_request(INPUT_ENV, $_ENV, 'unsafe_raw', 0, false);\n\nvar_dump(filter_input(INPUT_SERVER, \"PHP_SELF\"));\n",
     "expected": "string(%d) \"%s\"",
     "expectf": true,
     "xfail": false,
@@ -718,7 +718,7 @@
   },
   {
     "name": "bug49184.phpt",
-    "source": "<?php\n$_ENV['HTTP_X_FORWARDED_FOR'] = 'example.com';\n$_SERVER['HTTP_X_FORWARDED_FOR'] = 'example.com';\nputenv('HTTP_X_FORWARDED_FOR=example.com');\n\n  var_dump(filter_input(INPUT_SERVER, \"HTTP_X_FORWARDED_FOR\", FILTER_UNSAFE_RAW));\n  var_dump($_SERVER[\"HTTP_X_FORWARDED_FOR\"]);\n  var_dump(getenv(\"HTTP_X_FORWARDED_FOR\"));\n  var_dump(\"done\");\n",
+    "source": "<?php\n__elephc_filter_seed_request(INPUT_ENV, ['HTTP_X_FORWARDED_FOR' => 'example.com'], 'unsafe_raw', 0, false);\n__elephc_filter_seed_request(INPUT_SERVER, ['HTTP_X_FORWARDED_FOR' => 'example.com'], 'unsafe_raw', 0, false);\nputenv('HTTP_X_FORWARDED_FOR=example.com');\n\n  var_dump(filter_input(INPUT_SERVER, \"HTTP_X_FORWARDED_FOR\", FILTER_UNSAFE_RAW));\n  var_dump($_SERVER[\"HTTP_X_FORWARDED_FOR\"]);\n  var_dump(getenv(\"HTTP_X_FORWARDED_FOR\"));\n  var_dump(\"done\");\n",
     "expected": "string(11) \"example.com\"\nstring(11) \"example.com\"\nstring(11) \"example.com\"\nstring(4) \"done\"",
     "expectf": false,
     "xfail": true,
@@ -754,7 +754,7 @@
   },
   {
     "name": "bug50632.phpt",
-    "source": "<?php\n\n$foo = filter_input(INPUT_GET, 'foo', FILTER_VALIDATE_INT, array('flags' => FILTER_REQUIRE_SCALAR, 'options' => array('default' => 23)));\nvar_dump($foo);\n",
+    "source": "<?php\n__elephc_filter_seed_request(INPUT_SERVER, $_SERVER, 'unsafe_raw', 0, false);\n__elephc_filter_seed_request(INPUT_ENV, $_ENV, 'unsafe_raw', 0, false);\n\n$foo = filter_input(INPUT_GET, 'foo', FILTER_VALIDATE_INT, array('flags' => FILTER_REQUIRE_SCALAR, 'options' => array('default' => 23)));\nvar_dump($foo);\n",
     "expected": "int(23)",
     "expectf": false,
     "xfail": false,
@@ -781,7 +781,7 @@
   },
   {
     "name": "bug52209.phpt",
-    "source": "<?php\n\n    var_dump(filter_input(INPUT_ENV, 'PWD'));\n",
+    "source": "<?php\n__elephc_filter_seed_request(INPUT_SERVER, $_SERVER, 'unsafe_raw', 0, false);\n__elephc_filter_seed_request(INPUT_ENV, $_ENV, 'unsafe_raw', 0, false);\n\n    var_dump(filter_input(INPUT_ENV, 'PWD'));\n",
     "expected": "string(%d) \"%s\"",
     "expectf": true,
     "xfail": false,
@@ -885,7 +885,7 @@
   },
   {
     "name": "bug71063.phpt",
-    "source": "<?php\n$_ENV['PATH'] = '/';\n$_SERVER['PATH'] = '/';\nputenv('PATH=/');\n\nvar_dump($_ENV['PATH']);\nvar_dump(filter_input(INPUT_ENV, 'PATH'));\n",
+    "source": "<?php\n__elephc_filter_seed_request(INPUT_ENV, ['PATH' => '/'], 'unsafe_raw', 0, false);\n__elephc_filter_seed_request(INPUT_SERVER, ['PATH' => '/'], 'unsafe_raw', 0, false);\nputenv('PATH=/');\n\nvar_dump($_ENV['PATH']);\nvar_dump(filter_input(INPUT_ENV, 'PATH'));\n",
     "expected": "string(1) \"/\"\nstring(1) \"/\"",
     "expectf": false,
     "xfail": false,
@@ -1068,7 +1068,7 @@
   },
   {
     "name": "filter_input_array_001.phpt",
-    "source": "<?php\n\n$args = [\n    \"c\" => [\n        \"flags\" => FILTER_NULL_ON_FAILURE,\n    ]\n];\n\nvar_dump(filter_input_array(INPUT_GET, $args, true));\n",
+    "source": "<?php\n__elephc_filter_seed_request(INPUT_SERVER, $_SERVER, 'unsafe_raw', 0, false);\n__elephc_filter_seed_request(INPUT_ENV, $_ENV, 'unsafe_raw', 0, false);\n\n$args = [\n    \"c\" => [\n        \"flags\" => FILTER_NULL_ON_FAILURE,\n    ]\n];\n\nvar_dump(filter_input_array(INPUT_GET, $args, true));\n",
     "expected": "NULL",
     "expectf": false,
     "xfail": false,

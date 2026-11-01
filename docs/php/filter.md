@@ -43,7 +43,10 @@ var_dump($email); // string(15) "ada@example.com"
 - `FILTER_VALIDATE_REGEXP` with the `regexp` option.
 - `FILTER_VALIDATE_DOMAIN` with `FILTER_FLAG_HOSTNAME`.
 - `FILTER_VALIDATE_URL` with `FILTER_FLAG_PATH_REQUIRED`,
-  `FILTER_FLAG_QUERY_REQUIRED` and `uri_parser_class`.
+  `FILTER_FLAG_QUERY_REQUIRED` and `uri_parser_class`. The parser classes
+  (`Uri\Rfc3986Uri`, `Uri\WhatWgUri`) are not implemented yet; the option is
+  accepted for call-shape compatibility but validation always uses elephc's
+  RFC 3986-compatible parser.
 - `FILTER_VALIDATE_EMAIL` with `FILTER_FLAG_EMAIL_UNICODE`.
 - `FILTER_VALIDATE_IP` with `FILTER_FLAG_IPV4`, `FILTER_FLAG_IPV6`,
   `FILTER_FLAG_NO_PRIV_RANGE`, `FILTER_FLAG_NO_RES_RANGE` and
@@ -102,16 +105,19 @@ reads, which emit PHP's deprecation diagnostic.
 
 Email and `FILTER_VALIDATE_REGEXP` validation run through a pure-Rust
 PCRE-compatible engine in the `elephc-filter` bridge, so the filter surface needs
-no managed native package. Delimiters and the `i`, `m`, `s`, `x` and `D` modifiers
-are honoured; `D` rejects a trailing newline like PHP's PCRE end anchor.
+no managed native package. Delimiters and PHP's `i`, `m`, `s`, `x`, `A`, `D` and
+`u` modifiers are honoured; `$` matches before a final newline unless `D` is set,
+matching PCRE.
 
 ## Request input and `filter.default`
 
-`--ini filter.default=<name>` applies a filter to the request superglobals at request startup,
-exactly like the PHP INI directive, and `--ini filter.default_flags=<int>` supplies its flags.
-`filter_input()` and `filter_input_array()` keep reading the raw request values, so filtering
-`$_GET` does not change what `filter_input(INPUT_GET, …)` sees. The directive is deprecated in
-PHP 8.1+ and emits the same deprecation once per process.
+`--ini filter.default=<name>` applies a filter to the request superglobals at request startup
+in web builds, exactly like the PHP INI directive, and `--ini filter.default_flags=<int>`
+supplies its flags. Filter results keep their native types (`int`, `float`, `bool`), including
+`false` for a validation failure; only `parse_str()` stringifies its leaves. `filter_input()`
+and `filter_input_array()` keep reading the raw request values, so filtering `$_GET` does not
+change what `filter_input(INPUT_GET, …)` sees. The directive is deprecated in PHP 8.1+ and emits
+the same deprecation once per process.
 
 ```php
 // elephc --web --ini filter.default=special_chars app.php
@@ -122,8 +128,20 @@ echo filter_input(INPUT_GET, 'name', FILTER_SANITIZE_SPECIAL_CHARS);
 
 The request arrays are snapshotted before user code runs. In a CLI binary the HTTP request arrays
 are empty, matching PHP's CLI SAPI, while `$_ENV` and `$_SERVER` are seeded from the process
-environment; web builds parse the request into `$_GET`, `$_POST` and `$_COOKIE` first.
+environment; web builds parse the request into `$_GET`, `$_POST` and `$_COOKIE` first. A compiled
+CLI binary leaves its superglobals unfiltered: the CLI SAPI only applies `filter.default` to a
+small server-key subset, while elephc's CLI superglobals are process-environment seeds.
 
 `parse_str()` applies the same configured `filter.default` to every parsed leaf. Rejected scalar
 values become PHP's empty-string input value, while sanitizers replace the leaf with their
 sanitized string; nested arrays are walked recursively.
+
+## Known gaps
+
+- `declare(strict_types=1)` does not yet tighten the scalar `filter`, `options`, `type` or
+  `var_name` arguments; the prelude retains PHP's weak-mode coercion.
+- `FILTER_VALIDATE_REGEXP` matches PCRE's delimiter, anchor and common modifier semantics, but
+  invalid-pattern diagnostics are reported as a failed validation rather than PCRE's exact
+  compilation warning text.
+- The `Uri\Rfc3986Uri` / `Uri\WhatWgUri` parser classes are not implemented; `uri_parser_class`
+  is accepted for call-shape compatibility and validation uses the RFC 3986-compatible parser.

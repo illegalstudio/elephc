@@ -191,20 +191,12 @@ fn emit_descriptor_name_fragment(emitter: &mut Emitter, descriptor: &str) {
 
 /// Emits the current diagnostic call site's file name as a fragment.
 fn emit_diagnostic_file_fragment(emitter: &mut Emitter) {
-    let pointer = abi::symbol_scratch_reg(emitter);
-    let length = abi::secondary_scratch_reg(emitter);
-    abi::emit_load_symbol_to_reg(emitter, pointer, "_php_diagnostic_file", 0);
-    abi::emit_load_symbol_to_reg(emitter, length, "_php_diagnostic_file_len", 0);
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_reg_move(emitter, "x1", pointer);
-            abi::emit_reg_move(emitter, "x2", length);
-        }
-        Arch::X86_64 => {
-            abi::emit_reg_move(emitter, "rdi", pointer);
-            abi::emit_reg_move(emitter, "rsi", length);
-        }
-    }
+    let (pointer, length) = match emitter.target.arch {
+        Arch::AArch64 => ("x1", "x2"),
+        Arch::X86_64 => ("rdi", "rsi"),
+    };
+    abi::emit_symbol_address(emitter, pointer, "_script_source_file");
+    abi::emit_load_symbol_to_reg(emitter, length, "_script_source_file_len", 0);
     abi::emit_call_label(emitter, "__rt_diag_warning_fragment");
 }
 
