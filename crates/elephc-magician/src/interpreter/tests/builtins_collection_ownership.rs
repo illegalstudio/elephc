@@ -17,6 +17,7 @@ use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 fn array_keys_builder_releases_keys_indexes_and_partial_results() {
     for failed_insert in [None, Some(0), Some(1)] {
         let mut values = FakeOps::default();
+        let mut context = ElephcEvalContext::new();
         let first = values.int(4).unwrap();
         let second = values.int(5).unwrap();
         let source = values.alloc(FakeValue::Assoc(vec![
@@ -24,7 +25,9 @@ fn array_keys_builder_releases_keys_indexes_and_partial_results() {
         ]));
         let existing = values.values.keys().copied().collect::<Vec<_>>();
         if let Some(index) = failed_insert { values.fail_array_set_call(index); }
-        let result = eval_array_keys_result(source, &mut values);
+        let result = eval_array_declared_values_result(
+            "array_keys", &[source], None, &mut context, &mut values,
+        );
         if failed_insert.is_some() {
             assert_eq!(result, Err(EvalStatus::UnsupportedConstruct));
         } else {
@@ -58,7 +61,7 @@ fn implode_releases_traversal_keys_and_values_on_every_exit() {
             assert_eq!(result, Err(EvalStatus::UncaughtThrowable));
         } else {
             let result = result.unwrap();
-            assert_eq!(values.stringify(result), "first|second");
+            assert_eq!(values.get(result), FakeValue::String("first|second".to_string()));
             values.release(result).unwrap();
         }
         for id in values.values.keys().filter(|id| !existing.contains(id)) {
