@@ -276,7 +276,7 @@ fn flush_eval_scope_locals_with_mask(
         let result_reg = abi::int_result_reg(ctx.emitter);
         abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
         emit_eval_scope_set(ctx, local, EVAL_SCOPE_FLAG_OWNED | EVAL_SCOPE_FLAG_NATIVE_SNAPSHOT);
-        emit_eval_native_local_type(ctx, local);
+        emit_eval_native_local_type(ctx, local)?;
         if let Some((_, skip)) = skip {
             ctx.emitter.label(&skip);
         }
@@ -284,13 +284,48 @@ fn flush_eval_scope_locals_with_mask(
     Ok(())
 }
 
-/// Rejects invalid object-reference assignments inside eval, before a surrounding catch executes.
-fn emit_eval_native_local_type(ctx: &mut FunctionContext<'_>, local: &EvalSyncLocal) {
-    let expected = match &local.ty {
+/// Rejects invalid attached object-reference assignments before a surrounding catch executes.
+fn emit_eval_native_local_type(
+    ctx: &mut FunctionContext<'_>,
+    local: &EvalSyncLocal,
+) -> Result<()> {
+    if !ctx.local_slot_ever_stores_ref_cell_pointer(local.slot) {
+        emit_eval_native_type_registration(ctx, local, "");
+        return Ok(());
+    }
+    let payload_ty = ctx.ref_cell_payload_type(local.slot)?;
+    let expected = match &payload_ty {
         PhpType::Object(class) if !class.is_empty() => class.as_str(),
         PhpType::Object(_) => "object",
         _ => "",
     };
+    let Some(state_offset) = ctx.ref_cell_state_offset(local.slot) else {
+        emit_eval_native_type_registration(ctx, local, expected);
+        return Ok(());
+    };
+    if expected.is_empty() {
+        emit_eval_native_type_registration(ctx, local, "");
+        return Ok(());
+    }
+    let detached = ctx.next_label("eval_native_type_detached");
+    let done = ctx.next_label("eval_native_type_done");
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, result_reg, state_offset);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &detached);
+    emit_eval_native_type_registration(ctx, local, expected);
+    ctx.emit_branch(&done);
+    ctx.emitter.label(&detached);
+    emit_eval_native_type_registration(ctx, local, "");
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Publishes one local's active native assignment type to the materialized eval scope.
+fn emit_eval_native_type_registration(
+    ctx: &mut FunctionContext<'_>,
+    local: &EvalSyncLocal,
+    expected: &str,
+) {
     let (name, name_len) = ctx.data.add_string(local.name.as_bytes());
     let (ty, ty_len) = ctx.data.add_string(expected.as_bytes());
     load_eval_scope_to_arg(ctx, 0);

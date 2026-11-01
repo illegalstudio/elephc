@@ -947,43 +947,39 @@ impl<'a> FunctionContext<'a> {
         slot: LocalSlotId,
     ) -> Result<()> {
         let storage_ty = self.local_php_type(slot)?;
-        match self.local_slot_representation(slot) {
-            LocalSlotRepresentation::Raw => {
-                self.load_raw_local_to_result(slot)?;
-                self.own_loaded_eval_snapshot_as_mixed(&storage_ty);
+        if !self.local_slot_ever_stores_ref_cell_pointer(slot) {
+            self.load_raw_local_to_result(slot)?;
+            self.own_loaded_eval_snapshot_as_mixed(&storage_ty);
+            return Ok(());
+        }
+        let payload_ty = self.ref_cell_payload_type(slot)?;
+        let Some(state_offset) = self.ref_cell_state_offset(slot) else {
+            self.load_ref_cell_payload_to_result(slot, &payload_ty)?;
+            self.own_loaded_eval_snapshot_as_mixed(&payload_ty);
+            return Ok(());
+        };
+        let ref_cell = self.next_label("eval_snapshot_load_ref_cell");
+        let done = self.next_label("eval_snapshot_load_done");
+        let state_reg = abi::secondary_scratch_reg(self.emitter);
+        abi::load_at_offset(self.emitter, state_reg, state_offset);
+        match self.emitter.target.arch {
+            Arch::AArch64 => {
+                self.emitter
+                    .instruction(&format!("cbnz {state_reg}, {ref_cell}")); // attached aliases snapshot their physical cell payload
             }
-            LocalSlotRepresentation::RefCell => {
-                let payload_ty = self.ref_cell_payload_type(slot)?;
-                self.load_ref_cell_payload_to_result(slot, &payload_ty)?;
-                self.own_loaded_eval_snapshot_as_mixed(&payload_ty);
-            }
-            LocalSlotRepresentation::Dynamic => {
-                let state_offset = self.dynamic_ref_cell_state_offset(slot)?;
-                let ref_cell = self.next_label("eval_snapshot_load_ref_cell");
-                let done = self.next_label("eval_snapshot_load_done");
-                let state_reg = abi::secondary_scratch_reg(self.emitter);
-                abi::load_at_offset(self.emitter, state_reg, state_offset);
-                match self.emitter.target.arch {
-                    Arch::AArch64 => {
-                        self.emitter
-                            .instruction(&format!("cbnz {state_reg}, {ref_cell}")); // attached aliases snapshot their physical cell payload
-                    }
-                    Arch::X86_64 => {
-                        self.emitter
-                            .instruction(&format!("test {state_reg}, {state_reg}")); // inspect the authoritative eval-time representation flag
-                        self.emitter.instruction(&format!("jne {ref_cell}")); // attached aliases snapshot their physical cell payload
-                    }
-                }
-                self.load_raw_local_to_result(slot)?;
-                self.own_loaded_eval_snapshot_as_mixed(&storage_ty);
-                self.emit_branch(&done);
-                self.emitter.label(&ref_cell);
-                let payload_ty = self.ref_cell_payload_type(slot)?;
-                self.load_ref_cell_payload_to_result(slot, &payload_ty)?;
-                self.own_loaded_eval_snapshot_as_mixed(&payload_ty);
-                self.emitter.label(&done);
+            Arch::X86_64 => {
+                self.emitter
+                    .instruction(&format!("test {state_reg}, {state_reg}")); // inspect the authoritative eval-time representation flag
+                self.emitter.instruction(&format!("jne {ref_cell}")); // attached aliases snapshot their physical cell payload
             }
         }
+        self.load_raw_local_to_result(slot)?;
+        self.own_loaded_eval_snapshot_as_mixed(&storage_ty);
+        self.emit_branch(&done);
+        self.emitter.label(&ref_cell);
+        self.load_ref_cell_payload_to_result(slot, &payload_ty)?;
+        self.own_loaded_eval_snapshot_as_mixed(&payload_ty);
+        self.emitter.label(&done);
         Ok(())
     }
 
