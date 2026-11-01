@@ -352,10 +352,10 @@ pub(crate) use context_registration::configure_eval_opcache;
 pub(in crate::codegen::lower_inst::builtins) use context_registration::register_eval_inventory;
 pub(super) use calls::lower_eval;
 pub(super) use dynamic_calls::{
-    lower_eval_function_call, lower_eval_function_call_array, lower_eval_method_call,
-    lower_eval_native_frame_static_method_call, lower_eval_native_frame_static_property_get,
-    lower_eval_native_frame_static_property_set, lower_eval_object_new,
-    lower_eval_object_new_dynamic_fallback, lower_eval_static_method_call,
+    lower_eval_context_free_method_call, lower_eval_function_call, lower_eval_function_call_array,
+    lower_eval_method_call, lower_eval_native_frame_static_method_call,
+    lower_eval_native_frame_static_property_get, lower_eval_native_frame_static_property_set,
+    lower_eval_object_new, lower_eval_object_new_dynamic_fallback, lower_eval_static_method_call,
 };
 mod constructorless;
 pub(super) use constructorless::lower_eval_constructorless_fallback;

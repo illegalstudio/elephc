@@ -104,6 +104,25 @@ pub(in crate::codegen::lower_inst) fn lower_eval_method_call(
     eval::lower_eval_method_call(ctx, inst, object, method_name)
 }
 
+/// Tries an eval-owned object method before continuing with native interface dispatch.
+pub(in crate::codegen::lower_inst) fn lower_eval_context_free_method_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    method_name: &str,
+    native_fallback_label: &str,
+    done_label: &str,
+) -> Result<()> {
+    eval::lower_eval_context_free_method_call(
+        ctx,
+        inst,
+        object,
+        method_name,
+        native_fallback_label,
+        done_label,
+    )
+}
+
 /// Lowers a post-eval static method call to an eval-declared class.
 pub(in crate::codegen::lower_inst) fn lower_eval_static_method_call(
     ctx: &mut FunctionContext<'_>,

@@ -2028,13 +2028,17 @@ return $box->value . "|" . $box->apply($callback, 4) . "|" .
     );
 }
 
-/// Eval-backed objects satisfy context-free AOT reference guards and relation predicates.
+/// Eval-backed objects satisfy context-free AOT guards, interface methods, and relation predicates.
 #[test]
 fn test_eval_object_satisfies_aot_reference_guards_and_relations() {
     let out = compile_and_run(
         r#"<?php
 interface EvalClosureObjectReferenceContract {
     public function label(): string;
+}
+
+class NativeClosureObjectReferenceImplementation implements EvalClosureObjectReferenceContract {
+    public function label(): string { return "native"; }
 }
 
 function acceptEvalClosureObjectReference(EvalClosureObjectReferenceContract &$value): string {
@@ -2053,6 +2057,8 @@ $callback = function(EvalClosureObjectReferenceContract &$value): string {
     return $value->label();
 };
 
+$native = new NativeClosureObjectReferenceImplementation();
+
 echo eval('class EvalClosureObjectReferenceImplementation implements EvalClosureObjectReferenceContract {
     public function label(): string { return "eval"; }
 }
@@ -2061,10 +2067,11 @@ $first = $callback($value);
 $second = acceptEvalClosureObjectReference($value);
 $relations = inspectEvalClosureObjectRelations($value, "EvalClosureObjectReferenceContract");
 return $first . ":" . $second . ":" . $value->label() . ":" . $relations;');
+echo ":" . acceptEvalClosureObjectReference($native);
 "#,
     );
 
-    assert_eq!(out, "eval:eval:eval:iasdn");
+    assert_eq!(out, "eval:eval:eval:iasdn:native");
 }
 
 /// Context-free relation probes preserve eval aliases and reject invalid dynamic targets.

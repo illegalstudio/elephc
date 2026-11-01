@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - All dynamic dispatch paths keep the existing scratch-frame contract.
+//! - Context-free method calls borrow the object owner's eval context without adding frame state.
 
 use super::*;
 
@@ -245,6 +246,84 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_method_call(
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
     abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
     store_if_result(ctx, inst)
+}
+
+/// Tries an eval-owned object method before falling back to native interface dispatch.
+pub(in crate::codegen::lower_inst::builtins) fn lower_eval_context_free_method_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    method_name: &str,
+    native_fallback_label: &str,
+    done_label: &str,
+) -> Result<()> {
+    let arg_count = inst.operands.len().saturating_sub(1);
+    let args_offset = EVAL_STACK_BYTES;
+    let stack_bytes = eval_method_call_stack_bytes(arg_count);
+    let missing_owner_label = ctx.next_label("eval_dynamic_method_missing_owner");
+    abi::emit_reserve_temporary_stack(ctx.emitter, stack_bytes);
+    store_eval_object_operand(ctx, object)?;
+
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        0,
+    );
+    let object_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, object_arg, EVAL_TEMP_CELL_OFFSET);
+    let context_symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_object_context");
+    abi::emit_call_label(ctx.emitter, &context_symbol);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &missing_owner_label);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_CODE_PTR_OFFSET);
+
+    store_eval_method_call_arg_pack(ctx, inst, args_offset)?;
+    let context_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, context_arg, EVAL_CODE_PTR_OFFSET);
+    let object_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, object_arg, EVAL_TEMP_CELL_OFFSET);
+    let (method_label, method_len) = ctx.data.add_string(method_name.as_bytes());
+    let method_ptr_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    abi::emit_symbol_address(ctx.emitter, method_ptr_arg, &method_label);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        method_len as i64,
+    );
+    let pack_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
+    abi::emit_temporary_stack_address(ctx.emitter, pack_arg, args_offset);
+    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 5);
+    abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
+    let call_symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_method_call");
+    abi::emit_call_label(ctx.emitter, &call_symbol);
+    let mut adapter_boxes = vec![(object, EVAL_TEMP_CELL_OFFSET)];
+    adapter_boxes.extend(
+        inst.operands
+            .iter()
+            .skip(1)
+            .enumerate()
+            .map(|(index, &value)| (value, args_offset + 8 + index * 8)),
+    );
+    retire_eval_metadata_operand_boxes(ctx, &adapter_boxes)?;
+    emit_eval_status_check(ctx);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
+    emit_eval_result_as_type(ctx, &inst.result_php_type)?;
+    abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
+    store_if_result(ctx, inst)?;
+    abi::emit_jump(ctx.emitter, done_label);
+
+    ctx.emitter.label(&missing_owner_label);
+    retire_eval_metadata_operand_boxes(ctx, &[(object, EVAL_TEMP_CELL_OFFSET)])?;
+    abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
+    abi::emit_jump(ctx.emitter, native_fallback_label);
+    Ok(())
 }
 
 /// Lowers a native static-method call to an eval-declared dynamic class.

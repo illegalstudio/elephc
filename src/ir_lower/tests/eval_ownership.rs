@@ -70,11 +70,16 @@ fn eval_catch_predicates_retire_raw_throwable_adapter_boxes_linux_x86_64() {
     assert_eval_catch_predicates_retire_raw_throwable_adapter_boxes("linux-x86_64");
 }
 
-/// Verifies AOT object relations without an eval local consult escaped-object ownership.
+/// Verifies AOT interface methods and relations recover escaped-object ownership without an eval local.
 fn assert_context_free_object_relations_use_eval_owner(name: &str) {
     let source = r#"<?php
-interface EscapedEvalReferenceContract {}
-function acceptEscapedEvalReference(EscapedEvalReferenceContract &$value): bool { return true; }
+interface EscapedEvalReferenceContract { public function label(): string; }
+class EscapedNativeReferenceImplementation implements EscapedEvalReferenceContract {
+    public function label(): string { return "native"; }
+}
+function acceptEscapedEvalReference(EscapedEvalReferenceContract &$value): string {
+    return $value->label();
+}
 function inspectEscapedEvalRelations(mixed $value, string $target): string {
     return ($value instanceof EscapedEvalReferenceContract ? 'i' : 'n')
         . (is_a($value, EscapedEvalReferenceContract::class) ? 'a' : 'n')
@@ -83,7 +88,9 @@ function inspectEscapedEvalRelations(mixed $value, string $target): string {
         . (is_a($value, 'stdClass') ? 'w' : 'n');
 }
 $source = $argc > 0
-    ? 'class EscapedEvalReferenceImplementation implements EscapedEvalReferenceContract {}
+    ? 'class EscapedEvalReferenceImplementation implements EscapedEvalReferenceContract {
+           public function label(): string { return "eval"; }
+       }
        $value = new EscapedEvalReferenceImplementation();
        acceptEscapedEvalReference($value);
        inspectEscapedEvalRelations($value, "EscapedEvalReferenceContract");'
@@ -115,6 +122,19 @@ eval($source);
     let guard_body = assembly.split_once(&format!("{guard_symbol}:\n")).unwrap().1;
     let guard_body = guard_body.split("\n.globl ").next().unwrap();
     assert!(guard_body.contains(&named_call), "{name}");
+    let context_probe = target.extern_symbol("__elephc_eval_object_context");
+    let method_call = target.extern_symbol("__elephc_eval_method_call");
+    let context_probe = guard_body
+        .find(&context_probe)
+        .unwrap_or_else(|| panic!("{name}: interface dispatch must probe eval object ownership"));
+    let method_call = guard_body
+        .find(&method_call)
+        .unwrap_or_else(|| panic!("{name}: eval-owned interfaces must use dynamic method dispatch"));
+    let native_table = guard_body
+        .find("_class_interface_ptrs")
+        .unwrap_or_else(|| panic!("{name}: native interface fallback must remain available"));
+    assert!(context_probe < method_call, "{name}: resolve ownership before dynamic dispatch");
+    assert!(method_call < native_table, "{name}: dynamic dispatch must precede the native fallback");
 }
 
 macro_rules! context_free_eval_object_relations_target_test {
