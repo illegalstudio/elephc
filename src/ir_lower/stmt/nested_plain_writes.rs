@@ -38,8 +38,8 @@ pub(super) fn lower_store(
 fn lower_captured_store(
     ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: LoweredValue, span: Span,
 ) {
-    let target = super::nested_array_writes::bind_concrete_static_update_root(ctx, &target, &target)
-        .map_or(target, |(_, write)| write);
+    let target = super::nested_array_writes::bind_concrete_static_update_root(ctx, target, target)
+        .map_or_else(|| target.clone(), |(_, write)| write);
     let ExprKind::ArrayAccess { array, index } = &target.kind else { unreachable!() };
     let parent = super::nested_array_writes::lower_nested_assign_parent_for_store(ctx, array, span);
     if ctx.builder.insertion_block_is_terminated() { return; }
@@ -80,9 +80,10 @@ pub(super) fn lower_append(
 fn lower_captured_append(
     ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: LoweredValue, span: Span,
 ) {
-    let target = super::nested_array_writes::bind_concrete_static_update_root(ctx, &target, &target)
-        .map_or(target, |(_, write)| write);
-    let parent = super::nested_array_writes::lower_nested_assign_parent_for_store(ctx, &target, span);
+    let target = super::nested_array_writes::bind_concrete_static_update_root(ctx, target, target)
+        .map_or_else(|| target.clone(), |(_, write)| write);
+    let parent =
+        super::nested_array_writes::lower_nested_assign_parent_for_store(ctx, &target, span);
     if ctx.builder.insertion_block_is_terminated() { return; }
     let parent = resolve_parent_for_write(ctx, parent, span);
     let (parent, parent_owner) = super::nested_array_writes::root_static_update_receiver(ctx, parent, span);
