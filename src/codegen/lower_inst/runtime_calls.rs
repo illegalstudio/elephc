@@ -103,6 +103,7 @@ pub(super) fn lower(
             store_if_result(ctx, inst)
         }
         RuntimeCallTarget::MixedCellResolveForWrite => lower_mixed_cell_resolve_for_write(ctx, inst),
+        RuntimeCallTarget::MixedCellCopyForWrite => lower_mixed_cell_copy_for_write(ctx, inst),
         RuntimeCallTarget::ArrayUnpackToHash => lower_array_unpack_to_hash(ctx, inst),
         RuntimeCallTarget::ExceptionGuardOwned => super::exception_instructions::lower_guard_owned(ctx, inst),
         RuntimeCallTarget::ExceptionUnguardOwned => super::exception_instructions::lower_unguard_owned(ctx, inst),
@@ -352,6 +353,54 @@ fn lower_mixed_cell_resolve_for_write(ctx: &mut FunctionContext<'_>, inst: &Inst
     ctx.emitter.label(&retain);
     abi::emit_call_label(ctx.emitter, "__rt_mixed_deref");
     abi::emit_call_label(ctx.emitter, "__rt_incref");
+    store_if_result(ctx, inst)
+}
+
+/// Detaches an ordinary public getter value while keeping explicit references writable.
+fn lower_mixed_cell_copy_for_write(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let cell = expect_operand(inst, 0)?;
+    let actual = ctx.load_value_to_result(cell)?.codegen_repr();
+    if actual != PhpType::Mixed {
+        return Err(CodegenIrError::invalid_module(format!(
+            "typed runtime array.mixed_cell_copy_for_write expected Mixed, got {:?}",
+            actual,
+        )));
+    }
+    let retain = ctx.next_label("public_write_reference_retain");
+    let clone = ctx.next_label("public_write_value_clone");
+    let done = ctx.next_label("public_write_copy_done");
+    match ctx.emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {done}"));               // preserve an absent public getter result
+            ctx.emitter.instruction("ldr x9, [x0]");                           // inspect direct and persistent reference markers
+            ctx.emitter.instruction("cmp x9, #11");                            // direct caller-reference markers stay attached
+            ctx.emitter.instruction(&format!("b.eq {retain}"));                // retain the marker instead of detaching its value
+            ctx.emitter.instruction("cmp x9, #7");                             // nested Mixed may be an explicit PHP reference
+            ctx.emitter.instruction(&format!("b.ne {clone}"));                 // ordinary values receive independent Mixed storage
+            ctx.emitter.instruction("ldr x9, [x0, #16]");                      // inspect the persistent-reference flag
+            ctx.emitter.instruction("cmp x9, #1");                             // flag one denotes shared writable reference identity
+            ctx.emitter.instruction(&format!("b.eq {retain}"));                // preserve that identity through the later write resolver
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                          // preserve an absent public getter result
+            ctx.emitter.instruction(&format!("jz {done}"));                    // avoid reading a missing cell
+            ctx.emitter.instruction("cmp QWORD PTR [rax], 11");                // direct caller-reference markers stay attached
+            ctx.emitter.instruction(&format!("je {retain}"));                  // retain the marker instead of detaching its value
+            ctx.emitter.instruction("cmp QWORD PTR [rax], 7");                 // nested Mixed may be an explicit PHP reference
+            ctx.emitter.instruction(&format!("jne {clone}"));                  // ordinary values receive independent Mixed storage
+            ctx.emitter.instruction("cmp QWORD PTR [rax + 16], 1");            // flag one denotes shared writable reference identity
+            ctx.emitter.instruction(&format!("je {retain}"));                  // preserve that identity through the later write resolver
+        }
+    }
+    ctx.emitter.label(&clone);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");
+    ctx.emit_branch(&done);
+    ctx.emitter.label(&retain);
+    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    ctx.emitter.label(&done);
     store_if_result(ctx, inst)
 }
 
