@@ -80,11 +80,29 @@ unset($app);
         let body = source.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
         format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);")
     }).collect();
+    // Keep the full interaction too: reduced paths alone do not exercise an imported
+    // AOT binding together with snapshot COW and the final computed property read.
+    let full_paths = [
+        ("nested_receiver_eval_full_distinct_variables", true),
+        ("nested_receiver_eval_full_shared_variables", false),
+    ];
+    let full_variants: Vec<_> = full_paths.iter().enumerate().map(|(id, (_, distinct))| {
+        let mut source = source.replace("CapturedAppend", &format!("Whole{id}CapturedAppend"))
+            .replace("handlers", &format!("whole{id}"));
+        if *distinct {
+            source = source.replace("$app", "$evalOnlyApp")
+                .replace("$captured", "$evalOnlyCaptured").replace("$snapshot", "$evalOnlySnapshot");
+        }
+        let body = source.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
+        format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);")
+    }).collect();
     let mut cases = vec![
         BundleCase { name: "nested_receiver_aot", source, expected },
         BundleCase { name: "nested_receiver_eval", source: &eval, expected },
     ];
     cases.extend(paths.iter().zip(&isolated).map(|((name, _, expected), source)|
+        BundleCase { name, source, expected }));
+    cases.extend(full_paths.iter().zip(&full_variants).map(|((name, _), source)|
         BundleCase { name, source, expected }));
     assert_bundle_with(&cases, |source| {
         let out = compile_and_run_with_heap_debug(source);
