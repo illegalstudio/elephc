@@ -11,7 +11,7 @@
 
 use std::collections::HashSet;
 
-use crate::parser::ast::{BinOp, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
 use crate::parser::stmt::{
     can_replay_assignment_target, lower_postfix_incdec_assignment,
     update_dimension_base_is_snapshotted, update_index_needs_snapshot,
@@ -89,7 +89,10 @@ pub(crate) fn scoped_compound_assignment_expression(target: Expr, op: BinOp, rhs
 fn compound_assignment_expression_with_scope(target: Expr, op: BinOp, rhs: Expr, span: Span, scoped: bool) -> Expr {
     let mut lowerer = if scoped { AssignmentExpressionLowerer::new_scoped(span) } else { AssignmentExpressionLowerer::new(span) };
     let target = lowerer.stabilize_non_local_target(target, &rhs);
-    let rhs = if delayed_static_assignment_target(&target) {
+    let runtime_property_name = matches!(&target.kind,
+        ExprKind::DynamicPropertyAccess { property, .. }
+            if !matches!(property.kind, ExprKind::StringLiteral(_)));
+    let rhs = if delayed_static_assignment_target(&target) || runtime_property_name {
         lowerer.bind_result_value(rhs)
     } else {
         lowerer.bind_value(&target, rhs)
@@ -391,6 +394,20 @@ impl AssignmentExpressionLowerer {
     pub(super) fn snapshot_update_dimension(&mut self, target: Expr) -> Expr {
         let span = target.span;
         match target.kind {
+            ExprKind::DynamicPropertyAccess { object, property } => {
+                let property = if matches!(property.kind, ExprKind::StringLiteral(_)) {
+                    *property
+                } else {
+                    // RHS evaluation precedes conversion; both update halves share its string.
+                    let name_span = property.span;
+                    self.bind_temp(Expr::new(ExprKind::Cast {
+                        target: CastType::String, expr: property,
+                    }, name_span))
+                };
+                Expr::new(ExprKind::DynamicPropertyAccess {
+                    object, property: Box::new(property),
+                }, span)
+            }
             ExprKind::ArrayAccess { array, index }
                 if update_dimension_base_is_snapshotted(&array) =>
             {

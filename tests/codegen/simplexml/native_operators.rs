@@ -48,9 +48,30 @@ unset($counter, $xml);
         .replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("{eval_setup}\n$code = $argc > 0 ? '{eval_body}' : ''; eval($code);");
     let expected = "r|5|r|6|r|6|r|ab|n|8|r|11|11|r|abcc|abcc|";
+    let names = r#"<?php
+class SnapshotDynamicName {
+    public int $operand = 5;
+    public function __toString(): string { echo 'name|'; $this->operand = 9; return 'number'; }
+}
+function snapshotDynamicRhs(): int { echo 'rhs|'; return 2; }
+$snapshotBox = new stdClass(); $snapshotBox->number = 0;
+$snapshotName = new SnapshotDynamicName();
+$snapshotBox->{$snapshotName} += snapshotDynamicRhs(); echo $snapshotBox->number, '|';
+echo ++$snapshotBox->{$snapshotName}, '|';
+echo $snapshotBox->{$snapshotName}++, '|', $snapshotBox->number, '|';
+$snapshotName->operand = 5;
+echo ($snapshotBox->{$snapshotName} += $snapshotName->operand), ':', $snapshotName->operand, '|';
+unset($snapshotBox, $snapshotName);
+"#;
+    let names_body = names.strip_prefix("<?php").unwrap().replace("SnapshotDynamic", "EvalSnapshotDynamic")
+        .replace("snapshotDynamic", "evalSnapshotDynamic").replace('\\', "\\\\").replace('\'', "\\'");
+    let names_eval = format!("<?php $namesCode = $argc > 0 ? '{names_body}' : ''; eval($namesCode);");
+    let names_expected = "rhs|name|2|name|3|name|3|4|name|9:9|";
     assert_bundle_with(&[
         BundleCase { name: "ordinary_xml_enabled_aot", source: &aot, expected },
         BundleCase { name: "ordinary_xml_enabled_eval_bridge", source: &eval, expected },
+        BundleCase { name: "dynamic_property_name_aot", source: names, expected: names_expected },
+        BundleCase { name: "dynamic_property_name_eval", source: &names_eval, expected: names_expected },
     ], |source| {
         let output = compile_and_run_with_heap_debug(source);
         assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
