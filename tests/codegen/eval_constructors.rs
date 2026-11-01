@@ -16,6 +16,53 @@
 
 use crate::support::{compile_and_run, compile_and_run_capture};
 
+/// Concrete constructors may change parameters and visibility across native and eval parents.
+#[test]
+fn test_eval_constructor_overrides_concrete_parent_contracts() {
+    let out = compile_and_run(r#"<?php
+class NativeConcreteCtorParent { public function __construct(string $name) {} }
+echo eval('class NativeConcreteCtorChild extends NativeConcreteCtorParent {
+    private function __construct(int $first, int $second) { echo $first + $second, "|"; }
+    public static function make(): object { return new self(2, 3); }
+}
+class EvalConcreteCtorParent { public function __construct(string $name) {} }
+class EvalConcreteCtorChild extends EvalConcreteCtorParent {
+    private function __construct(int $first, int $second) { echo $first + $second, "|"; }
+    public static function make(): object { return new self(4, 5); }
+}
+NativeConcreteCtorChild::make(); EvalConcreteCtorChild::make(); return "done";');
+"#);
+    assert_eq!(out, "5|9|done");
+}
+
+/// Constructor exceptions preserve final, abstract and inherited interface requirements.
+#[test]
+fn test_eval_constructor_overrides_preserve_required_contracts() {
+    for source in [
+        r#"<?php
+class RequiredNativeFinalCtor { final public function __construct(string $name) {} }
+eval('class RefusedNativeFinalCtor extends RequiredNativeFinalCtor { public function __construct(int $id) {} }');
+"#,
+        r#"<?php
+abstract class RequiredNativeAbstractCtor { abstract public function __construct(string $name); }
+eval('class RefusedNativeAbstractCtor extends RequiredNativeAbstractCtor { public function __construct(int $id) {} }');
+"#,
+        r#"<?php
+interface RequiredNativeCtorInterface { public function __construct(string $name); }
+class RequiredNativeInterfaceCtor implements RequiredNativeCtorInterface { public function __construct(string $name) {} }
+eval('class RefusedNativeInterfaceCtor extends RequiredNativeInterfaceCtor { public function __construct(int $id) {} }');
+"#,
+        r#"<?php
+eval('interface RequiredEvalCtorInterface { public function __construct(string $name); }
+class RequiredEvalInterfaceCtor implements RequiredEvalCtorInterface { public function __construct(string $name) {} }
+class RefusedEvalInterfaceCtor extends RequiredEvalInterfaceCtor { public function __construct(int $id) {} }');
+"#,
+    ] {
+        let error = crate::support::compile_and_run_expect_failure(source);
+        assert!(error.contains("Fatal error: eval() runtime failed"), "{error}");
+    }
+}
+
 /// Verifies AOT constructor by-reference args write back to eval lvalue targets.
 #[test]
 fn test_eval_dynamic_new_constructor_by_ref_writes_back_to_lvalue_targets() {
