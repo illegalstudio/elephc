@@ -377,6 +377,7 @@ pub(super) fn lower_unset_array_access_property_offset(
             Op::PropInitialized.default_effects(),
             Some(expr.span),
         );
+        crate::ir_lower::ownership::release_if_owned(ctx, object_value, Some(expr.span));
         let call_block = ctx
             .builder
             .create_named_block("unset.array_access_property.call", Vec::new());

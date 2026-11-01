@@ -9,6 +9,36 @@
 
 use crate::support::*;
 
+/// Nullable native probes skip method dispatch and keep both direct and eval fallback values.
+#[test]
+fn test_simplexml_nullable_native_property_coalesce_bundle() {
+    if skip_without_xml_native("test_simplexml_nullable_native_property_coalesce_bundle") { return; }
+    let source = r#"<?php
+class NullableNativeProbeXml extends SimpleXMLElement {
+    public function __isset(string $name): bool { echo 'unexpected-isset|'; return true; }
+    public function __get(string $name): mixed { echo 'unexpected-get|'; return 'bad'; }
+}
+function nullableNativeProbe(?NullableNativeProbeXml $node): mixed {
+    return $node->missing ?? 'fallback';
+}
+echo nullableNativeProbe(new NullableNativeProbeXml('<r/>')), '|', nullableNativeProbe(null), '|';
+"#;
+    let renamed = source.replace("NullableNative", "EvalNullableNative")
+        .replace("nullableNative", "evalNullableNative");
+    let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
+    let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
+    assert_bundle_with(&[
+        BundleCase { name: "nullable_native_probe_aot", source, expected: "fallback|fallback|" },
+        BundleCase { name: "nullable_native_probe_eval", source: &eval, expected: "fallback|fallback|" },
+    ], |source| {
+        let out = compile_and_run_with_heap_debug(source);
+        assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+        assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+        out.stdout
+    });
+}
+
 /// An unreachable ordinary-write arm must not treat an XML subclass's declared field as storage.
 #[test]
 fn test_simplexml_erased_array_write_ignores_shadowing_declared_storage() {

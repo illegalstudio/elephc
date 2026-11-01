@@ -20,6 +20,8 @@ class ClassReferenceParent {
     public static function staticItems(): mixed { return []; }
     public static function forwarded(): mixed { return static::staticItems(); }
     public static function callback(): callable { return static::staticItems(...); }
+    public static function objectCallback(): object { return static::staticItems(...); }
+    public static function closureCallback(): Closure { return static::staticItems(...); }
 }
 class ClassReferenceChild extends ClassReferenceParent {
     public mixed $data = ['a' => 1, 'b' => 2];
@@ -60,6 +62,10 @@ $called = $callback();
 echo 'callback-invoked|';
 $called['z'] = 9;
 echo json_encode($called), '|', json_encode(ClassReferenceChild::$staticData), "\n";
+$objectResult = call_user_func(ClassReferenceChild::objectCallback());
+$closureResult = call_user_func(ClassReferenceChild::closureCallback());
+echo count($objectResult), '|', count($closureResult), '|';
+unset($objectResult, $closureResult);
 $text = classReferenceText(new ClassReferenceTextChild()); echo $text, "\n";
 ClassReferenceChild::$staticData = null;
 unset($object, $static, $callback, $called, $text);
@@ -81,7 +87,7 @@ unset($alias, $aliasOwner, $textAlias, $textOwner);
     let renamed = by_value_source.replace("ClassReference", "EvalClassReference").replace("classReference", "evalClassReference");
     let eval = format!("<?php $source = $argc > 0 ? '{}' : ''; eval($source);", quote(renamed.strip_prefix("<?php").unwrap()));
     let copy_line = "{\"a\":1,\"b\":2,\"z\":9}|{\"a\":1,\"b\":2}\n";
-    let expected = format!("{}2|{}callback-created|callback-invoked|{}child\n", copy_line.repeat(3), copy_line, copy_line);
+    let expected = format!("{}2|{}callback-created|callback-invoked|{}2|2|child\n", copy_line.repeat(3), copy_line, copy_line);
     let aot_expected = format!("{expected}7\nchanged\n");
     assert_bundle_with(&[
         BundleCase { name: "class_reference_override_aot", source: &source, expected: &aot_expected },

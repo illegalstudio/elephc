@@ -111,7 +111,9 @@ pub(in crate::ir_lower::expr) fn lower_property_write_prelude(
     if !read { return false; }
     let selected = lower_property_write_receiver(ctx, target);
     let ty = ctx.builder.value_php_type(selected.value);
-    let temp = ctx.declare_owned_hidden_temp(ty.clone());
+    // The published slot retains this value until the whole update finishes. Its ordinary
+    // read lends the value to arithmetic rather than transferring the slot's owner.
+    let temp = ctx.declare_hidden_temp(ty.clone());
     store_value_into_temp(ctx, &temp, ty, selected, stmt.span);
     let slot = ctx.local_slots[&temp];
     register_owned_call_operand(ctx, slot, stmt.span);
