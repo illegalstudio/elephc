@@ -26,6 +26,7 @@ fn compile_and_run_with_flags(prefix: &str, source: &str, flags: &[&str]) -> Pro
         stdout: String::from_utf8_lossy(&run.stdout).into_owned(),
         stderr: String::from_utf8_lossy(&run.stderr).into_owned(),
         success: run.status.success(),
+        status: run.status,
     }
 }
 

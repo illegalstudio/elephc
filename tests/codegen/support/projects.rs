@@ -594,9 +594,34 @@ fn compile_and_run_files_with_defines_per_argv(
     );
     let _ = fs::remove_dir_all(&dir);
     outputs.into_iter().zip(argvs).map(|(output, args)| {
-        assert!(output.success, "project binary failed for {args:?}: {}", output.stderr);
+        assert!(
+            output.success,
+            "project binary failed for {args:?}\nstatus: {}\nstdout: {}\nstderr: {}",
+            output.status, output.stdout, output.stderr,
+        );
         output.stdout
     }).collect()
+}
+
+/// Multi-file failures preserve the arguments, exit status and both output streams.
+#[test]
+fn test_multifile_failure_reports_status_stdout_stderr_and_argv() {
+    let failure = std::panic::catch_unwind(|| {
+        compile_and_run_files_per_argv(
+            &[("main.php", "<?php echo 'before failure'; fwrite(STDERR, 'failure detail'); exit(7);")],
+            "main.php",
+            &[&["diagnostic-argument"]],
+        );
+    }).expect_err("the fixture must fail with exit status 7");
+    let message = failure.downcast_ref::<String>().expect("expected an assertion message");
+    for detail in [
+        "[\"diagnostic-argument\"]",
+        "status: exit status: 7",
+        "stdout: before failure",
+        "stderr: failure detail",
+    ] {
+        assert!(message.contains(detail), "missing {detail:?} in {message}");
+    }
 }
 
 // Returns true if compilation of a multi-file PHP project fails (type-check or earlier).
