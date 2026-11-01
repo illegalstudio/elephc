@@ -55,6 +55,11 @@ pub(super) fn declarations() -> Program {
             .param("value", CType::Str)
             .returns(CType::Int)
             .build(),
+        extern_fn("elephc_filter_validate_url_whatwg", "elephc_filter")
+            .param("value", CType::Str)
+            .param("query_required", CType::Int)
+            .returns(CType::Int)
+            .build(),
         extern_fn("elephc_filter_apply_ip", "elephc_filter")
             .param("flags", CType::Int)
             .param("value", CType::Str)

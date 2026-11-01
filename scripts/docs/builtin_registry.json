@@ -1932,6 +1932,20 @@
           "name": "message",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "",
+          "name": "file",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "line",
+          "optional": true,
+          "type": "int"
         }
       ],
       "required_param_count": 1,
@@ -2030,6 +2044,20 @@
           "name": "message",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "''",
+          "name": "file",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "line",
+          "optional": true,
+          "type": "int"
         }
       ],
       "return_type": "bool",

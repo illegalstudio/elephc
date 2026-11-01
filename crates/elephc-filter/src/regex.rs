@@ -149,6 +149,79 @@ fn build_source(body: &str, modifiers: &str) -> String {
     source
 }
 
+// PCRE2 compile-only diagnostics provided by the generated runtime when regex is linked.
+#[cfg(not(test))]
+extern "C" {
+    fn __rt_filter_pcre2_compile_check(
+        pattern: *const u8,
+        length: u64,
+        options: u32,
+        message: *mut u8,
+        capacity: u64,
+        offset_out: *mut u64,
+    ) -> i32;
+}
+
+/// Test-only fallback: unit tests do not link the generated program runtime.
+#[cfg(test)]
+unsafe fn __rt_filter_pcre2_compile_check(
+    _pattern: *const u8,
+    _length: u64,
+    _options: u32,
+    _message: *mut u8,
+    _capacity: u64,
+    _offset_out: *mut u64,
+) -> i32 {
+    -1
+}
+
+/// Maps PHP's PCRE modifiers onto the compile flags needed for diagnostics.
+fn pcre2_options(modifiers: &str) -> u32 {
+    let mut options = 0u32;
+    if modifiers.contains('i') { options |= 0x0000_0008; }
+    if modifiers.contains('m') { options |= 0x0000_0400; }
+    if modifiers.contains('s') { options |= 0x0000_0020; }
+    if modifiers.contains('x') { options |= 0x0000_0080; }
+    if modifiers.contains('A') { options |= 0x8000_0000; }
+    if modifiers.contains('D') { options |= 0x0000_0010; }
+    if modifiers.contains('U') { options |= 0x0004_0000; }
+    if modifiers.contains('J') { options |= 0x0000_0040; }
+    if modifiers.contains('n') { options |= 0x0000_2000; }
+    if modifiers.contains('u') { options |= 0x0008_0000 | 0x0002_0000; }
+    options
+}
+
+/// PCRE2's answer for one pattern body when the native provider is linked.
+enum Pcre2Check {
+    Unavailable,
+    Valid,
+    Invalid(String),
+}
+
+/// Runs PCRE2's compile-only check and formats PHP's `Compilation failed` suffix.
+fn pcre2_check(body: &str, modifiers: &str) -> Pcre2Check {
+    let mut message = [0u8; 256];
+    let mut offset = 0u64;
+    let length = unsafe {
+        __rt_filter_pcre2_compile_check(
+            body.as_ptr(),
+            body.len() as u64,
+            pcre2_options(modifiers),
+            message.as_mut_ptr(),
+            message.len() as u64,
+            &mut offset,
+        )
+    };
+    if length < 0 {
+        return Pcre2Check::Unavailable;
+    }
+    if length == 0 {
+        return Pcre2Check::Valid;
+    }
+    let text = String::from_utf8_lossy(&message[..length as usize]);
+    Pcre2Check::Invalid(format!("Compilation failed: {text} at offset {offset}"))
+}
+
 /// Matches one value and reports PHP-level pattern spelling or compilation errors separately.
 pub(crate) fn php_pattern_with_error(
     value: &[u8],
@@ -161,6 +234,11 @@ pub(crate) fn php_pattern_with_error(
         Ok(parts) => parts,
         Err(error) => return (false, Some(error)),
     };
+    let pcre2 = pcre2_check(body, modifiers);
+    if let Pcre2Check::Invalid(error) = &pcre2 {
+        return (false, Some(error.clone()));
+    }
+    let pcre2_unavailable = matches!(pcre2, Pcre2Check::Unavailable);
     if modifiers.contains('u') {
         if std::str::from_utf8(value).is_err() {
             return (false, None);
@@ -168,7 +246,7 @@ pub(crate) fn php_pattern_with_error(
         let value = String::from_utf8_lossy(value);
         return match build_fancy(body, modifiers) {
             Some(regex) => (regex.is_match(&value).unwrap_or(false), None),
-            None => (false, Some("Compilation failed".to_string())),
+            None => (false, pcre2_unavailable.then(|| "Compilation failed".to_string())),
         };
     }
     if let Some(regex) = build_bytes(body, modifiers) {
@@ -179,7 +257,7 @@ pub(crate) fn php_pattern_with_error(
     let value = String::from_utf8_lossy(value);
     match build_fancy(body, modifiers) {
         Some(regex) => (regex.is_match(&value).unwrap_or(false), None),
-        None => (false, Some("Compilation failed".to_string())),
+        None => (false, pcre2_unavailable.then(|| "Compilation failed".to_string())),
     }
 }
 

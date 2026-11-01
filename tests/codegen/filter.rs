@@ -339,6 +339,48 @@ var_dump(filter_var("foo/bar/", FILTER_VALIDATE_REGEXP, ["options" => ["regexp" 
     );
 }
 
+/// Invalid regexp bodies report PCRE2's exact compilation diagnostic and offset.
+#[test]
+fn test_filter_regexp_compile_errors_match_pcre2() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $errno, string $message): bool {
+    echo $errno, "|", $message, "\n";
+    return true;
+});
+$patterns = [
+    "/[/",
+    "/(/",
+    "/a{2,1}/",
+    "/(?<=a+)/",
+    "/[z-a]/",
+    "/\\x{110000}/u",
+    "/(?<x>a)(?<x>b)/",
+];
+foreach ($patterns as $pattern) {
+    var_dump(filter_var("a", FILTER_VALIDATE_REGEXP, ["options" => ["regexp" => $pattern]]));
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "2|filter_var(): Compilation failed: missing terminating ] for character class at offset 1\n\
+bool(false)\n\
+2|filter_var(): Compilation failed: missing closing parenthesis at offset 1\n\
+bool(false)\n\
+2|filter_var(): Compilation failed: numbers out of order in {} quantifier at offset 5\n\
+bool(false)\n\
+2|filter_var(): Compilation failed: length of lookbehind assertion is not limited at offset 0\n\
+bool(false)\n\
+2|filter_var(): Compilation failed: range out of order in character class at offset 4\n\
+bool(false)\n\
+2|filter_var(): Compilation failed: character code point value in \\x{} or \\o{} is too large at offset 9\n\
+bool(false)\n\
+2|filter_var(): Compilation failed: two named subpatterns have the same name (PCRE2_DUPNAMES not set) at offset 12\n\
+bool(false)\n"
+    );
+}
+
 /// Verifies the real PHP 8.5 URI parser class names and WhatWg backslash-host handling.
 #[test]
 fn test_filter_url_uri_parser_classes_match_php85() {
@@ -357,6 +399,104 @@ try {
     assert_eq!(
         out,
         "string(23) \"http://example.com\\path\"\nbool(false)\nfilter_var(): \"uri_parser_class\" option has invalid value\n"
+    );
+}
+
+/// `Uri\WhatWg\Url` uses the WHATWG parser, including its port, IPv4 and backslash rules.
+#[test]
+fn test_filter_url_whatwg_parser_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+$cases = [
+    ["http://example.com", 0],
+    ["http://example.com\\path", 0],
+    ["http://example.com:65535", 0],
+    ["http://example.com:65536", 0],
+    ["http://0x7f.1", 0],
+    ["http://999.999.999.999", 0],
+    ["http://[::1]", 0],
+    ["foo://bar", 0],
+    ["foo:bar", 0],
+    ["mailto:", 0],
+    ["file:///tmp/x", 0],
+    ["http://example.com", FILTER_FLAG_QUERY_REQUIRED],
+    ["http://example.com?x", FILTER_FLAG_QUERY_REQUIRED],
+];
+foreach ($cases as $i => $case) {
+    $result = filter_var($case[0], FILTER_VALIDATE_URL, [
+        "options" => ["uri_parser_class" => "Uri\\WhatWg\\Url"],
+        "flags" => $case[1],
+    ]);
+    echo $i, ":", $result === false ? "false" : $result, "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "0:http://example.com\n\
+1:http://example.com\\path\n\
+2:http://example.com:65535\n\
+3:false\n\
+4:http://0x7f.1\n\
+5:false\n\
+6:http://[::1]\n\
+7:foo://bar\n\
+8:false\n\
+9:mailto:\n\
+10:file:///tmp/x\n\
+11:false\n\
+12:http://example.com?x\n"
+    );
+}
+
+/// The filter.default deprecation reports PHP's INI-startup file/line pair.
+#[test]
+fn test_filter_default_deprecation_uses_ini_startup_location() {
+    let output = compile_and_run_capture(
+        r#"<?php
+__elephc_filter_seed_request(INPUT_GET, [], "special_chars", 0, true);
+echo "Done\n";
+"#,
+    );
+    assert_eq!(output.stdout, "Done\n");
+    assert!(
+        output.stderr.contains("The filter.default ini setting is deprecated in Unknown on line 0"),
+        "stderr: {:?}",
+        output.stderr
+    );
+}
+
+/// A strict included file keeps its strict filter checks when the main file is weak.
+#[test]
+fn test_filter_strict_types_survive_includes() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+require __DIR__ . '/strict.php';
+try {
+    strict_filter("1");
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+"#,
+            ),
+            (
+                "strict.php",
+                r#"<?php
+declare(strict_types=1);
+function strict_filter(mixed $filter): mixed {
+    return filter_var("x", $filter);
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        "filter_var(): Argument #2 ($filter) must be of type int, string given\n"
     );
 }
 
@@ -503,6 +643,104 @@ foreach ($cases as $case) {
     assert_eq!(
         out,
         "&#x41;\n&#65;a&#39;\n&#0;\n&amp;#x;\n&amp;#999999999999999999999;\n&amp;#xFFFFFFFF;\n&#x10FFFF;\n&amp;#x110000;\n&amp;#12a;\n&amp;#x41g;\n&#000000000000000000000000000000000000000000000000000000000000041;\n&#xD800;\n&amp;\n&nbsp;\n&copy;\n&notin;\n&Aacute;\n&sum;\n&Sigma;\n&amp;&amp;\n&amp;AMP;\n&amp;apos;\n&amp;#+65;\n&amp;#-1;\n"
+    );
+}
+
+/// A strict_types filter call validates the PHP signature before weak coercion.
+#[test]
+fn test_filter_strict_types_scalar_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+declare(strict_types=1);
+$cases = [
+    fn() => filter_var("x", "1"),
+    fn() => filter_var("x", 1.0),
+    fn() => filter_var("x", FILTER_VALIDATE_INT, "1"),
+    fn() => filter_var("x", FILTER_VALIDATE_INT, null),
+    fn() => filter_var(value: "x", filter: "1"),
+    fn() => filter_var_array("x", FILTER_VALIDATE_INT),
+    fn() => filter_var_array([], FILTER_VALIDATE_INT, 1),
+    fn() => filter_input("GET", "x"),
+    fn() => filter_input(INPUT_GET, 1),
+    fn() => filter_input_array("GET"),
+    fn() => filter_input_array(INPUT_GET, FILTER_VALIDATE_INT, 1),
+    fn() => filter_has_var("GET", "x"),
+    fn() => filter_has_var(INPUT_GET, 1),
+    fn() => filter_id(1),
+    function () { $filter = "1"; return filter_var("x", $filter); },
+    function () { return call_filter("1"); },
+];
+function call_filter(mixed $filter) {
+    return filter_var("x", $filter);
+}
+foreach ($cases as $case) {
+    try {
+        var_dump($case());
+    } catch (Throwable $error) {
+        echo get_class($error), ": ", $error->getMessage(), "\n";
+    }
+}
+var_dump(filter_var("42", FILTER_VALIDATE_INT));
+var_dump(filter_var("x", FILTER_VALIDATE_INT, []));
+var_dump(filter_id("int"));
+"#,
+    );
+    assert_eq!(
+        out,
+        "TypeError: filter_var(): Argument #2 ($filter) must be of type int, string given\n\
+TypeError: filter_var(): Argument #2 ($filter) must be of type int, float given\n\
+TypeError: filter_var(): Argument #3 ($options) must be of type array|int, string given\n\
+TypeError: filter_var(): Argument #3 ($options) must be of type array|int, null given\n\
+TypeError: filter_var(): Argument #2 ($filter) must be of type int, string given\n\
+TypeError: filter_var_array(): Argument #1 ($array) must be of type array, string given\n\
+TypeError: filter_var_array(): Argument #3 ($add_empty) must be of type bool, int given\n\
+TypeError: filter_input(): Argument #1 ($type) must be of type int, string given\n\
+TypeError: filter_input(): Argument #2 ($var_name) must be of type string, int given\n\
+TypeError: filter_input_array(): Argument #1 ($type) must be of type int, string given\n\
+TypeError: filter_input_array(): Argument #3 ($add_empty) must be of type bool, int given\n\
+TypeError: filter_has_var(): Argument #1 ($input_type) must be of type int, string given\n\
+TypeError: filter_has_var(): Argument #2 ($var_name) must be of type string, int given\n\
+TypeError: filter_id(): Argument #1 ($name) must be of type string, int given\n\
+TypeError: filter_var(): Argument #2 ($filter) must be of type int, string given\n\
+TypeError: filter_var(): Argument #2 ($filter) must be of type int, string given\n\
+int(42)\n\
+bool(false)\n\
+int(257)\n"
+    );
+}
+
+/// Strictness follows the call site, so a weak included file still coerces filter arguments.
+#[test]
+fn test_filter_strict_types_follow_the_call_site_file() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+declare(strict_types=1);
+require __DIR__ . '/weak.php';
+var_dump(weak_filter("1"));
+try {
+    filter_var("x", "1");
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+"#,
+            ),
+            (
+                "weak.php",
+                r#"<?php
+function weak_filter(mixed $filter): mixed {
+    return @filter_var("x", $filter);
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nfilter_var(): Argument #2 ($filter) must be of type int, string given\n"
     );
 }
 
