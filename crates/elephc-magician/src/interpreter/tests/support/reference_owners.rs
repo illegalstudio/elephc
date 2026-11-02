@@ -47,6 +47,32 @@ impl FakeOps {
     }
 }
 
+/// Dereferencing a stored reference retires the temporary wrapper read on success and failure.
+#[test]
+fn fake_array_value_reads_retire_their_reference_wrapper_lease() {
+    for reject in [false, true] {
+        let mut values = FakeOps::default();
+        let original = values.string("value").unwrap();
+        let reference = values.reference_new(original).unwrap();
+        let key = values.int(0).unwrap();
+        let array = values.array_new(1).unwrap();
+        let array = values.array_set(array, key, reference).unwrap();
+        let owners = values.reference_owner_count(reference);
+        let all_owners = values.cell_owners.values().sum::<usize>();
+        if reject { values.fail_release_call = Some(values.releases.len()); }
+        let result = values.array_get(array, key);
+        if reject { assert_eq!(result, Err(EvalStatus::UncaughtThrowable)); }
+        else {
+            let copied = result.unwrap();
+            assert!(!values.is_reference(copied).unwrap());
+            assert_eq!(values.get(copied), FakeValue::String("value".into()));
+            values.release(copied).unwrap();
+        }
+        assert_eq!(values.reference_owner_count(reference), owners);
+        assert_eq!(values.cell_owners.values().sum::<usize>(), all_owners);
+    }
+}
+
 /// Container stores, replacements and retirement affect sharing without changing explicit owners.
 #[test]
 fn fake_reference_sharing_tracks_live_container_edges() {
