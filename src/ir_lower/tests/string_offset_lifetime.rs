@@ -279,8 +279,12 @@ offsetBoundaries("\x07aaaaaaaZ");
                     .filter(|inst| inst.op == Op::StrCharAt)
                     .filter_map(|inst| inst.result)
                     .collect::<Vec<_>>();
-                assert_eq!(byte_results.len(), 2,
-                    "{target}: the static nested update reads and writes the parent key");
+                assert_eq!(byte_results.len(), 1,
+                    "{target}: attached static updates capture the parent key once");
+                assert!(function.instructions.iter().any(|inst| matches!(inst.immediate,
+                    Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ArrayFetchForWrite
+                        | crate::ir::RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed)))),
+                    "{target}: preserve the attached parent fetch while sharing its persisted key");
                 let stabilized = byte_results.iter().filter(|result| {
                     function.instructions.iter().any(|inst| {
                         inst.op == Op::Acquire && inst.operands == [**result]
