@@ -58,7 +58,7 @@ class CoalesceParentNode { public mixed $value = 1; }
 function coalesceParentWrite(mixed $root, mixed $name): void { $root->{$name}->value ??= 2; }
 $root = new stdClass(); $root->child = new CoalesceParentNode(); $name = new CoalesceParentName();
 coalesceParentWrite($root, $name); echo $root->child->value, '|';
-unset($root->child->value);
+$root->child->value = null;
 coalesceParentWrite($root, $name); echo $root->child->value, '|';
 "#;
     let out = compile_and_run_with_heap_debug(source);
