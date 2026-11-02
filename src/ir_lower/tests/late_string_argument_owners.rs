@@ -48,7 +48,7 @@ echo $argument;
 
 supported_target_cases!(late_string_argument_owners, verify_late_string_argument_owner);
 
-/// A future eval barrier cannot leave an earlier throwing dynamic store's name unrooted.
+/// A computed name owns its early result across a throwing RHS despite a future eval barrier.
 fn verify_late_property_name_owner(target: &str) {
     let module = super::lower_source_at_for_target(r#"<?php
 class LateNameTarget { public int $value = 1; }
@@ -56,10 +56,11 @@ function lateNameRhs(bool $reject): mixed {
     if ($reject) { throw new RuntimeException('rhs'); }
     return 3;
 }
+function lateComputedName(string $name): string { return $name; }
 function lateNameWrite(bool $reject): void {
     $object = new LateNameTarget();
     $name = 'value';
-    try { $object->{$name} = $reject ? 'bad' : lateNameRhs($reject); } catch (TypeError $error) {}
+    try { $object->{lateComputedName($name)} = $reject ? 'bad' : lateNameRhs($reject); } catch (TypeError $error) {}
     $code = $reject ? '$widened = 1;' : '';
     eval($code);
     echo $name;
@@ -71,23 +72,36 @@ lateNameWrite(false);
     let rhs = function.instructions.iter().position(|inst| inst.op == Op::Call
         && matches!(inst.immediate, Some(Immediate::Data(id))
             if module.data.function_names[id.as_raw() as usize] == "lateNameRhs")).unwrap();
+    let computed = function.instructions.iter().find(|inst| inst.op == Op::Call
+        && matches!(inst.immediate, Some(Immediate::Data(id))
+            if module.data.function_names[id.as_raw() as usize] == "lateComputedName"))
+        .expect("computed names must be evaluated once").result.unwrap();
+    let mut names = std::collections::HashSet::from([computed]);
+    let mut slots = std::collections::HashSet::new();
+    for inst in &function.instructions[..rhs] {
+        let related = inst.operands.iter().any(|value| names.contains(value))
+            || matches!(inst.immediate, Some(Immediate::LocalSlot(slot))
+                if inst.op == Op::LoadLocal && slots.contains(&slot));
+        if related {
+            if let Some(result) = inst.result { names.insert(result); }
+            if let Some(Immediate::LocalSlot(slot)) = inst.immediate {
+                if inst.op == Op::StoreLocal { slots.insert(slot); }
+            }
+        }
+    }
     assert!(function.instructions[..rhs].iter().any(|inst| inst.op == Op::PushCallOperandOwner
-        && matches!(inst.immediate, Some(Immediate::LocalSlot(slot))
-            if function.locals[slot.as_raw() as usize].php_type.codegen_repr() == crate::types::PhpType::Str)),
-        "{target}: the name must survive a throwing RHS before the property store exists");
+        && matches!(inst.immediate, Some(Immediate::LocalSlot(slot)) if slots.contains(&slot))),
+        "{target}: the computed name must survive a throwing RHS before the store exists");
     let (store_index, store) = function.instructions.iter().enumerate()
         .find(|(_, inst)| inst.op == Op::DynamicPropSet).expect("the runtime name must stay dynamic");
-    let borrowed = function.instructions.iter().find(|inst| inst.result == Some(store.operands[1])).unwrap();
-    assert_eq!(borrowed.op, Op::Borrow, "{target}: the write must borrow its independently rooted name");
-    let rooted = borrowed.operands[0];
-    let slot = function.instructions.iter().find_map(|inst| match inst.immediate {
-        Some(Immediate::LocalSlot(slot)) if inst.op == Op::StoreLocal && inst.operands == [rooted] => Some(slot),
-        _ => None,
-    }).expect("the name must have an unwind-visible owner slot");
-    assert!(function.instructions[..store_index].iter().any(|inst| inst.op == Op::PushCallOperandOwner
-        && inst.immediate == Some(Immediate::LocalSlot(slot))), "{target}: publish before the store can throw");
+    assert_eq!(function.instructions.iter().filter(|inst| inst.op == Op::Call
+        && matches!(inst.immediate, Some(Immediate::Data(id))
+            if module.data.function_names[id.as_raw() as usize] == "lateComputedName")).count(), 1,
+        "{target}: the final store must reuse the captured computed name");
+    assert_eq!(function.value(store.operands[1]).unwrap().php_type, crate::types::PhpType::Str);
     assert!(function.instructions[store_index + 1..].iter().any(|inst| inst.op == Op::ReleaseLocalSlot
-        && inst.immediate == Some(Immediate::LocalSlot(slot))), "{target}: retire after a successful store");
+        && matches!(inst.immediate, Some(Immediate::LocalSlot(slot)) if slots.contains(&slot))),
+        "{target}: retire the early name after a successful store");
 }
 
 supported_target_cases!(late_property_name_owners, verify_late_property_name_owner);
