@@ -98,7 +98,7 @@ pub(super) fn lower_lazy_isset_operand(
                     elephc_builtin_contract::ObjectDimension::Isset, arg));
             }
             if !array_access_expr_supports_native_isset_probe(ctx, array) {
-                return None;
+                return native_xml_empty::lower(ctx, "isset", arg, arg);
             }
             Some(lower_native_isset_offset_probe(ctx, array, index, arg))
         }

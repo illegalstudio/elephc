@@ -1,8 +1,9 @@
 //! Purpose:
-//! Applies SimpleXML's container emptiness protocol independently of boolean casts.
+//! Applies SimpleXML's container probes without materializing PHP child wrappers.
 //!
 //! Called from:
 //! - Lazy empty lowering before ordinary property and ArrayAccess handling.
+//! - Lazy isset lowering for erased dimension receivers without a static probe.
 //!
 //! Key details:
 //! - Receiver and key are captured once, with PHP's dynamic-property evaluation order.
@@ -14,11 +15,12 @@ use super::*;
 /// One captured operand and its unwind-visible owner, when its type needs one.
 struct Capture { name: String, slot: crate::ir::LocalSlotId, rooted: bool }
 
-/// Selects native empty handling only for a container access that can reach an XML object.
+/// Selects native container probes only for accesses that can reach an XML object.
 pub(super) fn lower(
     ctx: &mut LoweringContext<'_, '_>, construct: &str, arg: &Expr, expr: &Expr,
 ) -> Option<LoweredValue> {
     if !ctx.classes.contains_key("SimpleXMLElement") { return None; }
+    if is_isset(construct) && !matches!(arg.kind, ExprKind::ArrayAccess { .. }) { return None; }
     let (object, key, dimension, nullsafe, named_property) = match &arg.kind {
         ExprKind::PropertyAccess { object, property } => {
             if property.starts_with("__elephc_") { return None; }
@@ -144,11 +146,11 @@ fn dispatch(
     if native_dimension_method_for_type(ctx, &ty,
         elephc_builtin_contract::ObjectDimension::Get).is_some()
     {
-        let method = if dimension { "__elephc_dimension_empty" } else { "__elephc_property_empty" };
+        let method = native_method(construct, dimension);
         let key_expr = Expr::new(ExprKind::Variable(key.name.clone()), arg.span);
         let nullable = value_is_nullable(ctx, object.value);
         let object = borrow_native_xml_property_receiver(ctx, object, arg.span);
-        return call_known_native(ctx, object, method, key_expr, nullable, expr);
+        return call_known_native(ctx, object, method, key_expr, nullable, !is_isset(construct), expr);
     }
     let class = ctx.intern_class_name("SimpleXMLElement");
     let condition = ctx.emit_value(Op::InstanceOf, vec![object.value], Some(Immediate::Data(class)),
@@ -172,7 +174,7 @@ fn dispatch(
         ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
         (borrowed, owner)
     } else { (borrow_native_xml_property_receiver(ctx, object, arg.span), None) };
-    let method = if dimension { "__elephc_dimension_empty" } else { "__elephc_property_empty" };
+    let method = native_method(construct, dimension);
     let key_expr = Expr::new(ExprKind::Variable(key.name.clone()), arg.span);
     let value = lower_method_call_with_receiver(ctx, object, method, &[key_expr], Op::MethodCall, expr);
     if let Some(owner) = boxed_owner { retire_owned_call_operand(ctx, owner, arg.span); }
@@ -191,10 +193,10 @@ fn dispatch(
     take_owned_temp(ctx, &temp, arg.span)
 }
 
-/// Uses the native decision alone, with a boolean empty result on a real nullable receiver.
+/// Uses the native decision, answering `null_answer` for a real nullable receiver.
 fn call_known_native(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, method: &str, key: Expr,
-    nullable: bool, expr: &Expr,
+    nullable: bool, null_answer: bool, expr: &Expr,
 ) -> LoweredValue {
     if !nullable {
         return lower_method_call_with_receiver(ctx, object, method, &[key], Op::MethodCall, expr);
@@ -209,7 +211,7 @@ fn call_known_native(
     ctx.builder.terminate(Terminator::CondBr { cond: missing.value,
         then_target: absent, then_args: vec![], else_target: present, else_args: vec![] });
     ctx.builder.position_at_end(absent);
-    let value = emit_bool_literal(ctx, true, Some(expr.span));
+    let value = emit_bool_literal(ctx, null_answer, Some(expr.span));
     store_value_into_temp(ctx, &temp, PhpType::Bool, value, expr.span);
     branch_to(ctx, merge);
     let absent_slots = ctx.initialized_slots_snapshot();
@@ -240,6 +242,10 @@ fn lower_regular(
 ) -> LoweredValue {
     let object = Box::new(Expr::new(ExprKind::Variable(receiver.name.clone()), arg.span));
     let key = Box::new(Expr::new(ExprKind::Variable(key.name.clone()), arg.span));
+    if is_isset(construct) {
+        let value = lower_array_access_with_missing_warning(ctx, &object, &key, arg, false);
+        return lazy_isset::probe_value_is_set(ctx, value, arg);
+    }
     let kind = if dimension {
         ExprKind::ArrayAccess { array: object, index: key }
     } else if let Some(property) = named_property {
@@ -253,4 +259,16 @@ fn lower_regular(
             let value = lower_expr(ctx, &access);
             lazy_isset::lower_empty_of_probed_value(ctx, value, construct, expr)
         })
+}
+
+/// Presence answers false where the empty construct answers true for a missing receiver.
+fn is_isset(construct: &str) -> bool {
+    php_symbol_key(construct.trim_start_matches('\\')) == "isset"
+}
+
+/// Names the native adapter that inspects a selection without wrapping a PHP object.
+fn native_method(construct: &str, dimension: bool) -> &'static str {
+    if is_isset(construct) { "__elephc_dimension_isset" }
+    else if dimension { "__elephc_dimension_empty" }
+    else { "__elephc_property_empty" }
 }

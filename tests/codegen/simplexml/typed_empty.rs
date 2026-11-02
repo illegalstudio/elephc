@@ -9,6 +9,33 @@
 
 use crate::support::*;
 
+/// Erased XML dimensions avoid wrapper destruction while ordinary mixed values stay silent.
+#[test]
+fn test_simplexml_erased_dimension_isset_retains_non_xml_behavior() {
+    if skip_without_xml_native("test_simplexml_erased_dimension_isset_retains_non_xml_behavior") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ErasedPresenceXml extends SimpleXMLElement { public function __destruct() { echo 'D|'; } }
+function erasedPresenceProbe(mixed $node): void {
+    var_dump(isset($node['id']), isset($node[0]), isset($node['missing']), isset($node[1]));
+}
+$xml = new ErasedPresenceXml('<r id="1"><a/></r>');
+erasedPresenceProbe($xml);
+erasedPresenceProbe(['id' => 1, 0 => null]);
+erasedPresenceProbe('ab');
+erasedPresenceProbe(null);
+unset($xml);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, concat!(
+        "bool(true)\nbool(true)\nbool(false)\nbool(false)\n",
+        "bool(true)\nbool(false)\nbool(false)\nbool(false)\n",
+        "bool(false)\nbool(true)\nbool(false)\nbool(true)\n",
+        "bool(false)\nbool(false)\nbool(false)\nbool(false)\nD|",
+    ));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
+}
+
 /// Nullable native probes skip method dispatch and keep both direct and eval fallback values.
 #[test]
 fn test_simplexml_nullable_native_property_coalesce_bundle() {
