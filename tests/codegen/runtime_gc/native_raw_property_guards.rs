@@ -37,6 +37,19 @@ class ReflectionLeaseTarget {
     public function __destruct() { echo 'drop:', $this->value, '|'; }
 }
 
+function reflectionLeaseThrow(): string { throw new RuntimeException('rhs'); }
+$property = new ReflectionProperty(ReflectionLeaseTarget::class, 'value');
+try { $property->setValue(new ReflectionLeaseTarget(), reflectionLeaseThrow()); }
+catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
+$property->setValue(new ReflectionLeaseTarget(), 'stored');
+var_dump($property->isInitialized(new ReflectionLeaseTarget()));
+unset($property, $error);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "drop:|rhs|drop:stored|drop:|bool(true)\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Eval can inspect an AOT DOMException's inherited accessors without losing native owners.
 #[test]
 fn test_native_dom_exception_accessors_from_eval() {
@@ -48,17 +61,5 @@ unset($failure, $source);
 "#);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "DOMException:5:Invalid Character Error:previous");
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
-}
-function reflectionLeaseThrow(): string { throw new RuntimeException('rhs'); }
-$property = new ReflectionProperty(ReflectionLeaseTarget::class, 'value');
-try { $property->setValue(new ReflectionLeaseTarget(), reflectionLeaseThrow()); }
-catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
-$property->setValue(new ReflectionLeaseTarget(), 'stored');
-var_dump($property->isInitialized(new ReflectionLeaseTarget()));
-unset($property, $error);
-"#);
-    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "drop:|rhs|drop:stored|drop:|bool(true)\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
