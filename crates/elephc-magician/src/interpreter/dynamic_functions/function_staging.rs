@@ -92,7 +92,7 @@ pub(in crate::interpreter) fn stage_native_function_shared_ref_arg(
         }
     }
     let guarded_writeback = target.as_ref()
-        .is_some_and(|target| !generic_reference_contracts(target, context).is_empty());
+        .is_none_or(|target| !generic_reference_contracts(target, context).is_empty());
     stage_native_function_ref_arg(param_type, tagged_scalar, original, target, guarded_writeback, values)
         .map(|(marker, slot)| (marker, Some(slot)))
 }
@@ -172,8 +172,8 @@ pub(in crate::interpreter) fn stage_native_function_ref_arg(
             Ok((marker, BoundNativeFunctionRefSlot::OwnedRawWord { original, slot, target }))
         }
         None => {
-            // Generic local contracts are checked at writeback; do not let native stores
-            // bypass that guard. Ordinary PHP references retain their live shared identity.
+            // Generic local contracts are checked at writeback, and by-value calls have no
+            // destination. Both need detached storage. Ordinary references remain live.
             let retained = if guarded_writeback && values.is_reference(original)? {
                 values.copy_value(original)?
             } else { values.retain(original)? };

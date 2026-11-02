@@ -616,3 +616,32 @@ fn native_reference_staging_keeps_duplicate_persistent_aliases_shared() {
     assert_eq!(scope.visible_cell("a"), scope.visible_cell("b"));
     for marker in bound.values { values.release(marker).unwrap(); }
 }
+
+/// By-value callback degradation cannot retain a caller's writable persistent wrapper.
+#[test]
+fn native_by_value_reference_staging_detaches_persistent_caller() {
+    let mut context = ElephcEvalContext::new();
+    let mut values = FakeOps::default();
+    let original = values.int(7).unwrap();
+    let reference = values.reference_new(original).unwrap();
+    let mut function = NativeFunction::new(std::ptr::null_mut(), fake_native_return_descriptor, 1);
+    function.set_param_by_ref(0, true);
+    let mut bound = bind_evaluated_native_function_args_for_call_user_func("change", &function,
+        vec![EvaluatedCallArg { name: None, value: reference.borrowed(), ref_target: None }],
+        &mut context, &mut values).unwrap();
+    let BoundNativeFunctionRefSlot::Mixed { slot, target, .. } = &mut bound.ref_slots[0] else {
+        panic!("untyped reference must use boxed staging");
+    };
+    assert!(target.is_none());
+    let staged = RuntimeCellHandle::from_raw(**slot);
+    assert!(!values.is_reference(staged).unwrap(), "a by-value call must detach reference identity");
+    let replacement = values.int(2).unwrap();
+    **slot = replacement.as_ptr();
+    values.release(staged).unwrap();
+    write_back_native_function_ref_args(&bound, &mut context, &mut values).unwrap();
+    assert_eq!(values.get(reference), FakeValue::Int(7));
+    assert_eq!(values.cell_owners[&(replacement.as_ptr() as usize)], 0);
+    for marker in bound.values { values.release(marker).unwrap(); }
+    values.release(reference).unwrap();
+    values.release(original).unwrap();
+}
