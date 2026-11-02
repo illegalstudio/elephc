@@ -756,7 +756,25 @@ fn store_matches_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId, raw_cap
     // Both return values must survive retirement and optional Mixed boxing.
     abi::emit_push_reg(ctx.emitter, result);
     abi::emit_push_reg(ctx.emitter, array);
-    if ctx.local_ref_cell_representation_is_definite(slot) {
+    let dynamic = ctx.local_ref_cell_representation_is_dynamic(slot);
+    let raw = dynamic.then(|| ctx.next_label("preg_matches_raw_slot"));
+    let stored = dynamic.then(|| ctx.next_label("preg_matches_published"));
+    if let Some(raw) = &raw {
+        let state = ctx.ref_cell_state_offset(slot).ok_or_else(||
+            CodegenIrError::invalid_module("dynamic regex capture slot has no representation flag"))?;
+        let scratch = abi::secondary_scratch_reg(ctx.emitter);
+        abi::load_at_offset(ctx.emitter, scratch, state);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cbz {scratch}, {raw}"));      // only raw storage uses ordinary local writeback
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("test {scratch}, {scratch}")); // inspect the slot's current representation
+                ctx.emitter.instruction(&format!("jz {raw}"));                  // only raw storage uses ordinary local writeback
+            }
+        }
+    }
+    if ctx.local_stores_ref_cell_pointer(slot) {
         let payload = ctx.ref_cell_payload_type(slot)?.codegen_repr();
         if payload != PhpType::Mixed && payload != *raw_capture_type {
             return Err(CodegenIrError::unsupported(format!(
@@ -772,7 +790,10 @@ fn store_matches_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId, raw_cap
         super::super::local_stores::publish_current_ref_cell_value(
             ctx, slot, &payload, super::super::local_stores::RefCellStorePrevious::RetireAcquired,
         )?;
-    } else {
+        if let Some(stored) = &stored { abi::emit_jump(ctx.emitter, stored); }
+    }
+    if let Some(raw) = &raw { ctx.emitter.label(raw); }
+    if !ctx.local_ref_cell_representation_is_definite(slot) {
         ctx.release_local_before_refcounted_writeback(slot)?;
         abi::emit_pop_reg(ctx.emitter, result);
         if matches!(ctx.local_php_type(slot)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
@@ -782,6 +803,7 @@ fn store_matches_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId, raw_cap
         }
         ctx.store_current_result_to_local(slot)?;
     }
+    if let Some(stored) = &stored { ctx.emitter.label(stored); }
     abi::emit_pop_reg(ctx.emitter, result);
     Ok(())
 }

@@ -188,7 +188,7 @@ impl Checker {
             return Ok(false);
         }
         let mut arg = arg;
-        while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &arg.kind {
+        while let ExprKind::NamedArg { value, .. } = &arg.kind {
             arg = value;
         }
         if !matches!(
