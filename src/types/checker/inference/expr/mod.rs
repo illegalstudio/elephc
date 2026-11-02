@@ -15,6 +15,7 @@ use crate::types::{PhpType, TypeEnv};
 mod assignments;
 mod array_access;
 mod basic;
+mod buffer_merges;
 mod class_refs;
 mod effects;
 mod calls_objects;
@@ -114,21 +115,39 @@ impl Checker {
     }
 
     /// Merges ordinary elements and spread values for a literal that may carry string keys.
-    fn assoc_spread_literal_value_type(&mut self, elems: &[Expr], env: &TypeEnv) -> PhpType {
+    ///
+    /// `scanned_sources` holds, in order, the results for the spread sources the caller's
+    /// hash-spread scan typed already: always a leading run of the literal's spreads, up to the
+    /// first hash source. Those results are reused, so no spread source is typed twice; typing
+    /// it again doubled the work at every level of a nested literal.
+    fn assoc_spread_literal_value_type(
+        &mut self,
+        elems: &[Expr],
+        scanned_sources: Vec<Result<PhpType, CompileError>>,
+        env: &TypeEnv,
+    ) -> PhpType {
+        let mut scanned_sources = scanned_sources.into_iter();
         let mut value_ty = PhpType::Never;
         for elem in elems {
             let next = match &elem.kind {
-                ExprKind::Spread(inner) => match self.infer_type(inner, env) {
-                    Ok(PhpType::Array(elem)) => *elem,
-                    Ok(PhpType::AssocArray { value, .. }) => *value,
-                    _ => PhpType::Mixed,
-                },
+                ExprKind::Spread(inner) => {
+                    match scanned_sources
+                        .next()
+                        .unwrap_or_else(|| self.infer_type(inner, env))
+                    {
+                        Ok(PhpType::Array(elem)) => *elem,
+                        Ok(PhpType::AssocArray { value, .. }) => *value,
+                        _ => PhpType::Mixed,
+                    }
+                }
                 _ => self.infer_type(elem, env).unwrap_or(PhpType::Mixed),
             };
             if matches!(value_ty, PhpType::Never) {
                 value_ty = next;
             } else if value_ty != next {
-                value_ty = PhpType::Mixed;
+                // Pointers and `null` share one pointer-word element.
+                value_ty = crate::types::merge_pointer_elements(&value_ty, &next)
+                    .unwrap_or(PhpType::Mixed);
             }
         }
         if matches!(value_ty, PhpType::Never) {
@@ -178,8 +197,9 @@ impl Checker {
 /// Returns `true` if `index` is a valid string offset index for a string receiver.
 ///
 /// A valid index is an integer or float type, or a string literal whose value
-/// can be parsed as a PHP string offset (e.g. `"0"`, `"-1"`, `"10"`).
-fn is_valid_string_offset_index(index: &Expr, idx_ty: &PhpType) -> bool {
+/// can be parsed as a PHP string offset (e.g. `"0"`, `"-1"`, `"10"`). Shared by string offset
+/// reads and writes (`$s[$i] = $v`), so both accept the same offsets.
+pub(crate) fn is_valid_string_offset_index(index: &Expr, idx_ty: &PhpType) -> bool {
     *idx_ty == PhpType::Int
         || *idx_ty == PhpType::Float
         // A boxed offset is decided at runtime, and a union IS boxed — `int|float`, what an

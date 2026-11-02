@@ -67,6 +67,7 @@ fn area_str(area: Area) -> &'static str {
         Area::Image => "image",
         Area::Opcache => "opcache",
         Area::Xml => "xml",
+        Area::Random => "random",
     }
 }
 
@@ -188,10 +189,11 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
     let argument_lowering = match semantics.argument_lowering {
         BuiltinArgumentLowering::Standard => "standard",
         BuiltinArgumentLowering::PreserveValues => "preserve_values",
+        BuiltinArgumentLowering::PreserveUncoerced => "preserve_uncoerced",
         BuiltinArgumentLowering::MaterializeDefaults => "materialize_defaults",
         BuiltinArgumentLowering::Count => "count",
         BuiltinArgumentLowering::Date => "date",
-        BuiltinArgumentLowering::JsonDecode => "json_decode",
+        BuiltinArgumentLowering::JsonSource => "json_source",
         BuiltinArgumentLowering::Getenv => "getenv",
         BuiltinArgumentLowering::PcntlPreserveOmitted => "pcntl_preserve_omitted",
         BuiltinArgumentLowering::PregReplaceCallback => "preg_replace_callback",
@@ -304,7 +306,7 @@ fn build_json(include_internal: bool) -> Value {
             "summary": spec.summary,
             "examples": spec.examples,
             "php_manual": spec.php_manual,
-            "deprecated": spec.deprecation,
+            "deprecated": spec.deprecation.map(|deprecation| deprecation.message),
         }));
     }
     Value::Array(out)

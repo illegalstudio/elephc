@@ -96,6 +96,8 @@ pub enum RuntimeFnId {
     ArrayFillKeys,
     ArrayFilter,
     ArrayFind,
+    /// Boxes the first value of an array in insertion order for `array_first()`.
+    ArrayFirst,
     ArrayFlip,
     ArrayIntersect,
     ArrayIntersectAssoc,
@@ -105,6 +107,8 @@ pub enum RuntimeFnId {
     ArrayKeyFirst,
     ArrayKeyLast,
     ArrayKeys,
+    /// Boxes the last value of an array in insertion order for `array_last()`.
+    ArrayLast,
     ArrayMap,
     ArrayMerge,
     ArrayMergeRecursive,
@@ -429,11 +433,16 @@ pub enum RuntimeFnId {
     ElephcOpcacheRtInFileCache,
     ElephcOpcacheRtStat,
     ElephcOpcacheRtSwap,
+    ElephcPtrGet,
     ElephcPtrIsNull,
     ElephcPtrReadString,
     ElephcPtrWriteString,
+    ElephcZvalFree,
+    ElephcZvalPack,
+    ElephcZvalUnpack,
     BufferFree,
     BufferLen,
+    BufferPtr,
     Ptr,
     PtrGet,
     PtrIsNull,
@@ -772,6 +781,16 @@ pub enum RuntimeFnId {
     JsonLastErrorMsg,
     JsonValidate,
     Localtime,
+    /// Native heap metric operation `memory_get_allocations`.
+    MemoryGetAllocations,
+    /// Native heap metric operation `memory_get_frees`.
+    MemoryGetFrees,
+    /// Native heap metric operation `memory_get_peak_usage`.
+    MemoryGetPeakUsage,
+    /// Native heap metric operation `memory_get_usage`.
+    MemoryGetUsage,
+    /// Native heap metric operation `memory_reset_peak_usage`.
+    MemoryResetPeakUsage,
     Microtime,
     Mktime,
     Passthru,
@@ -800,6 +819,8 @@ pub enum RuntimeFnId {
     IsNan,
     IsNumeric,
     Settype,
+    /// Stamps the source-buffer location on a tokenizer ParseError.
+    TokenizerErrorLocation,
 }
 
 impl RuntimeFnId {
@@ -1044,13 +1065,13 @@ impl RuntimeFnId {
                 // Do not let an FCC wrapper narrow that ABI to a packed Array<Mixed> pointer.
                 sig.return_type = PhpType::php_array();
             }
-            RuntimeFnId::ZvalPack => {
+            RuntimeFnId::ZvalPack | RuntimeFnId::ElephcZvalPack => {
                 if let Some((_, value_ty)) = sig.params.get_mut(0) {
                     *value_ty = PhpType::Mixed;
                 }
                 sig.return_type = PhpType::Pointer(None);
             }
-            RuntimeFnId::ZvalUnpack => {
+            RuntimeFnId::ZvalUnpack | RuntimeFnId::ElephcZvalUnpack => {
                 if let Some((_, zval_ty)) = sig.params.get_mut(0) {
                     *zval_ty = PhpType::Pointer(None);
                 }
@@ -1062,17 +1083,28 @@ impl RuntimeFnId {
                 }
                 sig.return_type = PhpType::Int;
             }
-            RuntimeFnId::ZvalFree => {
+            RuntimeFnId::ZvalFree | RuntimeFnId::ElephcZvalFree => {
                 if let Some((_, zval_ty)) = sig.params.get_mut(0) {
                     *zval_ty = PhpType::Pointer(None);
                 }
                 sig.return_type = PhpType::Void;
             }
+            // The wrapper takes the raw buffer handle, whatever the element type: `buffer<mixed>`
+            // is the internal any-buffer shape (no program can declare it) that
+            // `types_compatible` accepts for every `buffer<T>` argument. `buffer_ptr(...)`
+            // answers the untyped `ptr` for every buffer, since the callable has no call-site
+            // element type to refine it to `ptr<T>`.
             RuntimeFnId::BufferLen => {
                 if let Some((_, buffer_ty)) = sig.params.get_mut(0) {
-                    *buffer_ty = PhpType::Buffer(Box::new(PhpType::Int));
+                    *buffer_ty = PhpType::Buffer(Box::new(PhpType::Mixed));
                 }
                 sig.return_type = PhpType::Int;
+            }
+            RuntimeFnId::BufferPtr => {
+                if let Some((_, buffer_ty)) = sig.params.get_mut(0) {
+                    *buffer_ty = PhpType::Buffer(Box::new(PhpType::Mixed));
+                }
+                sig.return_type = PhpType::Pointer(None);
             }
             _ => {}
         }
@@ -1087,6 +1119,10 @@ impl RuntimeFnId {
             return;
         }
         match self {
+            RuntimeFnId::MemoryGetUsage | RuntimeFnId::MemoryGetPeakUsage => {
+                // Preserve dynamic flags until the builtin can reject non-scalar values.
+                set_callable_param_type(sig, 0, PhpType::Mixed);
+            }
             RuntimeFnId::Count => truncate_callable_params(sig, 1),
             RuntimeFnId::CloneWith => {
                 set_callable_param_type(sig, 0, PhpType::Mixed);
@@ -1143,6 +1179,18 @@ impl RuntimeFnId {
             );
         }
         match self {
+            // Persistent web requests retire the preceding ambient context owner on replacement.
+            // Captured objects can run destructors, mutate globals, and throw during that release.
+            RuntimeFnId::StreamContextCreate | RuntimeFnId::StreamContextSetDefault
+            | RuntimeFnId::StreamContextSetParams | RuntimeFnId::StreamContextSetOption
+            => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::all().bits()
+                    & !crate::ir::Effects::BLOCKING_IO.bits()
+                    & !crate::ir::Effects::NETWORK_IO.bits(),
+            ),
+            RuntimeFnId::TokenizerErrorLocation => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::WRITES_HEAP.bits(),
+            ),
             // Clone hooks and property hooks can execute arbitrary user code. I/O effects are
             // attributed to the nested operation that performs them.
             RuntimeFnId::CloneWith => crate::ir::Effects::from_bits_retain(
@@ -1255,8 +1303,6 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayIntersectKey |
             RuntimeFnId::ArrayIsList |
             RuntimeFnId::ArrayKeyExists |
-            RuntimeFnId::ArrayKeyFirst |
-            RuntimeFnId::ArrayKeyLast |
             RuntimeFnId::ArrayKeys |
             RuntimeFnId::ArrayMergeRecursive |
             RuntimeFnId::ArrayReplace |
@@ -1414,6 +1460,19 @@ impl RuntimeFnId {
             | RuntimeFnId::ElephcObjectPropCount
             | RuntimeFnId::ElephcObjectPropName
             | RuntimeFnId::SplObjectId => crate::ir::Effects::READS_HEAP,
+            // Array-edge value/key functions read one edge and box it into a fresh
+            // Mixed cell (retaining a container payload inside the box). No user code runs and
+            // nothing is written, but the result depends on the array's current contents, so
+            // the call must never be treated as pure and merged with an earlier read. A `mixed`
+            // argument holding no array raises PHP's TypeError, so the call may throw: operands
+            // are pinned for unwind and stores before it stay observable by a catch.
+            RuntimeFnId::ArrayFirst | RuntimeFnId::ArrayLast
+            | RuntimeFnId::ArrayKeyFirst | RuntimeFnId::ArrayKeyLast => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_CONCAT.bits()
+                    | crate::ir::Effects::MAY_THROW.bits(),
+            ),
             // The runtime script cache is process state: these read it and nothing else,
             // so they must NOT be folded across an include that can move the counters.
             RuntimeFnId::ElephcOpcacheRtScriptField | RuntimeFnId::ElephcOpcacheRtStat => {
@@ -1489,8 +1548,24 @@ impl RuntimeFnId {
                 crate::ir::Effects::READS_HEAP.bits()
                     | crate::ir::Effects::ALLOC_CONCAT.bits(),
             ),
-            RuntimeFnId::BufferLen => crate::ir::Effects::from_bits_retain(
+            // Both resolve the handle (a stale one is fatal) and read the descriptor.
+            RuntimeFnId::BufferLen | RuntimeFnId::BufferPtr => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::MAY_FATAL.bits(),
+            ),
+            // Heap samples observe allocation and release boundaries, including peak resets.
+            RuntimeFnId::MemoryGetUsage | RuntimeFnId::MemoryGetPeakUsage => {
+                crate::ir::Effects::from_bits_retain(
+                    crate::ir::Effects::READS_GLOBAL.bits() | crate::ir::Effects::READS_HEAP.bits()
+                        | crate::ir::Effects::MAY_WARN.bits() | crate::ir::Effects::MAY_THROW.bits(),
+                )
+            }
+            RuntimeFnId::MemoryGetAllocations | RuntimeFnId::MemoryGetFrees => {
+                crate::ir::Effects::from_bits_retain(
+                    crate::ir::Effects::READS_GLOBAL.bits() | crate::ir::Effects::READS_HEAP.bits(),
+                )
+            }
+            RuntimeFnId::MemoryResetPeakUsage => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_GLOBAL.bits() | crate::ir::Effects::WRITES_GLOBAL.bits(),
             ),
             // `getmypid()` is not a constant: a `pcntl_fork()` child reads its own id.
             RuntimeFnId::Time | RuntimeFnId::Getmypid => crate::ir::Effects::READS_PROCESS,
@@ -1652,6 +1727,10 @@ impl RuntimeFnId {
             IoKind, MonitoringPolicy, TraceContextPolicy, WaitPolicy,
         };
         match self {
+            RuntimeFnId::MtRand
+            | RuntimeFnId::Rand
+            | RuntimeFnId::ArrayRand
+            | RuntimeFnId::Shuffle => MonitoringPolicy::GenericTiming,
             RuntimeFnId::MbSendMail => MonitoringPolicy::Io {
                 kind: IoKind::Network,
                 wait: WaitPolicy::Measured,
@@ -1859,6 +1938,12 @@ impl RuntimeFnId {
             | RuntimeFnId::BcScale
             | RuntimeFnId::BcSqrt | RuntimeFnId::BcNumberSqrt
             | RuntimeFnId::BcSub | RuntimeFnId::BcNumberSub => &[BuiltinRequirement::Bridge("elephc_bcmath")],
+            // `mt_rand`/`rand` now draw from the global Mt19937 state in the random bridge,
+            // and `array_rand`/`shuffle` reach the same state through a published slot.
+            RuntimeFnId::MtRand
+            | RuntimeFnId::Rand
+            | RuntimeFnId::ArrayRand
+            | RuntimeFnId::Shuffle => &[BuiltinRequirement::Bridge("elephc_random")],
             RuntimeFnId::ElephcPharBzip2Archive => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharDecompressArchive => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharGetFileMetadata => &[BuiltinRequirement::Bridge("elephc_phar")],
@@ -2100,6 +2185,11 @@ impl RuntimeFnId {
                 | RuntimeFnId::CloneWith
                 | RuntimeFnId::Count
                 | RuntimeFnId::Getmypid
+                | RuntimeFnId::MemoryGetAllocations
+                | RuntimeFnId::MemoryGetFrees
+                | RuntimeFnId::MemoryGetPeakUsage
+                | RuntimeFnId::MemoryGetUsage
+                | RuntimeFnId::MemoryResetPeakUsage
                 | RuntimeFnId::Gettype
                 | RuntimeFnId::InArray
                 | RuntimeFnId::Trim
@@ -2129,7 +2219,13 @@ impl RuntimeFnId {
                 )
             }),
             RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct | RuntimeFnId::Getmypid
-            | RuntimeFnId::Gettype | RuntimeFnId::InArray => true,
+            | RuntimeFnId::Gettype | RuntimeFnId::InArray
+            | RuntimeFnId::MemoryGetAllocations
+            | RuntimeFnId::MemoryGetFrees
+            | RuntimeFnId::MemoryGetPeakUsage
+            | RuntimeFnId::MemoryGetUsage
+            | RuntimeFnId::MemoryResetPeakUsage
+            => true,
             RuntimeFnId::Trim => source.is_none_or(|ty| matches!(ty, PhpType::Str)),
             _ => false,
         }
@@ -2287,7 +2383,21 @@ impl RuntimeFnId {
         // for `Strpos` and `Strtr` below.
         if matches!(
             self,
-            RuntimeFnId::IntvalBase
+            RuntimeFnId::MemoryGetAllocations
+                | RuntimeFnId::MemoryGetFrees
+                | RuntimeFnId::MemoryGetPeakUsage
+                | RuntimeFnId::MemoryGetUsage
+                | RuntimeFnId::MemoryResetPeakUsage
+                | RuntimeFnId::IntvalBase
+                // The first byte is a scalar integer, independent of its source string.
+                | RuntimeFnId::Ord
+                // Raw-memory writes return only the byte count, never the borrowed input string.
+                | RuntimeFnId::PtrWriteString
+                // Brigade insertion mutates its inputs and returns no owning value.
+                | RuntimeFnId::StreamBucketAppend
+                | RuntimeFnId::StreamBucketPrepend
+                | RuntimeFnId::ElephcPtrWriteString
+                | RuntimeFnId::TokenizerErrorLocation
                 // Both array mutators answer the resulting element count. The returned
                 // machine integer cannot keep any variadic value operand alive.
                 | RuntimeFnId::ArrayPush
@@ -2298,6 +2408,8 @@ impl RuntimeFnId {
                 | RuntimeFnId::BcScale
                 // `iconv_set_encoding()` answers with a bare boolean.
                 | RuntimeFnId::IconvSetEncoding
+                // `buffer_ptr()` answers the raw payload address of a scalar buffer handle.
+                | RuntimeFnId::BufferPtr
                 // The clone override reference guard answers nothing at all: it returns or
                 // throws, so a result temporary would only keep the override array alive.
                 | RuntimeFnId::ElephcCloneOverrideReferenceGuard
@@ -2305,10 +2417,13 @@ impl RuntimeFnId {
             return BuiltinResultOwnership::NonHeap;
         }
         // Every other iconv entry point boxes a freshly built string, integer, or array,
-        // so its result never aliases an argument.
+        // so its result never aliases an argument. `zval_unpack` builds a new Elephc value
+        // from a C zval its only argument points to, which is not refcounted storage.
         if matches!(
             self,
-            RuntimeFnId::Iconv
+            RuntimeFnId::ZvalUnpack
+                | RuntimeFnId::ElephcZvalUnpack
+                | RuntimeFnId::Iconv
                 | RuntimeFnId::IconvGetEncoding
                 | RuntimeFnId::IconvMimeDecode
                 | RuntimeFnId::IconvMimeDecodeHeaders
@@ -2439,11 +2554,21 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayMerge
                 | RuntimeFnId::ArrayPad
                 | RuntimeFnId::ArrayPop
+                // Bucket construction and brigade extraction transfer an independent boxed owner.
+                | RuntimeFnId::StreamBucketNew
+                | RuntimeFnId::StreamBucketMakeWriteable
                 // `key()`/`current()` and the seek family all hand back a cell built by
                 // `__rt_mixed_from_value`, which persists strings and increfs containers, so
                 // the box is independently owned and never aliases the receiving array.
                 | RuntimeFnId::ArrayPtrKey
                 | RuntimeFnId::ArrayPtrValue
+                // Array-edge value/key functions box their answer through the same
+                // `__rt_mixed_from_value` / `__rt_array_get_mixed_key` paths, so the cell is
+                // independently owned and never aliases the source array.
+                | RuntimeFnId::ArrayFirst
+                | RuntimeFnId::ArrayLast
+                | RuntimeFnId::ArrayKeyFirst
+                | RuntimeFnId::ArrayKeyLast
                 | RuntimeFnId::ArrayProduct
                 | RuntimeFnId::ArrayReduce
                 | RuntimeFnId::ArrayReplace
@@ -2464,6 +2589,11 @@ impl RuntimeFnId {
                 // so the default `MayAliasArguments` bucket would only keep an owned subject
                 // temporary alive for the boxed result's whole lifetime.
                 | RuntimeFnId::Base64Decode
+                // Compression allocates independent output storage, including failure cells.
+                | RuntimeFnId::Gzdeflate
+                | RuntimeFnId::Gzinflate
+                // A newly boxed file descriptor never aliases its filename, mode or context.
+                | RuntimeFnId::Fopen
                 // hexdec()/bindec()/octdec() box their `int|float` answer through
                 // `__rt_mixed_from_value`, so the cell handed back is a fresh allocation
                 // that cannot alias the parsed subject string.
@@ -2580,6 +2710,11 @@ impl RuntimeFnId {
                 | RuntimeFnId::OpensslEncrypt
                 | RuntimeFnId::OpensslGetCipherMethods
                 | RuntimeFnId::ParseUrl
+                // `preg_match()` boxes `int|false` through `__rt_mixed_from_value`.
+                // That cell is fresh and does not alias the pattern, subject, or capture array.
+                | RuntimeFnId::PregMatch
+                | RuntimeFnId::PregMatchAll
+                | RuntimeFnId::PregReplace
                 | RuntimeFnId::PregSplit
                 // print_r renders into the `_print_r_buf` capture buffer and `__rt_pr_finish`
                 // copies those bytes out through `__rt_str_persist`, so every mode returns
@@ -2589,7 +2724,14 @@ impl RuntimeFnId {
                 // `value_is_scratch_string` classify the return-mode string as concat scratch and
                 // skip its release, leaking one block per `print_r($v, true)` call.
                 | RuntimeFnId::PrintR
+                // Stream writes box a fresh byte count or false and never return input storage.
+                | RuntimeFnId::Fwrite
                 | RuntimeFnId::PtrReadString
+                | RuntimeFnId::ElephcPtrReadString
+                // Filter attachment boxes a new resource or false. The helper retains
+                // its own params owner, so none of the result storage aliases an input.
+                | RuntimeFnId::StreamFilterAppend
+                | RuntimeFnId::StreamFilterPrepend
                 | RuntimeFnId::Range
                 | RuntimeFnId::StrSplit
                 | RuntimeFnId::Strtotime
@@ -2632,8 +2774,22 @@ impl RuntimeFnId {
                 // leaked the literal replacement array on every call.
                 | RuntimeFnId::ArraySplice
                 | RuntimeFnId::ZvalUnpack
+                | RuntimeFnId::ElephcZvalUnpack
                 // Parsed values own their storage independently of the wire input and options.
                 | RuntimeFnId::Unserialize
+                // Success copies the owned output buffer into a Mixed string and releases
+                // that buffer. An invalid pattern or the removed `/e` modifier boxes PHP
+                // null. Neither cell aliases an argument.
+                | RuntimeFnId::PregReplaceCallback
+                // `shell_exec` reserves or persists its own result; failure copies the
+                // empty output rather than aliasing an argument.
+                | RuntimeFnId::ShellExec
+                // These string transforms always answer with a fresh mutable copy. The
+                // caller persists it for assignment and may then release the original result.
+                | RuntimeFnId::StrPad
+                | RuntimeFnId::Ucfirst
+                | RuntimeFnId::Lcfirst
+                | RuntimeFnId::Ucwords
         ) {
             BuiltinResultOwnership::Fresh
         } else if matches!(
@@ -2646,6 +2802,10 @@ impl RuntimeFnId {
                 // literals, not the inspected object's storage or its boxed read cell.
                 | RuntimeFnId::GetClass
                 | RuntimeFnId::GetParentClass
+                // Reads return stream-owned bytes, never an argument view. Scratch is
+                // ignored by validated release; detached filter output must be retired.
+                | RuntimeFnId::Fread
+                | RuntimeFnId::Fgetc
                 // `__rt_chunk_split` always writes into a reservation taken from
                 // `__rt_concat_reserve`, so the split result can never alias the subject or
                 // the separator. The default `MayAliasArguments` bucket kept an owned subject
@@ -2667,6 +2827,12 @@ impl RuntimeFnId {
                 // Wire bytes occupy concat storage, never an operand's allocation. This also
                 // keeps temporary inputs pinned while serialization hooks can unwind.
                 | RuntimeFnId::Serialize
+                // A digest is formatted into its own concat reservation, never into or over
+                // the subject. The default `MayAliasArguments` bucket suppressed the release
+                // of an owned subject temporary, so `md5(str_repeat("x", 70000))` leaked the
+                // 70 KB subject on every call.
+                | RuntimeFnId::Md5
+                | RuntimeFnId::Sha1
         ) {
             BuiltinResultOwnership::Independent
         } else {
@@ -2689,6 +2855,7 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayFillKeys => "array_fill_keys",
             RuntimeFnId::ArrayFilter => "array_filter",
             RuntimeFnId::ArrayFind => "array_find",
+            RuntimeFnId::ArrayFirst => "array_first",
             RuntimeFnId::ArrayCountValues => "array_count_values",
             RuntimeFnId::ArrayFlip => "array_flip",
             RuntimeFnId::ArrayIntersect => "array_intersect",
@@ -2699,6 +2866,7 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayKeyFirst => "array_key_first",
             RuntimeFnId::ArrayKeyLast => "array_key_last",
             RuntimeFnId::ArrayKeys => "array_keys",
+            RuntimeFnId::ArrayLast => "array_last",
             RuntimeFnId::ArrayMap => "array_map",
             RuntimeFnId::ArrayMerge => "array_merge",
             RuntimeFnId::ArrayMergeRecursive => "array_merge_recursive",
@@ -3021,11 +3189,16 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcOpcacheRtInFileCache => "__elephc_opcache_rt_in_file_cache",
             RuntimeFnId::ElephcOpcacheRtStat => "__elephc_opcache_rt_stat",
             RuntimeFnId::ElephcOpcacheRtSwap => "__elephc_opcache_rt_swap",
+            RuntimeFnId::ElephcPtrGet => "__elephc_ptr_get",
             RuntimeFnId::ElephcPtrIsNull => "__elephc_ptr_is_null",
             RuntimeFnId::ElephcPtrReadString => "__elephc_ptr_read_string",
             RuntimeFnId::ElephcPtrWriteString => "__elephc_ptr_write_string",
+            RuntimeFnId::ElephcZvalFree => "__elephc_zval_free",
+            RuntimeFnId::ElephcZvalPack => "__elephc_zval_pack",
+            RuntimeFnId::ElephcZvalUnpack => "__elephc_zval_unpack",
             RuntimeFnId::BufferFree => "buffer_free",
             RuntimeFnId::BufferLen => "buffer_len",
+            RuntimeFnId::BufferPtr => "buffer_ptr",
             RuntimeFnId::Ptr => "ptr",
             RuntimeFnId::PtrGet => "ptr_get",
             RuntimeFnId::PtrIsNull => "ptr_is_null",
@@ -3216,6 +3389,7 @@ impl RuntimeFnId {
             RuntimeFnId::MbOutputHandler => "mb_output_handler",
             RuntimeFnId::MbGetInfo => "mb_get_info",
             RuntimeFnId::SharedIni => "__elephc_shared_ini",
+            RuntimeFnId::TokenizerErrorLocation => "__elephc_tokenizer_error_location",
             RuntimeFnId::MbParseStr => "mb_parse_str",
             RuntimeFnId::MbSendMail => "mb_send_mail",
             RuntimeFnId::MbHttpInput => "mb_http_input",
@@ -3288,6 +3462,11 @@ impl RuntimeFnId {
             RuntimeFnId::JsonLastErrorMsg => "json_last_error_msg",
             RuntimeFnId::JsonValidate => "json_validate",
             RuntimeFnId::Localtime => "localtime",
+            RuntimeFnId::MemoryGetAllocations => "memory_get_allocations",
+            RuntimeFnId::MemoryGetFrees => "memory_get_frees",
+            RuntimeFnId::MemoryGetPeakUsage => "memory_get_peak_usage",
+            RuntimeFnId::MemoryGetUsage => "memory_get_usage",
+            RuntimeFnId::MemoryResetPeakUsage => "memory_reset_peak_usage",
             RuntimeFnId::Microtime => "microtime",
             RuntimeFnId::Mktime => "mktime",
             RuntimeFnId::Passthru => "passthru",

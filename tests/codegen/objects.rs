@@ -18,6 +18,8 @@ mod gc_aliasing;
 mod magic_methods;
 #[path = "objects/cloning.rs"]
 mod cloning;
+#[path = "objects/debug_info_dumps.rs"]
+mod debug_info_dumps;
 #[path = "objects/dynamic_property_dumps.rs"]
 mod dynamic_property_dumps;
 #[path = "objects/property_access/mod.rs"]

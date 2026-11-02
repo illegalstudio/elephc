@@ -237,8 +237,10 @@ fn test_repl_project_context_and_multiline_strings() {
 }
 
 /// Warm launches reuse the same executable, start fresh state, and recover from corrupted bytes.
+/// The per-profile host is a separate test: each host build links the eval interpreter, and the
+/// three builds in one test sat at the edge of the REPL timeout on macOS runners.
 #[test]
-fn test_repl_cache_reuse_integrity_and_profile() {
+fn test_repl_cache_reuse_and_integrity() {
     use std::os::unix::fs::MetadataExt;
     let fixture = Fixture::new();
     assert_eq!(stdout(&fixture.run("$n = 12;\n", &[])), "int(12)\n");
@@ -250,6 +252,16 @@ fn test_repl_cache_reuse_integrity_and_profile() {
     fs::write(&hosts[0], b"damaged cache executable").unwrap();
     assert_eq!(stdout(&fixture.run("6 * 7\n", &[])), "int(42)\n");
     assert!(fs::metadata(&hosts[0]).unwrap().len() > 100);
+    for host in fixture.hosts() { assert!(!host.parent().unwrap().join("build").exists()); }
+}
+
+/// A different `--php-version` gets its own cached host next to the default one, and neither
+/// leaves its build directory behind.
+#[test]
+fn test_repl_cache_keeps_one_host_per_profile() {
+    let fixture = Fixture::new();
+    assert_eq!(stdout(&fixture.run("$n = 12;\n", &[])), "int(12)\n");
+    assert_eq!(fixture.hosts().len(), 1);
     assert!(stdout(&fixture.run("PHP_VERSION\n", &["--php-version=8.4"])).contains("8.4.0"));
     assert_eq!(fixture.hosts().len(), 2);
     for host in fixture.hosts() { assert!(!host.parent().unwrap().join("build").exists()); }

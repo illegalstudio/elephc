@@ -18,6 +18,24 @@ use super::super::super::*;
 enum EvalCallableValidationError<'a> {
     CallUserFunc(&'a str),
     ClosureFromCallable,
+    PregReplaceCallback,
+}
+
+/// Validates `preg_replace_callback()`'s callback before the pattern is compiled.
+///
+/// PHP checks the `callable` parameter during argument parsing, so a missing
+/// function is a `TypeError` even when the pattern would also be rejected.
+pub(in crate::interpreter) fn eval_validate_preg_replace_callback(
+    callback: &EvaluatedCallable,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    eval_validate_callback(
+        callback,
+        EvalCallableValidationError::PregReplaceCallback,
+        context,
+        values,
+    )
 }
 
 /// Validates callback targets whose PHP errors depend on method metadata.
@@ -610,6 +628,11 @@ fn eval_invalid_callback_type_error<T>(
             format!(
                 "{}(): Argument #1 ($callback) must be a valid callback, {}",
                 function_name, reason
+            )
+        }
+        EvalCallableValidationError::PregReplaceCallback => {
+            format!(
+                "preg_replace_callback(): Argument #2 ($callback) must be a valid callback, {reason}"
             )
         }
         EvalCallableValidationError::ClosureFromCallable => {

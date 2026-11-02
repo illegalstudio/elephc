@@ -95,7 +95,7 @@ pub(super) fn encode_eval_native_array_default_element(
         }
         Some(EvalNativeCallableArrayDefaultKey::String(value)) => {
             bytes.push(NATIVE_ARRAY_DEFAULT_KEY_STRING);
-            encode_eval_native_default_string(bytes, value);
+            encode_eval_native_literal_default_string(bytes, value);
         }
         None => bytes.push(NATIVE_ARRAY_DEFAULT_KEY_AUTO),
     }
@@ -127,7 +127,7 @@ pub(super) fn encode_eval_native_object_default_arg_value(
         }
         EvalNativeCallableDefault::String(value) => {
             bytes.push(NATIVE_OBJECT_DEFAULT_ARG_STRING);
-            encode_eval_native_default_string(bytes, value);
+            encode_eval_native_literal_default_string(bytes, value);
         }
         EvalNativeCallableDefault::Object { .. } => {
             bytes.push(NATIVE_OBJECT_DEFAULT_ARG_OBJECT);
@@ -145,4 +145,12 @@ pub(super) fn encode_eval_native_default_string(bytes: &mut Vec<u8>, value: &str
     let len = u32::try_from(value.len()).unwrap_or(u32::MAX);
     bytes.extend_from_slice(&len.to_le_bytes());
     bytes.extend_from_slice(value.as_bytes());
+}
+
+/// Encodes PHP literal bytes while ordinary class and argument names retain their UTF-8 codec.
+fn encode_eval_native_literal_default_string(bytes: &mut Vec<u8>, value: &str) {
+    let value = elephc_builtin_contract::string_literal::literal_bytes(value);
+    let len = u32::try_from(value.len()).unwrap_or(u32::MAX);
+    bytes.extend_from_slice(&len.to_le_bytes());
+    bytes.extend_from_slice(&value);
 }

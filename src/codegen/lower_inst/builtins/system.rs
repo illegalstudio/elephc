@@ -485,7 +485,7 @@ fn emit_load_scratch_to_arg_reg(ctx: &mut FunctionContext<'_>, index: usize, off
 fn emit_load_scratch_to_reg(ctx: &mut FunctionContext<'_>, reg: &str, offset: usize) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr {}, [sp, #{}]", reg, offset));// load the staged integer into the target register
+            ctx.emitter.instruction(&format!("ldr {}, [sp, #{}]", reg, offset)); // load the staged integer into the target register
         }
         Arch::X86_64 => {
             ctx.emitter
@@ -913,7 +913,7 @@ fn lower_direct_system_call(
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the null-terminated shell command to libc system()
     }
-    ctx.emitter.bl_c("system");
+    ctx.emitter.bl_c(if ctx.module.web_application { "elephc_web_application_system" } else { "system" });
     if returns_empty_string {
         emit_empty_string_result(ctx);
     }
@@ -934,6 +934,7 @@ fn emit_dynamic_exit(ctx: &mut FunctionContext<'_>) {
         (Platform::MacOS, Arch::AArch64) | (Platform::Linux, Arch::AArch64) => {
             ctx.emitter.instruction("mov x19, x0");                             // stash the exit code in a callee-saved register (this path never returns)
             ctx.emitter.instruction("bl __rt_ob_flush_all");                    // drain still-active output buffers to stdout before terminating
+            abi::emit_exit_hook(ctx.emitter);
             crate::codegen::frame::emit_instr_terminate(ctx);
             ctx.emitter.instruction("mov x0, x19");                             // restore the exit code into the syscall argument register
             ctx.emitter.syscall(1);
@@ -942,6 +943,7 @@ fn emit_dynamic_exit(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("mov rbx, rax");                            // stash the exit code in a callee-saved register (this path never returns)
             ctx.emitter.instruction("and rsp, -16");                            // realign the stack for the flush call (this path never returns)
             ctx.emitter.instruction("call __rt_ob_flush_all");                  // drain still-active output buffers to stdout before terminating
+            abi::emit_exit_hook(ctx.emitter);
             crate::codegen::frame::emit_instr_terminate(ctx);
             ctx.emitter.instruction("mov rdi, rbx");                            // move the computed exit code into the SysV first-argument register
             ctx.emitter.instruction("mov eax, 60");                             // Linux x86_64 syscall 60 = exit

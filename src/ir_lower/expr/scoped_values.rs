@@ -49,6 +49,8 @@ pub(super) fn callable_profile_immediate() -> Option<Immediate> {
 /// Lowers a pointer cast.
 pub(super) fn lower_ptr_cast(ctx: &mut LoweringContext<'_, '_>, target_type: &str, inner: &Expr, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
+    // A packed record address reaches the cast as a raw pointer word.
+    let value = ctx.retype_packed_address_for_pointer_sink(value, &PhpType::Pointer(None), Some(inner.span));
     let data = ctx.intern_string(target_type);
     ctx.emit_value(
         Op::PtrCast,
@@ -60,7 +62,7 @@ pub(super) fn lower_ptr_cast(ctx: &mut LoweringContext<'_, '_>, target_type: &st
     )
 }
 
-/// Lowers buffer allocation.
+/// Lowers buffer allocation, converting a non-`int` length to an element count first.
 pub(super) fn lower_buffer_new(
     ctx: &mut LoweringContext<'_, '_>,
     element_type: &TypeExpr,
@@ -68,7 +70,11 @@ pub(super) fn lower_buffer_new(
     expr: &Expr,
 ) -> LoweredValue {
     let len_value = lower_expr(ctx, len);
-    let php_type = PhpType::Buffer(Box::new(ctx.type_expr_to_php_type_for_value(element_type)));
+    let len_value = super::buffer_length::lower_buffer_length(ctx, len_value, len.span);
+    // `buffer_new<u8>()`: a C width name is the element's storage format, not a class.
+    let element_php_type = crate::types::width_type_from_type_expr(element_type)
+        .unwrap_or_else(|| ctx.type_expr_to_php_type_for_value(element_type));
+    let php_type = PhpType::Buffer(Box::new(element_php_type));
     ctx.emit_value(
         Op::BufferNew,
         vec![len_value.value],

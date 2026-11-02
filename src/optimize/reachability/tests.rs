@@ -398,6 +398,22 @@ fn prune_keeps_extern_class_named_by_ptr_sizeof() {
         .any(|name| php_symbol_key(name) == php_symbol_key("Point")));
 }
 
+/// Verifies an extern class named only through `ptr<T>` types keeps its layout metadata, so a
+/// field access through a pointer an extern function returned can still find the struct.
+#[test]
+fn prune_keeps_extern_class_named_only_by_pointer_types() {
+    let (program, check) = prune(
+        "<?php extern class Rect { public i32 $x; } extern function make(): ptr<Rect>; $r = make(); echo $r->x;",
+    );
+    assert!(program.iter().any(|statement| {
+        matches!(&statement.kind, StmtKind::ExternClassDecl { name, .. } if php_symbol_key(name) == php_symbol_key("Rect"))
+    }));
+    assert!(check
+        .extern_classes
+        .keys()
+        .any(|name| php_symbol_key(name) == php_symbol_key("Rect")));
+}
+
 /// Verifies a literal stream protocol registration retains every runtime-dispatched method.
 #[test]
 fn prune_keeps_registered_stream_wrapper_protocol() {

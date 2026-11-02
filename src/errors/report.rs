@@ -10,6 +10,8 @@
 //! - Decoration (color, symbol prefix) is gated behind `crate::progress::is_decorated()`,
 //!   the same switch the live spinner and `--timings` report use, so plain/piped/`--quiet`
 //!   runs keep byte-identical text to before.
+//! - A diagnostic whose span was lexed from an included or autoloaded file names that file
+//!   (`Span::source_path`), ahead of any entry-filename tag. The pipeline also registers the entry.
 
 use super::{CompileError, CompileWarning};
 
@@ -18,12 +20,17 @@ use super::{CompileError, CompileWarning};
 /// Format varies based on available metadata:
 /// - With file, line, and column: `error[file:line:col]: message`
 /// - With file only: `error[file]: message`
-/// - With line and column only: `error[line:col]: message`
+/// - With line and column only: `error[line:col]: message` (a node with no registered source)
 /// - With no location metadata: `error: message`
+///
+/// An error whose span was lexed from an included or autoloaded file names that file
+/// (`Span::source_path`), so a checker or lowering error inside a class file says which file it
+/// is in, even when the pipeline tagged it with the entry filename.
 ///
 /// Recursively prints any related errors attached to the main error.
 pub fn print_error(error: &CompileError) {
-    let plain = format_diagnostic("error", &error.file, error.span, &error.message);
+    let file = diagnostic_file(&error.file, error.span);
+    let plain = format_diagnostic("error", &file, error.span, &error.message);
     if crate::progress::is_decorated() {
         eprintln!(
             "{} {}",
@@ -41,10 +48,16 @@ pub fn print_error(error: &CompileError) {
 /// Prints a compiler warning to stderr with optional line and column.
 ///
 /// Format varies based on available metadata:
-/// - With line and column: `warning[line:col]: message`
+/// - With a registered source file: `warning[file:line:col]: message`
+/// - With line and column only: `warning[line:col]: message`
 /// - With no location metadata: `warning: message`
 pub fn print_warning(warning: &CompileWarning) {
-    let plain = format_diagnostic("warning", &None, warning.span, &warning.message);
+    let kind = match warning.kind {
+        crate::errors::WarningKind::Warning => "warning",
+        crate::errors::WarningKind::Deprecation => "deprecated",
+    };
+    let file = diagnostic_file(&None, warning.span);
+    let plain = format_diagnostic(kind, &file, warning.span, &warning.message);
     if crate::progress::is_decorated() {
         eprintln!(
             "{} {}",
@@ -54,6 +67,24 @@ pub fn print_warning(warning: &CompileWarning) {
     } else {
         eprintln!("{}", plain);
     }
+}
+
+/// Returns the file a diagnostic names: the included or autoloaded file its span was lexed
+/// from, else the file it was tagged with.
+///
+/// Checker diagnostics carry only a span, so this is what puts `file:line:col` on an error
+/// inside an included or autoloaded file. The span wins over the tag because the pipeline tags
+/// every lowering, export and `--emit-ir` refusal with the ENTRY filename: preferring that tag
+/// printed an included file's line and column under the entry file's name. A tag still names
+/// the file when the span has no position or no registered source, which covers every
+/// standalone span outside the pipeline. The pipeline registers the entry as identity 0.
+fn diagnostic_file(file: &Option<String>, span: crate::span::Span) -> Option<String> {
+    if span.line != 0 {
+        if let Some(path) = span.source_path() {
+            return Some(path);
+        }
+    }
+    file.clone()
 }
 
 /// Builds the plain `kind[location]: message` diagnostic text shared by both
@@ -96,6 +127,35 @@ mod tests {
     fn format_diagnostic_line_col_only() {
         let msg = format_diagnostic("warning", &None, Span::new(3, 5), "bad");
         assert_eq!(msg, "warning[3:5]: bad");
+    }
+
+    /// A diagnostic names the registered file its span was lexed from, even when it was tagged
+    /// with the entry filename; an unregistered or entry-file span keeps its tag, or names none.
+    #[test]
+    fn diagnostic_file_falls_back_to_the_span_source() {
+        let span = Span::new_in_source(4, 2, 9_201);
+        Span::register_source_path(9_201, "vendor/a/B.php");
+        assert_eq!(diagnostic_file(&None, span).as_deref(), Some("vendor/a/B.php"));
+        assert_eq!(
+            diagnostic_file(&Some("main.php".to_string()), span).as_deref(),
+            Some("vendor/a/B.php"),
+            "an entry-file tag must not rename an included file's position"
+        );
+        let entry = Span::new(4, 2);
+        assert_eq!(
+            diagnostic_file(&Some("main.php".to_string()), entry).as_deref(),
+            Some("main.php")
+        );
+        assert_eq!(
+            diagnostic_file(&Some("main.php".to_string()), Span::dummy()).as_deref(),
+            Some("main.php")
+        );
+        assert_eq!(diagnostic_file(&None, Span::new_in_source(4, 2, 9_202)), None);
+        assert_eq!(diagnostic_file(&None, entry), None);
+        assert_eq!(
+            format_diagnostic("warning", &diagnostic_file(&None, span), span, "bad"),
+            "warning[vendor/a/B.php:4:2]: bad"
+        );
     }
 
     /// Verifies diagnostics omit the location brackets when no location is available.

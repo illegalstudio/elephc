@@ -31,7 +31,7 @@ use crate::ir::{
 use crate::codegen_support::dynamic_new::known_dynamic_new_builtin_class_names;
 use crate::names::{label_fragment, method_symbol, php_symbol_key};
 use crate::parser::ast::Visibility;
-use crate::types::{ClassInfo, InterfaceInfo, PhpType};
+use crate::types::{ClassInfo, InterfaceInfo, PhpType, ScalarWidth};
 
 use super::super::context::FunctionContext;
 use super::{
@@ -70,6 +70,9 @@ pub(super) struct PropertySlot {
     offset: usize,
     is_declared: bool,
     is_packed: bool,
+    /// Storage width of a packed field declared with a C width name (`i32`, `u8`, `f32`), whose
+    /// `php_type` is the `int` or `float` it reads as; `None` for 8-byte fields.
+    width: Option<ScalarWidth>,
     is_reference: bool,
     /// Argument diagnostic prefix when this temporary slot models an inherited setter.
     abstract_setter_type_error_prefix: Option<String>,
@@ -166,10 +169,12 @@ pub(in crate::codegen::lower_inst) mod throwable_new;
 mod fiber_dynamic_entry;
 mod dynamic_mixed_candidates;
 mod dynamic_factory;
+mod reflection_constructor;
 // The one stderr-and-exit sequence for the whole lowering tree. Every caller names it rather than
 // open-coding the platform split, so `Emitter::syscall`'s macOS-to-Linux mapping has a single site.
 pub(super) use dynamic_factory::emit_fatal_message;
 mod dynamic_pdo;
+mod dynamic_class_flags;
 mod property_defaults;
 mod known_property_reads;
 mod mixed_property_reads;
@@ -190,6 +195,7 @@ mod property_store_values;
 mod typed_property_guards;
 mod instanceof_helpers;
 mod mixed_property_type_guard;
+mod extern_fields;
 pub(super) use mixed_property_type_guard::emit_string_into_int_diagnostics;
 
 #[allow(unused_imports)]
@@ -208,6 +214,7 @@ use dynamic_mixed_candidates::*;
 use dynamic_factory::*;
 #[allow(unused_imports)]
 pub(in crate::codegen::lower_inst) use dynamic_pdo::*;
+pub(in crate::codegen::lower_inst) use dynamic_class_flags::*;
 #[allow(unused_imports)]
 use property_defaults::*;
 #[allow(unused_imports)]
@@ -246,6 +253,7 @@ use typed_property_guards::*;
 use instanceof_helpers::*;
 #[allow(unused_imports)]
 use mixed_property_type_guard::*;
+use extern_fields::*;
 
 pub(super) use dynamic_property_read_entry::{lower_dynamic_prop_get, lower_nullsafe_prop_get};
 pub(super) use fiber_dynamic_entry::{

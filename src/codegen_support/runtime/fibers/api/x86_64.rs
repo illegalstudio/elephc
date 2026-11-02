@@ -196,6 +196,8 @@ pub(super) fn emit_resume_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", FIBER_STATE_OFFSET)); // r10 = receiver fiber state
     emitter.instruction(&format!("cmp r10, {}", FIBER_STATE_SUSPENDED));        // is the fiber currently paused at Fiber::suspend()?
     emitter.instruction("je __rt_fiber_resume_state_ok");                       // proceed only when the fiber is suspended
+    emitter.instruction("mov rax, r13");                                        // retire the transferred input when state validation rejects the resume
+    abi::emit_call_label(emitter, "__rt_decref_mixed");
     abi::emit_symbol_address(emitter, "rdi", "_fiber_msg_not_suspended");       // rdi = pointer to the static error message
     emitter.instruction("mov esi, 43");                                         // rsi = error message length in bytes
     emitter.instruction("call __rt_fiber_throw_state_error");                   // raise FiberError; this call does not return
@@ -244,14 +246,19 @@ pub(super) fn emit_suspend_x86_64(emitter: &mut Emitter) {
     // Raises without returning, so the suspension site's second hook never runs.
     // r12 is NULL on this path, which is exactly what the park recorded.
     super::common::emit_instr_unpark_hook(emitter, "__rt_fiber_suspend_outside_no_instr_x", "r12");
+    emitter.instruction("mov rax, r13");                                        // an invalid suspension still consumes its independent input owner
+    abi::emit_call_label(emitter, "__rt_decref_mixed");
     abi::emit_symbol_address(emitter, "rdi", "_fiber_msg_suspend_outside");     // rdi = pointer to the static error message
     emitter.instruction("mov esi, 33");                                         // rsi = error message length in bytes
     emitter.instruction("call __rt_fiber_throw_state_error");                   // raise FiberError; this call does not return
     emitter.label("__rt_fiber_suspend_state_ok");
+    super::super::force_close::suspend_guard(emitter);
     emitter.instruction("cmp QWORD PTR [rip + _unser_active], 0");              // is global unserialize parser state currently owned?
     emitter.instruction("je __rt_fiber_suspend_unserialize_ok_x");              // switching is safe only when no parser context is live
     // Also raises without returning, and also before the switch.
     super::common::emit_instr_unpark_hook(emitter, "__rt_fiber_suspend_unser_no_instr_x", "r12");
+    emitter.instruction("mov rax, r13");                                        // release the rejected transfer before raising the parser-state error
+    abi::emit_call_label(emitter, "__rt_decref_mixed");
     abi::emit_symbol_address(emitter, "rdi", "_fiber_msg_suspend_unserialize"); // rdi = stable FiberError message for the forbidden switch
     emitter.instruction("mov esi, 52");                                         // rsi = error message length in bytes
     emitter.instruction("call __rt_fiber_throw_state_error");                   // raise before publishing a yielded value or Suspended state

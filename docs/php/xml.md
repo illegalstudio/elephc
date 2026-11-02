@@ -102,8 +102,7 @@ Every handler in this guide is written as a closure because that is the
 shortest spelling, but note that **every handler invocation costs a small heap
 block**, whatever the callable is — one per string argument the runtime passes
 to it. A SAX handler receives a name or a data string on every event, so the
-cost scales with the document, and a large document can exhaust the default
-8 MB heap. Read [Runtime limits](#runtime-limits) before parsing anything
+cost scales with the document, and a large document can exhaust the heap. Read [Runtime limits](#runtime-limits) before parsing anything
 sizeable; it gives the measured element counts and the `--heap-size` escape.
 
 Every handler PHP offers is available: element, character data, processing
@@ -222,7 +221,7 @@ leaked block and byte totals), not guarantees.
   closure literal, a function named in the call, or a callable chosen at run
   time. In a probe with a start and an end element handler declared
   `array $attributes`, a document of 85,000 elements (170,000 handler calls)
-  completes on the default 8 MB heap and one of 90,000 stops with
+  completes on an 8 MB heap (`--heap-size=8388608`) and one of 90,000 stops with
   `Fatal error: heap memory exhausted` (exit status 1). Compile with
   [`--heap-size=BYTES`](../compiling/linking-and-conditional-compilation.md#heap-size)
   to raise the ceiling: the same probe built with `--heap-size=67108864`
@@ -233,7 +232,7 @@ leaked block and byte totals), not guarantees.
   a dynamically resolved handler needs, see the next item — every
   start-element event additionally leaks the boxed attribute array: about
   1.3 KB and six blocks per element with one attribute in the same probe, so
-  the default heap is exhausted between 6,000 and 7,000 elements. A closure
+  an 8 MB heap is exhausted between 6,000 and 7,000 elements. A closure
   literal or a function named literally in the `xml_set_*_handler()` call can
   keep `array $attributes` and pays only the per-event block above.
 - **A bare `array` parameter on a dynamically resolved handler receives
@@ -249,7 +248,7 @@ leaked block and byte totals), not guarantees.
   `$values` entries, and the per-tag `$index` lists when the caller passes
   `$index`, are ordinary PHP arrays that live until the call returns: in a probe
   of identical empty elements about 1.6 KB per element, so a document of 4,000
-  elements completes on the default 8 MB heap, one of 5,000 stops with
+  elements completes on an 8 MB heap, one of 5,000 stops with
   `Fatal error: heap memory exhausted`, and `--heap-size=67108864` (64 MB) takes
   30,000. This is the document's own footprint (PHP holds the same arrays),
   not a leak; the SAX handlers are not involved and cost nothing here.

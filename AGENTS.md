@@ -60,7 +60,7 @@ Some tests are marked `#[ignore]` because they require external libraries (e.g.,
 
 ### Test strategy during development
 
-The full test suite is slow because each codegen test spawns `as` + `ld` + runs the binary. CI runs sharded executable codegen tests on `macos-aarch64`, `linux-x86_64`, and `linux-aarch64`, and covers `ios-arm64` and `ios-sim-arm64` through target-specific compile and emitter tests. Local implementation work should optimize for fast, relevant signal:
+The full test suite is slow because each codegen test spawns `as` + `ld` + runs the binary. CI runs sharded executable codegen tests on `macos-aarch64`, `linux-x86_64`, and `linux-aarch64`, and covers `ios-arm64` and `ios-sim-arm64` through target-specific compile and emitter tests. Pull Requests run the Linux matrix, the core live database suites and the macOS build; the macOS test matrix, the iOS links and the optional-driver live database suites run in the merge queue, or on the PR with the `ci:macos` / `ci:pdo-live` labels (CONTRIBUTING.md § "CI tiers and the merge queue"). Local implementation work should optimize for fast, relevant signal:
 
 1. **While developing a feature**: run only the tests for that feature or regression (`cargo test test_my_feature`).
 2. **Scope to a single test binary**: prefer `cargo test --test codegen_tests <filter>` over a bare `cargo test <filter>`. A bare filter rebuilds and links all six test binaries every cycle (~2.5s of wasted link time); `--test <binary>` links only the one you need. Most codegen work lives in `codegen_tests`.
@@ -70,7 +70,7 @@ The full test suite is slow because each codegen test spawns `as` + `ld` + runs 
 
 ### Pre-commit verification
 
-Before committing code changes, run the smallest useful focused tests and hygiene checks that cover the implementation. Do not run full local suites by default; CI is responsible for the complete sharded matrix after push/PR.
+Before committing code changes, run the smallest useful focused tests and hygiene checks that cover the implementation. Do not run full local suites by default; CI is responsible for the complete sharded matrix: the PR tier on every push, every target in the merge queue.
 
 ```bash
 cargo build                                    # for code changes that should compile warning-free
@@ -78,7 +78,7 @@ cargo test <feature_or_regression_filter>      # or the narrower --test <binary>
 git diff --check
 ```
 
-For docs-only, workflow-only, or configuration-only changes, replace Rust test runs with the relevant syntax/metadata checks. For codegen changes, also verify assembly-comment coverage/alignment for any files you touched. If the change can affect generated assembly, runtime helpers, ABI behavior, linking, ownership/GC, or target-specific libraries, run focused tests for affected supported targets when local evidence is needed; otherwise rely on CI for sharded Linux x86_64/Linux ARM64/macOS ARM64 executable coverage and the target-specific iOS device/Simulator compile and emitter checks.
+For docs-only, workflow-only, or configuration-only changes, replace Rust test runs with the relevant syntax/metadata checks. For codegen changes, also verify assembly-comment coverage/alignment for any files you touched. If the change can affect generated assembly, runtime helpers, ABI behavior, linking, ownership/GC, or target-specific libraries, run focused tests for affected supported targets when local evidence is needed; otherwise rely on CI for sharded Linux x86_64/Linux ARM64/macOS ARM64 executable coverage and the target-specific iOS device/Simulator compile and emitter checks. For target-sensitive Darwin work, add the `ci:macos` label so the macOS tier runs on the PR before it reaches the merge queue.
 
 ### Test structure
 

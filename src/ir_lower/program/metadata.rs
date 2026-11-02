@@ -57,6 +57,7 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
     module.declared_trait_constant_visibilities =
         collect_declared_trait_constant_visibilities(program);
     module.declared_trait_final_constants = collect_declared_trait_final_constants(program);
+    module.imported_trait_method_names = collect_imported_trait_method_names(program, &check_result.classes);
     module.class_infos = check_result.classes.clone();
     normalize_class_method_signatures_for_eir(module, &check_result.callable_param_sigs);
     module.interface_infos = check_result.interfaces.clone();

@@ -308,7 +308,9 @@ pub(super) fn emit_eval_scope_read_param_source(
         EvalScopeReadParamSource::Local(local) => {
             let ty = ctx.load_local_to_result(local.slot)?.codegen_repr();
             if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
-                emit_box_current_value_as_mixed(ctx.emitter, &ty);
+                // A `?ptr<T>` local keeps its union, so address 0 is PHP null.
+                let box_ty = ctx.local_mixed_box_type(local.slot)?;
+                emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
             }
         }
         EvalScopeReadParamSource::Null => emit_core_mixed_null_cell(ctx),

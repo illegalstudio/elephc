@@ -50,6 +50,7 @@ fn lower_property_array_push_value(
     if let Some(property_ty) =
         object_property_type(ctx, object.value, property).filter(is_indexed_array_type)
     {
+        let value = ctx.retype_value_for_container_element(&property_ty, value, Some(span));
         let data = ctx.intern_string(property);
         let property_value = ctx.emit_value(
             Op::PropGet,
@@ -119,7 +120,11 @@ pub(super) fn lower_property_array_assign(
         crate::ir_lower::expr::lower_null_coalesce_update_stmt(ctx, read, default, span);
         return;
     }
-    lower_property_array_assign_with_diagnosed_key(
+    let element_update = match &update {
+        Some(ElementUpdate::IncDec { increment }) => PropertyElementUpdate::IncDec(*increment),
+        _ => PropertyElementUpdate::Written,
+    };
+    lower_property_array_assign_with_update(
         ctx,
         object,
         property,
@@ -127,7 +132,20 @@ pub(super) fn lower_property_array_assign(
         value,
         span,
         update.is_some(),
+        element_update,
     );
+}
+
+/// How a property-array element write may store a typed scalar buffer update.
+#[derive(Clone, Copy)]
+pub(super) enum PropertyElementUpdate {
+    /// The value is lowered as written.
+    Written,
+    /// A statement `++`/`--` (`true` for `++`), typed once the receiver shows a scalar buffer.
+    IncDec(bool),
+    /// An expression `++`/`--` whose element read and step already ran, as the parser's prelude
+    /// runs them before the write: the write stores this value instead of lowering `value`.
+    Stored(LoweredValue),
 }
 
 /// Returns whether `read` is the element `$object->property[index]` a statement writes.
@@ -159,16 +177,59 @@ pub(crate) fn lower_property_array_assign_with_diagnosed_key(
     span: Span,
     key_already_diagnosed: bool,
 ) {
+    lower_property_array_assign_with_update(
+        ctx,
+        object,
+        property,
+        index,
+        value,
+        span,
+        key_already_diagnosed,
+        PropertyElementUpdate::Written,
+    );
+}
+
+/// Lowers `$object->prop[index] = value`, storing a typed buffer update when `update` names one.
+///
+/// A statement `++`/`--` is decided after the receiver is lowered, from the same property type
+/// that selects the `BufferSet` write below, and its element read then runs where `value` would.
+/// `value` is not lowered when the write stores a typed update.
+pub(super) fn lower_property_array_assign_with_update(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    index: &Expr,
+    value: &Expr,
+    span: Span,
+    key_already_diagnosed: bool,
+    update: PropertyElementUpdate,
+) {
     let mut roots = Vec::new();
     let (mut receiver, index, value) = if crate::ir_lower::expr::is_static_property_write_chain(object) {
-        let (index, value) = lower_rooted_property_write_key_and_value(ctx, index, value, &mut roots);
+        let source = match update {
+            PropertyElementUpdate::Stored(stored) => PropertyWriteValue::Stored(stored),
+            PropertyElementUpdate::Written | PropertyElementUpdate::IncDec(_) => {
+                PropertyWriteValue::Expr(value)
+            }
+        };
+        let (index, value) = lower_property_write_operands(ctx, index, source, &mut roots, span);
         let receiver = crate::ir_lower::expr::lower_static_property_write_chain_with_operands(
             ctx, object, &[index.value, value.value], span);
         (receiver, index, value)
     } else {
         let object = lower_expr(ctx, object);
         let mut receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
-        let (index, value) = lower_rooted_property_write_key_and_value(ctx, index, value, &mut roots);
+        let source = match update {
+            PropertyElementUpdate::Written => PropertyWriteValue::Expr(value),
+            PropertyElementUpdate::IncDec(increment) => {
+                super::buffer_element_updates::property_statement_update(
+                    ctx, receiver.value, property, value, increment,
+                )
+                .map_or(PropertyWriteValue::Expr(value), PropertyWriteValue::Buffer)
+            }
+            PropertyElementUpdate::Stored(stored) => PropertyWriteValue::Stored(stored),
+        };
+        let (index, value) = lower_property_write_operands(ctx, index, source, &mut roots, span);
         receiver.place_above_operand_roots(ctx, &roots, span);
         (receiver, index, value)
     };
@@ -176,6 +237,38 @@ pub(crate) fn lower_property_array_assign_with_diagnosed_key(
     lower_property_array_assign_value(ctx, receiver.value, property, index, value, span, key_already_diagnosed);
     receiver.finish(ctx, span);
     retire_property_write_roots(ctx, roots, span);
+}
+
+/// The value a property-array write stores, resolved once the receiver is known.
+enum PropertyWriteValue<'a> {
+    /// The written expression, lowered and rooted as an ordinary operand.
+    Expr(&'a Expr),
+    /// A statement `++`/`--` of a scalar buffer element, read and stepped where `Expr` would run.
+    Buffer(super::buffer_element_updates::BufferIncDec<'a>),
+    /// A typed update the caller already read and stepped.
+    Stored(LoweredValue),
+}
+
+/// Lowers a property-array write's key and stored value in PHP's variable-key order.
+fn lower_property_write_operands(
+    ctx: &mut LoweringContext<'_, '_>,
+    index: &Expr,
+    source: PropertyWriteValue<'_>,
+    roots: &mut Vec<LocalSlotId>,
+    span: Span,
+) -> (LoweredValue, LoweredValue) {
+    match source {
+        PropertyWriteValue::Expr(value) => {
+            lower_rooted_property_write_key_and_value(ctx, index, value, roots)
+        }
+        // The typed element values are scalars, so they need no unwind root.
+        PropertyWriteValue::Buffer(buffer) => lower_rooted_property_write_key_then(
+            ctx, index, roots, |ctx, _| buffer.lower_values(ctx, span).stored,
+        ),
+        PropertyWriteValue::Stored(stored) => {
+            lower_rooted_property_write_key_then(ctx, index, roots, |_, _| stored)
+        }
+    }
 }
 
 /// Lowers one operand into an unwind-visible owner and lends a borrowed view to the writer.
@@ -210,12 +303,27 @@ fn lower_rooted_property_write_key_and_value(
     value: &Expr,
     roots: &mut Vec<LocalSlotId>,
 ) -> (LoweredValue, LoweredValue) {
+    lower_rooted_property_write_key_then(ctx, index, roots, |ctx, roots| {
+        lower_rooted_property_write_operand(ctx, value, roots)
+    })
+}
+
+/// Roots the key of a property-array write and runs `lower_value` in PHP's variable-key order.
+///
+/// A bare variable key is read after the value and a computed key before it, exactly as for
+/// `lower_rooted_property_write_key_and_value`; `lower_value` receives the same root list.
+fn lower_rooted_property_write_key_then<'m, 'f, T>(
+    ctx: &mut LoweringContext<'m, 'f>,
+    index: &Expr,
+    roots: &mut Vec<LocalSlotId>,
+    lower_value: impl FnOnce(&mut LoweringContext<'m, 'f>, &mut Vec<LocalSlotId>) -> T,
+) -> (LoweredValue, T) {
     if matches!(index.kind, ExprKind::Variable(_)) {
-        let value = lower_rooted_property_write_operand(ctx, value, roots);
+        let value = lower_value(ctx, roots);
         return (lower_rooted_property_write_operand(ctx, index, roots), value);
     }
     let index = lower_rooted_property_write_operand(ctx, index, roots);
-    let value = lower_rooted_property_write_operand(ctx, value, roots);
+    let value = lower_value(ctx, roots);
     (index, value)
 }
 
@@ -245,9 +353,36 @@ fn lower_property_array_assign_value(
         );
         return;
     }
+    if let Some(property_ty) = object_property_type(ctx, object.value, property)
+        .filter(|ty| matches!(ty.codegen_repr(), PhpType::Buffer(_)))
+    {
+        let data = ctx.intern_string(property);
+        let property_value = ctx.emit_value(
+            Op::PropGet,
+            vec![object.value],
+            Some(Immediate::Data(data)),
+            property_ty.clone(),
+            Op::PropGet.default_effects(),
+            Some(span),
+        );
+        let property_value =
+            crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(span));
+        let index = coerce_to_int_at_span(ctx, index, Some(span));
+        let value = coerce_buffer_set_value(ctx, &property_ty, value, Some(span));
+        ctx.emit_void(
+            Op::BufferSet,
+            vec![property_value.value, index.value, value.value],
+            None,
+            Op::BufferSet.default_effects(),
+            Some(span),
+        );
+        crate::ir_lower::ownership::release_if_owned(ctx, property_value, Some(span));
+        return;
+    }
     if let Some(property_ty) =
         object_property_type(ctx, object.value, property).filter(is_indexed_array_type)
     {
+        let value = ctx.retype_value_for_container_element(&property_ty, value, Some(span));
         let data = ctx.intern_string(property);
         let property_value = ctx.emit_value(
             Op::PropGet,
@@ -292,6 +427,7 @@ fn lower_property_array_assign_value(
     if let Some(property_ty) =
         object_property_type(ctx, object.value, property).filter(is_assoc_array_type)
     {
+        let value = ctx.retype_value_for_container_element(&property_ty, value, Some(span));
         let data = ctx.intern_string(property);
         let property_value = ctx.emit_value(
             Op::PropGet,
@@ -366,6 +502,72 @@ fn lower_property_array_assign_value(
         vec![object.value, index.value, value.value],
         Some(Immediate::Data(data)),
         effects_lookup::runtime_effects(),
+        Some(span),
+    );
+}
+
+/// Lowers `unset($object->prop[$key])` once the receiver and the key have been evaluated.
+///
+/// PHP evaluates the receiver, then the key, and only then fetches the property for the write,
+/// so a key expression that itself mutates the property is seen by the removal. The caller has
+/// already lowered both operands in that order; the property is fetched here, last.
+///
+/// Both storage shapes that reach this function go through `PropGetForWrite`, which splits the
+/// property's container under the `ensure_unique` convention, publishes the unique container
+/// into the slot, and hands it back BORROWED from the property:
+///
+/// - A declared PHP `array` property keeps a boxed packed-or-hash cell; `OffsetUnset` promotes
+///   the separated cell to hash storage before removing the key, exactly as the declared-array
+///   local path does, so surviving keys keep their numbering.
+/// - An associative property holds a raw hash; `HashUnset` removes the key from the separated
+///   table, which is already unique, so the backend's own split is a no-op.
+/// - A boxed `Mixed` property (`property_ty == Mixed`, an untyped slot widened by an earlier
+///   `unset($o->prop)` or a `mixed`/`?array` declaration) goes through `OffsetUnset` like the
+///   declared-array cell; the backend leaves a null cell alone and refuses a scalar with PHP's
+///   `Error`. A removed untyped slot is recreated as null by the fetch, as PHP does.
+///
+/// No independent PHP array copy is in flight across removal. The backend can retain the same
+/// hash in an unwind-visible scope when key conversion can invoke a warning handler.
+/// That matters because `__rt_hash_unset`
+/// releases the removed value last, and that release can run a destructor which throws or
+/// writes the property again. An acquired copy of the property value, as the element WRITE
+/// path uses, would leak on the throw (the unwinder cannot see it) and, stored back with
+/// `PropSet`, would discard the destructor's write. A `$copy = $o->items` taken earlier still
+/// keeps its own container, because the separation happens before the removal.
+///
+/// A packed indexed `array<T>` property never reaches this function: removing a key leaves a
+/// hole, so the storage would have to become a hash, and a property slot's representation is
+/// shared by every reader of the class. The caller refuses that shape instead.
+pub(crate) fn lower_property_array_unset(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: &str,
+    property_ty: &PhpType,
+    index: LoweredValue,
+    span: Span,
+) {
+    let data = ctx.intern_string(property);
+    let (container_ty, remove) = if property_ty.is_php_array() {
+        (PhpType::php_array(), Op::OffsetUnset)
+    } else if *property_ty == PhpType::Mixed {
+        (PhpType::Mixed, Op::OffsetUnset)
+    } else {
+        (property_ty.clone(), Op::HashUnset)
+    };
+    let container = ctx.emit_value(
+        Op::PropGetForWrite,
+        vec![object.value],
+        Some(Immediate::Data(data)),
+        container_ty,
+        Op::PropGetForWrite.default_effects(),
+        Some(span),
+    );
+    ctx.builder.set_value_ownership(container.value, Ownership::Borrowed);
+    ctx.emit_void(
+        remove,
+        vec![container.value, index.value],
+        None,
+        remove.default_effects(),
         Some(span),
     );
 }

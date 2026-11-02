@@ -131,6 +131,7 @@ pub(super) fn call_intermediate(ctx: &mut LoweringContext<'_, '_>, value: Lowere
     let owner = crate::ir_lower::context::CallArgumentEvaluationOwner {
         value: Some(snapshot.value), borrow: Some(snapshot.value), temp_name: slot.clone(),
         slot: ctx.local_slots[&slot], span, ref_cell_payload: None, scoped_receiver_alias: false,
+        pins_borrowed_source: false,
     };
     ctx.call_argument_evaluation_scopes.last_mut().expect("selected method argument scope")
         .owners.push(owner);

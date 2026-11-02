@@ -218,7 +218,7 @@ pub(super) fn callable_descriptor_signature_for_expr(
 /// cast to detach refcounted payloads without the exact ownership metadata the descriptor ABI
 /// provides for the concrete result.
 pub(super) fn descriptor_invoker_result_type(sig: Option<&FunctionSig>) -> PhpType {
-    sig.map(|sig| normalize_value_php_type(sig.return_type.codegen_repr()))
+    sig.map(|sig| normalize_value_php_type(crate::types::eir_value_php_type(&sig.return_type)))
         .unwrap_or(PhpType::Mixed)
 }
 

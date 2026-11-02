@@ -526,6 +526,34 @@ on macOS. Enabling user-object atom splitting requires explicit relocation and
 metadata roots plus callable regression coverage; applying the runtime-object
 strategy directly can produce dangling callable descriptors.
 
+## EIR method inlining
+
+Statically bound instance methods can inline when the receiver class or method
+is final, or the method has no virtual dispatch slot. Free functions have a
+24-instruction budget; methods have a 96-instruction budget, counting non-`Nop`
+EIR instructions. The larger method budget covers receiver reads and nested
+packed-field address calculations, including an eight-field vertex writer.
+The ordinary recursion, signature, lexical-scope and ownership guards still apply.
+Only a consumed call result requires a value at the return join, so a discarded
+`void` method call can inline even when its EIR result is a null placeholder.
+
+A throwing guard can inline without admitting general object lifetimes.
+Checker-provided Throwables with the compact builtin constructor are frame-independent.
+An owning temporary slot (`OwnedTemp` or `HiddenTemp`) is accepted only when its entire lifetime stays within one block: publication and
+unpublication must balance, the slot must be explicitly cleared or released,
+and the owner records must form a matching stack. A store before publication and
+a clear after unpublication must be adjacent to those operations. These slots
+therefore carry no ownership into the next caller-loop iteration or normal return;
+exceptional exits keep the original runtime owner records and cleanup. Rooted
+concat arguments use `StrPersist` in the spliced snapshot instead of string
+`Acquire`, preserving the same persistence operation without the local store's
+implicit rewind of the caller's concat scratch.
+Unscoped owners, user constructors, exception handlers and observable backtrace
+frames retain their existing call boundaries.
+
+See `examples/packed-sprite-batch/main.php` for nested packed writes and a capacity
+guard that throws while preserving the counter's post-increment behavior.
+
 ## EIR tail recursion
 
 `src/ir_passes/tail_call.rs` runs once after the inliner/per-function fixed point
@@ -562,6 +590,273 @@ new CFG before ownership finalization. The transform and its resulting branches
 are target-independent. See the
 [compilation guide](../compiling/optimization.md#tail-recursion) for eligibility
 and a PHP example.
+
+## EIR bounded mixed counters
+
+`src/ir_passes/bounded_mixed_counter.rs` runs after checked-integer sinking and
+before canonical loop optimization. It finds closed function-local integer
+counter graphs, scalarizes a private trial and requires `Mem2Reg` to eliminate
+every addressable load/store of the candidate slot. `IntegerRange` must then
+turn every introduced checked update into a plain integer add/subtract before
+the trial replaces the original function.
+
+The proof preserves the physical ABI of eligible by-value, nonvariadic `mixed`
+call parameters by rematerializing their integer arguments at the existing call
+boundary. It does not authorize a different closure call or change dispatch.
+Executable main, parameter slots, references, dynamic `eval`, suspension,
+exception handlers, escaping values and uncertain integer/type facts are
+excluded. See [Bounded mixed counters](../compiling/optimization.md#bounded-mixed-counters).
+
+The backend's [frame-local checked numeric cells](the-codegen.md#frame-local-checked-numeric-cells)
+are a separate storage optimization and do not require this pass to run.
+
+Lowering also uses a discarded trial to decide whether a potentially promoting
+local can retain scalar storage when the body is lowered again. A counter whose
+comparison partners require boxed PHP coercion or identity remains boxed in that
+replay, using the same partner rules as guarded loop copies. A counter whose
+seed is checked arithmetic on another counter (`$j = $i + 1`) is retried jointly
+with that counter when it fails alone, and a proven seeded counter is replayed
+with its seed recorded as an `int` (`LoweringContext::int_seed_bindings`), so its
+loop reads it as an integer exactly as after `$j = 0`. For instance
+methods, `src/ir_lower/numeric_storage.rs::readonly_calls()` uses the ordinary
+method-signature resolver and accepts only a concrete user-class receiver with a
+final class or final method. Variadic, generator and by-reference-return methods
+are excluded. Physical arity and reference flags must match the signature; the
+receiver at operand zero is excluded and only by-value argument positions qualify.
+This records storage observations without changing call effects or dispatch.
+
+Within that storage trial only, method arguments are detached as scalar copies
+and unchanged integer join parameters are folded before loop/range analysis.
+Every parallel incoming edge must agree on the same non-self value with identical
+`I64`/PHP `int`/nonheap metadata, and that value must strictly dominate the join.
+The shared rewrite helpers preserve value identity and edge arguments. Missing
+entry values, disagreeing edges or uncertain metadata reject the fold. The trial
+is discarded after every counter update is proven nonoverflowing; it authorizes
+ordinary lowering again, including with IR optimization disabled, rather than
+installing speculative trial instructions in the executable function. Integer
+storage and buffer bounds remain independent proofs.
+
+For a canonical counter that lacks a static overflow proof,
+`bounded_mixed_counter/versioning.rs` can retain the original loop and add a
+guarded integer copy. Both the seed and the invariant bound must have integer
+tags. Inclusive ascending bounds must differ from `PHP_INT_MAX`, and descending
+ones from `PHP_INT_MIN`. The copied counter uses private scalar storage, and each
+normal exit publishes its final integer into the original boxed slot. Float
+bounds, overflowing seeds and unsafe inclusive bounds follow the original loop.
+Mutable bounds, escaping SSA values, references, dynamic scopes, handlers and
+suspension are excluded. Only innermost loops of at most 256 instructions qualify,
+with at most four copies per function and conservative function-size limits.
+Copies preserve instruction source spans and lexical class scopes.
+
+A separate seed guard avoids a loop copy when overflow makes the first condition
+false and no code outside the loop reads the counter. For example, the overflowing
+seed of `for ($box = $n - 1; $box >= 0; $box--)` is negative and never enters the
+body. Its guard skips directly to the exit; the in-range path uses exact integer
+arithmetic. Header effects and observable final seed values veto this rewrite.
+
+`checked_numeric_chain/locals.rs` extends integer-cast chain fusion through private
+local writers. It inventories every observation reached before an overwrite or
+retirement, requires the writer to dominate those reads and be their unique reaching
+definition, and accepts only graphs ending in explicit integer casts. The generic loop copy can retain boxed storage
+while its fast copy eliminates an otherwise unobserved numeric store. A suffix such as `(int)($cell + 1)` stays in the same ordered
+float-promoting chain as `$cell = $row * $columns + $column`. Casting the local
+before that suffix would change PHP's answer after overflow, so the pass fuses the
+complete expression at each cast and removes the now-unobserved boxed storage.
+
+## EIR buffer resolution hoisting
+
+`src/ir_passes/buffer_access.rs` runs once after the module fixed point (and
+after tail recursion), then the scalar passes run again. Every `buffer_get` and
+`buffer_set` normally resolves its generation-safe handle through
+`__rt_buffer_resolve` before the bounds check. In a loop whose natural body
+cannot free, allocate or rebind a buffer, that answer cannot change between
+iterations, so the pass inserts one `buffer_resolve` into the preheader and turns
+each access with a loop-invariant handle into `buffer_get_resolved` or
+`buffer_set_resolved`.
+
+The resolution (with the handle slot load it reads, for a local handle) goes at
+the earliest preheader position that gives the answer the end of the preheader
+would: after the handle's own definition and after the last preheader
+instruction that fails the loop-body allowlist below or names the handle slot as
+storage. The pass runs after LICM has moved the loop-invariant loads into the
+preheader, so appending the call at the end would keep a hoisted float, such as
+a `float $dt` parameter, live across `__rt_buffer_try_resolve`. SysV x86_64 has
+no callee-saved XMM register, so the allocator would leave that float in a frame
+slot and reload it on every iteration; resolving first leaves it call-free and
+eligible for a caller-saved XMM register.
+
+The pass also recognizes a zero-initialized, unit-step induction parameter whose
+loop continuation is a strict signed comparison against `buffer_len` of that
+same handle. When the continuation block dominates an access using the exact
+induction value and the access is not in the loop header itself, the resolved
+instruction receives a true immediate. Header accesses keep the bounds check
+because they may precede a header-local continuation comparison. This proof also
+accepts a dominating cached length value. When the cached length and the access
+use different loads of one local handle slot, that slot must not escape by
+reference or be written anywhere in the function. It deliberately refuses
+inclusive comparisons, unrelated or other-buffer bounds, negative starts,
+decreasing or non-unit recurrences, and derived indexes. The handle identity is
+the same `HandleSource` used for descriptor hoisting, so a length from another
+buffer cannot justify removing an access check.
+
+The hoisted `buffer_resolve` calls `__rt_buffer_try_resolve`, which applies the
+same registry, activity and generation checks but answers 0 instead of failing.
+The resolved access tests the descriptor before its bounds check, so a stale
+handle still raises the use-after-free fatal at the access, and a loop that never
+runs its body never reports anything. A loop qualifies only when every
+instruction in its body is on a default-deny allowlist: buffer element accesses,
+packed field reads and writes, local loads, stores to scalar locals, concat
+resets, and instructions whose effects only read state or fatal. That last group
+includes direct user function and method calls once effect refinement has proven
+the callee's whole summary read-only; every other call, and user-code releases,
+allocations, warnings, output and throws, disqualify the loop, because each can run user code
+(a callee, a destructor, an error handler, an output callback) that frees a buffer
+through an alias. The handle must be an SSA value defined outside the loop
+or a `load_local` of a slot that nothing in the loop writes and no by-reference
+alias reaches. Generators, functions with exception handlers or dynamic `eval`,
+and modules that call `pcntl_async_signals()` (whose backend dispatches signal
+handlers after every instruction) are skipped.
+
+Loop descriptor hoisting also accepts reviewed box operations whose complete
+value graph contains only integers and floats. `buffer_access/numeric.rs` reuses
+the shared numeric-domain proof for checked add/subtract/multiply, numeric
+increment/decrement, ordered comparisons, scalar casts, boxing and ownership
+operations. A boxed local's stores and cleanup qualify only when every writer
+is numeric, every read has a dominating initialization, and the slot cannot
+escape by reference. Thus `$found++` and `$sum += $b[$i]` can keep one descriptor
+outside the loop even when overflow promotes the accumulator to float. Numeric
+box allocation does not trigger cycle collection or PHP callbacks, and retiring
+a numeric box cannot run a destructor. General EIR effects stay conservative;
+unknown tags, object-bearing slots, reference aliases and arbitrary allocations
+still fail the buffer-preservation proof. This specialization does not extend
+the separate property-read motion or straight-line property-reuse allowlists.
+Explicit casts to int or bool qualify only when the operand is already an int.
+Float-to-int range checks and NaN-to-bool coercions can run a PHP error handler,
+so raw floats and boxed numeric operands keep these casts as barriers.
+Implicit truthiness checks of floats, Mixed values and unions are barriers too,
+because a NaN-to-bool warning handler can invalidate the buffer between accesses.
+Callable effect summaries retain this warning so a non-inlined predicate cannot
+hide the same invalidation from its caller's loop.
+The numeric-domain analysis caches slot access tables, escape and
+dominance information, and definitive failures for each immutable function.
+Positive cycle facts become reusable only after the entire query succeeds.
+
+In modules that allow property reuse, buffer acquire/release are no-op word
+operations, and plain named reads on `$this` can throw without changing buffers
+or running PHP. These operations also preserve descriptor validity. Before
+descriptor hoisting, `buffer_property_loops` relocates a stable buffer-property
+read from the header or its unconditional body entry into a preheader. A
+body-only read gets a taken-only entry behind a duplicate of the scalar loop
+condition, preserving zero-trip uninitialized-property behavior. The read keeps
+its original instruction id and lexical scope. The ordinary single-read path
+rejects conditional reads and faulting prefixes. Calls, object-property writes,
+frees and live-out header SSA values prevent property motion.
+See `examples/buffer-property-loop/main.php`.
+
+The same body-read optimization handles an invariant object parameter such as
+`$table->slots[$i]`, including a read left by an inlined accessor. Borrowed
+inliner parameter copies with one dominating store are forwarded to their
+original SSA values. An accessor's invariant receiver null check moves behind
+the zero-trip guard and retains its original throwing edge and lexical scope.
+Object local receivers must use exact borrowed loads, remain unwritten in the
+loop, and have no by-reference parameter binding or escaping slot address.
+
+For a checked accessor chain, `guarded_buffer_prefix` clones the first scalar
+header and a bounded straight entry prefix through the first invariant buffer
+property read. A unique conditional loop-entry edge can be split to create its
+preheader. The first checks run only on a taken entry, in their original order;
+terminal failure blocks keep the initial operands, owner slots, source spans and
+inlined lexical scopes. Invariant object loads, scalar properties and conditions
+are cached, while index-dependent checks remain per iteration. Repeated tests of
+a cached condition can then fold through `guard_facts`. Calls, object-property
+writes, frees and other operations that could invalidate those reads reject the
+transformation, as do header SSA values observed after the loop. Zero-trip loops
+still execute no accessor checks. See `examples/checked-buffer/main.php`.
+
+A foreign receiver's static object type alone does not prove it non-null:
+dynamic calls can supply null, and a property warning can run an error handler.
+Such a buffer read qualifies only when a checked access consumes its handle
+before any observable operation or branch. Null reads return handle zero, so
+the access must fail before execution could continue with a descriptor an error
+handler invalidated. When relocating this read, its first checked access and
+scalar prefix are copied to the taken-only entry too. This retains the original
+warning/fatal order before the header is re-evaluated.
+Subsequent iterations use the cached property handle and resolved descriptors.
+See `examples/buffer-object-loop/main.php` for direct and inlined entity filters.
+
+Raw packed-record addresses are shared before loop accesses become resolved
+forms. This preserves reuse of an address checked before the loop by an
+equivalent access in the body, including when its property handle was already
+cached outside the loop. Remaining straight-line descriptors are shared after
+loop resolution.
+
+Inside a rewritten loop, packed `buffer_get_resolved` instructions with the same
+descriptor and index compute the same record address, so a dominated access
+reuses its dominator's result. Index operands are compared after seeing through
+block parameters whose every incoming edge passes the same value, which scalar
+promotion leaves at each join. Scalar element reads are not shared: a
+`buffer_set_resolved` between them can change the loaded value.
+
+Codegen always tests a resolved descriptor for zero. It omits the descriptor
+length load and unsigned comparison only for the true-immediate form. Every
+other resolved or unresolved access uses one unsigned `index < length`
+comparison; a negative signed index has a large unsigned representation and
+therefore reaches the same bounds fatal without a separate signed test.
+
+### Straight-line reuse of buffer property reads
+
+After the loops, `src/ir_passes/buffer_property_reuse.rs` handles the repeated
+`$this->slots[$i]` accesses of straight-line code and reads left inside loops
+whose property handle could not be hoisted. Each such access
+reads the property, calls `__rt_buffer_resolve` and recomputes the record
+address. Three rewrites share that work, each only across a clean region: every
+instruction on any path from the earliest instruction either access depends on
+to the later one must keep buffers, buffer-typed properties and the matched
+local slots unchanged. The classifier is default-deny: the loop allowlist minus
+every opcode that can run user code (even a call whose effect summary is
+read-only, since summaries drop the callee's local effects and matched slots are
+not proven free of address escapes), plus
+the no-op `acquire` and `release` of a buffer handle and named property reads of
+`$this` refined to `reads_heap, may_throw`. Foreign buffer reads also qualify
+when their null-warning path immediately reaches the checked access described
+above. Inlined scalar `int`, `float` and `bool` object-property reads also qualify:
+the splice retains their receiver guard and lexical scope. Other foreign property
+reads remain barriers: effect refinement drops their null-receiver warning, which
+can run a user error handler and then return.
+Modules where a class declares `__get`, or where the eval bridge can declare one,
+skip the phase, so no trusted read dispatches to user code. A property store or
+`unset` on any object
+(another reference may alias the receiver), `buffer_free()`, a call, a release,
+an allocation, a warning or output ends the region.
+
+1. A dominated buffer-typed or inlined scalar object `prop_get` of the same property
+   on a matching receiver in the same inlined class scope (`Function::inlined_scopes`) is replaced
+   by the dominating read. A read that did not throw first
+   cannot throw the second time, because nothing changed the property.
+2. A dominated packed `buffer_get` of the same property-read handle and a
+   matching index reuses the dominating record address.
+3. The remaining accesses of one property-read handle that a leading access
+   dominates share one `buffer_resolve` inserted right before that leader and
+   become `buffer_get_resolved` or `buffer_set_resolved`. A stale handle still
+   dies with the use-after-free fatal at the leader.
+
+Receivers and indexes match when they are one SSA value (seen through block
+parameters that every edge feeds the same value), equal integer constants, or
+loads of one stable slot: a by-value PHP local that only `load_local` and
+`store_local` name, which the region does not write. With no user code in the
+region, nothing can reach such a slot through a by-reference alias. A buffer
+`acquire` left with nothing but its `release` is dropped with it. Local buffer
+handles in straight-line code keep their per-access form.
+
+Packed field reads and writes (`prop_get`/`prop_set` on a packed record) also get
+their exact effects during effect refinement (`reads_heap` for a read;
+`reads_heap`, `writes_heap` and `may_fatal` for a write, which may copy a whole
+nested record), count as concat-inert, and consume their operands by value for the
+by-reference alias analysis, so the loop index and the locals they store stay in
+SSA. Packed field values are excluded from property-read merging: a packed field
+write, including a nested-record copy, can change them while preserving the
+record address, buffer handle and descriptor. See the
+[compilation guide](../compiling/optimization.md#buffer-loops).
 
 ## Effect summaries: purity and `may_throw`
 
@@ -851,6 +1146,15 @@ runs a linear-scan register allocator (`src/ir_passes/`), described in
 [The IR](the-ir.md). It is a backend pass over EIR rather than an AST-level
 optimization, so it lives outside `src/optimize/`.
 
+The allocator admits caller-saved homes only across instructions on a default-deny
+clobber allowlist. Packed field reads and concrete integer, float, or boolean
+field writes qualify because their lowering touches only the fixed result and
+documented scratch registers. A nested packed-record write does not qualify:
+its word-copy loop consumes secondary and tertiary scratch registers, and a
+`ptr<T>` source first calls the non-null runtime guard. The `false` field payload
+check is safe for this purpose because its error branch throws and never returns
+to the guarded store.
+
 During EIR lowering, `src/ir_lower/loop_closures/` checks a loop's condition,
 update, and complete body before emitting its closure calls. Identity and the
 numeric domain are separate proofs. Both apply with EIR optimization enabled or disabled.
@@ -907,14 +1211,25 @@ identity arithmetic folding (`x + 0`, `x * 1`, `x ^ x`, …) and local peephole
 patterns (box/unbox cancellation, scalar load/store forwarding, paired
 acquire/release cancellation, string-literal concat folding, redundant
 `move`/`borrow` cleanup), then scalar local promotion into SSA values with block
-parameters at joins and loop back edges, then immutable integer-local
+parameters at joins and loop back edges, then immutable concrete numeric-local
 classification and integer-sink specialization for checked add/subtract/multiply.
-Those passes make
-proven-stable local loads pure and replace transient boxed Mixed arithmetic with
+Immutable-load classification also covers concrete float locals. It refines integer
+loads only in functions with checked integer arithmetic and float loads only in
+functions with float arithmetic, so identical generic bodies stay identical for
+shape merging. It accepts an
+unwritten by-value parameter or one entry-block store that dominates every load,
+and rejects by-reference aliases, dynamic `eval`, other storage representations,
+and any unrecognized slot operation. Those passes make proven-stable integer and
+float local loads pure and replace transient boxed Mixed arithmetic with
 allocation-free `ichecked_*_to_int` operations only when every use observes an
 integer. `IntegerRange` then propagates inclusive signed 64-bit intervals through
 constants, branch comparisons, block arguments, masks, shifts, and integer
-arithmetic. It recognizes constant-step loop-carried parameters in natural loops
+arithmetic. A `php_rel_cmp` of an integer against a checked `X - c` (`c >= 1`)
+leaves the integer at most `PHP_INT_MAX - 1` on the edges where it is below the
+bound (`src/ir_passes/integer_range/checked_bound.rs`): the bound overflows only to
+a float at or below -2^63, which no converted integer is below. The mirrored
+`X + c` bound leaves the integer at least `PHP_INT_MIN + 1` when it is above it.
+Nothing tighter is claimed and no edge is pruned. It recognizes constant-step loop-carried parameters in natural loops
 and combines their initial value, comparison bound, and update step to constrain
 induction variables on the loop body and back edge. Basic recurrence recognition
 is shared with canonical loop optimization, which exposes invariant header values,

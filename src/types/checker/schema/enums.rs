@@ -562,12 +562,13 @@ pub(crate) fn insert_enum_metadata(
         constant_attribute_args.insert(case.name.clone(), case.attribute_args.clone());
     }
 
-    let mut interfaces: Vec<String> = implements
+    let declared_interfaces: Vec<String> = implements
         .iter()
         .map(|interface| interface.as_str().to_string())
         .chain(std::iter::once("UnitEnum".to_string()))
         .chain(backing_type.as_ref().map(|_| "BackedEnum".to_string()))
         .collect();
+    let mut interfaces = declared_interfaces.clone();
     let mut index = 0;
     while index < interfaces.len() {
         if let Some(interface) = checker.interfaces.get(&interfaces[index]) {
@@ -663,6 +664,7 @@ pub(crate) fn insert_enum_metadata(
             abstract_static_methods,
             static_vtable_methods: Vec::new(),
             static_vtable_slots: HashMap::new(),
+            declared_interfaces,
             interfaces,
             constructor_param_to_prop: Vec::new(),
         },

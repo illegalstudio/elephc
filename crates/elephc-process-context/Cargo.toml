@@ -1,0 +1,10 @@
+[package]
+name = "elephc-process-context"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Shared signal deferral context for Elephc worker callbacks and process creation"
+publish = false
+
+[dependencies]
+libc = "0.2"

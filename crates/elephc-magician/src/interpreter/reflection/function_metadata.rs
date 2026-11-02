@@ -119,7 +119,7 @@ pub(super) fn eval_reflection_function_method_target(
                 is_variadic,
                 is_static: eval_reflection_closure_target_is_static(closure_target.as_ref()),
                 is_closure: closure_target.is_some(),
-                is_deprecated: false,
+                is_deprecated: eval_reflection_attributes_include_deprecated(function.attributes()),
                 returns_reference: function.returns_reference(),
                 return_type_metadata,
             }));

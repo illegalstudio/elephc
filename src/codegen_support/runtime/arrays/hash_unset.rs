@@ -28,7 +28,8 @@ use crate::codegen_support::platform::Arch;
 /// Input:  x0 = hash table pointer, x1 = key_lo, x2 = key_hi
 ///         (key_hi = -1 means an integer key with key_lo = value; otherwise a string key
 ///          with key_lo = pointer and key_hi = length)
-/// Output: x0 = the incoming table pointer, possibly retired by a reentrant destructor
+/// Output: x0 = the incoming table pointer, possibly retired by a reentrant destructor;
+///         x1 = 1 when an entry was removed, 0 for a missing key
 pub fn emit_hash_unset(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_hash_unset_linux_x86_64(emitter);
@@ -47,11 +48,13 @@ pub fn emit_hash_unset(emitter: &mut Emitter) {
     //   [sp, #24] = current probe index
     //   [sp, #32] = probe count
     //   [sp, #40] = matched entry address
-    //   [sp, #48] = saved x29
-    //   [sp, #56] = saved x30
-    emitter.instruction("sub sp, sp, #64");                                     // allocate 64 bytes on the stack
-    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #48");                                    // set up new frame pointer
+    //   [sp, #48] = removal flag, preserved across reentrant destructors
+    //   [sp, #64] = saved x29
+    //   [sp, #72] = saved x30
+    emitter.instruction("sub sp, sp, #80");                                     // reserve aligned probe state and a callback-stable removal flag
+    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #64");                                    // set up new frame pointer
+    emitter.instruction("str xzr, [sp, #48]");                                  // null, empty and absent-key paths report no removal
     emitter.instruction("cbz x0, __rt_hash_unset_null");                        // null tables hold no keys to remove
     emitter.instruction("str x1, [sp, #8]");                                    // save key_lo across the COW/hash helper calls
     emitter.instruction("str x2, [sp, #16]");                                   // save key_hi across the COW/hash helper calls
@@ -115,6 +118,8 @@ pub fn emit_hash_unset(emitter: &mut Emitter) {
 
     // -- key found: release the key, unlink the entry, then release its value --
     emitter.label("__rt_hash_unset_found");
+    emitter.instruction("mov x9, #1");                                          // presence, including a null value, means this call changes the graph
+    emitter.instruction("str x9, [sp, #48]");                                   // preserve this call's result across nested removals and destructors
     emitter.instruction("ldr x0, [sp, #0]");                                    // claim the value owner in the actual separated hash
     emitter.instruction("ldr x1, [sp, #8]");                                    // recover the key before releasing its owned bytes
     emitter.instruction("ldr x2, [sp, #16]");                                   // recover normalized integer or string key identity
@@ -199,16 +204,18 @@ pub fn emit_hash_unset(emitter: &mut Emitter) {
 
     // -- return the unique table pointer --
     emitter.label("__rt_hash_unset_done");
-    emitter.instruction("ldr x0, [sp, #0]");                                    // return the unique (possibly cloned) table
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                     // deallocate the stack frame
+    emitter.instruction("ldr x1, [sp, #48]");                                   // report whether this invocation removed an entry
+    emitter.instruction("ldr x0, [sp, #0]");                                    // preserve the legacy pointer result without dereferencing it
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #80");                                     // deallocate the stack frame
     emitter.instruction("ret");                                                 // return to caller
 
     // -- null table: return null without touching memory --
     emitter.label("__rt_hash_unset_null");
+    emitter.instruction("mov x1, #0");                                          // a null table cannot remove an entry
     emitter.instruction("mov x0, #0");                                          // null table stays null
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                     // deallocate the stack frame
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #80");                                     // deallocate the stack frame
     emitter.instruction("ret");                                                 // return to caller
 }
 
@@ -218,6 +225,7 @@ pub fn emit_hash_unset(emitter: &mut Emitter) {
 /// (key_hi = -1 means an integer key). The caller has already split and published the table.
 /// Mirrors the AArch64 logic: linear probe, key release, unlink, tombstone, count decrement,
 /// then detached value release. The returned input pointer is not safe for receiver writeback.
+/// Returns the legacy table pointer in rax and the per-call removal flag in rdx.
 fn emit_hash_unset_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_unset ---");
@@ -230,9 +238,11 @@ fn emit_hash_unset_linux_x86_64(emitter: &mut Emitter) {
     //   [rbp - 32] = current probe index
     //   [rbp - 40] = probe count
     //   [rbp - 48] = matched entry address
+    //   [rbp - 56] = removal flag, preserved across reentrant destructors
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
-    emitter.instruction("sub rsp, 48");                                         // reserve spill slots for table/key/probe state
+    emitter.instruction("sub rsp, 64");                                         // reserve aligned probe state and a callback-stable removal flag
+    emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // null, empty and absent-key paths report no removal
     emitter.instruction("test rdi, rdi");                                       // null tables hold no keys to remove
     emitter.instruction("jz __rt_hash_unset_null");                             // return null without touching memory
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save key_lo across helper calls
@@ -296,6 +306,7 @@ fn emit_hash_unset_linux_x86_64(emitter: &mut Emitter) {
 
     // -- key found: release the key, unlink the entry, then release its value --
     emitter.label("__rt_hash_unset_found");
+    emitter.instruction("mov QWORD PTR [rbp - 56], 1");                         // preserve presence across callbacks, including null-valued entries
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // claim the value owner in the actual separated hash
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // recover the key before releasing its owned bytes
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // recover normalized integer or string key identity
@@ -383,15 +394,17 @@ fn emit_hash_unset_linux_x86_64(emitter: &mut Emitter) {
 
     // -- return the unique table pointer --
     emitter.label("__rt_hash_unset_done");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // return the unique (possibly cloned) table
-    emitter.instruction("add rsp, 48");                                         // release the spill slots
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 56]");                       // report whether this invocation removed an entry
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // preserve the legacy pointer result without dereferencing it
+    emitter.instruction("add rsp, 64");                                         // release the spill slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to caller
 
     // -- null table: return null without touching memory --
     emitter.label("__rt_hash_unset_null");
+    emitter.instruction("xor edx, edx");                                        // a null table cannot remove an entry
     emitter.instruction("xor eax, eax");                                        // null table stays null
-    emitter.instruction("add rsp, 48");                                         // release the spill slots
+    emitter.instruction("add rsp, 64");                                         // release the spill slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to caller
 }
@@ -442,6 +455,35 @@ mod tests {
                 assert!(!after_release.contains(table_register),
                     "retired table accessed after callback on {target:?}: {after_release}");
             }
+        }
+    }
+
+    /// Per-invocation presence survives callback clobbers and is zero on every no-op path.
+    #[test]
+    fn hash_unset_reports_presence_on_every_target() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emit_hash_unset(&mut emitter);
+            let asm = emitter.output();
+            let (initialize, matched, result, null_result) = match target.arch {
+                Arch::AArch64 => ("str xzr, [sp, #48]", "str x9, [sp, #48]",
+                    "ldr x1, [sp, #48]", "mov x1, #0"),
+                Arch::X86_64 => ("mov QWORD PTR [rbp - 56], 0", "mov QWORD PTR [rbp - 56], 1",
+                    "mov rdx, QWORD PTR [rbp - 56]", "xor edx, edx"),
+            };
+            let found = asm.find("__rt_hash_unset_found:").unwrap();
+            let done = asm.find("__rt_hash_unset_done:").unwrap();
+            let null = asm.find("__rt_hash_unset_null:").unwrap();
+            assert!(asm.find(initialize).unwrap() < found, "{target:?}");
+            assert!(asm[found..done].contains(matched), "{target:?}");
+            assert!(asm[done..null].contains(result), "{target:?}");
+            assert!(asm[null..].contains(null_result), "{target:?}");
         }
     }
 }

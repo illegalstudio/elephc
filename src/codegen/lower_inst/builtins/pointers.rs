@@ -514,6 +514,7 @@ fn const_string_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Str
         .strings
         .get(data.as_raw() as usize)
         .cloned()
+        .map(|value| crate::names::literal_symbol_name(&value).unwrap_or(value))
         .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))
 }
 
@@ -737,7 +738,8 @@ fn materialize_word_value(
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
             Ok(())
         }
-        PhpType::Pointer(_) if matches!(policy, WordValuePolicy::Word) => {
+        // A packed record address (a buffer element or nested record read) is one pointer word.
+        PhpType::Pointer(_) | PhpType::Packed(_) if matches!(policy, WordValuePolicy::Word) => {
             ctx.load_value_to_result(value)?;
             Ok(())
         }

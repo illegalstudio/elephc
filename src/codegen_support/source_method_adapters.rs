@@ -433,7 +433,9 @@ pub(crate) fn emit_method_adapter(
                 0x7fff_ffff_ffff_fffe,
             );
         }
-        super::value_boxing::emit_box_current_value_as_mixed(emitter, source_ty);
+        // A `?ptr<T>` argument keeps its union, so address 0 is PHP null.
+        let box_ty = crate::types::mixed_box_php_type(&caller.params[param_index - 1].1);
+        super::value_boxing::emit_box_current_value_as_mixed(emitter, &box_ty);
         abi::store_at_offset(emitter, abi::int_result_reg(emitter), offset);
         let owner_address = abi::tertiary_scratch_reg(emitter);
         abi::emit_frame_slot_address(emitter, owner_address, offset);
@@ -495,7 +497,13 @@ pub(crate) fn emit_method_adapter(
                 0x7fff_ffff_ffff_fffe,
             );
         }
-        super::value_boxing::emit_box_current_value_as_mixed(emitter, &physical_return);
+        // A `?ptr<T>` implementation keeps its union, so address 0 is PHP null.
+        let box_ty = if physical.by_ref_return {
+            physical_return.clone()
+        } else {
+            crate::types::mixed_box_php_type(&physical.return_type)
+        };
+        super::value_boxing::emit_box_current_value_as_mixed(emitter, &box_ty);
     }
     abi::emit_frame_restore(emitter, frame_size);
     abi::emit_return(emitter);

@@ -9,6 +9,31 @@
 
 use super::*;
 
+/// Lowers named builtin arguments without inventing a user-function variadic collector.
+///
+/// Without spreads, valid named builtin calls have no variadic entries: positional values precede
+/// named regular parameters, and the checker rejects unknown names. The shared planner still owns
+/// source evaluation and parameter ordering, using a storage signature with no empty collector.
+pub(super) fn lower_named_builtin_args_with_signature(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    let Some(sig) = sig else { return lower_args(ctx, args); };
+    let mut storage = sig.clone();
+    if storage.variadic.is_some() {
+        let regular = crate::types::call_args::regular_param_count(sig);
+        storage.params.truncate(regular);
+        storage.param_type_exprs.truncate(regular);
+        storage.param_attributes.truncate(regular);
+        storage.ref_params.truncate(regular);
+        storage.declared_params.truncate(regular);
+        storage.defaults.truncate(regular);
+        storage.variadic = None;
+    }
+    lower_args_with_signature(ctx, Some(&storage), args)
+}
+
 /// Lowers named arguments with caller-selected trailing-default preservation.
 pub(super) fn lower_named_args_with_signature_options(
     ctx: &mut LoweringContext<'_, '_>,
@@ -50,7 +75,7 @@ pub(super) fn lower_named_args_with_signature_options(
             return operands;
         }
         let normalized = plan.normalized_args();
-        return lower_args(ctx, &normalized);
+        return lower_normalized_args(ctx, sig, &plan, &normalized);
     }
     let mut source_values = Vec::with_capacity(plan.source_args.len());
     for source_index in 0..plan.source_args.len() {
@@ -87,6 +112,36 @@ pub(super) fn lower_named_args_with_signature_options(
         operands.push(lower_named_variadic_tail_array(ctx, sig, &plan.source_values, &source_values).value);
     }
     operands
+}
+
+/// Lowers a plan's normalized arguments, giving each regular parameter's literal its declared type.
+///
+/// Like `lower_args`, every argument but the last is rooted across the later evaluation; the
+/// regular entries additionally use their parameter destination for pointer literals and
+/// checked integer arithmetic, as positional arguments do. Variadic tail entries lower as
+/// plain values.
+fn lower_normalized_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    plan: &crate::types::call_args::CallArgPlan,
+    normalized: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    let regular_count = plan.normalized_regular_arg_count();
+    normalized
+        .iter()
+        .enumerate()
+        .map(|(index, arg)| {
+            let value = match sig.params.get(index).filter(|_| index < regular_count) {
+                Some((_, param_ty)) => lower_expr_for_parameter(ctx, arg, param_ty),
+                None => lower_expr(ctx, arg),
+            };
+            if index + 1 < normalized.len() {
+                root_evaluated_call_argument(ctx, value, arg.span).value
+            } else {
+                value.value
+            }
+        })
+        .collect()
 }
 
 /// Preserves a regular reference argument's place while consuming the shared source-order plan.
@@ -138,7 +193,21 @@ fn lower_planned_source_arg(
         )
         .value
     } else {
-        lower_call_source_arg(ctx, &plan.source_args[source_index])
+        // A regular parameter shapes its literal argument as a positional one does: a null-only
+        // literal bound to `array<ptr<T>|null>` keeps pointer storage.
+        let param_ty = plan
+            .source_values
+            .iter()
+            .find(|source| source.source_index() == source_index)
+            .and_then(|source| source.param_idx())
+            .and_then(|param_index| sig.params.get(param_index))
+            .map(|(_, param_ty)| param_ty.clone());
+        match param_ty {
+            Some(param_ty) => {
+                lower_expr_for_parameter(ctx, &plan.source_args[source_index], &param_ty).value
+            }
+            None => lower_call_source_arg(ctx, &plan.source_args[source_index]),
+        }
     };
     if capture_values {
         let parameter = plan.source_values.iter()

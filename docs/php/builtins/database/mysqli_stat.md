@@ -2,7 +2,7 @@
 title: "mysqli_stat()"
 description: "Returns the server's current status line."
 sidebar:
-  order: 159
+  order: 162
 ---
 
 ## mysqli_stat()

@@ -11,12 +11,12 @@ use super::*;
 
 /// Keeps a default's source constant spelling separate from its normalized eval value.
 pub(super) fn register_eval_native_function_param_default_constant_name(
-    ctx: &mut FunctionContext<'_>, context_offset: usize, key: (&str, usize),
+    ctx: &mut FunctionContext<'_>, context_source: EvalContextSource, key: (&str, usize),
     index: usize, name: Option<&str>,
 ) {
     let Some(name) = name else { return; };
     let (label, len) = ctx.data.add_string(name.as_bytes());
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     for (argument, label) in [(1, key.0), (4, label.as_str())] {
         abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, argument), label);
     }
@@ -31,13 +31,13 @@ pub(super) fn register_eval_native_function_param_default_constant_name(
 /// Emits one native-function parameter-name registration call.
 pub(super) fn register_eval_native_function_param(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     function_name_label: &str,
     function_name_len: usize,
     param_index: usize,
     param_name: &str,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     abi::emit_symbol_address(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 1),
@@ -74,12 +74,12 @@ pub(super) fn register_eval_native_function_param(
 /// Emits one native-function bridge-support registration call.
 pub(super) fn register_eval_native_function_bridge_support(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     function_name_label: &str,
     function_name_len: usize,
     bridge_supported: bool,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     abi::emit_symbol_address(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 1),
@@ -105,14 +105,14 @@ pub(super) fn register_eval_native_function_bridge_support(
 /// Emits one native-function parameter-flags registration call.
 pub(super) fn register_eval_native_function_param_flags(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     function_name_label: &str,
     function_name_len: usize,
     param_index: usize,
     is_by_ref: bool,
     is_variadic: bool,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     abi::emit_symbol_address(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 1),
@@ -148,13 +148,13 @@ pub(super) fn register_eval_native_function_param_flags(
 /// Emits one native-function parameter-type registration call.
 pub(super) fn register_eval_native_function_param_type(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     function_name_label: &str,
     function_name_len: usize,
     param_index: usize,
     type_spec: &str,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     abi::emit_symbol_address(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 1),
@@ -191,12 +191,12 @@ pub(super) fn register_eval_native_function_param_type(
 /// Emits one native-function return-type registration call.
 pub(super) fn register_eval_native_function_return_type(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     function_name_label: &str,
     function_name_len: usize,
     type_spec: &str,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     abi::emit_symbol_address(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 1),
@@ -229,11 +229,11 @@ pub(super) fn register_eval_native_function_return_type(
 /// eval's `ReflectionFunction::returnsReference()` reports.
 pub(super) fn register_eval_native_function_returns_reference(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     function_name_label: &str,
     function_name_len: usize,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     abi::emit_symbol_address(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 1),
@@ -254,13 +254,13 @@ pub(super) fn register_eval_native_function_returns_reference(
 /// Emits one native function parameter-default registration call.
 pub(super) fn register_eval_native_function_param_default(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     function_name_label: &str,
     function_name_len: usize,
     param_index: usize,
     default: &EvalNativeCallableDefault,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     abi::emit_symbol_address(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 1),
@@ -293,7 +293,8 @@ pub(super) fn register_eval_native_function_param_default(
                 .extern_symbol("__elephc_eval_register_native_function_param_default_scalar")
         }
         EvalNativeCallableDefault::String(value) => {
-            let (default_label, default_len) = ctx.data.add_string(value.as_bytes());
+            let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
+            let (default_label, default_len) = ctx.data.add_string(&bytes);
             abi::emit_symbol_address(
                 ctx.emitter,
                 abi::int_arg_reg_name(ctx.emitter.target, 4),
@@ -358,13 +359,13 @@ const NATIVE_SHAPE_FLAG_INTERNAL: i64 = 1 << 2;
 /// flags word rather than adding ABI arguments.
 pub(super) fn register_eval_native_function_shape(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     function_name_label: &str,
     function_name_len: usize,
     shape: &EvalNativeSignatureShape,
     is_internal: bool,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     abi::emit_symbol_address(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 1),

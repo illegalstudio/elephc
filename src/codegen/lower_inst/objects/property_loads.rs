@@ -112,11 +112,22 @@ pub(super) fn emit_reference_property_load(
 }
 
 /// Emits a compact packed-field load from a pointer to the containing packed record.
+///
+/// A width-declared field (`i32`, `u8`, `f32`, ...) loads through the shared width emitter,
+/// which extends an integer into the PHP int and widens an `f32` into the PHP float.
 pub(super) fn emit_packed_field_load(
     ctx: &mut FunctionContext<'_>,
     slot: &PropertySlot,
     base_reg: &str,
 ) -> Result<()> {
+    if let Some(width) = slot.width {
+        return super::super::scalar_widths::emit_width_load(
+            ctx,
+            width.abi(),
+            base_reg,
+            slot.offset,
+        );
+    }
     match slot.php_type.codegen_repr() {
         PhpType::Float => {
             let float_reg = abi::float_result_reg(ctx.emitter);
@@ -137,11 +148,26 @@ pub(super) fn emit_packed_field_load(
                     .instruction(&format!("mov {}, {}", int_reg, base_reg)); // return the nested packed field address directly
             } else {
                 match ctx.emitter.target.arch {
-                    Arch::AArch64 => {
+                    // An AArch64 `add` immediate encodes only 0..=4095 unshifted, so a nested
+                    // record placed further into its container adds the offset from a register.
+                    Arch::AArch64 if slot.offset <= 4095 => {
                         ctx.emitter.instruction(&format!(
                             "add {}, {}, #{}",
                             int_reg, base_reg, slot.offset
                         ));                                                     // compute the nested packed field address
+                    }
+                    Arch::AArch64 => {
+                        let offset_reg = if base_reg == abi::tertiary_scratch_reg(ctx.emitter) {
+                            abi::secondary_scratch_reg(ctx.emitter)
+                        } else {
+                            abi::tertiary_scratch_reg(ctx.emitter)
+                        };
+                        // -- compute a nested field address past the add immediate range --
+                        abi::emit_load_int_immediate(ctx.emitter, offset_reg, slot.offset as i64);
+                        ctx.emitter.instruction(&format!(
+                            "add {}, {}, {}",
+                            int_reg, base_reg, offset_reg
+                        ));                                                     // compute a nested packed field address beyond the add immediate range
                     }
                     Arch::X86_64 => {
                         ctx.emitter.instruction(&format!(

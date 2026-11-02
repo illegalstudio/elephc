@@ -447,23 +447,32 @@ pub(super) fn eval_native_static_method_with_evaluated_args_unchecked_bridge_sco
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let signature_owner = bridge_scope.unwrap_or(class_name);
-    let signature = context.native_static_method_signature(signature_owner, method_name);
+    let signature = tokenizer_native_binding_signature(signature_owner, method_name,
+        context.native_static_method_signature(signature_owner, method_name));
     let return_type = signature.as_ref().and_then(|signature| signature.return_type().cloned());
-    let bound_args =
+    let mut bound_args =
         bind_native_callable_bound_args_with_mode(signature, evaluated_args, by_ref_mode, context, values)?;
-    let result = if let Some(scope) = bridge_scope {
-        eval_native_static_method_call_with_scope(
-            scope,
-            called_class_scope,
-            class_name,
-            method_name,
-            native_bound_arg_values(&bound_args),
-            context,
-            values,
-        )
-    } else {
-        values.static_method_call(class_name, method_name, native_bound_arg_values(&bound_args))
-    };
+    let result = (|| {
+        normalize_tokenizer_native_arguments(signature_owner, method_name, &mut bound_args, context, values)?;
+        if let Some(result) = eval_tokenizer_static_method(signature_owner, method_name,
+            called_class_scope.unwrap_or(class_name), &native_bound_arg_values(&bound_args),
+            context, values) {
+            return result;
+        }
+        if let Some(scope) = bridge_scope {
+            eval_native_static_method_call_with_scope(
+                scope,
+                called_class_scope,
+                class_name,
+                method_name,
+                native_bound_arg_values(&bound_args),
+                context,
+                values,
+            )
+        } else {
+            values.static_method_call(class_name, method_name, native_bound_arg_values(&bound_args))
+        }
+    })();
     let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
     let result = match (result, writeback) {
         (Ok(result), Err(status)) => {

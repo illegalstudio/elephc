@@ -8,6 +8,7 @@
 //! - Excludes synthetic property initializers and preserves include-variant callable groups.
 
 use super::*;
+use crate::codegen_support::abi;
 
 /// Returns user functions visible to runtime callable-name metadata.
 pub(in crate::codegen) fn runtime_user_function_sigs(module: &Module) -> HashMap<String, FunctionSig> {
@@ -119,6 +120,7 @@ pub(in crate::codegen) fn emit_intrinsic_method_wrappers(module: &Module, emitte
             method_symbol(&wrapper.class_name, &wrapper.method_key)
         };
         emitter.label(&symbol);
+        retain_consumed_wrapper_arguments(emitter, &wrapper);
         match emitter.target.arch {
             Arch::AArch64 => {
                 emitter.instruction(&format!("b {}", wrapper.helper));          // tail-call the runtime helper using the method ABI arguments
@@ -135,7 +137,29 @@ pub(in crate::codegen) struct IntrinsicMethodWrapper {
     pub(in crate::codegen) class_name: String,
     pub(in crate::codegen) method_key: String,
     helper: &'static str,
+    consumed: &'static [usize],
     pub(in crate::codegen) is_static: bool,
+}
+
+/// Gives consuming runtime helpers independent owners while preserving the incoming PHP ABI.
+fn retain_consumed_wrapper_arguments(emitter: &mut Emitter, wrapper: &IntrinsicMethodWrapper) {
+    if wrapper.consumed.is_empty() { return; }
+    // -- preserve the method ABI before native retains borrow its volatile registers --
+    abi::emit_frame_prologue(emitter, 96);
+    let count = if emitter.target.arch == Arch::AArch64 { 8 } else { 6 };
+    for index in 0..count {
+        abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), (index + 1) * 8);
+    }
+    for &parameter in wrapper.consumed {
+        let index = parameter + usize::from(!wrapper.is_static);
+        abi::load_at_offset(emitter, abi::int_result_reg(emitter), (index + 1) * 8);
+        abi::emit_call_label(emitter, "__rt_incref");
+    }
+    // -- leave only the transferred owners and original arguments for the tail call --
+    for index in 0..count {
+        abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), (index + 1) * 8);
+    }
+    abi::emit_frame_restore(emitter, 96);
 }
 
 /// Returns intrinsic instance/static methods that need method-symbol wrappers.
@@ -152,13 +176,14 @@ pub(in crate::codegen) fn intrinsic_method_wrapper_specs(module: &Module) -> Vec
             if eir_methods.contains(&(impl_class.to_string(), method_key.clone(), false)) {
                 continue;
             }
-            if let Some(helper) = IntrinsicCall::instance_method(impl_class, method_key)
-                .and_then(|intrinsic| intrinsic.runtime_helper())
+            if let Some((helper, consumed)) = IntrinsicCall::instance_method(impl_class, method_key)
+                .and_then(|intrinsic| Some((intrinsic.runtime_helper()?, intrinsic.consumed_mixed_parameters())))
             {
                 wrappers.push(IntrinsicMethodWrapper {
                     class_name: impl_class.to_string(),
                     method_key: method_key.clone(),
                     helper,
+                    consumed,
                     is_static: false,
                 });
             }
@@ -172,13 +197,14 @@ pub(in crate::codegen) fn intrinsic_method_wrapper_specs(module: &Module) -> Vec
             if eir_methods.contains(&(impl_class.to_string(), method_key.clone(), true)) {
                 continue;
             }
-            if let Some(helper) = IntrinsicCall::static_method(impl_class, method_key)
-                .and_then(|intrinsic| intrinsic.runtime_helper())
+            if let Some((helper, consumed)) = IntrinsicCall::static_method(impl_class, method_key)
+                .and_then(|intrinsic| Some((intrinsic.runtime_helper()?, intrinsic.consumed_mixed_parameters())))
             {
                 wrappers.push(IntrinsicMethodWrapper {
                     class_name: impl_class.to_string(),
                     method_key: method_key.clone(),
                     helper,
+                    consumed,
                     is_static: true,
                 });
             }
@@ -197,4 +223,34 @@ pub(in crate::codegen) fn intrinsic_method_wrapper_specs(module: &Module) -> Vec
             && left.is_static == right.is_static
     });
     wrappers
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Each ABI preserves incoming arguments and takes a distinct owner for the transfer cell.
+    #[test]
+    fn coroutine_wrapper_transfers_are_owned_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = crate::codegen_support::platform::Target::parse(name).unwrap();
+            for (method, is_static) in [("resume", false), ("suspend", true)] {
+                let intrinsic = if is_static { IntrinsicCall::static_method("Fiber", method) }
+                    else { IntrinsicCall::instance_method("Fiber", method) }.unwrap();
+                let wrapper = IntrinsicMethodWrapper {
+                    class_name: "Fiber".to_string(), method_key: method.to_string(),
+                    helper: intrinsic.runtime_helper().unwrap(),
+                    consumed: intrinsic.consumed_mixed_parameters(), is_static,
+                };
+                let mut emitter = Emitter::new(target);
+                retain_consumed_wrapper_arguments(&mut emitter, &wrapper);
+                let assembly = emitter.output();
+                assert_eq!(assembly.matches("__rt_incref").count(), 1, "{name}: {method}");
+                let receiver = abi::int_arg_reg_name(target, 0);
+                let value = abi::int_arg_reg_name(target, usize::from(!is_static));
+                assert!(assembly.contains(receiver) && assembly.contains(value), "{name}: {method}");
+                assert!(assembly.contains(if target.arch == Arch::AArch64 { "ldur x1" } else { "mov rsi, QWORD PTR" }), "{name}: argument restoration");
+            }
+        }
+    }
 }

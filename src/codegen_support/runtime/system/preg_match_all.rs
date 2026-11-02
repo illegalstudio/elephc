@@ -91,6 +91,7 @@ pub(crate) fn emit_preg_match_all(emitter: &mut Emitter) {
 
     // -- strip delimiters --
     emitter.instruction("bl __rt_preg_strip");                                  // → x1, x2, x3=flags
+    emitter.instruction("tbnz x3, #30, __rt_preg_match_all_fail");              // the removed /e modifier is invalid in PHP 8
     emitter.instruction(&format!("str x3, [sp, #{}]", flags_off));              // save flags
 
     // -- materialize the PCRE pattern as a C string --
@@ -113,7 +114,7 @@ pub(crate) fn emit_preg_match_all(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x2, [sp, #{}]", subject_len_off));        // subject len
     emitter.instruction("bl __rt_cstr2");                                       // → x0=subject C string
     emitter.instruction(&format!("str x0, [sp, #{}]", subject_cstr_off));       // save subject C string
-    emitter.bl_c("strlen");                                                      // retain the established C-string subject boundary
+    emitter.bl_c("strlen");                                                     // retain the established C-string subject boundary
     emitter.instruction(&format!("str x0, [sp, #{}]", subject_len_off));        // save the complete subject length for offset matching
 
     // -- count matches loop --
@@ -151,7 +152,7 @@ pub(crate) fn emit_preg_match_all(emitter: &mut Emitter) {
     emitter.instruction("b __rt_preg_match_all_ret");                           // return
 
     emitter.label("__rt_preg_match_all_fail");
-    emitter.instruction("mov x0, #0");                                          // return 0 on compile failure
+    emitter.instruction("mov x0, #-1");                                         // failure sentinel: PHP false
 
     emitter.label("__rt_preg_match_all_ret");
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_off));         // restore frame pointer and return address
@@ -189,6 +190,8 @@ fn emit_preg_match_all_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, rdi");                                        // move the elephc pattern pointer into the delimiter-strip helper input register
     emitter.instruction("mov rdx, rsi");                                        // move the elephc pattern length into the delimiter-strip helper input register
     emitter.instruction("call __rt_preg_strip");                                // strip slash delimiters and gather supported regex flags from the pattern literal
+    emitter.instruction("bt rcx, 30");                                          // did the pattern use the removed /e modifier?
+    emitter.instruction("jc __rt_preg_match_all_fail_linux_x86_64");            // PHP 8 rejects /e as an unknown modifier
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", flags_off));  // preserve the delimiter-strip helper flags for the later regcomp() call
     emitter.instruction("call __rt_pcre_to_posix");                             // materialize PCRE pattern as a null-terminated C string
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pattern_cstr_off)); // preserve the null-terminated PCRE pattern C string across compilation and loop setup
@@ -209,7 +212,7 @@ fn emit_preg_match_all_linux_x86_64(emitter: &mut Emitter) {
         &format!("mov QWORD PTR [rsp + {}], rax", current_pos_off)
     );
     emitter.instruction("mov rdi, rax");                                        // pass the subject C string to strlen
-    emitter.bl_c("strlen");                                                      // retain the established C-string subject boundary
+    emitter.bl_c("strlen");                                                     // retain the established C-string subject boundary
     emitter.instruction(                                                        // save the complete subject length for offset matching
         &format!("mov QWORD PTR [rsp + {}], rax", subject_len_off)
     );
@@ -246,7 +249,7 @@ fn emit_preg_match_all_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_preg_match_all_ret_linux_x86_64");            // share the common epilogue after the successful match-count path
 
     emitter.label("__rt_preg_match_all_fail_linux_x86_64");
-    emitter.instruction("xor eax, eax");                                        // return zero when regex compilation fails for preg_match_all()
+    emitter.instruction("mov rax, -1");                                         // failure sentinel: PHP false
 
     emitter.label("__rt_preg_match_all_ret_linux_x86_64");
     emitter.instruction(&format!("add rsp, {}", stack_size));                   // release the opaque-handle, pair, and counting spill storage before returning

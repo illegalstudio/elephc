@@ -8,13 +8,13 @@ sidebar:
 ## Compilation pipeline
 
 ```
-PHP source (.php)
+Source (.php or .lfc)
     │
     ▼
 ┌─────────┐
 │  Lexer   │  src/lexer/
 │          │  scan.rs, literals.rs, cursor.rs, token.rs
-│          │  Source text → Vec<(Token, Span)>
+│          │  Source text -> Vec<SpannedToken> (Token + TokenMetadata)
 └────┬─────┘
      │
      ▼
@@ -54,9 +54,13 @@ PHP source (.php)
      │
      ▼
 ┌──────────────┐
-│   Preludes   │  src/{pdo,mysqli,tz,list_id,var_export,opcache,image,hash,curl,xml,web,version}_prelude*
+│   Preludes   │  src/{pdo,mysqli,tz,list_id,var_export,opcache,image,hash,curl,xml,dom_html,web,version}_prelude*
 │              │  Injects only the compiler-owned PHP surfaces required by
-│              │  resolved source usage, forced bridge flags, or --web.
+│              │  resolved source usage, forced bridge flags, or --web. Before
+│              │  injection, src/autoload/prelude_probe.rs scans an autoloaded
+│              │  copy for PDO/mysqli/tz/image/hash/curl/xml/var_export usage.
+│              │  The same probe retains per-request web environment copies for
+│              │  autoloaded observers in both request and application lifecycles.
 └─────┬────────┘
       │
       ▼
@@ -74,6 +78,12 @@ PHP source (.php)
 └────┬─────┘
      │
      ▼
+┌──────────────┐
+│ DOM autoload │  src/dom_html_prelude.rs
+│              │  Rechecks newly loaded classes for DOM HTML usage.
+└─────┬────────┘
+      │
+      ▼
 ┌──────────────┐
 │ Object casts │  src/object_cast_prelude*
 │              │  Injects stdClass declarations for object casts after autoload.
@@ -112,7 +122,8 @@ PHP source (.php)
 ┌──────────────┐
 │   Exports    │  src/exports.rs
 │    Scan      │  Collects #[Export]-marked functions and validates their
-│              │  C-ABI signatures and post-lowering safety graph (warns and
+│              │  native-library or PHP-extension signatures and post-lowering
+│              │  safety graph (warns and
 │              │  ignores them only in normal executable emission).
 └─────┬────────┘
       │
@@ -164,7 +175,8 @@ PHP source (.php)
 │             │  small-function inliner interleaved with the per-function
 │             │  pass driver (identity folding, peephole rewrites, scalar
 │             │  local promotion, immutable local classification, checked-
-│             │  integer sinking, integer range analysis (IntegerRange),
+│             │  integer sinking, bounded mixed-counter promotion,
+│             │  integer range analysis (IntegerRange),
 │             │  boxed numeric-chain fusion, constant folding,
 │             │  common-subexpression elimination, loop-invariant code motion,
 │             │  dead-instruction elimination, dead-store elimination, branch
@@ -199,6 +211,24 @@ become native EIR, scope-backed fragments use only core runtime helpers, and
 dynamic fragments enable the optional `elephc-magician` interpreter staticlib
 at final linking. This is a lowering/linking decision, not a separate timed
 compiler phase. See [Eval Runtime Architecture](eval-runtime.md).
+
+Before EIR validation, `src/ir_lower/boxed_array_appends.rs` reconciles single-use append
+receivers with their final local storage. A later reference call can widen a local from a
+native array to boxed `Mixed`; earlier appends then use `MixedArrayAppend` and a borrowed
+boxed read when no consumer observes a concrete native element layout. Typed consumers such as
+string-array sorting keep native append; codegen retires the old box before mutation so the
+unboxed lease becomes the mutator's owner without forcing a copy. A borrowed reference-cell
+read on an unpromoted raw path first retakes that lease before a consuming mutation, then
+transfers it through mutation writeback; a later explicit release makes writeback retain its
+own owner. Indexed writes, hash mutations, nested writes and reference iteration share this
+protocol. Iterator conversion reloads the SSA source after retiring its previous box because
+cleanup may clobber result registers. Append lowering evaluates the RHS before loading the current local, so a reference
+write on the RHS also selects the ordinary scalar/string parent guards. The final storage read
+stays after RHS evaluation, while the shared runtime keeps copy-on-write and reference aliases intact.
+Rejected append branches release an owned string RHS before raising the catchable parent error.
+Ordinary local loads unboxed from final `Mixed` storage own a lease that the consumer releases,
+including on paths that never promote. Reference-cell reads preserve their alias payload shape
+and remain borrowed. Indexed writes still detach a shared cell; only append bypasses that copy.
 
 ### Generated-artifact write policy
 
@@ -275,7 +305,8 @@ src/
 ├── pipeline.rs                Frontend/backend compilation pipeline
 │   └── artifact_io.rs         Generated-artifact write policy: preflight destination
 │                              validation and O_EXCL-staged atomic replacement
-├── exports.rs                 #[Export] collection and C-ABI signature validation for --emit cdylib
+├── exports.rs                 #[Export] collection and boundary validation for library outputs
+├── phpext/                    PHP 8.5 SDK discovery, Zend adapter, registration, transport, and linking
 ├── link_plan.rs               Ordered typed archives, libraries, paths, frameworks, and Linux link mode
 ├── link_planning.rs           Compile/runtime/user/managed inputs to one final ordered link plan
 ├── linker/                    Link-plan rendering, bridge discovery, SDK lookup, and archive handling
@@ -318,7 +349,7 @@ src/
 ├── optimize/                  Constant folding, constant propagation, control-flow pruning, normalization, dead-code elimination, declaration reachability pruning
 ├── ir/                        EIR types, builder, validator, printer, effects, and tests
 ├── ir_lower/                  Active checked-AST to EIR lowering
-├── ir_passes/                 EIR optimization pass driver, identity folding, peephole patterns, scalar local promotion, immutable integer-local loads, checked-integer sinking, canonical loop optimization, integer range and induction-variable analysis, numeric-chain fusion, constant folding, common-subexpression elimination, loop-invariant code motion, dead-instruction elimination, dead-store elimination, branch simplification, concat scratch-state optimization, the cross-function small-function inliner (run to a module-level fixed point), dominance analysis, loop analysis, and linear-scan register allocation with cost-aware constant rematerialization
+├── ir_passes/                 EIR optimization pass driver, identity folding, peephole patterns, scalar local promotion, immutable integer-local loads, checked-integer sinking, canonical loop optimization, integer range and induction-variable analysis, numeric-chain fusion, constant folding, common-subexpression elimination, loop-invariant code motion, dead-instruction elimination, dead-store elimination, branch simplification, concat scratch-state optimization, fresh numeric ownership finalization, direct self/mutual tail-recursion lowering, the cross-function small-function inliner (run to a module-level fixed point), dominance analysis, loop analysis, and linear-scan register allocation with cost-aware constant rematerialization
 ├── codegen/                   Active EIR to target assembly backend
 ├── codegen_support/           Shared ABI, runtime, platform, metadata, and callable support
 ├── runtime_cache.rs           Cached shared runtime object preparation
@@ -342,14 +373,16 @@ src/
 ├── list_id_prelude/           Identifier-list prelude detection and baked table data
 ├── var_export_prelude.rs      var_export prelude injection entry point
 ├── var_export_prelude/        var_export prelude usage detection
+├── dom_html_prelude.rs        Pay-for-use DOM HTML injection before name resolution and after autoload
+├── dom_html_prelude/          Cached declarations, HTML entity data, and DOM usage detection
 ├── image_prelude.rs           Image (GD, Exif/IPTC, Imagick, Gmagick, Cairo) prelude injection entry point
 ├── image_prelude/             Image prelude usage detection
 ├── web_prelude.rs             --web request superglobals and session prelude injection (flag-gated, not usage-detected)
-├── web_prelude/               Web-prelude function-reachability analysis for pay-for-use injection
+├── web_prelude/               Web declarations and conservative environment-copy demand detection
 ├── superglobals.rs            Canonical --web request-superglobal set shared by checker, IR lowering, and runtime reset
 │
 ├── lexer/
-│   ├── mod.rs                 tokenize() → Vec<(Token, Span)>
+│   ├── mod.rs                 tokenize() -> Vec<SpannedToken> (Token + TokenMetadata)
 │   ├── token.rs               Token enum
 │   ├── cursor.rs              Byte-level source reader
 │   ├── scan.rs                Main scanning loop, operators
@@ -409,6 +442,8 @@ src/
 │   ├── local_analysis.rs      Precomputed local-slot facts (explicit stores, ref-cell representation, owned parameters)
 │   ├── frame.rs               EIR frame layout and local/temporary slots
 │   ├── frame/                 Frame-layout unit tests
+│   ├── stack_numeric.rs       Escape/lifetime proofs for frame-local checked numeric cells
+│   ├── stack_numeric/         Numeric frame-cell proof unit tests
 │   ├── block_emit.rs          Basic-block scheduling and emission
 │   ├── block_layout.rs        Hot/cold block order and compare-and-branch fusion
 │   ├── parallel_moves.rs      Direct scalar moves for integer, boolean, and float block arguments
@@ -472,6 +507,7 @@ src/
 │   ├── cdylib.rs              Owned-string boundary orchestration + lifecycle/status/error/memory symbols
 │   ├── cdylib/boundary.rs     Recoverable scalar wrappers + nested boundary/concat state
 │   ├── cdylib/owned_string.rs Caller-owned binary-string ABI helpers
+│   ├── cdylib/phpext.rs       PHP-visible handler trampolines and request-boundary state exchange
 │   ├── visibility.rs          ELF hidden / Mach-O private visibility for internal cdylib globals
 │   ├── sentinels.rs           Null representation selection (sentinel vs tagged) and constants
 │   ├── data_section.rs        String/float literal .data section
@@ -479,7 +515,7 @@ src/
 │   │
 │   └── runtime/               Runtime routines and target-specific emission helpers
 │       ├── mod.rs             Runtime module boundary; re-exports the emission entry points
-│       ├── data/              Fixed, user-program, and instanceof runtime data tables (5 files)
+│       ├── data/              Fixed, user-program, and instanceof runtime data tables (6 files)
 │       ├── diagnostics.rs     Suppressible runtime-warning channel used by `@`
 │       ├── eval_bridge.rs     C-ABI value, callable, class, and runtime hooks used by Magician
 │       ├── eval_scope.rs      Core materialized-scope helpers usable without the interpreter
@@ -489,22 +525,22 @@ src/
 │       ├── resource_ids.rs    Runtime resource-kind identifiers shared by cleanup paths
 │       ├── round_mode.rs      PHP rounding-mode constants used by runtime helpers
 │       ├── sysv_call_alignment.rs x86_64 SysV nested-call stack-alignment helpers
-│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, hashes, iconv, mbstring, parse_url, and conversion helpers (103 top-level files + 68 nested helpers)
-│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (206 top-level files + 7 nested target/debug helpers)
+│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, hashes, iconv, mbstring, parse_url, and conversion helpers (106 top-level Rust files + 62 nested Rust helpers)
+│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (210 top-level Rust files + 9 nested target/debug/test helpers)
 │       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed, callable descriptor release, and `Closure::bind` support (7 files)
 │       ├── compare/           Loose/strict comparison and truthiness helpers (5 files)
 │       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (126 top-level files + 1 nested response-metadata helper)
 │       ├── buffers/           Generation-safe handle resolution, allocation/free, length, bounds/size/use-after-free diagnostics (8 files incl. mod.rs)
 │       ├── bcmath/            Target-aware C-ABI marshalling for exact decimal bridge calls (3 files incl. target assembly)
 │       ├── curl/              Easy, multi, share, callback, multipart, error, and version bridge adapters (14 files)
-│       ├── eval_bridge/       Magician value, array, cast, reflection, clone, mbstring, output, and builtin adapters (36 top-level files + 1 nested output helper)
+│       ├── eval_bridge/       Magician value, array, cast, reflection, clone, mbstring, output, and builtin adapters (37 top-level files + 1 nested output helper)
 │       ├── exceptions.rs      Exception runtime module root / re-exports
-│       ├── exceptions/        cleanup frames, handler dispatch, dynamic instanceof, matching, throwing, and Throwable helpers (22 files)
+│       ├── exceptions/        cleanup frames, handler dispatch, dynamic instanceof, matching, throwing, and Throwable helpers (23 top-level Rust files + 2 nested cleanup helpers)
 │       ├── pdo/               Target-aware PDO callable callback adapters (5 files)
-│       ├── system/            build_argv, time, getenv, shell_exec, date/JSON/strtotime, serialize/unserialize, preg_*, ... (46 top-level files + 44 nested files)
+│       ├── system/            build_argv, time, getenv, shell_exec, date/JSON/strtotime, serialize/unserialize, preg_*, ... (50 top-level Rust files + 61 nested Rust files)
 │       ├── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ptr_read_string, ptr_write_string, ... (7 files)
 │       ├── fibers/            stack allocation/free, context switch, entry trampoline (4 top-level files) + `api/` (4 target-aware public API helper files)
-│       ├── objects/           stdClass, object handles, Mixed property/index autovivification, object-vars/export, destructor dispatch, and new-by-name helpers (17 files)
+│       ├── objects/           stdClass, object handles, Mixed property/index autovivification, object-vars/export, destructor dispatch, and new-by-name helpers (19 files)
 │       ├── spl/               SplDoublyLinkedList and SplFixedArray runtime container helpers, including shared PHP offset conversion (4 files)
 │       ├── generators/        Generator frame layout and fiber-backed coroutine __rt_gen_* helpers (3 files)
 │       └── zval/              Zval bridge packing, unpacking, type, and lifetime helpers (11 files)
@@ -516,7 +552,7 @@ src/
 
 crates/
 ├── elephc-builtin-contract/   Dependency-neutral builtin catalog and signatures
-├── elephc-bcmath/             Pure-Rust arbitrary-precision decimal bridge for PHP `bc*()` functions
+├── elephc-bcmath/             Pure-Rust arbitrary-precision decimal bridge for PHP `bc*()` functions and immutable `BcMath\Number` objects
 ├── elephc-crypto/             Pure-Rust hashing/HMAC bridge staticlib behind PHP `hash()` / `hash_hmac()`
 ├── elephc-curl/               Static libcurl easy, multi, share, callback, and multipart bridge
 ├── elephc-generics/           Shared structural generic type terms, binding, and variance for AOT compilation and Magician
@@ -530,6 +566,7 @@ crates/
 ├── elephc-pdo/                Multi-driver database bridge staticlib behind the PDO prelude
 ├── elephc-phar/               Pure-Rust PHAR/tar/zip archive bridge for `phar://` runtime paths
 ├── elephc-probe/              Sampled profiling and authenticated service endpoint
+├── elephc-random/             Pure-Rust `ext/random` engines, CSPRNG, and global Mt19937 state bridge
 ├── elephc-tls/                TLS bridge for the `https://` stream wrapper
 ├── elephc-tz/                 IANA timezone-introspection bridge staticlib with baked tz tables
 ├── elephc-web/                Prefork HTTP bridge with compile-time worker/pool/request isolation
@@ -568,12 +605,17 @@ During type checking, extern declarations are registered in dedicated maps that 
 - `extern_classes`: flat C struct layout metadata
 - `extern_globals`: native global symbols loaded through the linker
 
+The checker registers extern and packed classes before the interface and class schema passes,
+because class members name them too (`public buffer<Vec2> $data`, `public ptr<Point> $p`, or a
+generic argument such as `Store<Vec2>`). Duplicate detection against ordinary classes therefore
+reads the pre-declared class names rather than the finished class table.
+
 Extern calls differ from ordinary elephc function calls in four important ways:
 
 1. Codegen dispatches extern functions before built-ins, so an `extern function strlen(...)` declaration really calls C `strlen`, not the elephc builtin.
-2. `string` arguments are converted with `__rt_str_to_cstr`, which allocates a null-terminated C buffer that is valid for the duration of the native call and is released immediately after the call returns.
-3. `string` return values are converted with `__rt_cstr_to_str`, which treats the returned `char *` as borrowed and copies bytes back into an owned elephc string.
-4. `extern class` layouts are available to pointer-oriented codegen too, so `ptr_sizeof("StructName")` and `ptr_cast<StructName>($p)->field` use the same checked layout metadata recorded by the type checker.
+2. `string` arguments are converted with `__rt_str_to_cstr`, which allocates a null-terminated C buffer that is valid for the duration of the native call and is released immediately after the call returns. A `?string` parameter (`ExternAbiType::NullableCStr`) passes PHP null as a NULL `char *` instead, deciding a boxed `string|null` argument from its runtime tag; its cleanup slot then holds NULL, which `__rt_heap_free` ignores. A boxed array or object is a fatal error there, so no PHP code (`__toString()`, an error handler) can throw while earlier arguments' C copies exist only on the temporary stack.
+3. `string` return values are converted with `__rt_cstr_to_str`, which treats the returned `char *` as borrowed and copies bytes back into an owned elephc string. A `?string` return boxes a NULL `char *` as PHP null and moves the owned copy of any other pointer into a Mixed box, because the call is typed `string|null`.
+4. `extern class` layouts are available to pointer-oriented codegen too, so `ptr_sizeof("StructName")` and `ptr_cast<StructName>($p)->field` use the same checked layout metadata recorded by the type checker. The checker lays fields out with natural C alignment (`ctype_field_layout` in `src/types/ffi.rs`) and keeps each field's C shape (`ExternFieldInfo::abi`), and `src/codegen/lower_inst/objects/extern_fields.rs` turns `prop_get`/`prop_set` on a `ptr<StructName>` receiver into width-aware loads and stores, the extern sibling of the packed-class `ptr<T>` route.
 
 `callable` FFI parameters pass a user-defined elephc function by address. The function name is provided as a string literal at the call site, and codegen loads the address of the compiled mangled function symbol before branching into C. Namespaced functions therefore still map to unique assembly labels after canonicalization.
 
@@ -635,7 +677,7 @@ The runtime data emission in `src/codegen_support/runtime/data/` is split into `
 |---|---|---|
 | String scratch | `_concat_buf`, `_concat_off` | Temporary string results for expression evaluation |
 | CLI globals | `_global_argc`, `_global_argv` | Saved OS argument state used to build `$argv` |
-| Heap allocator | `_heap_buf`, `_heap_off`, `_heap_free_list`, `_heap_small_bins`, `_heap_debug_enabled`, `_heap_max` | Heap storage plus general/small-bin allocator metadata and heap-debug toggle |
+| Heap allocator | `_heap_buf`, `_heap_off`, `_heap_free_list`, `_heap_small_bins`, `_heap_bin_marks`, `_heap_debug_enabled`, `_heap_max` | Heap storage plus general/small-bin allocator metadata, the per-granule bin marks behind the O(1) double-free check, and heap-debug toggle |
 | Buffer registry | `_buffer_registry`, `_buffer_registry_free`, `_buffer_registry_next` | Static generation-safe descriptors, recycled-slot free-list head, and next never-issued descriptor index |
 | Runtime diagnostics | `_rt_diag_suppression`, `_rt_diag_pending_*`, `_php_diagnostic_*`, `_diag_*`, `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg`, `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_buffer_alloc_size_msg`, `_buffer_registry_exhausted_msg`, `_match_unhandled_msg`, `_uncaught_exc_msg`, `_instanceof_target_type_msg`, `_heap_dbg_*` | Suppressible and deferred warning state/text plus source locations, fatal messages, and heap-debug summary/failure strings |
 | GC statistics and cycle state | `_gc_allocs`, `_gc_frees`, `_gc_live`, `_gc_peak`, `_gc_enabled`, `_gc_collecting`, `_gc_freeing_unreachable`, `_gc_pin_head`, `_gc_pending_throw`, `_gc_release_suppressed`, `_gc_runs`, `_gc_collected`, `_gc_application_started`, `_gc_*_started`, `_gc_*_time`, `_gc_destructor_depth` | Allocation/free/live-byte counters, collector lifecycle and timing state, pinned roots, and deferred throws |
@@ -651,7 +693,7 @@ The runtime data emission in `src/codegen_support/runtime/data/` is split into `
 
 ### Heap allocator
 
-8MB free-list + bump hybrid allocator in BSS (`_heap_buf`). Each allocation has a uniform 16-byte header: `[size:4][refcount:4][kind:8]` — a 32-bit block size, a 32-bit reference count, and an 8-byte heap-kind tag shared by arrays, hashes, objects, boxed mixed cells, persisted strings, and raw helper buffers. The allocator now keeps four segregated small-block bins (`<=8`, `<=16`, `<=32`, `<=64` bytes) in `_heap_small_bins` ahead of the general address-ordered free list, so tiny short-lived blocks can often be reused without walking the full first-fit chain. When memory is freed (via `__rt_heap_free`), tail blocks still fold directly back into `_heap_off`, small non-tail blocks are cached in their size class, and larger blocks remain in the ordered free list where adjacent neighbors are coalesced and any free chain that reaches the current bump tail is trimmed back into the bump pointer. New allocations consult the matching small-bin class first, then the general free list (splitting oversized free blocks when needed), and only bump allocate when neither path can satisfy the request. Reference counting (`__rt_incref`, `__rt_decref_array`, `__rt_decref_hash`, `__rt_decref_mixed`, `__rt_decref_object`) still handles the common acyclic case, while arrays and hashes now add copy-on-write splitting through `__rt_array_ensure_unique` / `__rt_hash_ensure_unique` plus shallow clone helpers before mutating shared containers. The low 16 bits of the kind word are now persistent container metadata: low byte = heap kind, bits 8-14 = indexed-array `value_type`, bit 15 = copy-on-write container flag, and higher bits remain reserved for transient cycle-collector state. Heap kind tags now use `0=raw/untyped`, `1=string`, `2=indexed array`, `3=assoc/hash`, `4=object`, `5=boxed mixed`, giving the runtime a uniform discriminator regardless of payload layout. With `--heap-debug`, the runtime validates both the ordered free list and the segregated small-bin chains on allocator/free mutations, traps on double free or zero-refcount `incref`/`decref` paths, poisons freed payload bytes, and prints an end-of-process summary with alloc/free counts, live blocks, live bytes, and the peak live-byte watermark. With `--gc-stats`, generated programs also print allocation/free counters to stderr at exit without enabling the heavier heap-debug checks. Fiber execution state uses dedicated BSS slots (`_fiber_current`, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, `_fiber_main_saved_call_frame`) plus guarded per-fiber stacks allocated with `mmap`; Fiber objects release those stacks through `__rt_fiber_free_stack` during object deep-free. Codegen now records a local ownership lattice (`Owned`, `Borrowed`, `MaybeOwned`, `NonHeap`) plus an `epilogue_cleanup_safe` bit in `Context::variables` so it can distinguish between stack slots that truly own a heap value and slots that merely alias global/static/container-backed storage. Ownership transfer points currently include ordinary reassignments, by-value call arguments, borrowed heap returns, indexed array writes, associative-array/hash writes, object property writes, `static` slot writes, `global` loads, `foreach` targets, and `list(...)` targets, while container-copy builtins now dispatch to dedicated `_refcounted` runtime helpers for nested array/hash/object/string payloads (`array` literals with spreads, `array_merge`, `array_chunk`, `array_slice`, `array_reverse`, `array_pad`, `array_unique`, `array_splice`, `array_diff`, `array_intersect`, `array_filter`, `array_fill`, `array_combine`, `array_fill_keys`). Mixed heap releases now funnel through `__rt_decref_any`, and object/container deep-free paths use richer runtime metadata plus per-class GC descriptor tables to discover nested heap-backed children. Function epilogues now clean up only locals that are both `Owned` and still marked safe; borrowed aliases such as `$this`, ref params, globals, and statics are explicitly excluded, and exhaustive `if` / `elseif` / `else` branches can now restore epilogue cleanup when every fallthrough branch directly stores the same heap-backed type into the same local. Loop-driven, switch-driven, and more dynamic alias-heavy joins remain conservative until more control-flow cases are proven. Configurable via `--heap-size=BYTES` (minimum 64KB), `--gc-stats`, and `--heap-debug` for runtime verification. Bounds-checked with fatal error on overflow.
+128MB (by default) free-list + bump hybrid allocator in BSS (`_heap_buf`). Each allocation has a uniform 16-byte header: `[size:4][refcount:4][kind:8]` — a 32-bit block size, a 32-bit reference count, and an 8-byte heap-kind tag shared by arrays, hashes, objects, boxed mixed cells, persisted strings, and raw helper buffers. The allocator keeps one exact size-class bin per 8-byte payload size up to 2048 bytes in `_heap_small_bins` ahead of the general address-ordered free list, so allocating and freeing such blocks is one push or pop whatever the number of free blocks; `__rt_heap_consolidate` merges the binned blocks in one pass over the heap when the bump end is full, before the allocator reports exhaustion. When memory is freed (via `__rt_heap_free`), tail blocks still fold directly back into `_heap_off`, non-tail blocks up to 2048 bytes are cached in their exact size class, and larger blocks remain in the ordered free list where adjacent neighbors are coalesced and any free chain that reaches the current bump tail is trimmed back into the bump pointer. New allocations pop the matching exact bin first, then the general free list (splitting oversized free blocks when needed), and only bump allocate when neither path can satisfy the request. Reference counting (`__rt_incref`, `__rt_decref_array`, `__rt_decref_hash`, `__rt_decref_mixed`, `__rt_decref_object`) still handles the common acyclic case, while arrays and hashes now add copy-on-write splitting through `__rt_array_ensure_unique` / `__rt_hash_ensure_unique` plus shallow clone helpers before mutating shared containers. The low 16 bits of the kind word are now persistent container metadata: low byte = heap kind, bits 8-14 = indexed-array `value_type`, bit 15 = copy-on-write container flag, and higher bits remain reserved for transient cycle-collector state. Heap kind tags now use `0=raw/untyped`, `1=string`, `2=indexed array`, `3=assoc/hash`, `4=object`, `5=boxed mixed`, giving the runtime a uniform discriminator regardless of payload layout. With `--heap-debug`, the runtime validates both the ordered free list and the exact size-class bin chains on allocator/free mutations, traps on double free or zero-refcount `incref`/`decref` paths, poisons freed payload bytes, and prints an end-of-process summary with alloc/free counts, live blocks, live bytes, and the peak live-byte watermark. With `--gc-stats`, generated programs also print allocation/free counters to stderr at exit without enabling the heavier heap-debug checks. Fiber execution state uses dedicated BSS slots (`_fiber_current`, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, `_fiber_main_saved_call_frame`) plus guarded per-fiber stacks allocated with `mmap`; Fiber objects release those stacks through `__rt_fiber_free_stack` during object deep-free. Codegen now records a local ownership lattice (`Owned`, `Borrowed`, `MaybeOwned`, `NonHeap`) plus an `epilogue_cleanup_safe` bit in `Context::variables` so it can distinguish between stack slots that truly own a heap value and slots that merely alias global/static/container-backed storage. Ownership transfer points currently include ordinary reassignments, by-value call arguments, borrowed heap returns, indexed array writes, associative-array/hash writes, object property writes, `static` slot writes, `global` loads, `foreach` targets, and `list(...)` targets, while container-copy builtins now dispatch to dedicated `_refcounted` runtime helpers for nested array/hash/object/string payloads (`array` literals with spreads, `array_merge`, `array_chunk`, `array_slice`, `array_reverse`, `array_pad`, `array_unique`, `array_splice`, `array_diff`, `array_intersect`, `array_filter`, `array_fill`, `array_combine`, `array_fill_keys`). Mixed heap releases now funnel through `__rt_decref_any`, and object/container deep-free paths use richer runtime metadata plus per-class GC descriptor tables to discover nested heap-backed children. Function epilogues now clean up only locals that are both `Owned` and still marked safe; borrowed aliases such as `$this`, ref params, globals, and statics are explicitly excluded, and exhaustive `if` / `elseif` / `else` branches can now restore epilogue cleanup when every fallthrough branch directly stores the same heap-backed type into the same local. Loop-driven, switch-driven, and more dynamic alias-heavy joins remain conservative until more control-flow cases are proven. Configurable via `--heap-size=BYTES` (minimum 64KB), `--gc-stats`, and `--heap-debug` for runtime verification. Bounds-checked with fatal error on overflow.
 
 ### Hash table header (heap-allocated, for associative arrays)
 
@@ -698,6 +740,7 @@ Total size: `8 + (num_properties × 16)`. Properties are stored at fixed offsets
 
 - Instance methods: codegen resolves a stable slot number from the static class metadata, then uses the object's `class_id` to load the concrete class vtable entry and `blr` to the implementation. The object pointer is still passed as the first argument in `x0` (as `$this`).
 - Private instance methods are excluded from the vtable and emitted as direct calls within the declaring class, preserving PHP's lexical binding for parent-private helpers.
+- Final methods and methods on a statically known final class call the emitted implementation directly, including inherited implementations. This also applies to generic instantiations with fixed arguments, such as `Buffer<int>`, using the shared proof in `generics::dispatch::has_fixed_instantiation`. Instantiations whose object arguments can widen retain vtable dispatch because the actual instantiation may have its own lexical body and static storage. Literal-parameter guards on final generic declarations select the actual runtime class without requiring an inheritance edge, preserving the declaring instantiation's name in `TypeError` messages. Ordinary `->` calls on overridable base-class receivers retain their hierarchy-based guards and vtable dispatch. The same rule applies to nullable receivers after their null guard and uses the target's ordinary physical or source ABI entry. A method-defined closure captures `$this` as boxed `Mixed`, so rebinding selects the actual runtime class before this rule applies.
 - Interfaces and abstract classes are enforced at compile time. Runtime method calls still use the existing class vtables, while dedicated interface metadata tables are emitted alongside the class metadata for roadmap-aligned interface bookkeeping and future dispatch work.
 - Static methods: `bl _static_ClassName_methodName`. No object pointer is passed.
 - `self::method()` / `parent::method()`: emitted as direct lexical calls, but static targets still forward the current "called class" id for later `static::` lookups.
@@ -709,7 +752,7 @@ Traits are flattened into the owning class before inheritance metadata is built.
 
 ### String buffer
 
-64KB scratch buffer in BSS (`_concat_buf`). Used by `itoa`, `concat`, `strtolower`, and all string-producing runtime routines. Reset to offset 0 at the start of each statement. Strings that need to persist beyond the current statement are copied to the heap via `__rt_str_persist`.
+Heap-sized scratch buffer in BSS (`_concat_buf`, sized by `--heap-size`). Used by `itoa`, `concat`, `strtolower`, and all string-producing runtime routines. Reset to offset 0 at the start of each statement. Strings that need to persist beyond the current statement are copied to the heap via `__rt_str_persist`.
 
 ### I/O buffers
 

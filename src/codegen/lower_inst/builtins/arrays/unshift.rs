@@ -45,6 +45,22 @@ pub(super) fn lower_array_unshift(ctx: &mut FunctionContext<'_>, inst: &Instruct
         require_array_unshift_result_type(&inst.result_php_type.codegen_repr())?;
         return super::boxed_unshift::lower_boxed_array_unshift(ctx, inst, array);
     }
+    // A concrete associative source: `array_unshift` renumbers the surviving integer keys from
+    // zero, so it merges into a fresh hash rather than shifting indexed slots. The merge boxes
+    // every value, so only a hash that already stores Mixed values keeps its representation.
+    if let PhpType::AssocArray { value, .. } = ctx.value_php_type(array)?.codegen_repr() {
+        require_array_unshift_result_type(&inst.result_php_type.codegen_repr())?;
+        if inst.operands.len() == 1 {
+            return super::boxed_unshift::lower_assoc_array_unshift_without_values(ctx, inst, array);
+        }
+        if value.codegen_repr() != PhpType::Mixed {
+            return Err(CodegenIrError::unsupported(format!(
+                "array_unshift for hash values of PHP type {:?}",
+                value.codegen_repr()
+            )));
+        }
+        return super::boxed_unshift::lower_assoc_array_unshift(ctx, inst, array);
+    }
     let elem_ty = array_unshift_element_type(ctx.value_php_type(array)?)?;
     for index in 1..inst.operands.len() {
         let value = expect_operand(inst, index)?;

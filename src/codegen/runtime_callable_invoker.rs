@@ -239,7 +239,7 @@ fn emit_runtime_callable_invoker_impl(
     catch_native_throws: bool,
 ) {
     let call_reg = abi::nested_call_reg(emitter);
-    let escape_label = format!("{}_eval_escape", invoker.label);
+    let escape_label = format!("{}_eval_escape", local_label_prefix(invoker.label, emitter.target));
     let argument_owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, invoker.sig.params.len());
     let frame_size = argument_owners.frame_size();
     let mut ctx = InvokerEmitContext::new(
@@ -345,7 +345,8 @@ fn emit_boxed_invoker_return(emitter: &mut Emitter, ret_ty: &PhpType) {
         | PhpType::Iterable
         | PhpType::Object(_)
         | PhpType::Callable => emit_box_current_owned_value_as_mixed(emitter, &repr),
-        _ => emit_box_current_value_as_mixed(emitter, &repr),
+        // The declared type, so a `?ptr<T>` result boxes address 0 as PHP null.
+        _ => emit_box_current_value_as_mixed(emitter, ret_ty),
     }
 }
 
@@ -380,7 +381,7 @@ fn emit_invoker_exception_boundary_push(
                 "sub x0, x29, #{}",
                 handler_base - TRY_HANDLER_JMP_BUF_OFFSET
             ));
-            emitter.bl_c("setjmp"); // snapshot the bridge stack before entering the callable
+            emitter.save_exception_handler();                                   // snapshot the bridge stack before entering the callable
             emitter.instruction(&format!("cbnz x0, {}", escape_label));         // non-zero setjmp result means a callable Throwable escaped
         }
         Arch::X86_64 => {
@@ -403,7 +404,7 @@ fn emit_invoker_exception_boundary_push(
                 "lea rdi, [rbp - {}]",
                 handler_base - TRY_HANDLER_JMP_BUF_OFFSET
             ));
-            emitter.bl_c("setjmp"); // snapshot the bridge stack before entering the callable
+            emitter.save_exception_handler();                                   // snapshot the bridge stack before entering the callable
             emitter.instruction("test eax, eax");                               // did control arrive through longjmp?
             emitter.instruction(&format!("jne {}", escape_label));              // non-zero setjmp result means a callable Throwable escaped
         }
@@ -1674,7 +1675,8 @@ fn store_pushed_value_to_ref_cell(emitter: &mut Emitter, cell_reg: &str, val_ty:
         | PhpType::Callable
         | PhpType::Pointer(_)
         | PhpType::Buffer(_)
-        | PhpType::Packed(_) => {
+        | PhpType::Packed(_)
+        | PhpType::Narrow(_) => {
             abi::emit_pop_reg(emitter, temp_reg);
             abi::emit_store_to_address(emitter, temp_reg, cell_reg, 0);
             abi::emit_store_zero_to_address(emitter, cell_reg, 8);
@@ -2680,7 +2682,10 @@ fn coerce_result_to_type(
     }
     if matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
         match target_ty.codegen_repr() {
-            PhpType::Int | PhpType::Resource(_) | PhpType::Pointer(_) => {
+            // A buffer handle is boxed as an integer like a pointer word, so the integer cast
+            // recovers it for a `buffer<T>` parameter (the `buffer_len(...)` and
+            // `buffer_ptr(...)` wrappers forwarded through a `callable`).
+            PhpType::Int | PhpType::Resource(_) | PhpType::Pointer(_) | PhpType::Buffer(_) => {
                 abi::emit_call_label(emitter, "__rt_mixed_cast_int");
             }
             PhpType::Bool => {
@@ -2735,6 +2740,7 @@ fn can_coerce_result_to_type(source_ty: &PhpType, target_ty: &PhpType) -> bool {
             PhpType::Int
                 | PhpType::Resource(_)
                 | PhpType::Pointer(_)
+                | PhpType::Buffer(_)
                 | PhpType::Bool
                 | PhpType::Float
                 | PhpType::Str
@@ -3644,8 +3650,10 @@ mod tests {
                 let mut emitter = Emitter::new(target);
                 emit_runtime_callable_invoker_impl(&mut emitter, &mut DataSection::new(), &invoker, eval_boundary);
                 let asm = emitter.output();
-                assert!(asm.contains(&target.extern_symbol("setjmp")), "{name}: {eval_boundary}");
-                let escape = asm.split_once("owned_invoker_eval_escape:").unwrap().1;
+                assert!(asm.contains(&target.extern_symbol("_setjmp")), "{name}: {eval_boundary}");
+                let escape_label = format!("{}_eval_escape", local_label_prefix(invoker.label, target));
+                assert!(escape_label.starts_with(target.platform.local_label_prefix()), "{name}");
+                let escape = asm.split_once(&format!("{escape_label}:")).unwrap().1;
                 assert_eq!(escape.matches("__rt_cleanup_invoke").count(), 2, "{name}: {eval_boundary}");
                 assert_eq!(escape.contains("__rt_throw_current"), !eval_boundary, "{name}: {eval_boundary}");
             }

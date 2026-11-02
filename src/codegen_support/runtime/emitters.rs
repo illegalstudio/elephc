@@ -34,6 +34,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
 
     // String runtime functions
     strings::emit_concat_scratch(emitter);
+    strings::emit_strbuf(emitter);
     strings::emit_itoa(emitter);
     strings::emit_string_offset_warning(emitter);
     strings::emit_itoa_into(emitter);
@@ -52,6 +53,9 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_str_looks_like_int_for_coercion(emitter);
     strings::emit_str_to_int(emitter);
     strings::emit_str_to_int_base(emitter);
+    strings::emit_num_run_class(emitter);
+    strings::emit_str_numeric_ex(emitter);
+    strings::emit_str_smart_cmp(emitter);
     strings::emit_str_loose_eq(emitter);
     strings::emit_number_format(emitter);
     strings::emit_strcopy(emitter);
@@ -87,6 +91,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_ucwords(emitter);
     strings::emit_str_ireplace(emitter);
     strings::emit_substr_replace(emitter);
+    strings::emit_str_offset_set(emitter);
     strings::emit_substr_count(emitter);
     strings::emit_str_pad(emitter);
     strings::emit_str_split(emitter);
@@ -172,7 +177,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     super::objects::emit_weak_map(emitter);
     system::emit_getenv(emitter);
     system::emit_getenv_all(emitter);
-    system::emit_shell_exec(emitter);
+    system::emit_shell_exec(emitter, features.web);
     system::emit_date(emitter);
     system::emit_date_default_timezone(emitter);
     system::emit_checkdate(emitter);

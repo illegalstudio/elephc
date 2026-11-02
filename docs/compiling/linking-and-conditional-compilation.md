@@ -129,7 +129,7 @@ By default a bridge is linked **only when the program uses it** — using a hash
 function pulls in `crypto`, opening an `https://` stream pulls in `tls`,
 calling a `bc*` function or using `BcMath\Number` pulls in `bcmath`, calling an `iconv*` function pulls in
 `iconv`, calling `mb_strlen()` pulls in `mbstring`, referencing `PDO` pulls in
-`pdo`, and creating an `XMLWriter` or calling an `xml_*` function pulls in `xml`.
+`pdo`, calling `token_get_all()` or using `PhpToken` pulls in `tokenizer`, and creating an `XMLWriter` or calling an `xml_*` function pulls in `xml`.
 An `eval()` call pulls in Magician
 only when it needs runtime parsing: eligible literal fragments can be parsed at
 compile time and lowered to native EIR without the interpreter bridge. Programs
@@ -142,7 +142,7 @@ the lockfile, and Cargo configuration also participate in this freshness check.
 `--with-CRATE` force-enables a bridge regardless of that auto-detection. It
 force-links the staticlib (whole-archived, so it is retained even if no symbol
 references it) and, for crates whose PHP surface comes from an injected prelude
-(`pdo`, `mysqli`, `tz`, `image`, `xml`), force-injects that prelude so the classes/functions are
+(`pdo`, `mysqli`, `tz`, `image`, `xml`, `tokenizer`, `random`), force-injects that prelude so the classes/functions are
 available. This is useful when a program reaches a feature through indirection
 that detection cannot see. The flag is repeatable:
 
@@ -150,6 +150,7 @@ that detection cannot see. The flag is repeatable:
 elephc app.php --with-pdo
 elephc app.php --with-crypto --with-tls
 elephc app.php --with-bcmath
+elephc app.php --with-random
 elephc app.php --with-mbstring
 elephc app.php --with-iconv
 elephc app.php --with-pcntl
@@ -355,8 +356,9 @@ curl-aware variant above is the one name it does not print.
 
 ## Heap size
 
-The compiled program uses a fixed-size runtime heap, **8 MB** by default. Programs
-that allocate a lot of arrays, strings, or objects may need more.
+The compiled program uses a fixed-size runtime heap, **128 MB** by default, the same
+as PHP's default `memory_limit`. It is reserved as zero-filled memory, so the pages a
+program never touches cost nothing. Programs that keep more live data need more.
 
 ### `--heap-size`
 
@@ -400,8 +402,10 @@ second changes only what the file says about itself.
 A linked **executable** is stripped of its symbol table. Runtime introspection
 uses compiler-emitted descriptors rather than linker symbol names.
 `Throwable::getTrace()` and `getTraceAsString()` currently return an empty array
-and string, and the uncaught-exception report prints no stack trace. The linker
-names are unnecessary at run time and are roughly a quarter of the file:
+and string; the uncaught-exception report walks the live activation chain
+instead of the symbol table, so it prints its stack trace from a stripped binary
+too. The linker names are unnecessary at run time and are roughly a quarter of
+the file:
 
 | program | linked | stripped |
 |---|--:|--:|
@@ -481,3 +485,13 @@ ifdef (DEBUG) {
 
 See [Conditional Compilation](../beyond-php/ifdef.md) for the full `ifdef` syntax
 and semantics.
+
+## Fileinfo
+
+Using `finfo` or a fileinfo function automatically links the optional
+`elephc_fileinfo` bridge. Declare its native dependency with
+`elephc native add libmagic`. The pinned package supplies
+`libelephc_magic_database.a -> libmagic.a`, including its complete compiled magic
+database, without a system-library fallback. `--with-fileinfo` also injects and
+retains the PHP surface for opaque dynamic eval. All supported targets use the
+same extern ABI and native recipe.

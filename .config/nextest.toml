@@ -39,6 +39,16 @@ slow-timeout = { period = "60s", terminate-after = 4 }
 filter = 'binary(codegen_tests) and test(bcmath) and test(eval)'
 slow-timeout = { period = "60s", terminate-after = 4 }
 
+# The GMP eval parity fixture compiles one opaque-eval host (the whole builtin catalog)
+# and links the GMP bridge; it measured 329s on a debug macOS host.
+[[profile.default.overrides]]
+filter = 'binary(codegen_tests) and test(~codegen::gmp_eval)'
+slow-timeout = { period = "60s", terminate-after = 10 }
+
+[[profile.ci.overrides]]
+filter = 'binary(codegen_tests) and test(~codegen::gmp_eval)'
+slow-timeout = { period = "60s", terminate-after = 10 }
+
 # REPL integration probes compile real dynamic-eval hosts, including multiple cache variants.
 [[profile.default.overrides]]
 filter = 'binary(codegen_tests) and test(~codegen::repl)'
@@ -90,6 +100,12 @@ relative-to = "target"
 path = "debug/libelephc_bcmath.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
+path = "debug/libelephc_gmp.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
+path = "debug/libelephc_random.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
 path = "debug/libelephc_mbstring.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
@@ -108,7 +124,16 @@ relative-to = "target"
 path = "debug/libelephc_pcntl.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
+path = "debug/libelephc_fileinfo.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
 path = "debug/libelephc_xml.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
+path = "debug/libelephc_tokenizer.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
+path = "debug/libelephc_zend.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
 path = "debug/libelephc_magician.a"
@@ -178,48 +203,22 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 filter = 'test(native_debug_ranges_stay_in_their_function_sections_on_all_targets)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
-# This single-compile fixture force-loads the full PDO surface and static archive. Its first
-# cold run reached the 60s boundary on Linux x86_64 and macOS, while the isolated retries
-# passed, so keep the global budget unchanged and allow this exact link to finish once.
+# Every `extension_loaded_tests` fixture compiles and links a whole program in an isolated
+# cold cache, most of them force-loading the PDO and/or mysqli surface and its static
+# archive. Four exact-name entries here already gave single fixtures 180s after they reached
+# the 60s cap on macOS and Linux x86_64, and the CI JUnit reports of 2026-10-20..22 showed
+# the next ones crossing it: `with_mysqli_force_injects_without_static_new` (median 56s on
+# macOS, 73 retried timeouts in three days), `with_pdo_reports_pdo_extension_loaded` and
+# `with_mysqli_forces_surface_past_reachability`. The binary gets the family budget the
+# eval and opcache binaries in the same CLI shards use, instead of one entry per crossing:
+# the 60s slow warning stays, and a hang still terminates at 180s.
 [[profile.default.overrides]]
-filter = 'binary(extension_loaded_tests) and test(=dynamic_argument_tracks_linked_bridges)'
-slow-timeout = { period = "180s", terminate-after = 1 }
+filter = 'binary(extension_loaded_tests)'
+slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.ci.overrides]]
-filter = 'binary(extension_loaded_tests) and test(=dynamic_argument_tracks_linked_bridges)'
-slow-timeout = { period = "180s", terminate-after = 1 }
-
-# This dynamic-list fixture compiles both the unlinked control and a second program
-# that force-loads the full PDO surface and static archive. Both attempts reached the
-# 60s cap on a loaded macOS runner, so give this exact two-compile probe the PDO budget.
-[[profile.default.overrides]]
-filter = 'binary(extension_loaded_tests) and test(=get_loaded_extensions_dynamic_flag_tracks_linked_bridges)'
-slow-timeout = { period = "180s", terminate-after = 1 }
-
-[[profile.ci.overrides]]
-filter = 'binary(extension_loaded_tests) and test(=get_loaded_extensions_dynamic_flag_tracks_linked_bridges)'
-slow-timeout = { period = "180s", terminate-after = 1 }
-
-# This auto-detection fixture compiles the full PDO surface in an isolated cold cache.
-# Both macOS CI attempts reached 60s; keep its assertions and use the existing PDO budget.
-[[profile.default.overrides]]
-filter = 'binary(extension_loaded_tests) and test(=pdo_usage_still_reports_pdo_without_mysqli)'
-slow-timeout = { period = "180s", terminate-after = 1 }
-
-[[profile.ci.overrides]]
-filter = 'binary(extension_loaded_tests) and test(=pdo_usage_still_reports_pdo_without_mysqli)'
-slow-timeout = { period = "180s", terminate-after = 1 }
-
-# This single compilation injects both PDO and mysqli preludes and links their shared
-# archive in an isolated cold cache. Both macOS attempts reached the 60s cap, so give
-# this exact combined-surface probe the existing PDO budget without changing its checks.
-[[profile.default.overrides]]
-filter = 'binary(extension_loaded_tests) and test(=pdo_and_mysqli_usage_reports_both)'
-slow-timeout = { period = "180s", terminate-after = 1 }
-
-[[profile.ci.overrides]]
-filter = 'binary(extension_loaded_tests) and test(=pdo_and_mysqli_usage_reports_both)'
-slow-timeout = { period = "180s", terminate-after = 1 }
+filter = 'binary(extension_loaded_tests)'
+slow-timeout = { period = "60s", terminate-after = 3 }
 
 # The `codegen::eval` fixtures compile, link (against the Magician staticlib), and
 # run several programs per test — five in the largest — at ~7-8s per program on
@@ -355,6 +354,25 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 filter = 'test(web_resets_core_handlers_between_requests)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
+# These environment probes compile eval-capable web hosts. The computed-name
+# regression needs three separate programs, since one literal eval target would
+# otherwise retain the environment for every case. It took 90s locally.
+[[profile.default.overrides]]
+filter = 'binary(web_tests) and test(=environment::web_environment_computed_eval_retains_population)'
+slow-timeout = { period = "60s", terminate-after = 6 }
+
+[[profile.ci.overrides]]
+filter = 'binary(web_tests) and test(=environment::web_environment_computed_eval_retains_population)'
+slow-timeout = { period = "60s", terminate-after = 6 }
+
+[[profile.default.overrides]]
+filter = 'binary(web_tests) and test(=environment::web_environment_opaque_eval_retains_population)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'binary(web_tests) and test(=environment::web_environment_opaque_eval_retains_population)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
 # This ownership fixture likewise compiles the web prelude with opaque eval and
 # then drives several requests. Both retries on macOS CI reached nextest's exact
 # 60s termination boundary without a test panic or server diagnostic.
@@ -387,6 +405,17 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 [[profile.ci.overrides]]
 filter = 'binary(web_session_tests) and test(=the_revalidate_field_is_the_entrys_own_deadline)'
 slow-timeout = { period = "180s", terminate-after = 1 }
+
+# One web-runtime compile plus a served request: median 44s and up to 58s on macOS in the
+# CI JUnit reports of 2026-10-20..22, with five retried 60s timeouts in three days. Keep the
+# 60s slow warning and terminate a hang at 180s, like the other web session entries above.
+[[profile.default.overrides]]
+filter = 'binary(web_session_tests) and test(=ini_get_session_name_tracks_session_name)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'binary(web_session_tests) and test(=ini_get_session_name_tracks_session_name)'
+slow-timeout = { period = "60s", terminate-after = 3 }
 
 # PDO_ODBC surface/live fixtures compile the full versioned PDO prelude and may
 # also rebuild the optional system-client archive on a cold local cache.

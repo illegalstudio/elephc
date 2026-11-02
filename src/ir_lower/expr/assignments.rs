@@ -26,11 +26,25 @@ pub(super) fn lower_assignment_expr(
         return result;
     }
     let key_already_diagnosed = compound_array_key_diagnosed_in_prelude(target, value, prelude, expr.span);
+    // A `++`/`--` of a scalar buffer element takes over after the prelude has stabilized its
+    // receiver and key, at the element read; any other container continues below as written.
+    let buffer_update = crate::ir_lower::stmt::BufferExpressionUpdate::recognize(
+        target, value, result_target, prelude, conditional_value_temp, expr.span,
+    );
     let mut compound_receiver = None;
-    for stmt in prelude {
+    for (position, stmt) in prelude.iter().enumerate() {
         if let Some(receiver) = guard_static_compound_property_read(ctx, target, value, stmt, expr.span) {
             compound_receiver = Some(receiver);
             continue;
+        }
+        if let Some(update) = buffer_update.as_ref() {
+            if compound_receiver.is_none() && update.read_position() == position {
+                if let Some(result) = crate::ir_lower::stmt::lower_buffer_expression_update(
+                    ctx, update, expr.span,
+                ) {
+                    return result;
+                }
+            }
         }
         crate::ir_lower::stmt::lower_stmt(ctx, stmt);
     }
@@ -61,9 +75,17 @@ pub(super) fn lower_assignment_expr(
         }
     }
     if assigned_name.is_none() {
+        // PHP's `($s[$i] = $v)` on a string evaluates to the byte it stored (or `null`), not to
+        // `$v`, so the string write produces its own result. The checker refuses the compound
+        // and increment forms, so only a plain `=` reaches here.
+        if let Some(result) = lower_string_offset_assignment_expr(
+            ctx, target, value, result_target, prelude, expr.span, key_already_diagnosed,
+        ) {
+            return result;
+        }
         if let Some(result_target) = result_target {
             let rhs_owner = if compound_receiver.is_none() {
-                super::assignment_rhs_capture::publish_static_assignment_rhs(
+                super::assignment_rhs_capture::publish_assignment_rhs(
                     ctx, target, value, result_target, prelude, expr.span,
                 )
             } else { None };
@@ -74,7 +96,7 @@ pub(super) fn lower_assignment_expr(
             );
             let result = lower_expr(ctx, result_target);
             finish_static_compound_receiver(ctx, compound_receiver, expr.span);
-            return super::assignment_rhs_capture::finish_static_assignment_rhs(
+            return super::assignment_rhs_capture::finish_assignment_rhs(
                 ctx, rhs_owner, result, expr.span,
             );
         }
@@ -98,6 +120,11 @@ pub(super) fn lower_assignment_expr(
         .unwrap_or_else(|| lower_expr(ctx, value));
     let mut result = lowered;
     if let ExprKind::Variable(name) = &target.kind {
+        let lowered = if ctx.integer_local_declarations.contains(name) {
+            coerce_integer_arithmetic(ctx, lowered, &PhpType::Int, expr.span)
+        } else {
+            lowered
+        };
         let lowered = crate::ir_lower::ownership::copy_assignment_value(ctx, lowered, Some(expr.span));
         // For static locals and ref-bound locals, keep the declared type to
         // avoid widening Int→Mixed. The codegen narrows Mixed→Int when the slot
@@ -115,6 +142,10 @@ pub(super) fn lower_assignment_expr(
         } else {
             value_php_type
         };
+        // `($p = null)` into a pointer-word local stores address 0, as the statement form does.
+        let (lowered, php_type) =
+            crate::ir_lower::stmt::retype_value_for_pointer_local(ctx, name, lowered, expr.span)
+                .unwrap_or((lowered, php_type));
         ctx.store_local(name, lowered, php_type, Some(expr.span));
         result = ctx.load_local(name, Some(expr.span));
         let static_callable = callable_array
@@ -202,15 +233,19 @@ pub(super) fn lower_conditional_non_local_null_coalesce_assignment(
     // defects hid each other.
     crate::ir_lower::ownership::release_if_owned(ctx, current, Some(expr.span));
     store_expr_into_temp(ctx, temp_name, result_type.clone(), default, expr.span);
-    let temp_value = Expr::new(ExprKind::Variable(temp_name.to_string()), expr.span);
-    // The write BORROWS the temporary: `array_set` takes its own reference by retaining, and
-    // the slot keeps hers for the merge below to hand to the consumer. One store, one owned
-    // load — the merge's — per execution.
-    // The insert converts a float key again: PHP's probe and its insert are separate accesses,
-    // and each reports the deprecation.
-    ctx.with_borrowed_write_operand(|ctx| {
-        lower_non_local_assignment_write(ctx, target, &temp_value, expr.span);
-    });
+    // A `throw` default of a buffer target (`$o->buf ??= throw ...`) ends the branch inside
+    // `store_expr_into_temp`: nothing is left to write, and nothing may be emitted after it.
+    if !ctx.builder.insertion_block_is_terminated() {
+        let temp_value = Expr::new(ExprKind::Variable(temp_name.to_string()), expr.span);
+        // The write BORROWS the temporary: `array_set` takes its own reference by retaining, and
+        // the slot keeps hers for the merge below to hand to the consumer. One store, one owned
+        // load (the merge's) per execution.
+        // The insert converts a float key again: PHP's probe and its insert are separate
+        // accesses, and each reports the deprecation.
+        ctx.with_borrowed_write_operand(|ctx| {
+            lower_non_local_assignment_write(ctx, target, &temp_value, expr.span);
+        });
+    }
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(keep_block);
@@ -297,7 +332,7 @@ pub(super) fn lower_non_local_assignment_write(
 }
 
 /// Writes an assignment target whose key may already have been diagnosed by its read half.
-fn lower_non_local_assignment_write_with_diagnosed_key(
+pub(super) fn lower_non_local_assignment_write_with_diagnosed_key(
     ctx: &mut LoweringContext<'_, '_>,
     target: &Expr,
     value: &Expr,
@@ -475,6 +510,7 @@ pub(super) fn lower_dynamic_property_assign(
     let (mut receiver, property, value) = if is_static_property_write_chain(object) {
         let property = lower_expr(ctx, property);
         let property = property_access::coerce_runtime_property_name(ctx, property, span);
+        let property = crate::ir_lower::ownership::persist_string_byte_view(ctx, property, Some(span));
         let property_pins = pin_in_flight_owners(ctx, &[property.value], span);
         // The traversal must not pin this same lease again at a nullable hop. Its
         // borrowed guard view remains protected by the earlier name record below it.
@@ -488,10 +524,11 @@ pub(super) fn lower_dynamic_property_assign(
         receiver.finish_operand_window(ctx, property_pins, span);
         (receiver, property, value)
     } else {
-        let object = lower_expr(ctx, object);
+        let object = lower_member_receiver_at_span(ctx, object, span);
         let receiver = crate::ir_lower::stmt::property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
         let property = lower_expr(ctx, property);
         let property = property_access::coerce_runtime_property_name(ctx, property, span);
+        let property = crate::ir_lower::ownership::persist_string_byte_view(ctx, property, Some(span));
         let property_pins = pin_in_flight_owners(ctx, &[property.value], span);
         let value = lower_expr(ctx, value);
         unpin_in_flight_owners(ctx, property_pins, span);

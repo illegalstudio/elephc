@@ -28,6 +28,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_cstr(emitter);
     io::emit_disk_space(emitter);
     io::emit_fopen(emitter);
+    io::emit_fileinfo_streams(emitter);
     io::emit_fgets(emitter);
     io::emit_feof(emitter);
     io::emit_stream_isatty(emitter);
@@ -56,6 +57,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_fsockopen(emitter);
     io::emit_stream_wrapper_register(emitter);
     io::emit_stream_wrapper_unregister(emitter);
+    io::emit_stream_registry(emitter);
     io::emit_stream_socket_server(emitter);
     io::emit_stream_socket_client(emitter);
     io::emit_unix_socket_server(emitter);
@@ -66,7 +68,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_stream_socket_recvfrom(emitter);
     io::emit_stream_socket_get_name(emitter);
     io::emit_stream_socket_pair(emitter);
-    io::emit_popen(emitter);
+    io::emit_popen(emitter, features.web);
     io::emit_pclose(emitter);
     io::emit_opendir(emitter);
     io::emit_readdir(emitter);
@@ -168,6 +170,10 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_pr_append(emitter);
     io::emit_pr_write(emitter);
     io::emit_pr_finish(emitter);
+    io::emit_pr_flush_deferred(emitter);
+    io::emit_pr_base(emitter);
+    io::emit_pr_reserve(emitter);
+    io::emit_pr_release(emitter);
     // Output-buffering (ob_*) stack helpers. Always emitted: __rt_stdout_write,
     // __rt_pr_write, and the process-exit paths reference them unconditionally.
     io::emit_var_dump_write(emitter);
@@ -252,6 +258,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     fibers::emit_fiber_free_stack(emitter);
     fibers::emit_fiber_switch(emitter);
     fibers::emit_fiber_entry(emitter);
+    fibers::force_close::emit(emitter);
     fibers::emit_fiber_construct(emitter);
     fibers::emit_fiber_throw_state_error(emitter);
     fibers::emit_fiber_start(emitter);

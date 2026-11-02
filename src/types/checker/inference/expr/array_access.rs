@@ -134,7 +134,7 @@ impl Checker {
                                 PhpType::Packed(name) => {
                                     result_members.push(PhpType::Pointer(Some(name.clone())))
                                 }
-                                _ => result_members.push(*elem_ty.clone()),
+                                other => result_members.push(other.storage_value_type()),
                             }
                         }
                         _ => {}
@@ -162,9 +162,11 @@ impl Checker {
                         "Buffer index must be integer",
                     ));
                 }
+                // A width-declared element (`buffer<i32>`, `buffer<f32>`) reads as its value
+                // type; the storage width only matters to the lowering.
                 match elem_ty.as_ref() {
                     PhpType::Packed(name) => Ok(PhpType::Pointer(Some(name.clone()))),
-                    _ => Ok(*elem_ty.clone()),
+                    other => Ok(other.storage_value_type()),
                 }
             }
             // Mixed receivers fall through to runtime dispatch. The

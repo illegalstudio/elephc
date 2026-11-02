@@ -93,7 +93,7 @@ fn bind_implicit_integer(
 }
 
 /// Builds the runtime predicate for PHP weak scalar and class parameter acceptance.
-fn accepts_type(ty: &PhpType, value: &Expr, span: Span) -> Option<Expr> {
+pub(super) fn accepts_type(ty: &PhpType, value: &Expr, span: Span) -> Option<Expr> {
     let predicate = |name| predicate(name, value, span);
     let either = |a, b| Expr::new(ExprKind::BinaryOp {
         left: Box::new(a), op: BinOp::Or, right: Box::new(b),
@@ -140,11 +140,21 @@ fn predicate(name: &str, value: &Expr, span: Span) -> Expr {
 
 /// Produces PHP's diagnostic type names instead of gettype's historical aliases.
 fn runtime_type(value: &Expr, expected: &PhpType, span: Span) -> Expr {
+    runtime_type_with_bool_literals(value, contains_false(expected), span)
+}
+
+/// Produces PHP's `get_debug_type()` spelling for a runtime diagnostic.
+pub(super) fn runtime_debug_type(value: &Expr, span: Span) -> Expr {
+    runtime_type_with_bool_literals(value, true, span)
+}
+
+/// Builds a normalized runtime type expression with optional bool-value spelling.
+fn runtime_type_with_bool_literals(value: &Expr, bool_literals: bool, span: Span) -> Expr {
     let mut result = predicate("gettype", value, span);
     for (test, text) in [
         ("is_null", "null"), ("is_bool", "bool"), ("is_float", "float"), ("is_int", "int"),
     ] {
-        let text = if test == "is_bool" && contains_false(expected) {
+        let text = if test == "is_bool" && bool_literals {
             Expr::new(ExprKind::Ternary {
                 condition: Box::new(value.clone()),
                 then_expr: Box::new(Expr::new(ExprKind::StringLiteral("true".into()), span)),

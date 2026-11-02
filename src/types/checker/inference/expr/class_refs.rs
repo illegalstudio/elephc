@@ -28,15 +28,17 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<(), CompileError> {
-        let mut class_names: Vec<String> = self
-            .classes
-            .keys()
-            .filter(|name| self.class_is_same_or_descends_from(name, base_class))
-            .cloned()
-            .collect();
+        // Every registered class at or below `base_class`, from the children index rather than a
+        // parent-chain walk from every class in the table (`new static` sits in hot factories).
+        let mut class_names: Vec<String> = self.class_and_descendants(base_class);
         class_names.sort();
 
         for class_name in class_names {
+            // Abstract receivers fail at runtime. Their concrete descendants still need
+            // constructor validation, but an abstract candidate is never instantiated here.
+            if self.classes.get(&class_name).is_some_and(|class| class.is_abstract) {
+                continue;
+            }
             let constructor = self
                 .classes
                 .get(&class_name)
@@ -73,22 +75,6 @@ impl Checker {
         }
 
         Ok(())
-    }
-
-    /// Checks whether `class_name` is either `base_class` itself or a descendant of it
-    /// by walking the parent chain.
-    fn class_is_same_or_descends_from(&self, class_name: &str, base_class: &str) -> bool {
-        let mut current = Some(class_name);
-        while let Some(name) = current {
-            if name == base_class {
-                return true;
-            }
-            current = self
-                .classes
-                .get(name)
-                .and_then(|info| info.parent.as_deref());
-        }
-        false
     }
 
     /// Infers the type of a class constant or enum case accessed via scope resolution

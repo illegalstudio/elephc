@@ -107,6 +107,20 @@ $middle = array_slice($names, 1, 2);
 $middle[0] = "GRACE";
 echo "Sliced names: " . implode(", ", $middle) . " (source still " . implode(", ", $names) . ")\n";
 
+// A PHP array can keep string keys and still append at its next free integer key.
+$associative = ["label" => "values", 5 => "first"];
+$size = array_push($associative, "next");
+echo "Associative push: ";
+foreach ($associative as $key => $value) {
+    echo $key . "=" . $value . " ";
+}
+echo "(now " . $size . " elements)\n";
+
+// With no values, array_push() reports the current count and leaves the hash untouched.
+$before = count($associative);
+$size = array_push($associative);
+echo "Zero-value push: " . $before . " -> " . $size . " elements\n";
+
 // array_splice() removes a window IN PLACE and returns what it removed; the optional
 // fourth argument is spliced in where the removed window was, so the array can grow.
 $queue = [10, 20, 30, 40, 50];
@@ -264,4 +278,15 @@ echo "Spread keys: ";
 foreach ($spread_keys as $key => $value) {
     echo $key . "=" . $value . " ";
 }
+echo "\n";
+
+// sort() and rsort() order float elements as numbers, not as the bit patterns behind
+// them -- which is what puts the negatives in the right place.
+$temps = [3.5, -7.75, 0.0, 1.25, -0.5];
+sort($temps);
+echo "\nColdest first: ";
+foreach ($temps as $t) { echo $t, " "; }
+rsort($temps);
+echo "\nWarmest first: ";
+foreach ($temps as $t) { echo $t, " "; }
 echo "\n";

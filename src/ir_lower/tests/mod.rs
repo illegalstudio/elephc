@@ -16,17 +16,31 @@ use crate::ir::{print_module, Terminator};
 
 mod aggregate_operand_owners;
 mod argument_evaluation_owners;
+mod borrowed_string_reads;
+mod buffer_element_updates;
+mod ref_local_append;
+mod string_offset_lifetime;
+mod string_offset_writes;
 mod arrays;
+mod unset_collection;
+mod array_edge_guards;
+mod assoc_push;
 mod append_writes;
+mod nullable_array_merges;
 mod array_reference_outputs;
 mod array_implode;
 mod array_membership;
 mod call_coercion_owners;
+mod integer_destinations;
 mod callable_flow_safety;
 mod loop_closures;
+mod method_loop_counters;
+mod reused_loop_counters;
+mod counter_fast_paths;
 mod callable_property_owners;
 mod class_introspection_owners;
 mod closure_bind_owners;
+mod closure_scope_variants;
 mod corpus;
 mod debug_info;
 mod descriptor_ownership;
@@ -35,6 +49,7 @@ mod destructor_catch_preservation;
 mod dom_html_review;
 mod dynamic_spreads;
 mod effects;
+mod method_receiver_roots;
 mod enum_argument_boundaries;
 mod enum_review;
 mod enum_result_owners;
@@ -44,11 +59,19 @@ mod eval_default_helpers;
 mod default_review_boundaries;
 mod exhaustive;
 mod ownership;
+mod property_element_unset;
+mod transient_string_claims;
 mod strip_tags_review;
 mod weak_map_places;
 mod backtrace_labels;
 mod preg_match_all_review;
 mod object_mixed_return_owners;
+mod numeric_string_comparisons;
+mod packed_record_addresses;
+mod fixed_layout_field_narrowing;
+mod scalar_load_owners;
+mod buffer_lengths;
+mod branch_conditions;
 mod boxed_array_write_owners;
 mod boxed_array_reduce;
 mod boxed_array_aggregates;
@@ -56,6 +79,8 @@ mod boxed_array_multisort;
 mod builtin_datetime_methods;
 mod eval_demand;
 mod instanceof_operand_owners;
+mod guarded_interface_receivers;
+mod guarded_interface_mutations;
 mod iter_start_origin;
 mod iterator_cleanup;
 mod iterator_aggregate_owners;
@@ -67,6 +92,7 @@ mod static_nested_updates;
 mod reference_cells;
 mod reference_detach;
 mod reference_property_payload;
+mod reflection_mirror_ownership;
 mod reference_return_boundaries;
 mod callable_operand_owners;
 mod capture_view_owners;
@@ -78,6 +104,7 @@ mod static_receiver_writes;
 mod synthetic_arrays;
 mod throwable_constructors;
 mod mixed_throw_errors;
+mod hosted_exception_discard;
 mod xml_parser_arguments;
 
 /// Runs frontend, type checking, optimization, and EIR lowering for a source string.
@@ -168,9 +195,12 @@ fn try_lower_source_at_for_target(
     let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::core_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::random_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::testing_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::fileinfo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::tokenizer_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::version_prelude::inject_if_used(
         ast,
@@ -331,6 +361,28 @@ fn native_reflection_program_lowers_reachable_builtin_methods() {
         r#"<?php
 class Plain {}
 $reflection = new ReflectionClass('Plain');
+echo $reflection->getName();
+"#,
+    );
+    let method_names = module
+        .class_methods
+        .iter()
+        .map(|function| function.name.as_str())
+        .collect::<HashSet<_>>();
+    assert!(method_names.contains("ReflectionClass::__construct"));
+    assert!(method_names.contains("ReflectionClass::getName"));
+}
+
+/// Verifies a user Reflection subclass retains the builtin constructor and inherited methods.
+#[test]
+fn native_reflection_subclass_lowers_reachable_builtin_methods() {
+    let module = lower_source(
+        r#"<?php
+class ReflectedTarget {}
+class UserReflection extends ReflectionClass {
+    public function __construct(string $name) { parent::__construct($name); }
+}
+$reflection = new UserReflection(ReflectedTarget::class);
 echo $reflection->getName();
 "#,
     );

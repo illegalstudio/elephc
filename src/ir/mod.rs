@@ -18,6 +18,7 @@ pub(crate) mod function_variants;
 mod instr;
 mod module;
 mod pcntl_runtime;
+pub(crate) mod parameter_roots;
 mod print;
 mod runtime_call;
 mod types;
@@ -34,7 +35,6 @@ pub use runtime_fn::{
 };
 pub use builder::Builder;
 pub(crate) use builder::local_load_types_share_storage;
-#[cfg(test)]
 pub(crate) use builder::local_load_coercion_owns_result;
 pub use effects::Effects;
 pub use function::{
@@ -47,7 +47,7 @@ pub use instr::{
     PropertyFetchMode, RuntimeId,
 };
 pub use module::{
-    ClassTable, CloneOverrideApplicator, DataId, DataPool, EnumTable, ExternDecl, ExternParamDecl,
+    ClassTable, CloneOverrideApplicator, ClosureScopeVariant, DataId, DataPool, EnumTable, ExternDecl, ExternParamDecl,
     InterfaceTable, Module, PackedLayoutTable, TraitMethodInfo,
 };
 pub use pcntl_runtime::{PcntlRuntime, PcntlTargetSupport};

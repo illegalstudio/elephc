@@ -21,10 +21,19 @@ pub(super) fn lower_echo_value(ctx: &mut FunctionContext<'_>, inst: &Instruction
     }
     let ty = ctx.load_value_to_result(value)?;
     let raw_ty = ctx.raw_value_php_type(value)?;
-    let output_ty = if matches!(raw_ty, PhpType::Resource(_)) {
-        raw_ty
-    } else {
-        ty
+    // A null `?ptr<T>` (pointer word 0) echoes nothing, like PHP `null`.
+    if crate::types::is_nullable_pointer_type(&raw_ty) {
+        let skip = ctx.next_label("echo_skip_null_pointer");
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &skip);
+        emit_loaded_value_to_stdout(ctx, &ty)?;
+        ctx.emitter.label(&skip);
+        return Ok(());
+    }
+    let output_ty = match raw_ty {
+        PhpType::Resource(_) => raw_ty,
+        // A packed record address prints like the `ptr<T>` the checker types it as.
+        PhpType::Packed(class_name) => PhpType::Pointer(Some(class_name)),
+        _ => ty,
     };
     emit_loaded_value_to_stdout(ctx, &output_ty)
 }

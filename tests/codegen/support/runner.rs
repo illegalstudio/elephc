@@ -77,6 +77,11 @@ struct TestBridgeStaticlib {
 /// Lists bridge staticlibs that codegen fixtures may link through `extra_link_libs`.
 const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
     TestBridgeStaticlib {
+        lib_name: "elephc_tokenizer",
+        package: "elephc-tokenizer",
+        php_extensions: &["tokenizer"],
+    },
+    TestBridgeStaticlib {
         lib_name: "elephc_tls",
         package: "elephc-tls",
         php_extensions: &["openssl"],
@@ -97,6 +102,16 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         lib_name: "elephc_bcmath",
         package: "elephc-bcmath",
         php_extensions: &["bcmath"],
+    },
+    TestBridgeStaticlib {
+        lib_name: "elephc_gmp",
+        package: "elephc-gmp",
+        php_extensions: &["gmp"],
+    },
+    TestBridgeStaticlib {
+        lib_name: "elephc_random",
+        package: "elephc-random",
+        php_extensions: &["random"],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_mbstring",
@@ -137,6 +152,11 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         lib_name: "elephc_curl",
         package: "elephc-curl",
         php_extensions: &["curl"],
+    },
+    TestBridgeStaticlib {
+        lib_name: "elephc_fileinfo",
+        package: "elephc-fileinfo",
+        php_extensions: &["fileinfo"],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_xml",
@@ -192,7 +212,7 @@ impl std::ops::Deref for TestLinkRequirements {
 
 /// Assemble `asm` to `obj_path` by piping the source through `as`'s stdin so
 /// no intermediate `.s` file is created.
-fn assemble_from_stdin(asm: &str, obj_path: &Path) {
+pub(crate) fn assemble_from_stdin(asm: &str, obj_path: &Path) {
     let mut cmd = Command::new(assembler_cmd());
     if target().platform == Platform::MacOS {
         cmd.args(["-arch", target().darwin_arch_name()]);
@@ -386,6 +406,7 @@ mod bridge_extension_tests {
     #[test]
     fn bridge_extension_metadata_matches_distinct_and_shared_surfaces() {
         let linked = vec![
+            "elephc_tokenizer".to_string(),
             "elephc_pdo".to_string(),
             "elephc_iconv".to_string(),
             "elephc_pcntl".to_string(),
@@ -393,7 +414,7 @@ mod bridge_extension_tests {
         ];
         assert_eq!(
             test_linked_extensions(&linked),
-            ["iconv", "pcntl", "posix", "curl"]
+            ["tokenizer", "iconv", "pcntl", "posix", "curl"]
         );
     }
 }
@@ -1309,8 +1330,21 @@ fn test_link_plan(
     // reads the same durable cache structurally (see `super::xml_native`). A fixture
     // whose artifact is missing skips (or, under `ELEPHC_TEST_REQUIRE_XML_NATIVE`,
     // panics) before it ever reaches this point.
+    if named.contains("elephc_fileinfo") {
+        if let Some(archives) = super::fileinfo_native::archives() {
+            for archive in archives { plan.push(LinkItem::managed_archive(archive, "libmagic")); }
+        }
+    }
     if named.contains("elephc_xml") && !xml_pushed {
         push_xml_native_if_available(&mut plan);
+    }
+    // The gmp bridge declares libgmp's `__gmpz_*` symbols without linking them; the
+    // managed `gmp` package supplies the single `libgmp.a` archive at final link time.
+    // The harness reads the same durable cache structurally (see `super::gmp_native`).
+    if named.contains("elephc_gmp") {
+        if let Some(package) = gmp_native_package() {
+            push_gmp_native_archives(&mut plan, package);
+        }
     }
     for path in extra_link_paths {
         plan.push(LinkItem::SearchPath(path.as_str().into()));
@@ -1364,6 +1398,18 @@ fn push_xml_native_if_available(plan: &mut elephc::link_plan::LinkPlan) -> bool 
             true
         }
         None => false,
+    }
+}
+
+/// Appends the managed native libgmp artifact as an exact archive path.
+fn push_gmp_native_archives(
+    plan: &mut elephc::link_plan::LinkPlan,
+    package: &GmpNativePackage,
+) {
+    use elephc::link_plan::LinkItem;
+    plan.push(LinkItem::SearchPath(package.library_dir.clone()));
+    for archive in &package.archives {
+        plan.push(LinkItem::managed_archive(archive, GMP_NATIVE_PACKAGE));
     }
 }
 
@@ -1471,6 +1517,31 @@ fn append_test_frameworks(command: &mut Command, plan: &elephc::link_plan::LinkP
 /// Used for post-link execution of already-assembled test binaries.
 pub(crate) fn run_binary(bin_path: &Path, dir: &Path) -> Output {
     run_binary_with_env(bin_path, dir, &[])
+}
+
+/// Runs a compiled binary with stderr redirected onto stdout, preserving write order.
+///
+/// Used only by PHPT fixtures, whose expected output is PHP's single displayed stream.
+pub(crate) fn run_binary_merged(bin_path: &Path, dir: &Path) -> Output {
+    let mut cmd = if target().platform == Platform::Linux
+        && target().arch == Arch::AArch64
+        && cfg!(target_arch = "x86_64")
+    {
+        let mut command = Command::new("/bin/sh");
+        let mut script = String::from("exec qemu-aarch64-static");
+        if let Some(sysroot) = qemu_sysroot() {
+            script.push_str(&format!(" -L {}", sysroot));
+        }
+        script.push_str(" \"$0\" \"$@\" 2>&1");
+        command.arg("-c").arg(script).arg(bin_path);
+        command
+    } else {
+        let mut command = Command::new("/bin/sh");
+        command.arg("-c").arg("exec \"$0\" \"$@\" 2>&1").arg(bin_path);
+        command
+    };
+    cmd.current_dir(dir);
+    run_command_with_timeout(cmd)
 }
 
 /// Runs a compiled binary with isolated environment overrides, using qemu for
@@ -1731,6 +1802,8 @@ pub(crate) struct ProgramOutput {
     pub(crate) stderr: String,
     // true if the process exited with a successful (zero) exit code.
     pub(crate) success: bool,
+    // Preserves the exit code or terminating signal for failure diagnostics.
+    pub(crate) status: std::process::ExitStatus,
 }
 
 /// Assembles user assembly, links it with a runtime object, runs the binary,
@@ -1763,6 +1836,43 @@ pub(crate) fn assemble_and_run_capture(
         stdout: String::from_utf8(output.stdout).unwrap(),
         stderr: String::from_utf8(output.stderr).unwrap(),
         success: output.status.success(),
+        status: output.status,
+    }
+}
+
+/// Assembles and runs one fixture with stderr merged into stdout at the OS level.
+///
+/// PHP's CLI writes `display_errors` diagnostics to stdout, and PHPT `--EXPECT--`
+/// records them interleaved with program output. elephc writes runtime diagnostics to
+/// stderr, so a PHPT runner must merge the two file descriptors before reading them;
+/// concatenating captured streams afterwards would lose the source order.
+pub(crate) fn assemble_and_run_capture_merged(
+    user_asm: &str,
+    runtime_obj: &Path,
+    dir: &Path,
+    requirements: &TestLinkRequirements,
+    extra_link_paths: &[String],
+    extra_frameworks: &[String],
+) -> ProgramOutput {
+    let obj_path = dir.join("test.o");
+    let bin_path = dir.join("test");
+
+    assemble_from_stdin(user_asm, &obj_path);
+    link_binary(
+        &obj_path,
+        runtime_obj,
+        &bin_path,
+        requirements,
+        extra_link_paths,
+        extra_frameworks,
+    );
+
+    let output = run_binary_merged(&bin_path, dir);
+    ProgramOutput {
+        stdout: String::from_utf8(output.stdout).unwrap(),
+        stderr: String::new(),
+        success: output.status.success(),
+        status: output.status,
     }
 }
 
@@ -1802,6 +1912,7 @@ pub(crate) fn assemble_and_run_capture_per_argv(
                 stdout: String::from_utf8(output.stdout).unwrap(),
                 stderr: String::from_utf8(output.stderr).unwrap(),
                 success: output.status.success(),
+                status: output.status,
             }
         })
         .collect()

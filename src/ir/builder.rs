@@ -2,7 +2,7 @@
 //! Provides the checked construction API for hand-built and lowered EIR.
 //!
 //! Called from:
-//! - Phase 02 tests and future Phase 03 AST-to-EIR lowering.
+//! - AST-to-EIR lowering and IR construction tests.
 //!
 //! Key details:
 //! - The builder assigns value/instruction IDs, prevents emission after a
@@ -145,6 +145,23 @@ impl<'f> Builder<'f> {
         self.current = Some(block);
     }
 
+    /// Moves new ownership preparation and records before an already lowered operand window.
+    /// Their operands precede the window or belong to the moved tail; refresh SSA positions.
+    pub fn move_trailing_instructions(
+        &mut self, source: BlockId, start: usize, target: BlockId, position: usize,
+    ) {
+        let moved = self.func.blocks[source.as_raw() as usize].instructions.split_off(start);
+        self.func.blocks[target.as_raw() as usize].instructions.splice(position..position, moved);
+        // Removing a tail leaves prior source positions intact; refresh the target suffix.
+        for (index, id) in self.func.blocks[target.as_raw() as usize].instructions.iter().copied().enumerate().skip(position) {
+            if let Some(value) = self.func.instructions[id.as_raw() as usize].result {
+                self.func.values[value.as_raw() as usize].def = ValueDef::Instruction {
+                    block: target, index: index as u32, inst: id,
+                };
+            }
+        }
+    }
+
     /// Returns one block parameter value by index.
     pub fn block_param(&self, block: BlockId, index: usize) -> ValueId {
         self.func.blocks[block.as_raw() as usize].params[index]
@@ -164,7 +181,7 @@ impl<'f> Builder<'f> {
     /// Widens an existing local slot so its frame storage can hold the incoming PHP type.
     pub fn widen_local_storage_type(&mut self, slot: LocalSlotId, php_type: PhpType) {
         let local = &mut self.func.locals[slot.as_raw() as usize];
-        let storage_type = widened_local_storage_type(&local.php_type, &php_type);
+        let storage_type = widened_slot_storage_type(local.kind, &local.php_type, &php_type);
         local.ir_type = local_storage_ir_type(&storage_type);
         local.php_type = storage_type;
     }
@@ -175,7 +192,8 @@ impl<'f> Builder<'f> {
     /// emits that release before the widening lands, so the release is still analysed against
     /// what the slot currently holds.
     pub fn widened_local_php_type(&self, slot: LocalSlotId, php_type: &PhpType) -> PhpType {
-        widened_local_storage_type(&self.func.locals[slot.as_raw() as usize].php_type, php_type)
+        let local = &self.func.locals[slot.as_raw() as usize];
+        widened_slot_storage_type(local.kind, &local.php_type, php_type)
     }
 
     /// Returns the current frame storage PHP type for a local slot.
@@ -270,7 +288,7 @@ impl<'f> Builder<'f> {
             let Some(source_inst) = self.func.instructions.get(source_inst.as_raw() as usize) else {
                 continue;
             };
-            if !matches!(source_inst.op, Op::LoadLocal | Op::LoadStaticLocal) {
+            if !matches!(source_inst.op, Op::LoadLocal | Op::LoadStaticLocal | Op::LoadRefCell) {
                 continue;
             }
             let Some(Immediate::LocalSlot(slot)) = source_inst.immediate else {
@@ -334,7 +352,7 @@ impl<'f> Builder<'f> {
             let Some(source_inst) = self.func.instructions.get(source_inst.as_raw() as usize) else {
                 continue;
             };
-            if !matches!(source_inst.op, Op::LoadLocal | Op::LoadStaticLocal) {
+            if !matches!(source_inst.op, Op::LoadLocal | Op::LoadStaticLocal | Op::LoadRefCell) {
                 continue;
             }
             let Some(Immediate::LocalSlot(slot)) = source_inst.immediate else {
@@ -411,6 +429,17 @@ impl<'f> Builder<'f> {
         self.func.values[value_index].ownership = ownership;
         if let ValueDef::Instruction { inst, .. } = def {
             self.func.instructions[inst.as_raw() as usize].result_ownership = ownership;
+        }
+    }
+
+    /// Refines a fresh object receiver's class metadata without altering storage or ownership.
+    pub(crate) fn set_object_value_class(&mut self, value: ValueId, class: String) {
+        let entry = &mut self.func.values[value.as_raw() as usize];
+        assert!(matches!(entry.php_type, PhpType::Object(_)));
+        let php_type = PhpType::Object(class);
+        entry.php_type = php_type.clone();
+        if let ValueDef::Instruction { inst, .. } = entry.def {
+            self.func.instructions[inst.as_raw() as usize].result_php_type = php_type;
         }
     }
 
@@ -695,6 +724,53 @@ impl<'f> Builder<'f> {
     }
 }
 
+/// Returns the frame storage a local slot of `kind` needs to hold both observed types.
+///
+/// A PHP local that holds `null`, packed record addresses and pointers at different points keeps
+/// one pointer word (see `pointer_word_storage`); every other combination, and every other slot
+/// role, widens through `widened_local_storage_type`.
+fn widened_slot_storage_type(kind: LocalKind, current: &PhpType, incoming: &PhpType) -> PhpType {
+    if kind == LocalKind::PhpLocal {
+        if let Some(pointer) =
+            pointer_word_storage(&current.codegen_repr(), &incoming.codegen_repr())
+        {
+            return pointer;
+        }
+    }
+    widened_local_storage_type(current, incoming)
+}
+
+/// Returns the pointer word shared by a mix of `null`, packed record addresses and pointers.
+///
+/// A `?ptr<T>` is one raw pointer word where address 0 is PHP null (decision for task 6da89f60),
+/// and a packed record address is the word a `ptr<T>` holds, so a local that receives any mix of
+/// them stays one pointer word instead of widening to boxed `mixed`. Codegen writes a `null`
+/// stored into such a slot as address 0, and reads the slot back as the null sentinel where
+/// lowering knows the local holds `null`. Two pointer targets merge through
+/// `merge_local_pointer_targets`. Returns `None` for two equal types (which keep their own
+/// storage) and unless both sides are one of these shapes with at least one of them not `null`.
+fn pointer_word_storage(current: &PhpType, incoming: &PhpType) -> Option<PhpType> {
+    /// Splits a storage shape into its pointer word (`None` for `null`), or `None` otherwise.
+    fn pointer_word(ty: &PhpType) -> Option<Option<PhpType>> {
+        match ty {
+            PhpType::Void | PhpType::Never => Some(None),
+            PhpType::Pointer(_) => Some(Some(ty.clone())),
+            PhpType::Packed(class) => Some(Some(PhpType::Pointer(Some(class.clone())))),
+            _ => None,
+        }
+    }
+    if current == incoming {
+        return None;
+    }
+    match (pointer_word(current)?, pointer_word(incoming)?) {
+        (None, None) => None,
+        (Some(pointer), None) | (None, Some(pointer)) => Some(pointer),
+        (Some(left), Some(right)) => {
+            Some(crate::types::merge_local_pointer_targets(&left, &right))
+        }
+    }
+}
+
 /// Returns the local frame PHP representation that can store both observed types.
 fn widened_local_storage_type(current: &PhpType, incoming: &PhpType) -> PhpType {
     let current = current.codegen_repr();
@@ -721,6 +797,9 @@ fn widened_local_storage_type(current: &PhpType, incoming: &PhpType) -> PhpType 
 /// Indexed arrays and associative hashes are both one-word container pointers. A flow-local
 /// `ArrayToHash` conversion can therefore keep the established frame slot while later loads use
 /// the associative logical type; cleanup remains safe because array decref dispatches by heap kind.
+/// Pointers and packed record addresses are one raw address word too, so a pointer-word slot
+/// (see `pointer_word_storage`) reads as a record address or as another pointer type as is.
+/// Object class/interface names likewise refine the checked view of the same object pointer.
 ///
 /// Codegen consumes this predicate too, so its no-coercion path and EIR release
 /// pruning cannot classify an ordinary borrowed local view differently.
@@ -737,6 +816,9 @@ pub(crate) fn local_load_types_share_storage(source_ty: &PhpType, result_ty: &Ph
             | (PhpType::AssocArray { .. }, PhpType::AssocArray { .. })
             | (PhpType::Array(_), PhpType::AssocArray { .. })
             | (PhpType::AssocArray { .. }, PhpType::Array(_))
+            | (PhpType::Object(_), PhpType::Object(_))
+            | (PhpType::Pointer(_), PhpType::Pointer(_) | PhpType::Packed(_))
+            | (PhpType::Packed(_), PhpType::Pointer(_))
     )
 }
 

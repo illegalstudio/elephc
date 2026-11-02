@@ -12,6 +12,30 @@
 
 use crate::support::compile_and_run;
 
+/// Returned metadata strings retain value semantics when their local copies are changed.
+#[test]
+fn test_reflection_aot_metadata_string_results_copy_before_mutation() {
+    let out = compile_and_run(r#"<?php
+class MirrorCowTarget { public function action(string $value): void {} }
+function mutateNames(ReflectionClass $class, ReflectionMethod $method, ReflectionParameter $parameter): void {
+    $className = $class->getName(); $className .= '!';
+    echo $className, '|', $class->getName(), '|', $class->name, '|';
+    $methodName = $method->getName(); $methodName .= '!';
+    echo $methodName, '|', $method->getName(), '|', $method->name, '|';
+    $parameterName = $parameter->getName(); $parameterName .= '!';
+    echo $parameterName, '|', $parameter->getName(), '|', $parameter->name, '|';
+}
+$class = new ReflectionClass('MirrorCowTarget');
+$method = new ReflectionMethod('MirrorCowTarget', 'action');
+$parameter = new ReflectionParameter(['MirrorCowTarget', 'action'], 'value');
+mutateNames($class, $method, $parameter);
+$type = $parameter->getType();
+$typeName = $type->getName(); $typeName .= '!';
+echo $typeName, '|', $type->getName();
+"#);
+    assert_eq!(out, "MirrorCowTarget!|MirrorCowTarget|MirrorCowTarget|action!|action|action|value!|value|value|string!|string");
+}
+
 /// `ReflectionObject::getClass()` is the only source of a `ReflectionClass` companion here.
 #[test]
 fn get_class_materializes_reflection_class_methods() {
@@ -107,7 +131,9 @@ echo get_class($type), ":";
 foreach ($type->getTypes() as $member) { echo $member->getName(), ","; }
 "#,
     );
-    assert_eq!(out, "ReflectionUnionType:int,string,");
+    // PHP lists a union's members in its canonical order, string before int, whatever order the
+    // declaration used (#1118); PHP 8.5.10 prints exactly this.
+    assert_eq!(out, "ReflectionUnionType:string,int,");
 }
 
 /// A getter name assembled at run time reaches the companion through `$holder->$name()`.

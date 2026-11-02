@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # The merge queue's temporary `gh-readonly-queue/main/...` commits. They run every tier, and
+  # the queue fast-forwards main to the commit it tested; see the `plan` job.
+  merge_group:
+    types: [checks_requested]
 
 # Least privilege for every job: the repository default token is read-write,
 # and no job here writes anything through it. `packages: read` lets the Linux
@@ -33,6 +37,8 @@ env:
     -p elephc-pdo
     -p elephc-crypto
     -p elephc-bcmath
+    -p elephc-gmp
+    -p elephc-random
     -p elephc-mbstring
     -p elephc-iconv
     -p elephc-phar
@@ -40,18 +46,65 @@ env:
     -p elephc-image
     -p elephc-pcntl
     -p elephc-xml
+    -p elephc-fileinfo
+    -p elephc-tokenizer
     -p elephc-magician
     -p elephc-web
     -p elephc-instr
     -p elephc-probe
     -p elephc-curl
+    -p elephc-zend
 
 jobs:
+  # The required gate waits for real PHP on the queue's actual integration commit.
+  phpext-host-sdk:
+    needs: plan
+    if: needs.plan.outputs.run == 'true' && github.event_name != 'pull_request'
+    uses: ./.github/workflows/phpext-host-sdk.yml
+
+  # Chooses the tiers this run executes (scripts/ci/plan_tiers.sh, CONTRIBUTING.md § "CI
+  # tiers and the merge queue"). Pull requests run every Linux job plus the macOS compile,
+  # doctests and managed-native smoke; the macOS test matrix and the iOS links run in the
+  # merge queue, which tests the exact commit main is fast-forwarded to. A pull request gets
+  # the macOS tier too with the `ci:macos` label (then re-run) or when it changes CI
+  # scheduling (this file, nextest.toml, scripts/ci/, .github/actions/). The push to main
+  # that the queue produces skips the test jobs, because the queue already ran them on the
+  # same commit; any other push runs everything.
+  plan:
+    name: Plan CI tiers
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      run: ${{ steps.plan.outputs.run }}
+      extended: ${{ steps.plan.outputs.extended }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts/ci
+          sparse-checkout-cone-mode: true
+
+      - name: Choose the tiers
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          SHA: ${{ github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          WORKFLOW_FILE: ci.yml
+          EXTENDED_LABEL: ci:macos
+          EXTENDED_PATHS: ^(\.github/workflows/ci\.yml|\.config/nextest\.toml|scripts/ci/|\.github/actions/)
+        run: bash scripts/ci/plan_tiers.sh
+
   # Compile each platform once, then let that platform's tests start as soon as
   # its archive is uploaded. This avoids a matrix-wide barrier where Linux tests
   # wait for a queued or slower macOS archive job.
   build-archive-macos-aarch64:
     name: Build & Archive Tests (macos-aarch64)
+    needs: plan
     runs-on: macos-15
     timeout-minutes: 60
     steps:
@@ -59,6 +112,12 @@ jobs:
 
       - name: Test nextest artifact validation
         run: sh scripts/ci/test_validate_archived_nextest.sh
+
+      - name: Test the CI tier planner, the eval shard runner and the merge queue cleanup
+        run: |
+          bash scripts/ci/test_plan_tiers.sh
+          bash scripts/ci/test_run_eval_codegen_shard.sh
+          bash scripts/ci/test_cancel_superseded_queue_runs.sh
 
       - name: Test macOS notarization gate
         run: python3 -B -m unittest discover -s .github/scripts -p 'test_notarize_macos.py' -v
@@ -78,6 +137,7 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
         with:
           prefix-key: rust-deps-macos-aarch64
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-bin: false
           cache-on-failure: true
 
@@ -174,9 +234,19 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
-          key: libxml2-native-macos-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          key: libxml2-native-macos-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             libxml2-native-macos-aarch64-
+
+      - name: Cache managed native gmp
+        # The gmp bridge links the managed `gmp` catalog package; keyed on the
+        # committed lock plus the recipe sources that decide what gets built.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: gmp-native-macos-aarch64-${{ hashFiles('examples/gmp/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/gmp.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+          restore-keys: |
+            gmp-native-macos-aarch64-
 
       - name: Materialize managed native libxml2
         # `install --locked` reproduces exactly the version pinned in the committed
@@ -186,6 +256,45 @@ jobs:
           ./target/debug/elephc native install --locked \
             --target macos-aarch64 \
             --manifest-path examples/xml/elephc.toml
+
+      - name: Ensure GMP configure dependency
+        # GMP's configure needs a usable m4. The prebuilt CI image may predate this
+        # installation; the guard makes the step a no-op on macOS and warm images.
+        run: |
+          if command -v apt-get >/dev/null 2>&1 && ! command -v m4 >/dev/null 2>&1; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends m4
+          fi
+
+      - name: Materialize managed native gmp
+        # `install --locked` reproduces exactly the version pinned in the committed
+        # examples/gmp/elephc.lock.
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target macos-aarch64 \
+            --manifest-path examples/gmp/elephc.toml
+
+      - name: Test the GMP bridge against managed libgmp
+        # crates/elephc-gmp/build.rs reads ELEPHC_GMP_LIB_DIR, links libgmp.a into
+        # the crate's test binary and compiles the libgmp-calling unit tests in
+        # behind cfg(elephc_gmp_native). Without the variable those tests take the
+        # skip path exercised by the archived non-codegen run. Runs AFTER the
+        # archive was taken so the plain libelephc_gmp.a every codegen shard links
+        # is never the variant this env-var-driven rebuild produces.
+        run: |
+          set -e
+          gmp_lib_dir=$(sh scripts/ci/gmp_lib_dir.sh macos-aarch64)
+          ELEPHC_GMP_LIB_DIR="$gmp_lib_dir" cargo test -p elephc-gmp
+      - name: Materialize managed native libmagic
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target macos-aarch64 \
+            --manifest-path examples/fileinfo/elephc.toml
+
+      - name: Test the fileinfo bridge against managed libmagic
+        run: |
+          ELEPHC_FILEINFO_LIBMAGIC_LIB_DIR="$(sh scripts/ci/libmagic_lib_dir.sh macos-aarch64)" \
+            cargo test -p elephc-fileinfo
 
       - name: Test the xml bridge against managed libxml2
         # crates/elephc-xml/build.rs reads ELEPHC_XML_LIBXML2_LIB_DIR (the artifact's
@@ -200,6 +309,8 @@ jobs:
             cargo test -p elephc-xml
 
       - name: Upload test archive
+        # Only when this run's test jobs for the platform consume it (see `plan`).
+        if: needs.plan.outputs.extended == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: nextest-archive-macos-aarch64
@@ -211,6 +322,8 @@ jobs:
           if-no-files-found: error
 
       - name: Upload codegen test archive
+        # Only when this run's test jobs for the platform consume it (see `plan`).
+        if: needs.plan.outputs.extended == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: nextest-archive-codegen-macos-aarch64
@@ -220,6 +333,7 @@ jobs:
 
   build-archive-linux-x86_64:
     name: Build & Archive Tests (linux-x86_64)
+    needs: plan
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     # Every Linux job runs inside the prebuilt CI image (multi-arch, built by
@@ -245,6 +359,7 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
         with:
           prefix-key: rust-deps-container-linux-x86_64
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-bin: false
           cache-on-failure: true
 
@@ -335,9 +450,19 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
-          key: libxml2-native-linux-x86_64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          key: libxml2-native-linux-x86_64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             libxml2-native-linux-x86_64-
+
+      - name: Cache managed native gmp
+        # The gmp bridge links the managed `gmp` catalog package; keyed on the
+        # committed lock plus the recipe sources that decide what gets built.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: gmp-native-linux-x86_64-${{ hashFiles('examples/gmp/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/gmp.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+          restore-keys: |
+            gmp-native-linux-x86_64-
 
       - name: Materialize managed native libxml2
         # `install --locked` reproduces exactly the version pinned in the committed
@@ -347,6 +472,45 @@ jobs:
           ./target/debug/elephc native install --locked \
             --target linux-x86_64 \
             --manifest-path examples/xml/elephc.toml
+
+      - name: Ensure GMP configure dependency
+        # GMP's configure needs a usable m4. The prebuilt CI image may predate this
+        # installation; the guard makes the step a no-op on macOS and warm images.
+        run: |
+          if command -v apt-get >/dev/null 2>&1 && ! command -v m4 >/dev/null 2>&1; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends m4
+          fi
+
+      - name: Materialize managed native gmp
+        # `install --locked` reproduces exactly the version pinned in the committed
+        # examples/gmp/elephc.lock.
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-x86_64 \
+            --manifest-path examples/gmp/elephc.toml
+
+      - name: Test the GMP bridge against managed libgmp
+        # crates/elephc-gmp/build.rs reads ELEPHC_GMP_LIB_DIR, links libgmp.a into
+        # the crate's test binary and compiles the libgmp-calling unit tests in
+        # behind cfg(elephc_gmp_native). Without the variable those tests take the
+        # skip path exercised by the archived non-codegen run. Runs AFTER the
+        # archive was taken so the plain libelephc_gmp.a every codegen shard links
+        # is never the variant this env-var-driven rebuild produces.
+        run: |
+          set -e
+          gmp_lib_dir=$(sh scripts/ci/gmp_lib_dir.sh linux-x86_64)
+          ELEPHC_GMP_LIB_DIR="$gmp_lib_dir" cargo test -p elephc-gmp
+      - name: Materialize managed native libmagic
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-x86_64 \
+            --manifest-path examples/fileinfo/elephc.toml
+
+      - name: Test the fileinfo bridge against managed libmagic
+        run: |
+          ELEPHC_FILEINFO_LIBMAGIC_LIB_DIR="$(sh scripts/ci/libmagic_lib_dir.sh linux-x86_64)" \
+            cargo test -p elephc-fileinfo
 
       - name: Test the xml bridge against managed libxml2
         # crates/elephc-xml/build.rs reads ELEPHC_XML_LIBXML2_LIB_DIR (the artifact's
@@ -361,6 +525,8 @@ jobs:
             cargo test -p elephc-xml
 
       - name: Upload test archive
+        # Only when this run's test jobs for the platform consume it (see `plan`).
+        if: needs.plan.outputs.run == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: nextest-archive-linux-x86_64
@@ -369,6 +535,8 @@ jobs:
           if-no-files-found: error
 
       - name: Upload codegen test archive
+        # Only when this run's test jobs for the platform consume it (see `plan`).
+        if: needs.plan.outputs.run == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: nextest-archive-codegen-linux-x86_64
@@ -378,6 +546,7 @@ jobs:
 
   build-archive-linux-aarch64:
     name: Build & Archive Tests (linux-aarch64)
+    needs: plan
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     container:
@@ -398,6 +567,7 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
         with:
           prefix-key: rust-deps-container-linux-aarch64
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-bin: false
           cache-on-failure: true
 
@@ -488,9 +658,19 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
-          key: libxml2-native-linux-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          key: libxml2-native-linux-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             libxml2-native-linux-aarch64-
+
+      - name: Cache managed native gmp
+        # The gmp bridge links the managed `gmp` catalog package; keyed on the
+        # committed lock plus the recipe sources that decide what gets built.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: gmp-native-linux-aarch64-${{ hashFiles('examples/gmp/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/gmp.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+          restore-keys: |
+            gmp-native-linux-aarch64-
 
       - name: Materialize managed native libxml2
         # `install --locked` reproduces exactly the version pinned in the committed
@@ -500,6 +680,45 @@ jobs:
           ./target/debug/elephc native install --locked \
             --target linux-aarch64 \
             --manifest-path examples/xml/elephc.toml
+
+      - name: Ensure GMP configure dependency
+        # GMP's configure needs a usable m4. The prebuilt CI image may predate this
+        # installation; the guard makes the step a no-op on macOS and warm images.
+        run: |
+          if command -v apt-get >/dev/null 2>&1 && ! command -v m4 >/dev/null 2>&1; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends m4
+          fi
+
+      - name: Materialize managed native gmp
+        # `install --locked` reproduces exactly the version pinned in the committed
+        # examples/gmp/elephc.lock.
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-aarch64 \
+            --manifest-path examples/gmp/elephc.toml
+
+      - name: Test the GMP bridge against managed libgmp
+        # crates/elephc-gmp/build.rs reads ELEPHC_GMP_LIB_DIR, links libgmp.a into
+        # the crate's test binary and compiles the libgmp-calling unit tests in
+        # behind cfg(elephc_gmp_native). Without the variable those tests take the
+        # skip path exercised by the archived non-codegen run. Runs AFTER the
+        # archive was taken so the plain libelephc_gmp.a every codegen shard links
+        # is never the variant this env-var-driven rebuild produces.
+        run: |
+          set -e
+          gmp_lib_dir=$(sh scripts/ci/gmp_lib_dir.sh linux-aarch64)
+          ELEPHC_GMP_LIB_DIR="$gmp_lib_dir" cargo test -p elephc-gmp
+      - name: Materialize managed native libmagic
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-aarch64 \
+            --manifest-path examples/fileinfo/elephc.toml
+
+      - name: Test the fileinfo bridge against managed libmagic
+        run: |
+          ELEPHC_FILEINFO_LIBMAGIC_LIB_DIR="$(sh scripts/ci/libmagic_lib_dir.sh linux-aarch64)" \
+            cargo test -p elephc-fileinfo
 
       - name: Test the xml bridge against managed libxml2
         # crates/elephc-xml/build.rs reads ELEPHC_XML_LIBXML2_LIB_DIR (the artifact's
@@ -514,6 +733,8 @@ jobs:
             cargo test -p elephc-xml
 
       - name: Upload test archive
+        # Only when this run's test jobs for the platform consume it (see `plan`).
+        if: needs.plan.outputs.run == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: nextest-archive-linux-aarch64
@@ -522,6 +743,8 @@ jobs:
           if-no-files-found: error
 
       - name: Upload codegen test archive
+        # Only when this run's test jobs for the platform consume it (see `plan`).
+        if: needs.plan.outputs.run == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: nextest-archive-codegen-linux-aarch64
@@ -540,7 +763,8 @@ jobs:
   # at one test per core.
   non-codegen-tests-macos-aarch64:
     name: Non-Codegen Tests (macos-aarch64 ${{ matrix.shard }}/4)
-    needs: build-archive-macos-aarch64
+    needs: [plan, build-archive-macos-aarch64]
+    if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
     timeout-minutes: 30
     strategy:
@@ -609,7 +833,8 @@ jobs:
 
   non-codegen-tests-linux-x86_64:
     name: Non-Codegen Tests (linux-x86_64 ${{ matrix.shard }}/4)
-    needs: build-archive-linux-x86_64
+    needs: [plan, build-archive-linux-x86_64]
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
@@ -658,7 +883,8 @@ jobs:
 
   non-codegen-tests-linux-aarch64:
     name: Non-Codegen Tests (linux-aarch64 ${{ matrix.shard }}/4)
-    needs: build-archive-linux-aarch64
+    needs: [plan, build-archive-linux-aarch64]
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     strategy:
@@ -707,7 +933,8 @@ jobs:
 
   cli-tests-macos-aarch64:
     name: CLI Eval Tests (macos-aarch64 ${{ matrix.shard }}/6)
-    needs: build-archive-macos-aarch64
+    needs: [plan, build-archive-macos-aarch64]
+    if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
     timeout-minutes: 30
     strategy:
@@ -780,7 +1007,8 @@ jobs:
 
   cli-tests-linux-x86_64:
     name: CLI Eval Tests (linux-x86_64 ${{ matrix.shard }}/6)
-    needs: build-archive-linux-x86_64
+    needs: [plan, build-archive-linux-x86_64]
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
@@ -833,7 +1061,8 @@ jobs:
 
   cli-tests-linux-aarch64:
     name: CLI Eval Tests (linux-aarch64 ${{ matrix.shard }}/6)
-    needs: build-archive-linux-aarch64
+    needs: [plan, build-archive-linux-aarch64]
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     strategy:
@@ -886,7 +1115,8 @@ jobs:
 
   web-tests-macos-aarch64:
     name: Web Tests (macos-aarch64 ${{ matrix.shard }}/2)
-    needs: build-archive-macos-aarch64
+    needs: [plan, build-archive-macos-aarch64]
+    if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
     timeout-minutes: 20
     strategy:
@@ -954,7 +1184,8 @@ jobs:
 
   web-tests-linux-x86_64:
     name: Web Tests (linux-x86_64 ${{ matrix.shard }}/2)
-    needs: build-archive-linux-x86_64
+    needs: [plan, build-archive-linux-x86_64]
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -1002,7 +1233,8 @@ jobs:
 
   web-tests-linux-aarch64:
     name: Web Tests (linux-aarch64 ${{ matrix.shard }}/2)
-    needs: build-archive-linux-aarch64
+    needs: [plan, build-archive-linux-aarch64]
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
     strategy:
@@ -1050,7 +1282,8 @@ jobs:
 
   codegen-tests-macos-aarch64:
     name: Codegen Tests (macos-aarch64 ${{ matrix.shard }}/16)
-    needs: build-archive-macos-aarch64
+    needs: [plan, build-archive-macos-aarch64]
+    if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
     timeout-minutes: 40
     strategy:
@@ -1098,7 +1331,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
-          key: libxml2-native-macos-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          key: libxml2-native-macos-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             libxml2-native-macos-aarch64-
 
@@ -1123,6 +1356,39 @@ jobs:
             --target macos-aarch64 \
             --manifest-path examples/xml/elephc.toml
 
+      - name: Cache managed native gmp
+        # GMP PHPT fixtures link the elephc_gmp bridge against the managed gmp
+        # artifact (see tests/codegen/support/gmp_native.rs). Same key as the
+        # build-archive job that already materialized it, so this is a restore.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: gmp-native-macos-aarch64-${{ hashFiles('examples/gmp/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/gmp.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+          restore-keys: |
+            gmp-native-macos-aarch64-
+
+      - name: Ensure GMP configure dependency
+        # GMP's configure needs a usable m4. The prebuilt CI image may predate this
+        # installation; the guard makes the step a no-op on macOS and warm images.
+        run: |
+          if command -v apt-get >/dev/null 2>&1 && ! command -v m4 >/dev/null 2>&1; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends m4
+          fi
+
+      - name: Materialize managed native gmp
+        # A no-op on the warm cache restored above; otherwise the pinned
+        # examples/gmp/elephc.lock build from source.
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target macos-aarch64 \
+            --manifest-path examples/gmp/elephc.toml
+      - name: Materialize managed native libmagic
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target macos-aarch64 \
+            --manifest-path examples/fileinfo/elephc.toml
+
       - name: Run codegen test shard
         env:
           CARGO_NET_OFFLINE: "true"
@@ -1130,6 +1396,10 @@ jobs:
           # A missing libxml2 artifact must FAIL an xml fixture here, never skip it:
           # the package was materialized just above, so absence is a provisioning bug.
           ELEPHC_TEST_REQUIRE_XML_NATIVE: "1"
+          # Same fail-closed rule for the GMP PHPT corpus: the managed libgmp
+          # artifact was materialized just above, so a missing one is a bug.
+          ELEPHC_TEST_REQUIRE_GMP_NATIVE: "1"
+          ELEPHC_TEST_REQUIRE_FILEINFO_NATIVE: "1"
         run: |
           "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
@@ -1155,7 +1425,8 @@ jobs:
 
   codegen-tests-linux-x86_64:
     name: Codegen Tests (linux-x86_64 ${{ matrix.shard }}/16)
-    needs: build-archive-linux-x86_64
+    needs: [plan, build-archive-linux-x86_64]
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     container:
@@ -1183,7 +1454,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
-          key: libxml2-native-linux-x86_64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          key: libxml2-native-linux-x86_64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             libxml2-native-linux-x86_64-
 
@@ -1208,6 +1479,39 @@ jobs:
             --target linux-x86_64 \
             --manifest-path examples/xml/elephc.toml
 
+      - name: Cache managed native gmp
+        # GMP PHPT fixtures link the elephc_gmp bridge against the managed gmp
+        # artifact (see tests/codegen/support/gmp_native.rs). Same key as the
+        # build-archive job that already materialized it, so this is a restore.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: gmp-native-linux-x86_64-${{ hashFiles('examples/gmp/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/gmp.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+          restore-keys: |
+            gmp-native-linux-x86_64-
+
+      - name: Ensure GMP configure dependency
+        # GMP's configure needs a usable m4. The prebuilt CI image may predate this
+        # installation; the guard makes the step a no-op on macOS and warm images.
+        run: |
+          if command -v apt-get >/dev/null 2>&1 && ! command -v m4 >/dev/null 2>&1; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends m4
+          fi
+
+      - name: Materialize managed native gmp
+        # A no-op on the warm cache restored above; otherwise the pinned
+        # examples/gmp/elephc.lock build from source.
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target linux-x86_64 \
+            --manifest-path examples/gmp/elephc.toml
+      - name: Materialize managed native libmagic
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target linux-x86_64 \
+            --manifest-path examples/fileinfo/elephc.toml
+
       - name: Run codegen test shard
         env:
           CARGO_NET_OFFLINE: "true"
@@ -1215,6 +1519,10 @@ jobs:
           # A missing libxml2 artifact must FAIL an xml fixture here, never skip it:
           # the package was materialized just above, so absence is a provisioning bug.
           ELEPHC_TEST_REQUIRE_XML_NATIVE: "1"
+          # Same fail-closed rule for the GMP PHPT corpus: the managed libgmp
+          # artifact was materialized just above, so a missing one is a bug.
+          ELEPHC_TEST_REQUIRE_GMP_NATIVE: "1"
+          ELEPHC_TEST_REQUIRE_FILEINFO_NATIVE: "1"
         run: |
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
@@ -1240,7 +1548,8 @@ jobs:
 
   codegen-tests-linux-aarch64:
     name: Codegen Tests (linux-aarch64 ${{ matrix.shard }}/16)
-    needs: build-archive-linux-aarch64
+    needs: [plan, build-archive-linux-aarch64]
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 40
     container:
@@ -1268,7 +1577,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
-          key: libxml2-native-linux-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          key: libxml2-native-linux-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             libxml2-native-linux-aarch64-
 
@@ -1293,6 +1602,39 @@ jobs:
             --target linux-aarch64 \
             --manifest-path examples/xml/elephc.toml
 
+      - name: Cache managed native gmp
+        # GMP PHPT fixtures link the elephc_gmp bridge against the managed gmp
+        # artifact (see tests/codegen/support/gmp_native.rs). Same key as the
+        # build-archive job that already materialized it, so this is a restore.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: gmp-native-linux-aarch64-${{ hashFiles('examples/gmp/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/gmp.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+          restore-keys: |
+            gmp-native-linux-aarch64-
+
+      - name: Ensure GMP configure dependency
+        # GMP's configure needs a usable m4. The prebuilt CI image may predate this
+        # installation; the guard makes the step a no-op on macOS and warm images.
+        run: |
+          if command -v apt-get >/dev/null 2>&1 && ! command -v m4 >/dev/null 2>&1; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends m4
+          fi
+
+      - name: Materialize managed native gmp
+        # A no-op on the warm cache restored above; otherwise the pinned
+        # examples/gmp/elephc.lock build from source.
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target linux-aarch64 \
+            --manifest-path examples/gmp/elephc.toml
+      - name: Materialize managed native libmagic
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target linux-aarch64 \
+            --manifest-path examples/fileinfo/elephc.toml
+
       - name: Run codegen test shard
         env:
           CARGO_NET_OFFLINE: "true"
@@ -1300,6 +1642,10 @@ jobs:
           # A missing libxml2 artifact must FAIL an xml fixture here, never skip it:
           # the package was materialized just above, so absence is a provisioning bug.
           ELEPHC_TEST_REQUIRE_XML_NATIVE: "1"
+          # Same fail-closed rule for the GMP PHPT corpus: the managed libgmp
+          # artifact was materialized just above, so a missing one is a bug.
+          ELEPHC_TEST_REQUIRE_GMP_NATIVE: "1"
+          ELEPHC_TEST_REQUIRE_FILEINFO_NATIVE: "1"
         run: |
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
@@ -1328,7 +1674,8 @@ jobs:
   # survive between cases while preserving the full three-target test surface.
   pdo-codegen-tests-macos-aarch64:
     name: PDO Codegen Tests (macos-aarch64 ${{ matrix.shard }}/4)
-    needs: build-archive-macos-aarch64
+    needs: [plan, build-archive-macos-aarch64]
+    if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
     timeout-minutes: 40
     strategy:
@@ -1389,7 +1736,8 @@ jobs:
 
   pdo-codegen-tests-linux-x86_64:
     name: PDO Codegen Tests (linux-x86_64 ${{ matrix.shard }}/4)
-    needs: build-archive-linux-x86_64
+    needs: [plan, build-archive-linux-x86_64]
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     container:
@@ -1430,7 +1778,8 @@ jobs:
 
   pdo-codegen-tests-linux-aarch64:
     name: PDO Codegen Tests (linux-aarch64 ${{ matrix.shard }}/4)
-    needs: build-archive-linux-aarch64
+    needs: [plan, build-archive-linux-aarch64]
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 40
     container:
@@ -1476,7 +1825,8 @@ jobs:
   # ordinary shards, from the elephc binary the archive already carries.
   curl-native-macos-aarch64:
     name: Managed Native curl (macos-aarch64)
-    needs: build-archive-macos-aarch64
+    needs: [plan, build-archive-macos-aarch64]
+    if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
     timeout-minutes: 30
     steps:
@@ -1555,7 +1905,8 @@ jobs:
 
   curl-native-linux-x86_64:
     name: Managed Native curl (linux-x86_64)
-    needs: build-archive-linux-x86_64
+    needs: [plan, build-archive-linux-x86_64]
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     container:
@@ -1617,7 +1968,8 @@ jobs:
 
   curl-native-linux-aarch64:
     name: Managed Native curl (linux-aarch64)
-    needs: build-archive-linux-aarch64
+    needs: [plan, build-archive-linux-aarch64]
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     container:
@@ -1688,7 +2040,8 @@ jobs:
   # the Linux CI container.
   curl-codegen-tests-macos-aarch64:
     name: Curl Codegen Tests (macos-aarch64 ${{ matrix.shard }}/4)
-    needs: [build-archive-macos-aarch64, curl-native-macos-aarch64]
+    needs: [plan, build-archive-macos-aarch64, curl-native-macos-aarch64]
+    if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
     timeout-minutes: 45
     strategy:
@@ -1786,7 +2139,8 @@ jobs:
 
   curl-codegen-tests-linux-x86_64:
     name: Curl Codegen Tests (linux-x86_64 ${{ matrix.shard }}/4)
-    needs: [build-archive-linux-x86_64, curl-native-linux-x86_64]
+    needs: [plan, build-archive-linux-x86_64, curl-native-linux-x86_64]
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     container:
@@ -1864,7 +2218,8 @@ jobs:
 
   curl-codegen-tests-linux-aarch64:
     name: Curl Codegen Tests (linux-aarch64 ${{ matrix.shard }}/4)
-    needs: [build-archive-linux-aarch64, curl-native-linux-aarch64]
+    needs: [plan, build-archive-linux-aarch64, curl-native-linux-aarch64]
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     container:
@@ -1948,6 +2303,8 @@ jobs:
   # or misses a framework/archive on either platform, fails here.
   curl-ios-compile-link:
     name: Curl iOS Compile & Link (${{ matrix.elephc_target }})
+    needs: plan
+    if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
     timeout-minutes: 60
     strategy:
@@ -1981,6 +2338,7 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
         with:
           prefix-key: rust-deps-curl-${{ matrix.elephc_target }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-bin: false
           cache-on-failure: true
 
@@ -2011,6 +2369,8 @@ jobs:
   # libxml2, `-liconv`, or the SDK's zlib/bzip2 on either platform, fails here.
   xml-ios-compile-link:
     name: XML iOS Compile & Link (${{ matrix.elephc_target }})
+    needs: plan
+    if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
     timeout-minutes: 60
     strategy:
@@ -2044,6 +2404,7 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
         with:
           prefix-key: rust-deps-xml-${{ matrix.elephc_target }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-bin: false
           cache-on-failure: true
 
@@ -2051,7 +2412,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/elephc-native
-          key: xml-native-${{ matrix.elephc_target }}-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          key: xml-native-${{ matrix.elephc_target }}-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             xml-native-${{ matrix.elephc_target }}-
 
@@ -2065,13 +2426,188 @@ jobs:
             "${{ matrix.sdk }}" \
             "${{ matrix.clang_target }}"
 
+  fileinfo-ios-compile-link:
+    name: Fileinfo iOS Compile & Link (${{ matrix.elephc_target }})
+    needs: plan
+    if: needs.plan.outputs.extended == 'true'
+    runs-on: macos-15
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - elephc_target: ios-arm64
+            rust_target: aarch64-apple-ios
+            sdk: iphoneos
+            clang_target: arm64-apple-ios13.0
+          - elephc_target: ios-sim-arm64
+            rust_target: aarch64-apple-ios-sim
+            sdk: iphonesimulator
+            clang_target: arm64-apple-ios13.0-simulator
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust with the iOS standard library
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ matrix.rust_target }}
+
+      - name: Cache Rust build state
+        # Dependencies only (registry, git checkouts, and the dependency
+        # artifacts under target/); the action prunes the workspace crates'
+        # own artifacts before saving. Caching the whole target/ dir put three
+        # 4 GB entries per platform plus every other job's into the repository's
+        # 10 GB allowance, so main's entries were evicted before the next run
+        # and every archive job compiled from scratch.
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
+        with:
+          prefix-key: rust-deps-xml-${{ matrix.elephc_target }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-bin: false
+          cache-on-failure: true
+
+      - name: Cache managed native libmagic for iOS
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/elephc-native
+          key: fileinfo-native-${{ matrix.elephc_target }}-${{ hashFiles('examples/fileinfo/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            fileinfo-native-${{ matrix.elephc_target }}-
+
+      - name: Build and link fileinfo with managed libmagic
+        env:
+          ELEPHC_NATIVE_CACHE: ${{ runner.temp }}/elephc-native
+        run: |
+          bash scripts/ci/test_ios_fileinfo_link.sh \
+            "${{ matrix.elephc_target }}" \
+            "${{ matrix.rust_target }}" \
+            "${{ matrix.sdk }}" \
+            "${{ matrix.clang_target }}"
+
+  gmp-phpt-corpus:
+    name: GMP PHPT corpus
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    # The prebuilt CI image already carries the pinned Rust toolchain, m4 and the
+    # native build dependencies, so this job needs no per-run apt-get step.
+    container:
+      image: ghcr.io/illegalstudio/elephc-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Ensure GMP configure dependency
+        # GMP's configure needs a usable m4. The prebuilt CI image may predate this
+        # installation; the guard makes the step a no-op once the image includes it.
+        run: |
+          if ! command -v m4 >/dev/null 2>&1; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends m4
+          fi
+
+      - name: Build compiler and GMP bridge
+        run: |
+          cargo build --bin elephc
+          cargo build -p elephc-gmp
+
+      - name: Materialize managed GMP
+        run: |
+          ./target/debug/elephc native install --locked \
+            --manifest-path examples/gmp/elephc.toml
+
+      - name: Run the whole ext/gmp PHPT corpus
+        env:
+          ELEPHC_TEST_REQUIRE_GMP_NATIVE: "1"
+        run: |
+          cargo test --test codegen_tests test_gmp_php_src_phpt_corpus \
+            -- --ignored --nocapture
+
+  gmp-ios-compile-link:
+    name: GMP iOS Compile & Link (${{ matrix.elephc_target }})
+    needs: plan
+    if: needs.plan.outputs.extended == 'true'
+    runs-on: macos-15
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - elephc_target: ios-arm64
+            rust_target: aarch64-apple-ios
+            sdk: iphoneos
+            clang_target: arm64-apple-ios13.0
+          - elephc_target: ios-sim-arm64
+            rust_target: aarch64-apple-ios-sim
+            sdk: iphonesimulator
+            clang_target: arm64-apple-ios13.0-simulator
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust with the iOS standard library
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ matrix.rust_target }}
+
+      - name: Cache managed native GMP for iOS
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/elephc-native
+          key: gmp-native-${{ matrix.elephc_target }}-${{ hashFiles('examples/gmp/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/gmp.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            gmp-native-${{ matrix.elephc_target }}-
+
+      - name: Build and link gmp with the managed libgmp
+        env:
+          ELEPHC_NATIVE_CACHE: ${{ runner.temp }}/elephc-native
+        run: |
+          bash scripts/ci/test_ios_gmp_link.sh \
+            "${{ matrix.elephc_target }}" "${{ matrix.rust_target }}" \
+            "${{ matrix.sdk }}" "${{ matrix.clang_target }}"
+
+  tokenizer-ios-compile-link:
+    name: Tokenizer iOS Compile & Link (${{ matrix.elephc_target }})
+    needs: plan
+    if: needs.plan.outputs.extended == 'true'
+    runs-on: macos-15
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - elephc_target: ios-arm64
+            rust_target: aarch64-apple-ios
+            sdk: iphoneos
+            clang_target: arm64-apple-ios13.0
+          - elephc_target: ios-sim-arm64
+            rust_target: aarch64-apple-ios-sim
+            sdk: iphonesimulator
+            clang_target: arm64-apple-ios13.0-simulator
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust with the iOS standard library
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ matrix.rust_target }}
+      - name: Compile and link the tokenizer bridge
+        run: |
+          bash scripts/ci/test_ios_tokenizer_link.sh \
+            "${{ matrix.elephc_target }}" "${{ matrix.rust_target }}" \
+            "${{ matrix.sdk }}" "${{ matrix.clang_target }}"
+
   # Eval integration tests compile, link, and run full programs while exercising
   # eval/magician paths, so keep them out of the ordinary codegen shards. Run each
   # deterministic shard in one libtest process so runtime-object and bridge caches
   # survive between cases, with two workers preserving bounded parallelism.
   eval-codegen-tests-macos-aarch64:
     name: Eval Codegen Tests (macos-aarch64 ${{ matrix.shard }}/16)
-    needs: build-archive-macos-aarch64
+    needs: [plan, build-archive-macos-aarch64]
+    if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
     timeout-minutes: 40
     strategy:
@@ -2154,7 +2690,8 @@ jobs:
 
   eval-codegen-tests-linux-x86_64:
     name: Eval Codegen Tests (linux-x86_64 ${{ matrix.shard }}/16)
-    needs: build-archive-linux-x86_64
+    needs: [plan, build-archive-linux-x86_64]
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     container:
@@ -2214,7 +2751,8 @@ jobs:
 
   eval-codegen-tests-linux-aarch64:
     name: Eval Codegen Tests (linux-aarch64 ${{ matrix.shard }}/16)
-    needs: build-archive-linux-aarch64
+    needs: [plan, build-archive-linux-aarch64]
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 40
     container:
@@ -2358,6 +2896,7 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
         with:
           prefix-key: rust-deps-builtins-docs
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-bin: false
           cache-on-failure: true
 
@@ -2378,23 +2917,11 @@ jobs:
       - name: Enforce builtin target architecture
         run: python3 scripts/audit_builtin_eir_boundary.py --enforce-target-architecture
 
-      - name: Test builtin contract documentation pipeline
-        run: python3 -m unittest discover -s scripts/docs/elephc_builtins -p 'test_*.py'
-
       - name: Regenerate builtins documentation
         # Re-run the generator; the committed Markdown pages and JSON registry
         # must come back byte-identical. A diff means someone changed a builtin
         # signature, lowering, or area assignment without regenerating docs.
         run: python3 scripts/docs/extract_builtins.py --render --force
-
-      - name: Audit generated builtins docs
-        run: python3 scripts/docs/audit_builtins.py
-
-      - name: Validate generated docs for site compatibility
-        run: python3 scripts/docs/elephc_builtins/validate_site_compat.py
-
-      - name: Run PHP comparison generator tests
-        run: python3 -m unittest discover -s scripts/docs -p "test_*.py" -v
 
       - name: Regenerate the module symbol sections
         # Writes the generated "Functions" block (functions, classes, constants per
@@ -2408,6 +2935,18 @@ jobs:
         # consistency; the committed page must come back byte-identical.
         run: python3 scripts/docs/gen_php_comparison.py
 
+      - name: Test builtin contract documentation pipeline
+        run: python3 -m unittest discover -s scripts/docs/elephc_builtins -p 'test_*.py'
+
+      - name: Audit generated builtins docs
+        run: python3 scripts/docs/audit_builtins.py
+
+      - name: Validate generated docs for site compatibility
+        run: python3 scripts/docs/elephc_builtins/validate_site_compat.py
+
+      - name: Run PHP comparison generator tests
+        run: python3 -m unittest discover -s scripts/docs -p "test_*.py" -v
+
       - name: Fail if generated docs are out of sync
         run: |
           changes=$(git status --porcelain -- docs/php docs/internals/builtins scripts/docs/builtin_registry.json scripts/docs/symbol_registry.json)
@@ -2419,6 +2958,68 @@ jobs:
             echo "$changes"
             exit 1
           fi
+
+      - name: Upload generated builtin documentation
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: generated-builtin-docs
+          retention-days: 7
+          path: |
+            docs/php
+            docs/internals/builtins
+            scripts/docs/builtin_registry.json
+            scripts/docs/symbol_registry.json
+
+  tokenizer-tests:
+    name: Tokenizer PHP 8.5 parity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: Install PHP reference tokenizer
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.5'
+          extensions: tokenizer
+          coverage: none
+      - name: Check the shared tokenizer against PHP
+        env:
+          ELEPHC_TOKENIZER_REQUIRE_PHP85: '1'
+        run: cargo test --locked -p elephc-tokenizer-engine --lib
+
+  tokenizer-native-smoke:
+    name: Tokenizer native smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: Build the compiler and tokenizer bridge
+        run: |
+          cargo build --locked -p elephc-tokenizer
+          cargo build --locked --bin elephc
+      - name: Run the native tokenizer example
+        run: |
+          target/debug/elephc --with-tokenizer examples/tokenizer/main.php
+          trap 'rm -f "$RUNNER_TEMP/tokenizer-example.out"' EXIT
+          examples/tokenizer/main > "$RUNNER_TEMP/tokenizer-example.out"
+          grep -F 'Function declaration at line 1, byte ' "$RUNNER_TEMP/tokenizer-example.out"
+          grep -F 'First token: T_OPEN_TAG' "$RUNNER_TEMP/tokenizer-example.out"
+      - name: Run focused native, eval and argument regressions
+        run: |
+          cargo test --locked --test codegen_tests test_tokenizer_
+          cargo test --locked --test codegen_tests codegen::lfc::lfc_and_strict_php_eval_calls_do_not_leak_profiles -- --exact
+          cargo test --locked --test error_tests tokenizer_
+          cargo test --locked -p elephc --lib ir_lower::tests::corpus::lowers_tokenizer_example_on_every_target -- --exact
+          cargo test --locked -p elephc --lib autoload::prelude_probe::tests::probe_detects_tokenizer_in_autoloaded_classes -- --exact
+          cargo test --locked -p elephc --lib ir_lower::tests::string_offset_lifetime::string_offset_lifetime_stabilizes_views_on_all_targets -- --exact
+          cargo test --locked --test embedder_stack_tests prelude_injection_survives_the_nesting_limit_on_a_small_embedder_stack -- --exact
 
   differential-tests:
     name: Differential test run (PHPUnit vs elephc test)
@@ -2485,6 +3086,7 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
         with:
           prefix-key: rust-deps-curl-feature
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-bin: false
           cache-on-failure: true
 
@@ -2524,6 +3126,8 @@ jobs:
 
   managed-native-smoke:
     name: Managed Native Packages (${{ matrix.target }})
+    needs: plan
+    if: needs.plan.outputs.run == 'true'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     strategy:
@@ -2560,6 +3164,7 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
         with:
           prefix-key: rust-deps-managed-native-${{ matrix.target }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-bin: false
           cache-on-failure: true
 
@@ -2714,6 +3319,13 @@ jobs:
           grep -F "handle still usable after curl_close()" "$RUNNER_TEMP/curl-get.out"
           grep -F "connection refused, as expected" "$RUNNER_TEMP/curl-get.out"
 
+      - name: Compile and run fileinfo through the production resolver
+        run: |
+          ./target/debug/elephc native install --locked --target "${{ matrix.target }}" --manifest-path examples/fileinfo/elephc.toml
+          ./target/debug/elephc --target "${{ matrix.target }}" examples/fileinfo/main.php
+          ./examples/fileinfo/main > "$RUNNER_TEMP/fileinfo.out"
+          grep -Fx "text/plain; charset=us-ascii" "$RUNNER_TEMP/fileinfo.out"
+
       - name: Compile and run xml through the production resolver
         # Exercises the chain every tests/codegen/xml fixture also needs (see
         # tests/codegen/support/xml_native.rs) end to end through the real
@@ -2787,6 +3399,7 @@ jobs:
     name: Build & Test
     runs-on: ubuntu-latest
     needs:
+      - plan
       - build-archive-macos-aarch64
       - build-archive-linux-x86_64
       - build-archive-linux-aarch64
@@ -2813,11 +3426,15 @@ jobs:
       - curl-native-linux-aarch64
       - curl-ios-compile-link
       - xml-ios-compile-link
+      - fileinfo-ios-compile-link
+      - tokenizer-ios-compile-link
       - eval-codegen-tests-macos-aarch64
       - eval-codegen-tests-linux-x86_64
       - eval-codegen-tests-linux-aarch64
       - image-api-sync
       - builtins-docs-sync
+      - tokenizer-tests
+      - tokenizer-native-smoke
       - differential-tests
       - managed-native-smoke
       - curl-feature-contract
@@ -2825,6 +3442,7 @@ jobs:
       - action-pins
       - frame-assertions-release
       - benchmark-tooling
+      - phpext-host-sdk
     if: always()
     steps:
       - name: Merge JUnit reports
@@ -2840,45 +3458,54 @@ jobs:
           retention-days: 7
 
       - name: Verify test jobs
+        # The plan job decides which tiers ran; a skipped tier must be skipped, never a quiet
+        # failure, and a job in `needs` that none of the lists below classifies fails the gate,
+        # so a new job cannot slip past it.
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          RUN_TIER: ${{ needs.plan.outputs.run }}
+          EXTENDED_TIER: ${{ needs.plan.outputs.extended }}
+          SDK_TIER: ${{ needs.plan.outputs.run == 'true' && github.event_name != 'pull_request' }}
         run: |
-          test "${{ needs.build-archive-macos-aarch64.result }}" = "success"
-          test "${{ needs.build-archive-linux-x86_64.result }}" = "success"
-          test "${{ needs.build-archive-linux-aarch64.result }}" = "success"
-          test "${{ needs.non-codegen-tests-macos-aarch64.result }}" = "success"
-          test "${{ needs.non-codegen-tests-linux-x86_64.result }}" = "success"
-          test "${{ needs.non-codegen-tests-linux-aarch64.result }}" = "success"
-          test "${{ needs.cli-tests-macos-aarch64.result }}" = "success"
-          test "${{ needs.cli-tests-linux-x86_64.result }}" = "success"
-          test "${{ needs.cli-tests-linux-aarch64.result }}" = "success"
-          test "${{ needs.web-tests-macos-aarch64.result }}" = "success"
-          test "${{ needs.web-tests-linux-x86_64.result }}" = "success"
-          test "${{ needs.web-tests-linux-aarch64.result }}" = "success"
-          test "${{ needs.codegen-tests-macos-aarch64.result }}" = "success"
-          test "${{ needs.codegen-tests-linux-x86_64.result }}" = "success"
-          test "${{ needs.codegen-tests-linux-aarch64.result }}" = "success"
-          test "${{ needs.pdo-codegen-tests-macos-aarch64.result }}" = "success"
-          test "${{ needs.pdo-codegen-tests-linux-x86_64.result }}" = "success"
-          test "${{ needs.pdo-codegen-tests-linux-aarch64.result }}" = "success"
-          test "${{ needs.curl-codegen-tests-macos-aarch64.result }}" = "success"
-          test "${{ needs.curl-codegen-tests-linux-x86_64.result }}" = "success"
-          test "${{ needs.curl-codegen-tests-linux-aarch64.result }}" = "success"
-          test "${{ needs.curl-native-macos-aarch64.result }}" = "success"
-          test "${{ needs.curl-native-linux-x86_64.result }}" = "success"
-          test "${{ needs.curl-native-linux-aarch64.result }}" = "success"
-          test "${{ needs.curl-ios-compile-link.result }}" = "success"
-          test "${{ needs.xml-ios-compile-link.result }}" = "success"
-          test "${{ needs.eval-codegen-tests-macos-aarch64.result }}" = "success"
-          test "${{ needs.eval-codegen-tests-linux-x86_64.result }}" = "success"
-          test "${{ needs.eval-codegen-tests-linux-aarch64.result }}" = "success"
-          test "${{ needs.image-api-sync.result }}" = "success"
-          test "${{ needs.builtins-docs-sync.result }}" = "success"
-          test "${{ needs.differential-tests.result }}" = "success"
-          test "${{ needs.managed-native-smoke.result }}" = "success"
-          test "${{ needs.curl-feature-contract.result }}" = "success"
-          test "${{ needs.security-audit.result }}" = "success"
-          test "${{ needs.action-pins.result }}" = "success"
-          test "${{ needs.frame-assertions-release.result }}" = "success"
-          test "${{ needs.benchmark-tooling.result }}" = "success"
+          always="plan build-archive-macos-aarch64 build-archive-linux-x86_64
+            build-archive-linux-aarch64 image-api-sync builtins-docs-sync tokenizer-tests tokenizer-native-smoke differential-tests
+            curl-feature-contract security-audit action-pins frame-assertions-release
+            benchmark-tooling"
+          run_tier="non-codegen-tests-linux-x86_64 non-codegen-tests-linux-aarch64
+            cli-tests-linux-x86_64 cli-tests-linux-aarch64 web-tests-linux-x86_64
+            web-tests-linux-aarch64 codegen-tests-linux-x86_64 codegen-tests-linux-aarch64
+            pdo-codegen-tests-linux-x86_64 pdo-codegen-tests-linux-aarch64
+            curl-native-linux-x86_64 curl-native-linux-aarch64 curl-codegen-tests-linux-x86_64
+            curl-codegen-tests-linux-aarch64 eval-codegen-tests-linux-x86_64
+            eval-codegen-tests-linux-aarch64 managed-native-smoke"
+          extended_tier="non-codegen-tests-macos-aarch64 cli-tests-macos-aarch64
+            web-tests-macos-aarch64 codegen-tests-macos-aarch64 pdo-codegen-tests-macos-aarch64
+            curl-native-macos-aarch64 curl-codegen-tests-macos-aarch64
+            eval-codegen-tests-macos-aarch64 curl-ios-compile-link xml-ios-compile-link fileinfo-ios-compile-link tokenizer-ios-compile-link"
+          in_list() { case " $(echo $2) " in *" $1 "*) return 0 ;; esac; return 1; }
+          echo "tiers: run=$RUN_TIER extended=$EXTENDED_TIER"
+          status=0
+          for job in $(jq -r 'keys[]' <<< "$NEEDS"); do
+            result=$(jq -r --arg job "$job" '.[$job].result' <<< "$NEEDS")
+            if in_list "$job" "$always"; then
+              want=success
+            elif in_list "$job" "$run_tier"; then
+              if [ "$RUN_TIER" = true ]; then want=success; else want=skipped; fi
+            elif in_list "$job" "$extended_tier"; then
+              if [ "$EXTENDED_TIER" = true ]; then want=success; else want=skipped; fi
+            elif [ "$job" = phpext-host-sdk ]; then
+              if [ "$SDK_TIER" = true ]; then want=success; else want=skipped; fi
+            else
+              echo "::error::$job is in needs but in none of this gate's tier lists"
+              status=1
+              continue
+            fi
+            if [ "$result" != "$want" ]; then
+              echo "::error::$job finished $result, expected $want"
+              status=1
+            fi
+          done
+          exit "$status"
 
   benchmark:
     name: Benchmark Suite

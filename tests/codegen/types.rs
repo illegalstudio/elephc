@@ -31,12 +31,18 @@ mod enum_omission_review;
 mod enum_keyed_review;
 #[path = "types/type_annotations.rs"]
 mod type_annotations;
+#[path = "types/nullable_array_merge.rs"]
+mod nullable_array_merge;
 #[path = "types/narrowing.rs"]
 mod narrowing;
 #[path = "types/narrowed_object_arguments.rs"]
 mod narrowed_object_arguments;
+mod guarded_interface_receivers;
+mod guarded_interface_mutations;
 #[path = "types/param_coercion.rs"]
 mod param_coercion;
+#[path = "types/declare_groups.rs"]
+mod declare_groups;
 #[path = "types/strict_types.rs"]
 mod strict_types;
 #[path = "types/named_arguments/mod.rs"]

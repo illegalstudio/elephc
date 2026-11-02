@@ -16,10 +16,10 @@ use super::*;
 /// Emits one native constructor signature registration call into the eval context.
 pub(super) fn register_eval_native_constructor(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     registration: &EvalNativeConstructorRegistration,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     let (class_name_label, class_name_len) =
         ctx.data.add_string(registration.class_name.as_bytes());
     abi::emit_symbol_address(
@@ -44,7 +44,7 @@ pub(super) fn register_eval_native_constructor(
     abi::emit_call_label(ctx.emitter, &symbol);
     register_eval_native_constructor_bridge_support(
         ctx,
-        context_offset,
+        context_source,
         &class_name_label,
         class_name_len,
         registration.bridge_supported,
@@ -53,7 +53,7 @@ pub(super) fn register_eval_native_constructor(
     // observe a signature whose visible/hidden partition is still being inferred.
     register_eval_native_constructor_shape(
         ctx,
-        context_offset,
+        context_source,
         &class_name_label,
         class_name_len,
         &eval_native_signature_shape(&registration.signature),
@@ -64,7 +64,7 @@ pub(super) fn register_eval_native_constructor(
         let visible = visible_indexes.contains(&index);
         register_eval_native_constructor_param(
             ctx,
-            context_offset,
+            context_source,
             &class_name_label,
             class_name_len,
             index,
@@ -74,7 +74,7 @@ pub(super) fn register_eval_native_constructor(
         );
         register_eval_native_constructor_param_flags(
             ctx,
-            context_offset,
+            context_source,
             &class_name_label,
             class_name_len,
             index,
@@ -94,7 +94,7 @@ pub(super) fn register_eval_native_constructor(
         if let Some(type_spec) = param_type_specs.get(index).and_then(Option::as_deref) {
             register_eval_native_constructor_param_type(
                 ctx,
-                context_offset,
+                context_source,
                 &class_name_label,
                 class_name_len,
                 index,
@@ -125,7 +125,7 @@ pub(super) fn register_eval_native_constructor(
         ) {
             continue;
         }
-        if register_eval_native_param_default_error(ctx, context_offset,
+        if register_eval_native_param_default_error(ctx, context_source,
             (&class_name_label, class_name_len), index, default.as_ref(), &default_context,
             "__elephc_eval_register_native_constructor_param_default_error") { continue; }
         if let Some(default) = default
@@ -134,7 +134,7 @@ pub(super) fn register_eval_native_constructor(
         {
             register_eval_native_constructor_param_default(
                 ctx,
-                context_offset,
+                context_source,
                 &class_name_label,
                 class_name_len,
                 index,
@@ -156,7 +156,7 @@ pub(super) fn register_eval_native_constructor(
         {
             register_eval_native_constructor_compiled_default(
                 ctx,
-                context_offset,
+                context_source,
                 &class_name_label,
                 class_name_len,
                 index,
@@ -169,13 +169,13 @@ pub(super) fn register_eval_native_constructor(
 /// Registers a compiled Mixed-returning helper for a default outside compact eval metadata.
 fn register_eval_native_constructor_compiled_default(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     class_name_label: &str,
     class_name_len: usize,
     param_index: usize,
     helper_name: &str,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     abi::emit_symbol_address(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 1),
@@ -211,12 +211,12 @@ fn register_eval_native_constructor_compiled_default(
 /// Emits one native constructor bridge-support registration call.
 pub(super) fn register_eval_native_constructor_bridge_support(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     class_name_label: &str,
     class_name_len: usize,
     bridge_supported: bool,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     abi::emit_symbol_address(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 1),
@@ -242,11 +242,11 @@ pub(super) fn register_eval_native_constructor_bridge_support(
 /// Emits one native class-parent metadata registration call into the eval context.
 pub(super) fn register_eval_native_class_parent(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     class_name: &str,
     parent_name: &str,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     let (class_name_label, class_name_len) = ctx.data.add_string(class_name.as_bytes());
     abi::emit_symbol_address(
         ctx.emitter,
@@ -279,10 +279,10 @@ pub(super) fn register_eval_native_class_parent(
 /// Emits one native property-type metadata registration call into the eval context.
 pub(super) fn register_eval_native_property_type(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     registration: &EvalNativePropertyTypeRegistration,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     let property_key = format!(
         "{}::{}",
         registration.class_name, registration.property_name
@@ -319,10 +319,10 @@ pub(super) fn register_eval_native_property_type(
 /// Emits one native interface-property metadata registration call into the eval context.
 pub(super) fn register_eval_native_interface_property(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     registration: &EvalNativeInterfacePropertyRegistration,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     let property_key = format!(
         "{}::{}::{}",
         registration.interface_name,
@@ -376,10 +376,10 @@ pub(super) fn register_eval_native_interface_property(
 /// Emits one native abstract-property metadata registration call into the eval context.
 pub(super) fn register_eval_native_abstract_property(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     registration: &EvalNativeAbstractPropertyRegistration,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     let property_key = format!(
         "{}::{}::{}",
         registration.class_name, registration.declaring_class_name, registration.property_name

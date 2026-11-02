@@ -27,7 +27,7 @@ use crate::codegen_support::sentinels::tagged_scalar_tag_reg;
 /// incrementing the refcount—the caller owns the result register value.
 pub fn emit_store(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     match ty {
-        PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Resource(_) => {
+        PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Resource(_) | PhpType::Narrow(_) => {
             store_at_offset(emitter, int_result_reg(emitter), offset); // store scalar integer-like value to stack
         }
         PhpType::Float => {
@@ -176,7 +176,7 @@ fn emit_local_ref_cell_cleanup(emitter: &mut Emitter, cell_reg: &str, value_ty: 
 /// sentinel. For compound types (array, object, callable, pointer, etc.), loads the heap pointer.
 pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     match ty {
-        PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Resource(_) => {
+        PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Resource(_) | PhpType::Narrow(_) => {
             load_at_offset(emitter, int_result_reg(emitter), offset); // load scalar integer-like value from stack
         }
         PhpType::Float => {
@@ -408,7 +408,7 @@ pub fn emit_write_stdout(emitter: &mut Emitter, ty: &PhpType) {
         PhpType::Str => {
             emit_write_current_string_stdout(emitter);
         }
-        PhpType::Bool | PhpType::False | PhpType::Int => {
+        PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Narrow(_) => {
             emit_call_label(emitter, "__rt_itoa");
             emit_write_current_string_stdout(emitter);
         }

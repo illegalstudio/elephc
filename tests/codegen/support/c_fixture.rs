@@ -3,7 +3,9 @@
 //! Lets codegen tests call real C callees (dirty-register returns, native hosts) without a shared library.
 //!
 //! Called from:
+//! - `tests/codegen/ffi/nullable_strings.rs`
 //! - `tests/codegen/ffi/return_normalization.rs`
+//! - `tests/codegen/ffi/struct_layout.rs`
 //! - `tests/codegen/runtime_gc/mbstring_capture_hash/*`
 //!
 //! Key details:

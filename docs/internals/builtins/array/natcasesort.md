@@ -2,7 +2,7 @@
 title: "natcasesort() - internals"
 description: "Compiler internals for natcasesort(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 59
+  order: 61
 ---
 
 ## `natcasesort()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/natcasesort.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/natcasesort.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

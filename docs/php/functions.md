@@ -227,8 +227,18 @@ echo $static();            // 99  (static spelling)
 echo $read();              // 7   (original is unchanged)
 ```
 
-An optional third `$scope` argument is accepted for source compatibility and
-ignored (member visibility is resolved at compile time).
+An explicit scope may be a known user class name, `Class::class`, an object,
+`null` for global visibility, or `"static"` to preserve the closure's current
+scope. The same argument is the second parameter of `bindTo()`. An object
+supplies its concrete runtime class, including when it is passed through a
+base-class parameter.
+
+For standalone accessor closures, explicit scope also works when the closure
+is supplied as a callable parameter or selected after a warning handler changes
+a global. Binding selects a function compiled for the requested visibility;
+the original and earlier bound copies keep their own scopes. Runtime strings
+that select a scope are refused by native lowering; use an object or a literal
+class scope instead.
 
 `$closure->call($newThis, ...$args)` binds `$this` and invokes the closure in a
 single step, returning its result:
@@ -255,8 +265,10 @@ echo $read();   // 250 — bound access reaches the private property
 
 Rebinding supports closures that capture `$this` and nothing else (the typical
 accessor closure, whether created inside a method or standalone). Binding a
-closure that also has `use(...)` captures aborts with a fatal error rather than
-producing an incorrectly bound closure.
+closure that also has `use(...)` captures is refused rather than producing an
+incorrectly bound closure.
+Changing the class scope of an accessor originally compiled against a concrete
+object layout is also refused when that layout cannot be retargeted safely.
 
 ## Static closures
 
@@ -387,6 +399,38 @@ $b =& $a;
 $b = 2;
 echo $a; // 2
 ```
+
+An **object property** can also be passed directly to a by-reference parameter of a user
+method or constructor when the parameter and the property are both object-typed:
+
+```php
+<?php
+class Value { public function __construct(public int $number) {} }
+class Box { public function __construct(public Value $value) {} }
+class Ops {
+    public function replace(Value &$value): void {
+        $value = new Value(9);
+    }
+}
+
+$box = new Box(new Value(1));
+(new Ops())->replace($box->value);
+echo $box->value->number; // 9
+```
+
+elephc lowers the call as `$temporary = $box->value; replace($temporary); $box->value = $temporary;`
+through a hidden reference cell, so the callee's replacement is visible on the property
+exactly as PHP's shared reference is. The same rewrite accepts scalar, string, array,
+`mixed`, union, and nullable properties, static properties, static methods, and free
+functions.
+
+The same property places also bind to by-reference **variadics**, except array properties:
+the variadic collector needs the container payload repacked, so `collect($box->items)` is
+rejected and asks for a local variable instead. Properties whose declared type needs a runtime
+type dispatch the rewrite does not implement (`iterable`, pointers, buffers) still report
+`must be passed a variable`. The write-back runs after the call
+returns; if the callee throws after mutating the reference, the property keeps its previous
+value (PHP would already have applied the mutation).
 
 ## References to array elements
 

@@ -99,8 +99,12 @@ fn test_fresh_mixed_transfer_all_target_eir() {
             .arg(&php_path).output().expect("emit target EIR");
         assert!(result.status.success(), "{target}: {}", String::from_utf8_lossy(&result.stderr));
         let ir = String::from_utf8(result.stdout).expect("UTF-8 EIR");
-        let main = ir.split("function main(").nth(1).expect("main EIR");
-        assert!(main.contains(" = ichecked_add "), "{target}: {main}");
+        let main = ir.split("function main(").nth(1).expect("main EIR")
+            .split("\n  function ").next().unwrap();
+        let numeric_add = main.contains(" = ichecked_add ") || main.lines().any(|line| {
+            line.contains(" = mixed_numeric_binop ") && line.contains(" add ")
+        });
+        assert!(numeric_add, "{target}: promotion-aware numeric addition must remain: {main}");
         assert!(!main.contains(" = mixed_clone "), "{target}: {main}");
     }
     fs::remove_dir_all(dir).expect("remove target fixture");

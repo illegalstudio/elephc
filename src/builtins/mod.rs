@@ -26,6 +26,7 @@ pub(crate) mod mbstring;
 mod mbstring_callback;
 mod string;
 mod math;
+pub(crate) mod gmp;
 mod spl;
 mod pointers;
 mod system;

@@ -19,7 +19,7 @@ use crate::codegen::abi;
 use crate::codegen::callable_descriptor::{
     self, CallableDescriptorInvocation, CallableDescriptorShape,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::codegen::callable_dispatch::{
     self, RuntimeCallableCase, RuntimeCallableSelector, RuntimeStaticMethodCallableCase,
@@ -78,16 +78,38 @@ enum EvalInstanceCallableShape {
     ObjectInvoke,
 }
 
+/// Label an eval invoker is emitted under until its text is known to be new.
+const PENDING_INVOKER_LABEL: &str = "__elephc_eval_callable_invoker_pending";
+
 /// Stable label allocator for eval bridge helper bodies emitted outside `FunctionContext`.
 struct EvalCallableEmitState {
     next_id: usize,
     argument_normalizer_needed: bool,
+    /// Emitted invoker bodies, as written under [`PENDING_INVOKER_LABEL`], mapped to the label
+    /// that carries that body.
+    invoker_bodies: HashMap<String, String>,
 }
 
 impl EvalCallableEmitState {
     /// Creates an empty label state for one eval callable-support emission pass.
     fn new() -> Self {
-        Self { next_id: 0, argument_normalizer_needed: false }
+        Self { next_id: 0, argument_normalizer_needed: false, invoker_bodies: HashMap::new() }
+    }
+
+    /// Returns the label carrying `body`, an invoker emitted under [`PENDING_INVOKER_LABEL`],
+    /// naming and recording it the first time that text is seen.
+    ///
+    /// The placeholder names the invoker and prefixes each of its local labels, so two bodies
+    /// share a label exactly when their instructions are the same. `filed` receives the body
+    /// under its real label only when it is new.
+    fn emitted_invoker(&mut self, body: String, filed: impl FnOnce(&str)) -> String {
+        if let Some(existing) = self.invoker_bodies.get(&body) {
+            return existing.clone();
+        }
+        let label = self.next_label("callable_invoker");
+        filed(&body.replace(PENDING_INVOKER_LABEL, &label));
+        self.invoker_bodies.insert(body, label.clone());
+        label
     }
 
     /// Returns a unique global/local label for generated eval callable support.
@@ -773,14 +795,13 @@ fn emit_eval_runtime_callable_invoker_inline(
 ) -> String {
     state.argument_normalizer_needed |=
         super::runtime_callable_invoker::needs_callable_argument_normalizer(sig);
-    let label = state.next_label("callable_invoker");
     let defaults = super::runtime_callable_invoker::resolve_invoker_defaults(
         module,
         current_class,
         sig,
     );
     let invoker = RuntimeCallableInvoker {
-        label: &label,
+        label: PENDING_INVOKER_LABEL,
         sig,
         captures,
         mbstring_operation: None,
@@ -792,8 +813,12 @@ fn emit_eval_runtime_callable_invoker_inline(
     // See `Emitter::begin_out_of_line` for the branch-range failure that splicing caused.
     let scope = emitter.begin_out_of_line();
     super::runtime_callable_invoker::emit_runtime_callable_invoker(emitter, data, &invoker);
-    emitter.end_out_of_line(scope);
-    label
+    let body = emitter.end_detached(scope);
+    // Most callees share a few shapes: an `eval()` program emitted 633 of these invokers with
+    // 148 distinct bodies. The invoker emitter keeps no state outside its text, and its data
+    // entries are content-deduplicated strings and floats, so a body whose text matches an
+    // earlier one is dropped for that one's label.
+    state.emitted_invoker(body, |body| emitter.push_out_of_line(body))
 }
 
 /// Returns a hidden receiver parameter name that cannot collide with visible parameters.

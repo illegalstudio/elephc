@@ -17,6 +17,9 @@ use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[path = "error_tests/buffer_record_copy.rs"]
+mod buffer_record_copy;
+
 static TEST_PROJECT_ID: AtomicUsize = AtomicUsize::new(0);
 
 /// Runs the full frontend pipeline (tokenize → parse → conditional → autoload → name-resolve → optimize → type-check)
@@ -68,9 +71,12 @@ fn check_source_with_defines_and_options(
     let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::core_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = elephc::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::random_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::testing_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::fileinfo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::tokenizer_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::name_resolver::resolve(ast).map_err(|e| e.message.clone())?;
     // Mirrors `pipeline::compile`: the object-cast prelude is injected past name resolution,
@@ -103,9 +109,12 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::core_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = elephc::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::random_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::testing_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::fileinfo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::tokenizer_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::name_resolver::resolve(ast)?;
     let ast = elephc::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory)?;
@@ -294,6 +303,8 @@ mod core_symbols;
 mod type_system;
 #[path = "error_tests/reference_detach.rs"]
 mod reference_detach;
+#[path = "error_tests/loop_counter_bindings.rs"]
+mod loop_counter_bindings;
 #[path = "error_tests/exceptions_enums_magic.rs"]
 mod exceptions_enums_magic;
 #[path = "error_tests/classes_traits.rs"]
@@ -304,10 +315,16 @@ mod property_default_scope;
 mod generics_review;
 #[path = "error_tests/extensions.rs"]
 mod extensions;
+#[path = "error_tests/buffer_merges.rs"]
+mod buffer_merges;
+#[path = "error_tests/data_widths.rs"]
+mod data_widths;
 #[path = "error_tests/strict_php.rs"]
 mod strict_php;
 #[path = "error_tests/math_builtins.rs"]
 mod math_builtins;
+#[path = "error_tests/random.rs"]
+mod random;
 #[path = "error_tests/bcmath_number.rs"]
 mod bcmath_number;
 #[path = "error_tests/string_builtins.rs"]
@@ -322,6 +339,8 @@ mod array_builtins;
 mod nested_write_review;
 #[path = "error_tests/registry_arity.rs"]
 mod registry_arity;
+#[path = "error_tests/memory_metrics.rs"]
+mod memory_metrics;
 #[path = "error_tests/callables.rs"]
 mod callables;
 #[path = "error_tests/never.rs"]
@@ -346,6 +365,8 @@ mod curl;
 /// wrappers' argument contracts and `xml_parse_into_struct()`'s output requirements.
 #[path = "error_tests/xml.rs"]
 mod xml;
+#[path = "error_tests/tokenizer.rs"]
+mod tokenizer;
 
 // --- Iterator-related errors ---
 
@@ -466,3 +487,6 @@ function gen() { yield from not_gen(); }
         "yield from expects an array literal or Generator, got int",
     );
 }
+
+#[path = "error_tests/fileinfo.rs"]
+mod fileinfo;

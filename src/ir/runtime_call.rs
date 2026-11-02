@@ -65,6 +65,12 @@ pub enum RuntimeArgumentLayout {
 /// Typed runtime operation selected by backend-neutral EIR lowering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RuntimeCallTarget {
+    /// Releases the native owner represented by one private PHP host lease.
+    PhpextObjectRelease,
+    /// Publishes graph roots after excluding ordinary owners held by PHP wrappers.
+    PhpextPublishObjectRoots,
+    /// Reclaims native cycles after PHP has retired wrapper leases, even under heap pressure.
+    PhpextCollectObjectCycles,
     /// Returns an owned string naming the currently running executable.
     ExecutablePath,
     /// Returns the unique live weak wrapper for an object, acquiring its returned owner.
@@ -81,6 +87,15 @@ pub enum RuntimeCallTarget {
     /// (operand 1); an overlap between the two chains drops the pending owner instead of
     /// creating a cycle.
     ExceptionChain,
+    /// Chains exceptions emitted by a `finally` escape and notifies hosted runtimes that the
+    /// current escape crossed one older parked host-exception level.
+    ExceptionFinallyChain,
+    /// Notifies a hosted runtime that a `finally` jump discarded its pending exception.
+    /// Standalone outputs have no host exception to retire, so their backend emits no code.
+    ExceptionDiscard,
+    /// Marks a native exception consumed by a user catch while it replaces a pending host escape.
+    /// The hosted adapter keeps that host exception only when the caught native chain is rethrown.
+    ExceptionCatchHostReplacement,
     /// Fetches an intermediate array element in write context, installing an
     /// empty child container when the addressed parent slot is missing or null.
     ArrayFetchForWrite,
@@ -131,6 +146,10 @@ pub enum RuntimeCallTarget {
     CallArgumentCollectNamed,
     /// A one-string-to-one-string transform implemented by the shared runtime.
     UnaryString(UnaryStringRuntime),
+    /// PHP's string offset write `$s[$i] = $v`: takes the subject, the resolved integer offset,
+    /// and the string value, and returns the updated string as a fresh value. It can warn
+    /// (illegal offset, multi-byte value) and throw `Error` (empty value).
+    StringOffsetSet,
     /// A typed PCNTL process-control operation with target-aware availability.
     Pcntl(crate::ir::PcntlRuntime),
     /// A stable runtime function whose target-aware implementation is backend-owned.
@@ -153,6 +172,12 @@ impl RuntimeCallTarget {
     /// Returns the logical signature shared by EIR validation and backend lowering.
     pub fn signature(self) -> Option<RuntimeCallSignature> {
         match self {
+            RuntimeCallTarget::PhpextObjectRelease => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::I64], result: IrType::Void,
+            }),
+            RuntimeCallTarget::PhpextPublishObjectRoots | RuntimeCallTarget::PhpextCollectObjectCycles => Some(RuntimeCallSignature::Fixed {
+                parameters: &[], result: IrType::Void,
+            }),
             RuntimeCallTarget::WeakObjectId => Some(RuntimeCallSignature::Fixed {
                 parameters: &[IrType::Heap(IrHeapKind::Mixed)],
                 result: IrType::I64,
@@ -173,8 +198,16 @@ impl RuntimeCallTarget {
                 parameters: &[IrType::Heap(IrHeapKind::Object), IrType::Str, IrType::I64, IrType::Heap(IrHeapKind::Mixed)],
                 result: IrType::Void,
             }),
-            RuntimeCallTarget::ExceptionChain => Some(RuntimeCallSignature::Fixed {
+            RuntimeCallTarget::ExceptionChain | RuntimeCallTarget::ExceptionFinallyChain => Some(RuntimeCallSignature::Fixed {
                 parameters: &[IrType::Heap(IrHeapKind::Object), IrType::Heap(IrHeapKind::Object)],
+                result: IrType::Void,
+            }),
+            RuntimeCallTarget::ExceptionDiscard => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Object)],
+                result: IrType::Void,
+            }),
+            RuntimeCallTarget::ExceptionCatchHostReplacement => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Object)],
                 result: IrType::Void,
             }),
             RuntimeCallTarget::ArrayFetchForWrite
@@ -237,6 +270,10 @@ impl RuntimeCallTarget {
                 parameters: &[IrType::Str],
                 result: IrType::Str,
             }),
+            RuntimeCallTarget::StringOffsetSet => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Str, IrType::I64, IrType::Str],
+                result: IrType::Str,
+            }),
             RuntimeCallTarget::Pcntl(target) => Some(target.signature()),
             RuntimeCallTarget::Function(target) => {
                 target.descriptor().logical_signature
@@ -255,12 +292,20 @@ impl RuntimeCallTarget {
     /// Returns the stable backend-neutral spelling used by textual EIR.
     pub fn as_eir(self) -> &'static str {
         match self {
+            RuntimeCallTarget::PhpextObjectRelease => "phpext.object_release",
+            RuntimeCallTarget::PhpextPublishObjectRoots => "phpext.publish_object_roots",
+            RuntimeCallTarget::PhpextCollectObjectCycles => "phpext.collect_object_cycles",
             RuntimeCallTarget::WeakObjectId => "object.weak_identity",
             RuntimeCallTarget::WeakReferenceCreate => "object.weak_reference_create",
             RuntimeCallTarget::WeakReferenceGet => "object.weak_reference_get",
             RuntimeCallTarget::ExecutablePath => "process.executable_path",
             RuntimeCallTarget::ThrowableInitialize => "object.throwable_initialize",
             RuntimeCallTarget::ExceptionChain => "object.exception_chain",
+            RuntimeCallTarget::ExceptionFinallyChain => "object.exception_finally_chain",
+            RuntimeCallTarget::ExceptionDiscard => "object.exception_discard",
+            RuntimeCallTarget::ExceptionCatchHostReplacement => {
+                "object.exception_catch_host_replacement"
+            }
             RuntimeCallTarget::ArrayFetchForWrite => "array.fetch_for_write",
             RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed => "array.fetch_for_write_already_diagnosed",
             RuntimeCallTarget::PendingAppendFetchForWrite => "array.pending_append_fetch_for_write",
@@ -296,6 +341,7 @@ impl RuntimeCallTarget {
             }
             RuntimeCallTarget::CallArgumentCollectNamed => "call_argument.collect_named",
             RuntimeCallTarget::UnaryString(runtime) => runtime.as_eir(),
+            RuntimeCallTarget::StringOffsetSet => "string.offset_set",
             RuntimeCallTarget::Pcntl(target) => target.as_eir(),
             RuntimeCallTarget::Function(target) => target.as_eir(),
             RuntimeCallTarget::ProfiledFunction { target, .. } => target.as_eir(),

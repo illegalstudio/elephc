@@ -43,15 +43,20 @@ pub(super) fn reflection_parameter_default_value(
         current_class: (!current_class.is_empty()).then_some(current_class),
     };
     if let Some(kind) = crate::codegen::const_default_values::resolve_const_default(default, &context)
-        .and_then(crate::codegen::const_default_values::resolved_scalar_literal)
+        .and_then(crate::codegen::const_default_values::resolved_literal_default)
     {
         return Ok(reflection_literal_parameter_default_value(&Expr::new(kind, default.span)));
     }
     match &default.kind {
-        ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => {
-            let value = reflection_constant_value(ctx, current_class, current_info, default, 0)?;
-            Ok(reflection_parameter_default_from_constant_value(value))
-        }
+        // Unsupported constant forms retain their source export without failing compilation.
+        // Representable scalar and array values share the recursive constant evaluator.
+        ExprKind::ConstRef(_)
+        | ExprKind::ClassConstant { .. }
+        | ExprKind::ScopedConstantAccess { .. } => Ok(
+            reflection_constant_value(ctx, current_class, current_info, default, 0)
+                .ok()
+                .and_then(reflection_parameter_default_from_constant_value),
+        ),
         _ => Ok(None),
     }
 }
@@ -67,91 +72,6 @@ pub(super) fn reflection_deferred_default_value(default: &Expr) -> Option<Reflec
         .then(|| ReflectionParameterDefaultValue::DeferredError(message.clone()))
 }
 
-/// Converts a top-level object parameter default into Reflection metadata.
-pub(super) fn reflection_object_parameter_default_value(
-    ctx: &FunctionContext<'_>,
-    current_class: &str,
-    current_info: Option<&crate::types::ClassInfo>,
-    default: &Expr,
-) -> Result<Option<ReflectionParameterDefaultValue>> {
-    let ExprKind::NewObject { class_name, args } = &default.kind else {
-        return Ok(None);
-    };
-    let Some(args) = reflection_object_parameter_default_args(
-        ctx,
-        current_class,
-        current_info,
-        class_name.as_str(),
-        args,
-    )?
-    else {
-        return Ok(None);
-    };
-    Ok(Some(ReflectionParameterDefaultValue::Object {
-        class_name: class_name.as_str().to_string(),
-        args,
-    }))
-}
-
-/// Returns constructor args for an object default, including supported omitted defaults.
-pub(super) fn reflection_object_parameter_default_args(
-    ctx: &FunctionContext<'_>,
-    current_class: &str,
-    current_info: Option<&crate::types::ClassInfo>,
-    class_name: &str,
-    args: &[Expr],
-) -> Result<Option<Vec<ReflectionParameterDefaultValue>>> {
-    if args.len() > 8 {
-        return Ok(None);
-    }
-    let mut values = Vec::with_capacity(args.len());
-    for arg in args {
-        let Some(value) =
-            reflection_parameter_default_non_object_value(ctx, current_class, current_info, arg)?
-        else {
-            return Ok(None);
-        };
-        values.push(value);
-    }
-    let Some((_, class_info)) = resolve_reflection_class(ctx, class_name) else {
-        return Ok(Some(values));
-    };
-    let constructor = class_info.methods.get(&php_symbol_key("__construct"));
-    let Some(constructor) = constructor else {
-        return if values.is_empty() {
-            Ok(Some(values))
-        } else {
-            Ok(None)
-        };
-    };
-    if constructor.variadic.is_some()
-        || values.len() > constructor.params.len()
-        || constructor.params.len() > 8
-    {
-        return Ok(None);
-    }
-    for default in constructor.defaults.iter().skip(values.len()) {
-        let Some(default) = default.as_ref() else {
-            return Ok(None);
-        };
-        let Some(value) = reflection_parameter_default_non_object_value(
-            ctx,
-            class_name,
-            Some(class_info),
-            default,
-        )?
-        else {
-            return Ok(None);
-        };
-        values.push(value);
-    }
-    if values.len() == constructor.params.len() {
-        Ok(Some(values))
-    } else {
-        Ok(None)
-    }
-}
-
 /// Converts a supported non-object parameter default expression into metadata.
 pub(super) fn reflection_parameter_default_non_object_value(
     ctx: &FunctionContext<'_>,
@@ -162,11 +82,24 @@ pub(super) fn reflection_parameter_default_non_object_value(
     if let Some(value) = reflection_literal_parameter_default_non_object_value(default) {
         return Ok(Some(value));
     }
+    let context = crate::codegen::const_default_values::ConstDefaultContext {
+        module: ctx.module,
+        current_class: (!current_class.is_empty()).then_some(current_class),
+    };
+    if let Some(kind) = crate::codegen::const_default_values::resolve_const_default(default, &context)
+        .and_then(crate::codegen::const_default_values::resolved_literal_default)
+    {
+        return Ok(reflection_literal_parameter_default_non_object_value(&Expr::new(kind, default.span)));
+    }
     match &default.kind {
-        ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => {
-            let value = reflection_constant_value(ctx, current_class, current_info, default, 0)?;
-            Ok(reflection_parameter_default_from_constant_value(value))
-        }
+        // Object arguments share the supported constant-value fallback.
+        ExprKind::ConstRef(_)
+        | ExprKind::ClassConstant { .. }
+        | ExprKind::ScopedConstantAccess { .. } => Ok(
+            reflection_constant_value(ctx, current_class, current_info, default, 0)
+                .ok()
+                .and_then(reflection_parameter_default_from_constant_value),
+        ),
         _ => Ok(None),
     }
 }
@@ -210,6 +143,9 @@ pub(super) fn reflection_literal_parameter_default_value(
         crate::codegen::literal_defaults::fold_named_class_constant(&default.kind)
     {
         return Some(ReflectionParameterDefaultValue::Str(value));
+    }
+    if let Some(folded) = crate::types::fold_spreadless_mixed_array_literal(&default.kind, crate::codegen_support::compile_php_version()) {
+        return reflection_literal_parameter_default_value(&Expr::new(folded, default.span));
     }
     match &default.kind {
         ExprKind::IntLiteral(value) => Some(ReflectionParameterDefaultValue::Int(*value)),
@@ -259,12 +195,19 @@ pub(super) fn reflection_default_array_key(key: &Expr) -> Option<ReflectionDefau
     match &key.kind {
         ExprKind::IntLiteral(value) => Some(ReflectionDefaultArrayKey::Int(*value)),
         ExprKind::BoolLiteral(value) => Some(ReflectionDefaultArrayKey::Int(i64::from(*value))),
-        ExprKind::FloatLiteral(value) => Some(ReflectionDefaultArrayKey::Int(*value as i64)),
+        ExprKind::FloatLiteral(value) => {
+            let key = crate::types::php_float_array_key(*value);
+            Some(ReflectionDefaultArrayKey::Int(key))
+        }
         ExprKind::StringLiteral(value) => reflection_default_string_array_key(value),
         ExprKind::Null => Some(ReflectionDefaultArrayKey::Str(String::new())),
         ExprKind::Negate(inner) => match &inner.kind {
             ExprKind::IntLiteral(value) => value.checked_neg().map(ReflectionDefaultArrayKey::Int),
-            ExprKind::FloatLiteral(value) => Some(ReflectionDefaultArrayKey::Int((-*value) as i64)),
+            ExprKind::FloatLiteral(value) => {
+                let negated = -*value;
+                let key = crate::types::php_float_array_key(negated);
+                Some(ReflectionDefaultArrayKey::Int(key))
+            }
             _ => None,
         },
         _ => None,
@@ -273,14 +216,13 @@ pub(super) fn reflection_default_array_key(key: &Expr) -> Option<ReflectionDefau
 
 /// Normalizes a string array key according to PHP integer-string key rules.
 pub(super) fn reflection_default_string_array_key(value: &str) -> Option<ReflectionDefaultArrayKey> {
-    if is_php_integer_array_key(value) {
-        value
-            .parse::<i64>()
-            .ok()
-            .map(ReflectionDefaultArrayKey::Int)
-    } else {
-        Some(ReflectionDefaultArrayKey::Str(value.to_string()))
+    let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
+    if let Ok(decoded) = std::str::from_utf8(&bytes) {
+        if is_php_integer_array_key(decoded) {
+            return decoded.parse::<i64>().ok().map(ReflectionDefaultArrayKey::Int);
+        }
     }
+    Some(ReflectionDefaultArrayKey::Str(value.to_string()))
 }
 
 /// Converts scalar/null constant metadata into a parameter default value.
@@ -296,12 +238,30 @@ pub(super) fn reflection_parameter_default_from_constant_value(
         ReflectionConstantValue::Str(value) => Some(ReflectionParameterDefaultValue::Str(value)),
         ReflectionConstantValue::Null => Some(ReflectionParameterDefaultValue::Null),
         ReflectionConstantValue::EnumCase { .. } => None,
+        ReflectionConstantValue::Array(elements) => elements
+            .into_iter()
+            .map(reflection_parameter_default_from_constant_value)
+            .collect::<Option<Vec<_>>>()
+            .map(ReflectionParameterDefaultValue::Array),
+        ReflectionConstantValue::AssocArray(entries) => entries
+            .into_iter()
+            .map(|entry| {
+                Some(ReflectionDefaultAssocEntry {
+                    key: entry.key,
+                    value: reflection_parameter_default_from_constant_value(entry.value)?,
+                })
+            })
+            .collect::<Option<Vec<_>>>()
+            .map(ReflectionParameterDefaultValue::AssocArray),
     }
 }
 
-/// Returns PHP's constant-name metadata for parameter defaults that name a class constant.
+/// Returns PHP's constant-name metadata for parameter defaults that name a constant.
 pub(super) fn reflection_parameter_default_constant_name(default: &Expr) -> Option<String> {
-    crate::types::deferred_defaults::source_constant_name(default)
+    match &default.kind {
+        ExprKind::ConstRef(name) => Some(name.as_str().trim_start_matches('\\').to_string()),
+        _ => crate::types::deferred_defaults::source_constant_name(default),
+    }
 }
 
 /// Converts a normalized parameter type into a supported `ReflectionType` subset.
@@ -337,11 +297,12 @@ pub(super) fn reflection_declared_type_metadata(
         }
         TypeExpr::Union(members) => {
             let allows_null = members.iter().any(|member| matches!(member, TypeExpr::Void));
-            let types = members
+            let mut types = members
                 .iter()
                 .filter(|member| !matches!(member, TypeExpr::Void))
                 .map(reflection_named_type_metadata_from_type_expr)
                 .collect::<Option<Vec<_>>>()?;
+            sort_union_members_like_php(&mut types);
             if types.len() == 1 {
                 let mut metadata = types.into_iter().next()?;
                 metadata.allows_null = allows_null;
@@ -411,12 +372,16 @@ pub(super) fn reflection_named_type_metadata(ty: &PhpType) -> Option<ReflectionN
         PhpType::Float => Some(reflection_builtin_named_type("float", false)),
         PhpType::Str => Some(reflection_builtin_named_type("string", false)),
         PhpType::Bool => Some(reflection_builtin_named_type("bool", false)),
+        PhpType::False => Some(reflection_builtin_named_type("false", false)),
         PhpType::Iterable => Some(reflection_builtin_named_type("iterable", false)),
         PhpType::Mixed => Some(reflection_builtin_named_type("mixed", true)),
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
             Some(reflection_builtin_named_type("array", false))
         }
         PhpType::Callable => Some(reflection_builtin_named_type("callable", false)),
+        PhpType::Object(name) if name.is_empty() => {
+            Some(reflection_builtin_named_type("object", false))
+        }
         PhpType::Object(name) => Some(ReflectionNamedTypeMetadata {
             name: name.clone(),
             allows_null: false,
@@ -458,6 +423,10 @@ pub(super) fn reflection_union_or_nullable_type_metadata(
         metadata.allows_null = allows_null;
         return Some(ReflectionParameterTypeMetadata::Named(metadata));
     }
+    // PHP prints union members in its own rank order, not the declared one. The list built
+    // above already collapses packed and keyed storage into one PHP type, so it only needs
+    // ordering -- rebuilding it here would undo that de-duplication.
+    sort_union_members_like_php(&mut types);
     (!types.is_empty()).then_some(ReflectionParameterTypeMetadata::Union(
         ReflectionUnionTypeMetadata { types, allows_null },
     ))
@@ -504,4 +473,24 @@ pub(super) fn reflection_named_type_metadata_from_type_expr(
         }
         _ => None,
     }
+}
+
+/// Orders a union's members the way PHP prints them, not the way they were declared.
+///
+/// PHP renders a union from its internal type mask, which has a fixed order, so `int|string`
+/// prints as `string|int`. `ReflectionMethod::__toString()` already used this order (issue
+/// #1080); the type OBJECT returned by `getType()` kept the declared one, so the same program
+/// disagreed with itself:
+///
+/// ```text
+/// echo (string) $p;             // Parameter #0 [ <required> string|int $v ]
+/// echo (string) $p->getType();  // int|string
+/// ```
+///
+/// The sort is stable, which is what keeps class names in their declared order among themselves:
+/// they all share rank 0.
+fn sort_union_members_like_php(types: &mut [ReflectionNamedTypeMetadata]) {
+    types.sort_by_key(|member| {
+        elephc_builtin_contract::reflection_format::union_member_rank(&member.name)
+    });
 }

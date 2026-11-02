@@ -116,7 +116,7 @@ pub(crate) fn lower_clone_with(ctx: &mut FunctionContext<'_>, inst: &Instruction
     abi::emit_temporary_stack_address(ctx.emitter, &owner_addr, 0);
     abi::emit_link_call_operand_owner_at_stack(ctx.emitter, &owner_addr, false, 16);
 
-    emit_enum_uncloneable_guard(ctx);
+    emit_declared_uncloneable_guard(ctx);
     emit_clone_hook(ctx, object, inst.operands.get(2).copied())?;
     // An omitted second argument IS the empty override array, so there is nothing to apply.
     if let Some(properties) = inst.operands.get(1).copied() {
@@ -311,7 +311,7 @@ fn emit_eval_clone_invocation_scope(
     invocation_scope: Option<ValueId>,
 ) -> Result<()> {
     let Some(invocation_scope) = invocation_scope else {
-        let Some(lexical_class) = ctx.function.lexical_class.clone() else {
+        let Some(lexical_class) = ctx.lexical_class().map(str::to_owned) else {
             return Ok(());
         };
         emit_store_eval_clone_scope_name(ctx, &lexical_class);
@@ -532,7 +532,7 @@ fn static_type_name(ty: &PhpType) -> &str {
         PhpType::Resource(_) | PhpType::Buffer(_) | PhpType::Pointer(_) => "resource",
         PhpType::Callable => "Closure",
         PhpType::Iterable => "object",
-        PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar => "mixed",
+        PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar | PhpType::Narrow(_) => "mixed",
     }
 }
 
@@ -575,12 +575,12 @@ fn emit_uncloneable_guard(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.label(&cloned_label);
 }
 
-/// Refuses an enum case, which php forbids cloning, naming the enum the way php-src does.
+/// Refuses enum cases and catalogued opaque objects using their runtime class names.
 ///
-/// The shared shallow-copy adapter happily copies an enum case, so the refusal is decided here
+/// The shared shallow-copy adapter copies enum cases and opaque internal classes, so the refusal is decided here
 /// from the clone's own runtime class id. It runs INSIDE the owner window, so the copy the
 /// adapter already made is released by the unwinder instead of leaking.
-fn emit_enum_uncloneable_guard(ctx: &mut FunctionContext<'_>) {
+fn emit_declared_uncloneable_guard(ctx: &mut FunctionContext<'_>) {
     let mut enums = ctx
         .module
         .enum_infos
@@ -592,6 +592,11 @@ fn emit_enum_uncloneable_guard(ctx: &mut FunctionContext<'_>) {
                 .map(|info| (info.class_id as i64, name.clone()))
         })
         .collect::<Vec<_>>();
+    for (name, info) in &ctx.module.class_infos {
+        if !crate::types::builtin_classes::class_allows_clone(name, &ctx.module.class_infos) {
+            enums.push((info.class_id as i64, name.clone()));
+        }
+    }
     if enums.is_empty() {
         return;
     }
@@ -969,8 +974,8 @@ fn clone_hook_is_visible(ctx: &FunctionContext<'_>, candidate: &CloneHookCandida
     let declaring = candidate.declaring_class.as_str();
     match candidate.visibility {
         Visibility::Public => true,
-        Visibility::Private => ctx.function.lexical_class.as_deref() == Some(declaring),
-        Visibility::Protected => ctx.function.lexical_class.as_deref().is_some_and(|current| {
+        Visibility::Private => ctx.lexical_class() == Some(declaring),
+        Visibility::Protected => ctx.lexical_class().is_some_and(|current| {
             current == declaring
                 || class_is_subclass_of(ctx, current, declaring)
                 || class_is_subclass_of(ctx, declaring, current)
@@ -1003,9 +1008,7 @@ fn class_is_subclass_of(ctx: &FunctionContext<'_>, class_name: &str, ancestor: &
 /// PHP writes `from global scope` at the top level and `from scope Other` inside a class,
 /// so the phrase carries its own trailing word and callers must not append one.
 fn invocation_scope_phrase(ctx: &FunctionContext<'_>) -> String {
-    ctx.function
-        .lexical_class
-        .as_deref()
+    ctx.lexical_class()
         .map_or_else(|| "global scope".to_string(), |class| format!("scope {class}"))
 }
 

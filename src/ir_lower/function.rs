@@ -103,8 +103,11 @@ pub(crate) fn lower_main(
         &module.declared_trait_methods,
         &module.declared_trait_properties,
         &check_result.packed_classes,
+        &check_result.extern_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.array_push_property_plans,
+        &check_result.member_receiver_types,
 
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
@@ -188,8 +191,12 @@ pub(crate) fn lower_user_function(
     let web = module.web;
     let fallback = signature_from_ast(params, return_type);
     let signature = check_result.functions.get(name).unwrap_or(&fallback);
-    let eir_signature =
+    let mut eir_signature =
         eir_signature_with_php_param_contracts(name, signature, &check_result.callable_param_sigs);
+    // The body builds a `[null]` it returns with boxed slots, as every caller reads it
+    // (`caller_visible_return_type`).
+    eir_signature.return_type =
+        crate::types::dynamic_params::null_only_container_return_storage(&eir_signature.return_type);
     // A generator's compiled body is a coroutine that returns the value passed
     // to `return` (Mixed, read back via `Generator::getReturn()`), not the
     // `Generator` object itself. The public signature stays `Generator` for
@@ -242,8 +249,11 @@ pub(crate) fn lower_user_function(
         &module.declared_trait_methods,
         &module.declared_trait_properties,
         &check_result.packed_classes,
+        &check_result.extern_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.array_push_property_plans,
+        &check_result.member_receiver_types,
 
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
@@ -366,8 +376,11 @@ pub(crate) fn lower_class_method(
         &module.declared_trait_methods,
         &module.declared_trait_properties,
         &check_result.packed_classes,
+        &check_result.extern_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.array_push_property_plans,
+        &check_result.member_receiver_types,
 
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
@@ -483,8 +496,11 @@ pub(crate) fn lower_eval_aot_function(
         &module.declared_trait_methods,
         &module.declared_trait_properties,
         &check_result.packed_classes,
+        &check_result.extern_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.array_push_property_plans,
+        &check_result.member_receiver_types,
 
         &boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
@@ -611,8 +627,11 @@ pub(crate) fn lower_eval_aot_scope_function(
         &module.declared_trait_methods,
         &module.declared_trait_properties,
         &check_result.packed_classes,
+        &check_result.extern_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.array_push_property_plans,
+        &check_result.member_receiver_types,
 
         &boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
@@ -729,8 +748,11 @@ pub(crate) fn lower_property_init_thunk(
         &module.declared_trait_methods,
         &module.declared_trait_properties,
         &check_result.packed_classes,
+        &check_result.extern_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.array_push_property_plans,
+        &check_result.member_receiver_types,
 
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
@@ -1095,8 +1117,11 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         &module.declared_trait_methods,
         &module.declared_trait_properties,
         &check_result.packed_classes,
+        &check_result.extern_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.array_push_property_plans,
+        &check_result.member_receiver_types,
 
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
@@ -1217,8 +1242,11 @@ pub(crate) fn lower_clone_override_function(
         &module.declared_trait_methods,
         &module.declared_trait_properties,
         &check_result.packed_classes,
+        &check_result.extern_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.array_push_property_plans,
+        &check_result.member_receiver_types,
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
         &check_result.generic_call_sites,
@@ -1383,8 +1411,11 @@ pub(crate) fn lower_eval_native_default_helpers(
             &module.declared_trait_methods,
             &module.declared_trait_properties,
             &check_result.packed_classes,
+            &check_result.extern_classes,
             &check_result.throw_access_sites,
             &check_result.builtin_call_types,
+            &check_result.array_push_property_plans,
+            &check_result.member_receiver_types,
             &check_result.boxed_reference_promotion_sites,
             &check_result.first_class_builtin_call_types,
             &check_result.generic_call_sites,
@@ -1559,6 +1590,7 @@ fn lower_closure_function_with_signature(
     );
     function.lexical_class = parent.current_class.clone();
     function.callable_default = callable_default;
+    function.display_name = parent.take_closure_display_name(name);
     function.flags = FunctionFlags {
         is_closure: true,
         is_synthetic: function.callable_default.is_some(),
@@ -1592,6 +1624,8 @@ fn lower_closure_function_with_signature(
                 .map(|(name, hint, _, _)| (name.as_str(), hint.as_ref())),
             None,
             signature.by_ref_return,
+            // Closures keep the conservative summary.
+            None,
             body,
         ),
     });
@@ -1615,8 +1649,11 @@ fn lower_closure_function_with_signature(
         parent.declared_trait_methods,
         parent.declared_trait_properties,
         parent.packed_classes,
+        parent.extern_classes,
         parent.throw_access_sites,
         parent.builtin_call_types,
+        parent.array_push_property_plans,
+        parent.member_receiver_types,
 
         parent.boxed_reference_promotion_sites,
         parent.first_class_builtin_call_types,
@@ -1669,8 +1706,11 @@ fn lower_body_into_function(
     >,
     declared_trait_properties: &std::collections::HashMap<String, Vec<crate::parser::ast::ClassProperty>>,
     packed_classes: &std::collections::HashMap<String, PackedClassInfo>,
+    extern_classes: &std::collections::HashMap<String, crate::types::ExternClassInfo>,
     throw_access_sites: &std::collections::HashMap<Span, crate::types::ThrowAccessInfo>,
     builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    array_push_property_plans: &std::collections::HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
+    member_receiver_types: &std::collections::HashMap<(String, Span), Option<PhpType>>,
 
     boxed_reference_promotion_sites: &std::collections::HashMap<
         (String, Span),
@@ -1736,8 +1776,11 @@ fn lower_body_into_function(
         declared_trait_methods,
         declared_trait_properties,
         packed_classes,
+        extern_classes,
         throw_access_sites,
         builtin_call_types,
+        array_push_property_plans,
+        member_receiver_types,
 
         boxed_reference_promotion_sites,
         first_class_builtin_call_types,
@@ -1762,6 +1805,12 @@ fn lower_body_into_function(
     if let Some(function_global_names) = function_global_names {
         ctx.set_function_global_names(function_global_names);
     }
+    ctx.this_storage_stays_concrete = {
+        let flags = &ctx.builder.function().flags;
+        flags.is_method && !flags.is_static && !flags.is_closure
+            && property_initializers.is_none() && !body.is_empty()
+            && !crate::ir_lower::body_contains_eval_call(body)
+    };
     ctx.by_ref_return = function_by_ref_return;
     ctx.return_type_is_declared = return_type_is_declared;
     if let Some((scope_param, read_names, write_names, flush_names)) = eval_scope_reads {
@@ -1800,11 +1849,11 @@ fn lower_body_into_function(
         ctx.privatize_container_param(name, php_type, None);
     }
     seed_recursive_closure_binding(&mut ctx, recursive_closure_binding);
-    ctx.lower_with_final_string_append_storage(|ctx| {
+    ctx.lower_with_final_string_storage(|ctx| {
         if let Some(class) = property_initializers {
             super::property_initializers::lower(ctx, class);
         } else if !super::throwable_constructors::lower(ctx) && !super::core_methods::lower(ctx, body) {
-            crate::ir_lower::loop_closures::lower_body_observing_numeric_closures(ctx, body);
+            crate::ir_lower::numeric_storage::lower_body(ctx, body);
         }
     });
     terminate_open_block(&mut ctx);
@@ -1814,6 +1863,8 @@ fn lower_body_into_function(
     // Final storage types are now known: erase deferred loop-store releases that
     // guard slots which never widened to lifetime-tracked storage (issue #534).
     ctx.builder.prune_untracked_release_local_slot_ops();
+    // Pointer by-reference bindings need a pointer-word slot, which only the final storage shows.
+    ctx.refuse_pointer_reference_bindings();
     // Likewise, erase provisional releases for concrete local loads unless a
     // later store widened their final frame slot to Mixed (issue #538).
     ctx.builder.prune_borrowed_local_load_release_ops();
@@ -2342,15 +2393,20 @@ fn direct_closure_return_expr_type(
         // recognize. `$f = function ($v) { return tag($v); }` therefore returned a declared
         // `: string` through an int slot and printed 0, with no diagnostic (issue #1028). The
         // checker gets this right; only this re-derivation did not.
-        // Through `eir_user_function_return_type`, NOT the raw signature type, because that is
-        // what ordinary call lowering hands back and the two have to agree. A callee with an
-        // untyped by-value parameter receives it as a boxed Mixed, so a container it builds out
-        // of that parameter has Mixed elements whatever the signature's inferred element type
-        // says. Copying the raw type here stamped `array<string>` on a call that really produces
-        // `array<mixed>`, and the caller then read the boxed element with the wrong layout: the
-        // element came back as its own pointer printed as an integer. Raised in review.
+        // Through the caller rule, NOT the raw signature type, because that is what ordinary
+        // call lowering hands back and the two have to agree. A callee with an untyped by-value
+        // parameter receives it as a boxed Mixed, so a container it builds out of that parameter
+        // has Mixed elements whatever the signature's inferred element type says. Copying the
+        // raw type here stamped `array<string>` on a call that really produces `array<mixed>`,
+        // and the caller then read the boxed element with the wrong layout: the element came
+        // back as its own pointer printed as an integer. Raised in review.
+        // The rule is read before the boxed storage of a callee returning only `null`s
+        // (`caller_visible_checker_return_type`), so such a closure keeps `array<void>`, as on
+        // main: its `StaticCallableBinding` signature is all a `?:` or `??` merge of `$f()` can
+        // read, and beside a pointer array that arm must join into `?ptr<T>` (task 1539dae5
+        // tracks closures and methods).
         if let Some(sig) = ctx.functions.get(name.as_str()) {
-            return crate::ir_lower::expr::eir_user_function_return_type(sig);
+            return crate::types::dynamic_params::caller_visible_checker_return_type(sig);
         }
     }
     // The other call shapes fell to the same syntactic fallback, whose answer for a call it does
@@ -2445,6 +2501,13 @@ fn direct_closure_return_expr_type(
         }
         if let Some((_, php_type)) = params.iter().find(|(param_name, _)| param_name == name) {
             return php_type.clone();
+        }
+    }
+    if let ExprKind::BinaryOp { left, op, right } = &expr.kind {
+        let left_ty = direct_closure_return_expr_type(left, captures, params, ctx);
+        let right_ty = direct_closure_return_expr_type(right, captures, params, ctx);
+        if let Some(plan) = crate::types::object_operators::binary_plan(op, &left_ty, &right_ty) {
+            return plan.result_type(op);
         }
     }
     if let ExprKind::PropertyAccess { object, property } = &expr.kind {

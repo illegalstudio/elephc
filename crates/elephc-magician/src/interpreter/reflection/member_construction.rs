@@ -831,7 +831,8 @@ pub(super) fn eval_reflection_native_callable_default_expr(default: &NativeCalla
         NativeCallableDefault::Bool(value) => EvalExpr::Const(EvalConst::Bool(*value)),
         NativeCallableDefault::Int(value) => EvalExpr::Const(EvalConst::Int(*value)),
         NativeCallableDefault::Float(value) => EvalExpr::Const(EvalConst::Float(*value)),
-        NativeCallableDefault::String(value) => EvalExpr::Const(EvalConst::String(value.clone())),
+        NativeCallableDefault::String(value) => native_default_string_expr(value.as_bytes()),
+        NativeCallableDefault::Bytes(value) => native_default_string_expr(value),
         NativeCallableDefault::EmptyArray => EvalExpr::Array(Vec::new()),
         NativeCallableDefault::Array(elements) => EvalExpr::Array(
             elements
@@ -860,8 +861,11 @@ pub(super) fn eval_reflection_native_callable_default_array_element(
             value,
         },
         Some(NativeCallableArrayDefaultKey::String(key)) => EvalArrayElement::KeyValue {
-            key: EvalExpr::Const(EvalConst::String(key.clone())),
+            key: native_default_string_expr(key.as_bytes()),
             value,
+        },
+        Some(NativeCallableArrayDefaultKey::Bytes(key)) => EvalArrayElement::KeyValue {
+            key: native_default_string_expr(key), value,
         },
         None => EvalArrayElement::Value(value),
     }
@@ -1090,4 +1094,12 @@ pub(super) fn eval_reflection_aot_property_metadata(
         required_parameter_count: 0,
         parameters: Vec::new(),
     }
+}
+
+/// Restores EvalIR string constants from native PHP bytes without lexer marker encoding.
+fn native_default_string_expr(bytes: &[u8]) -> EvalExpr {
+    EvalExpr::Const(match std::str::from_utf8(bytes) {
+        Ok(value) => EvalConst::String(value.to_string()),
+        Err(_) => EvalConst::Bytes(bytes.to_vec()),
+    })
 }

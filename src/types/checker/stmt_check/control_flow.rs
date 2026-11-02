@@ -31,6 +31,17 @@ const FS_CURRENT_AS_PATHNAME: i64 = 32;
 const FS_CURRENT_MODE_MASK: i64 = 240;
 const FS_SKIP_DOTS: i64 = 4096;
 
+impl Checker {
+    /// Forgets every loop-storage contract recorded for `scope`, before its body is walked again.
+    pub(crate) fn clear_loop_storage_scope(&mut self, scope: &str) {
+        if let Some(spans) = self.loop_storage_scope_spans.remove(scope) {
+            for span in spans {
+                self.loop_storage_types.remove(&(scope.to_string(), span));
+            }
+        }
+    }
+}
+
 /// Computes and records fixed-point array storage contracts before checking a loop body.
 ///
 /// The shared analysis iterates over rebinds and growth sites with an evolving environment, so
@@ -79,14 +90,29 @@ fn stabilize_loop_storage(
                     return Some(cached.clone());
                 }
             }
-            let inferred = checker.infer_type(expr, analysis_env).ok()?;
+            // This body and its lexical closures see an unguarded environment. Independently
+            // checked callees still need their facts, including a user function named `main`.
+            checker.member_receiver_analysis_scopes.push((
+                checker.current_function.clone(), checker.current_loop_storage_scope.clone(),
+            ));
+            let inferred = checker.infer_type(expr, analysis_env);
+            let _ = checker.member_receiver_analysis_scopes.pop();
+            let inferred = inferred.ok()?;
             if memoizable {
                 call_types.insert(expr.span, inferred.clone());
             }
             Some(inferred)
         },
     );
-    let recorded = checker.loop_storage_types.entry(key).or_default();
+    let (scope, span) = key;
+    if !checker.loop_storage_types.contains_key(&(scope.clone(), span)) {
+        checker
+            .loop_storage_scope_spans
+            .entry(scope.clone())
+            .or_default()
+            .push(span);
+    }
+    let recorded = checker.loop_storage_types.entry((scope, span)).or_default();
     for (name, storage_type) in contracts {
         recorded.insert(name.clone(), storage_type.clone());
         env.insert(name, storage_type);
@@ -387,6 +413,8 @@ impl Checker {
                 if *value_by_ref {
                     self.record_reference_alias_root(array);
                     self.ref_aliased_locals.insert(value_var.clone());
+                    self.non_builtin_ref_aliased_locals
+                        .insert(value_var.clone());
                 }
                 let value_was_bound = env.contains_key(value_var);
                 let arr_ty = self.infer_type_with_assignment_effects(array, env)?;
@@ -895,7 +923,19 @@ impl Checker {
                 body,
             } => {
                 if let Some(s) = init {
-                    self.check_stmt(s, env)?;
+                    // The initializer runs exactly once, unconditionally, whenever the `for`
+                    // statement itself runs: `for ($i = 0; …)` binds `$i` exactly like `$i = 0;`
+                    // written before the loop. It is therefore checked at the depth of the
+                    // statement, not at the depth of the conditional group `check_stmt` opened
+                    // for the whole loop, so its bindings are unconditional ones (a later
+                    // straight-line `unset` or retype may end them) and it may itself retype or
+                    // re-bind an unconditional binding. The provenance bracket of that group is
+                    // kept: only the binding depth changes. `mixed_storage_scan` mirrors this.
+                    let loop_depth = self.local_conditional_depth;
+                    self.local_conditional_depth = loop_depth.saturating_sub(1);
+                    let checked = self.check_stmt(s, env);
+                    self.local_conditional_depth = loop_depth;
+                    checked?;
                 }
                 self.boxed_ref_aliased_locals.clear();
                 // A `for ($i = 0; …; $i++)` counter is the one index a still-empty array can be

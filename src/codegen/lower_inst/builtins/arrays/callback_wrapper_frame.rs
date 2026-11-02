@@ -135,7 +135,7 @@ pub(super) fn box_callback_mixed_args(
             continue;
         }
         load_callback_raw_arg_to_result(ctx, frame.raw_offsets[index], visible_ty);
-        emit_box_current_value_as_mixed(ctx.emitter, &visible_ty.codegen_repr());
+        emit_box_current_value_as_mixed(ctx.emitter, &crate::types::mixed_box_php_type(visible_ty));
         abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), box_offset);
     }
 }

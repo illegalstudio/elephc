@@ -89,6 +89,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Deg2rad,
     /// Dispatches `exp(...)`.
     Exp,
+    /// Dispatches the `ext/gmp` procedural surface by forwarding to the compiled GMP prelude.
+    Gmp,
     /// Dispatches `hypot(...)`.
     Hypot,
     /// Dispatches `printf(...)`.
@@ -167,6 +169,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     JsonLastErrorMsg,
     /// Dispatches `json_validate(...)`.
     JsonValidate,
+    /// Dispatches PHP tokenization and token-name lookup through the shared engine.
+    Tokenizer,
     /// Dispatches `log(...)`.
     Log,
     /// Dispatches `log2(...)`.
@@ -183,6 +187,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Pcntl,
     /// Dispatches the `xml_*` / `xmlwriter_*` family by forwarding to the compiled xml prelude.
     Xml,
+    /// Forwards fileinfo to the compiled host prelude.
+    Fileinfo,
     /// Dispatches `number_format(...)`.
     NumberFormat,
     /// Dispatches the bridge-backed OpenSSL cipher builtins.
@@ -225,6 +231,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     BufferLen,
     /// Dispatches `buffer_new(...)`.
     BufferNew,
+    /// Dispatches `buffer_ptr(...)`.
+    BufferPtr,
     /// Dispatches `ptr(...)`.
     Ptr,
     /// Dispatches `ptr_get(...)`.
@@ -381,6 +389,7 @@ impl EvalDirectHook {
             },
             Self::Deg2rad => eval_builtin_deg2rad(args, context, scope, values),
             Self::Exp => eval_builtin_exp(args, context, scope, values),
+            Self::Gmp => eval_builtin_gmp_expr_call(name, args, context, scope, values),
             Self::Filesystem => eval_builtin_filesystem_call(name, args, context, scope, values),
             #[cfg(feature = "curl")]
             Self::Curl => eval_builtin_curl_declared_call(name, args, context, scope, values),
@@ -444,6 +453,7 @@ impl EvalDirectHook {
             Self::JsonLastError => eval_builtin_json_last_error(args, context, values),
             Self::JsonLastErrorMsg => eval_builtin_json_last_error_msg(args, context, values),
             Self::JsonValidate => eval_builtin_json_validate(args, context, scope, values),
+            Self::Tokenizer => eval_builtin_tokenizer(name, args, context, scope, values),
             Self::Log => eval_builtin_log(args, context, scope, values),
             Self::Log2 => eval_builtin_log2(args, context, scope, values),
             Self::Log10 => eval_builtin_log10(args, context, scope, values),
@@ -452,6 +462,7 @@ impl EvalDirectHook {
             Self::MtRand => eval_builtin_mt_rand(args, context, scope, values),
             Self::NetworkEnv => eval_builtin_network_env_call(name, args, context, scope, values),
             Self::Pcntl => eval_builtin_pcntl_expr_call(name, args, context, scope, values),
+            Self::Fileinfo => eval_builtin_fileinfo_expr_call(name, args, context, scope, values),
             Self::Xml => eval_builtin_xml_expr_call(name, args, context, scope, values),
             Self::NumberFormat => eval_builtin_number_format(args, context, scope, values),
             Self::Openssl => {
@@ -479,6 +490,7 @@ impl EvalDirectHook {
             Self::BufferFree => eval_builtin_buffer_free(args, context, scope, values),
             Self::BufferLen => eval_builtin_buffer_len(args, context, scope, values),
             Self::BufferNew => eval_builtin_buffer_new(args, context, scope, values),
+            Self::BufferPtr => eval_builtin_buffer_ptr(args, context, scope, values),
             Self::Ptr => eval_builtin_ptr(args, context, scope, values),
             Self::PtrGet => eval_builtin_ptr_get(args, context, scope, values),
             Self::PtrIsNull => eval_builtin_ptr_is_null(args, context, scope, values),

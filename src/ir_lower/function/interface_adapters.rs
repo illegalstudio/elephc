@@ -104,8 +104,11 @@ fn lower_interface_adapter(
         &module.class_infos, &module.enum_infos, &module.interface_infos,
         &module.declared_trait_names, &module.declared_trait_methods,
         &module.declared_trait_properties, &module.packed_class_infos,
+        &module.extern_class_infos,
         &Default::default(), // throw access sites
         &Default::default(), // builtin call types
+        &Default::default(), // array_push property plans
+        &Default::default(), // checked member receiver types
         &Default::default(), // boxed reference promotions
         &Default::default(), // first-class builtin call types
         &Default::default(), // synthesized calls have no written generic arguments

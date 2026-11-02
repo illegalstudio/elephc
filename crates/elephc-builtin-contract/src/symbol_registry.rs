@@ -37,6 +37,7 @@ pub fn constants() -> &'static [ConstantContract] {
         .get_or_init(|| {
             let mut constants = Vec::new();
             constants.extend_from_slice(crate::catalog_constants::CONSTANTS);
+            constants.extend_from_slice(crate::catalog_constants_tokenizer::CONSTANTS);
             constants.extend_from_slice(crate::catalog_constants_curl::CURL_CONSTANTS);
             constants.sort_unstable_by_key(|constant| constant.name);
             constants

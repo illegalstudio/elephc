@@ -53,6 +53,35 @@ fn register_array(ctx: &mut ElephcEvalContext, name: &str, spec: &[u8]) -> i32 {
     }
 }
 
+/// Binary keys and values survive array registration while truncated records stay rejected.
+#[test]
+fn user_constant_registration_preserves_binary_array_bytes() {
+    let mut ctx = ElephcEvalContext::new();
+    let scalar = [0xff_u8, 0];
+    assert_eq!(register_scalar(&mut ctx, "BINARY_SCALAR", USER_CONSTANT_STRING,
+        scalar.as_ptr() as u64, scalar.len() as u64), 1);
+    assert_eq!(ctx.native_user_constant("BINARY_SCALAR"),
+        Some(&EvalNativeUserConstant::Scalar(EvalNativeGlobalConstant::Bytes(scalar.to_vec()))));
+    let mut spec = 1_u32.to_le_bytes().to_vec();
+    spec.push(2);
+    spec.extend_from_slice(&1_u32.to_le_bytes());
+    spec.push(0xff);
+    spec.push(1);
+    spec.extend_from_slice(&2_u32.to_le_bytes());
+    spec.extend_from_slice(&[0xff, 0]);
+    assert_eq!(register_array(&mut ctx, "BINARY", &spec), 1);
+    assert_eq!(ctx.native_user_constant("BINARY"), Some(&EvalNativeUserConstant::Array(vec![
+        NativeCallableArrayDefaultElement::keyed(
+            NativeCallableArrayDefaultKey::Bytes(vec![0xff]),
+            NativeCallableDefault::Bytes(vec![0xff, 0]),
+        ),
+    ])));
+    for length in 0..spec.len() {
+        assert_eq!(register_array(&mut ctx, "TRUNCATED", &spec[..length]), 0);
+    }
+    assert!(!ctx.has_native_user_constant("TRUNCATED"));
+}
+
 /// Verifies every scalar shape survives the user-constant ABI with its exact PHP value.
 #[test]
 fn user_constant_registration_preserves_scalar_metadata() {

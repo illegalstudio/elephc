@@ -4,8 +4,7 @@
 //!
 //! Called from:
 //! - `stmt::loops` at loop entry and `expr::callable_resolution` before direct calls.
-//! - `function::lower_body_into_function` when a numeric proof must be replayed
-//!   against final Mixed storage.
+//! - `numeric_storage::lower_body` preserves sealed per-call proofs during storage replay.
 //!
 //! Key details:
 //! - Identity and the numeric domain are separate proofs. A written counter does not
@@ -286,83 +285,9 @@ fn stable_stmt(
 /// The storage label alone is not what makes them harmless.
 fn harmless_local(ctx: &LoweringContext<'_, '_>, name: &str) -> bool {
     !ctx.is_ref_bound_local(name) && ctx.can_track_static_callable_local(name)
-        && (ctx.final_mixed_locals.contains(name)
+        && (ctx.is_final_mixed_local(name)
             || scalar_type(&ctx.local_type(name))
             || ctx.local_type(name) == PhpType::Str)
-}
-
-/// Lowers a body, then replays it when an admitted numeric local's final slot is Mixed
-/// but an earlier load still used a narrower type.
-///
-/// The proof is sealed from the discovery pass, whose entry seeds are still the
-/// proven `I64`/`F64` types. Replaying must not re-seed those locals from the Mixed
-/// label it is about to force. A parameter or a reference cell is not rewritten in
-/// place; that call stays on the descriptor path.
-pub(crate) fn lower_body_observing_numeric_closures(
-    ctx: &mut LoweringContext<'_, '_>,
-    body: &[Stmt],
-) {
-    let checkpoint = ctx.snapshot();
-    lower_stmts(ctx, body);
-    if ctx.numeric_closure_sites.is_empty() {
-        return;
-    }
-    let sites = ctx.numeric_closure_sites.clone();
-    let tracked = ctx.numeric_tracked_locals.clone();
-    let params = ctx
-        .builder
-        .function()
-        .params
-        .iter()
-        .map(|param| param.name.clone())
-        .collect::<HashSet<_>>();
-    let mut force = HashSet::new();
-    let mut suppress = false;
-    for name in &tracked {
-        if !narrow_load_of_mixed_slot(ctx, name) {
-            continue;
-        }
-        if params.contains(name) || ctx.is_ref_bound_local(name) {
-            suppress = true;
-        } else {
-            force.insert(name.clone());
-        }
-    }
-    if tracked.iter().any(|name| ctx.is_ref_bound_local(name)) {
-        suppress = true;
-    }
-    if !suppress && force.is_empty() {
-        return;
-    }
-    ctx.restore(checkpoint);
-    ctx.numeric_proof_sealed = true;
-    if !suppress {
-        ctx.numeric_closure_sites = sites;
-        ctx.final_mixed_locals = force;
-    }
-    lower_stmts(ctx, body);
-}
-
-/// Lowers each statement in source order.
-fn lower_stmts(ctx: &mut LoweringContext<'_, '_>, body: &[Stmt]) {
-    for stmt in body {
-        crate::ir_lower::stmt::lower_stmt(ctx, stmt);
-    }
-}
-
-/// Reports a load whose result type is narrower than the slot's final Mixed storage.
-fn narrow_load_of_mixed_slot(ctx: &LoweringContext<'_, '_>, name: &str) -> bool {
-    let Some(slot) = ctx.local_slots.get(name).copied() else {
-        return false;
-    };
-    if ctx.builder.local_php_type(slot).codegen_repr() != PhpType::Mixed {
-        return false;
-    }
-    ctx.builder.function().instructions.iter().any(|inst| {
-        inst.op == Op::LoadLocal
-            && matches!(inst.immediate, Some(Immediate::LocalSlot(loaded)) if loaded == slot)
-            && inst.result_php_type.codegen_repr() != PhpType::Mixed
-    })
 }
 
 /// Rejects opaque calls, aliases, declarations, and indirect writes anywhere in the loop.

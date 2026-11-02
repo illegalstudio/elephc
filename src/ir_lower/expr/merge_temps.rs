@@ -17,12 +17,37 @@ pub(super) fn store_expr_into_temp(
     expr: &Expr,
     span: crate::span::Span,
 ) {
+    // A `throw` arm of a buffer merge leaves through its exception and stores nothing: the boxed
+    // null its lowering answers is not a buffer handle, so the branch ends where the throw does
+    // and the merge block only joins the arms that store a buffer.
+    if matches!(expr.kind, ExprKind::Throw(_))
+        && matches!(temp_type.codegen_repr(), PhpType::Buffer(_))
+    {
+        lower_expr(ctx, expr);
+        ctx.builder.terminate(Terminator::Unreachable);
+        return;
+    }
+    // A pointer-array temporary builds a literal branch as pointer words, so `[null]` is the
+    // null pointer rather than a boxed null the merged array cannot hold.
+    if super::indexed_array_literals::literal_pointer_element_type(&temp_type).is_some()
+        && matches!(expr.kind, ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_))
+    {
+        let value = lower_expr_for_destination(ctx, expr, &temp_type);
+        store_value_into_temp(ctx, temp_name, temp_type, value, span);
+        return;
+    }
+    if temp_type.codegen_repr() == PhpType::Mixed {
+        if let Some(value) = lower_array_value_for_merge(ctx, expr) {
+            store_value_into_temp(ctx, temp_name, temp_type, value, span);
+            return;
+        }
+    }
     let value = lower_expr(ctx, expr);
     store_value_into_temp(ctx, temp_name, temp_type, value, span);
 }
 
 /// Stores an already lowered value into a hidden merge temporary.
-pub(super) fn store_value_into_temp(
+pub(in crate::ir_lower) fn store_value_into_temp(
     ctx: &mut LoweringContext<'_, '_>,
     temp_name: &str,
     temp_type: PhpType,
@@ -39,7 +64,7 @@ pub(super) fn store_value_into_temp(
 }
 
 /// Loads an owned hidden temp into SSA and clears the backing slot without releasing it.
-pub(super) fn take_owned_temp(
+pub(in crate::ir_lower) fn take_owned_temp(
     ctx: &mut LoweringContext<'_, '_>,
     temp_name: &str,
     span: crate::span::Span,
@@ -49,6 +74,88 @@ pub(super) fn take_owned_temp(
     value
 }
 
+/// Types one arm of a lazy merge the way its own lowering will see it: an array or hash literal
+/// through the context-aware literal typer, anything else through
+/// `materialized_expr_type_for_merge`. Called once per arm, so a merge nested in a literal arm is
+/// scanned once per level.
+fn merge_arm_type(ctx: &LoweringContext<'_, '_>, arm: &Expr) -> PhpType {
+    match &arm.kind {
+        ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, arm),
+        ExprKind::ArrayLiteralAssoc(pairs) => {
+            super::assoc_array_literals::assoc_array_literal_type_for_ir(ctx, pairs, arm)
+        }
+        _ => null_only_call_merge_type(ctx, arm)
+            .unwrap_or_else(|| materialized_expr_type_for_merge(ctx, arm)),
+    }
+}
+
+/// Returns the checker's `array<void>` (or `array<K, void>`) for a call to a user function whose
+/// inferred return holds only `null`s, and `None` for any other expression.
+///
+/// The call hands back boxed `mixed` slots (`caller_visible_return_type`), but a merge types it
+/// the way it types a `[null]` local: beside a pointer array the `null` element joins into
+/// `?ptr<T>`, so `$ps ?: f()`, `$m ?? f()` and `$ps ?: (f() ?? [])` keep pointer storage and the
+/// call result is converted into it. A merge whose arms are all such calls keeps `array<void>`, as
+/// on main. The call may be suppressed, assigned, or made through a local statically bound to
+/// the function (`$f = f(...); $f()`), as `materialized_expr_type_for_merge` reads those shapes.
+pub(super) fn null_only_call_merge_type(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> Option<PhpType> {
+    let mut call = expr;
+    loop {
+        match &call.kind {
+            ExprKind::ErrorSuppress(inner) => call = inner,
+            ExprKind::Assignment { value, result_target, prelude, .. } => {
+                call = assignment_result_expr(value, result_target.as_deref(), prelude);
+            }
+            _ => break,
+        }
+    }
+    let canonical = match &call.kind {
+        ExprKind::FunctionCall { name, .. } => {
+            let canonical = name.as_str().to_string();
+            if source_prefers_extension_builtin(&canonical) {
+                return None;
+            }
+            canonical
+        }
+        ExprKind::ClosureCall { var, .. } => match ctx.static_callable_local(var) {
+            Some(StaticCallableBinding::UserFunction(name)) => name,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let signature = ctx.functions.get(canonical.as_str())?;
+    let checker = crate::types::dynamic_params::caller_visible_checker_return_type(signature);
+    (crate::types::dynamic_params::null_only_container_return_storage(&checker) != checker)
+        .then_some(checker)
+}
+
+/// Returns the `buffer<T>` type every arm that completes shares, if they all hold the same one.
+///
+/// A buffer is an opaque handle word that has no `mixed` form: the ordinary merge widened two
+/// `buffer<T>` arms of a ternary or `match` against the syntactic fallback (`int`) into `mixed`,
+/// boxing the handle as an integer that an element read then answered with null. A `throw` arm
+/// stores nothing (`store_expr_into_temp` ends its branch), so it does not widen the merge. Any
+/// other mix keeps the ordinary merge; the checker rejects a buffer arm beside another type.
+/// The arms come typed, so nothing is typed again here.
+fn shared_buffer_merge_type(arms: &[(&Expr, PhpType)]) -> Option<PhpType> {
+    let mut shared: Option<PhpType> = None;
+    for (arm, ty) in arms {
+        if matches!(arm.kind, ExprKind::Throw(_)) {
+            continue;
+        }
+        let ty = ty.codegen_repr();
+        if !matches!(ty, PhpType::Buffer(_)) {
+            return None;
+        }
+        match &shared {
+            Some(existing) if *existing != ty => return None,
+            Some(_) => {}
+            None => shared = Some(ty),
+        }
+    }
+    shared
+}
+
 /// Chooses a merge temp type from contextual branch materialization and fallback metadata.
 pub(super) fn branch_merge_result_type(
     ctx: &LoweringContext<'_, '_>,
@@ -56,10 +163,20 @@ pub(super) fn branch_merge_result_type(
     else_expr: &Expr,
     expr: &Expr,
 ) -> PhpType {
-    let then_ty = materialized_expr_type_for_merge(ctx, then_expr);
-    let else_ty = materialized_expr_type_for_merge(ctx, else_expr);
-    let branch_ty = nullable_aware_branch_merge_type(&then_ty, &else_ty);
-    if php_type_allows_null(&branch_ty) {
+    let arms = [(then_expr, merge_arm_type(ctx, then_expr)), (else_expr, merge_arm_type(ctx, else_expr))];
+    if let Some(raw_words) = pointer_array_branch_merge_type(&arms) {
+        return raw_words;
+    }
+    if let Some(buffer) = shared_buffer_merge_type(&arms) {
+        return buffer;
+    }
+    let [(_, then_ty), (_, else_ty)] = &arms;
+    let branch_ty = nullable_aware_branch_merge_type(then_ty, else_ty);
+    // A pointer merge (a `ptr<T>` or packed record address on both sides) is already exact; the
+    // syntactic fallback would answer `int` for the ternary and widen the word into `Mixed`.
+    if php_type_allows_null(&branch_ty)
+        || matches!(branch_ty.codegen_repr(), PhpType::Pointer(_) | PhpType::Packed(_))
+    {
         return branch_ty;
     }
     let fallback_ty = fallback_expr_type(expr).codegen_repr();
@@ -75,9 +192,21 @@ pub(super) fn match_merge_result_type(
     default: Option<&Expr>,
     expr: &Expr,
 ) -> PhpType {
+    let typed_arms: Vec<(&Expr, PhpType)> = arms
+        .iter()
+        .map(|(_, result)| result)
+        .chain(default)
+        .map(|result| (result, merge_arm_type(ctx, result)))
+        .collect();
+    if let Some(raw_words) = pointer_array_branch_merge_type(&typed_arms) {
+        return raw_words;
+    }
+    if let Some(buffer) = shared_buffer_merge_type(&typed_arms) {
+        return buffer;
+    }
     let mut merged: Option<PhpType> = None;
-    for result in arms.iter().map(|(_, result)| result).chain(default) {
-        let arm_ty = materialized_expr_type_for_merge(ctx, result);
+    for (_, arm_ty) in &typed_arms {
+        let arm_ty = arm_ty.clone();
         merged = Some(match merged {
             Some(acc) => nullable_aware_branch_merge_type(&acc, &arm_ty),
             None => arm_ty,
@@ -86,7 +215,10 @@ pub(super) fn match_merge_result_type(
     let Some(merged) = merged else {
         return fallback_expr_type(expr);
     };
-    if php_type_allows_null(&merged) {
+    // As for a ternary, an exact pointer merge must not be widened by the syntactic fallback.
+    if php_type_allows_null(&merged)
+        || matches!(merged.codegen_repr(), PhpType::Pointer(_) | PhpType::Packed(_))
+    {
         return merged;
     }
     let fallback_ty = fallback_expr_type(expr).codegen_repr();
@@ -100,9 +232,25 @@ pub(super) fn short_ternary_merge_result_type(
     value: &Expr,
     default: &Expr,
 ) -> PhpType {
-    let value_ty = materialized_expr_type_for_merge(ctx, value).codegen_repr();
-    let default_ty = materialized_expr_type_for_merge(ctx, default).codegen_repr();
-    wider_type_for_merge(&value_ty, &default_ty)
+    let arms = [(value, merge_arm_type(ctx, value)), (default, merge_arm_type(ctx, default))];
+    if let Some(raw_words) = pointer_array_branch_merge_type(&arms) {
+        return raw_words;
+    }
+    // The tested value is stored as it was lowered, so only the default may be a `throw` arm.
+    if !matches!(value.kind, ExprKind::Throw(_)) {
+        if let Some(buffer) = shared_buffer_merge_type(&arms) {
+            return buffer;
+        }
+    }
+    let [(_, value_ty), (_, default_ty)] = &arms;
+    // A `?ptr<T>` side keeps the merge nullable: its codegen form is the bare pointer word, and
+    // joining that would type a null result as a set pointer.
+    if crate::types::is_nullable_pointer_type(value_ty)
+        || crate::types::is_nullable_pointer_type(default_ty)
+    {
+        return nullable_aware_branch_merge_type(value_ty, default_ty);
+    }
+    materialized_merge_type(&value_ty.codegen_repr(), &default_ty.codegen_repr())
 }
 
 /// Chooses a ternary branch merge type without erasing PHP null branches.
@@ -113,7 +261,88 @@ pub(super) fn nullable_aware_branch_merge_type(left: &PhpType, right: &PhpType) 
         return normalize_union_members(vec![PhpType::Void, left_non_null, right_non_null])
             .unwrap_or(PhpType::Void);
     }
-    wider_type_for_merge(&left.codegen_repr(), &right.codegen_repr())
+    materialized_merge_type(left, right)
+}
+
+/// Returns the pointer or buffer array (or hash) storage that merged branches share, if any.
+///
+/// Every branch must be a pointer array (or hash) value or a literal of only `null`s, with at
+/// least one of them holding pointers and all of them the same shape. A `[null]` branch types
+/// as `array<mixed>` on its own, so the ordinary merge would box the pointer branches, while the
+/// checker joins `ptr<T>` and `null` into one pointer element.
+///
+/// Arrays of buffer handles are raw words too: every branch must then hold the same `buffer<T>`
+/// (a null literal cannot be a buffer element), so `$a ?: [$b]` keeps the handles as words
+/// instead of boxing both branches into `array<mixed>` and reading the cells back as handles.
+///
+/// Each arm comes with the type `merge_arm_type` gave it, so the arms are typed once whether
+/// the raw-word storage or the ordinary merge wins: typing them here again would scan a nested
+/// merge twice per level.
+pub(super) fn pointer_array_branch_merge_type(arms: &[(&Expr, PhpType)]) -> Option<PhpType> {
+    let mut merged: Option<PhpType> = None;
+    let mut null_literal_shapes = Vec::new();
+    let mut holds_buffers = false;
+    let mut empty_literal_shapes = Vec::new();
+    for (branch, contextual) in arms {
+        if super::indexed_array_literals::is_null_only_literal(branch) {
+            null_literal_shapes.push(matches!(branch.kind, ExprKind::ArrayLiteralAssoc(_)));
+            continue;
+        }
+        // A literal branch is typed the way its own lowering stamps it.
+        let ty = contextual.codegen_repr();
+        let Some(elem) = super::indexed_array_literals::literal_raw_word_element_type(&ty) else {
+            // `[]` holds no word to type; it only has to match the merged shape.
+            if super::indexed_array_literals::is_empty_literal(branch) {
+                empty_literal_shapes.push(matches!(branch.kind, ExprKind::ArrayLiteralAssoc(_)));
+                continue;
+            }
+            return None;
+        };
+        holds_buffers |= matches!(elem, PhpType::Buffer(_));
+        merged = Some(match merged {
+            None => ty,
+            Some(acc) => merge_pointer_containers(acc, ty)?,
+        });
+    }
+    let merged = merged?;
+    if holds_buffers {
+        // Differing buffer types (or a buffer beside a pointer) widen the element to `mixed`,
+        // and a null literal has no buffer word: both keep the ordinary merge.
+        let same_buffer = super::indexed_array_literals::literal_raw_word_element_type(&merged)
+            .is_some_and(|elem| matches!(elem, PhpType::Buffer(_)));
+        if !same_buffer || !null_literal_shapes.is_empty() {
+            return None;
+        }
+    } else if !empty_literal_shapes.is_empty() {
+        // A pointer merge keeps its ordinary path for `[]`: the boxed result is rewritten into
+        // pointer words by the destination conversions.
+        return None;
+    }
+    let merged_is_hash = matches!(merged, PhpType::AssocArray { .. });
+    null_literal_shapes
+        .into_iter()
+        .chain(empty_literal_shapes)
+        .all(|is_hash| is_hash == merged_is_hash)
+        .then_some(merged)
+}
+
+/// Joins two pointer arrays or two pointer hashes into the storage both fit.
+pub(super) fn merge_pointer_containers(left: PhpType, right: PhpType) -> Option<PhpType> {
+    match (left, right) {
+        (PhpType::Array(left), PhpType::Array(right)) => Some(PhpType::Array(Box::new(
+            PhpType::widen_array_branch_element(*left, *right).codegen_repr(),
+        ))),
+        (
+            PhpType::AssocArray { key: left_key, value: left_value },
+            PhpType::AssocArray { key: right_key, value: right_value },
+        ) => Some(PhpType::AssocArray {
+            key: Box::new(if left_key == right_key { *left_key } else { PhpType::Mixed }),
+            value: Box::new(
+                PhpType::widen_array_branch_element(*left_value, *right_value).codegen_repr(),
+            ),
+        }),
+        _ => None,
+    }
 }
 
 /// Returns true when a PHP type can materialize PHP null at runtime.
@@ -129,8 +358,15 @@ pub(super) fn php_type_allows_null(php_type: &PhpType) -> bool {
 
 /// Estimates the value type an expression will materialize during branch lowering.
 pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> PhpType {
+    // A nullsafe postfix chain lowers to its boxed chain temp whatever its last segment reads,
+    // so `$o?->floats[0]` must not be predicted as the syntactic `int` and cast back.
+    if let Some(storage) = super::nullsafe_chain::result_storage_type(expr) {
+        return storage;
+    }
     match &expr.kind {
-        ExprKind::Variable(name) => normalize_value_php_type(ctx.local_type(name).codegen_repr()),
+        ExprKind::Variable(name) => {
+            normalize_value_php_type(crate::types::eir_value_php_type(&ctx.local_type(name)))
+        }
         ExprKind::ErrorSuppress(inner) => materialized_expr_type_for_merge(ctx, inner),
         ExprKind::BinaryOp { left, op, right } if mixed_numeric_op(op).is_some() => {
             let left_ty = materialized_expr_type_for_merge(ctx, left).codegen_repr();
@@ -154,10 +390,35 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         ExprKind::ShortTernary { value, default } => {
             short_ternary_merge_result_type(ctx, value, default)
         }
+        ExprKind::NullCoalesce { value, default } => {
+            null_coalesce_merge_type(ctx, null_coalesce_value_type_for_merge(ctx, value), default)
+        }
+        ExprKind::Assignment {
+            value,
+            result_target,
+            prelude,
+            ..
+        } => materialized_expr_type_for_merge(
+            ctx,
+            assignment_result_expr(value, result_target.as_deref(), prelude),
+        ),
         ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
             .unwrap_or_else(|| fallback_expr_type(expr)),
+        // Typed the way `lower_buffer_new` stamps the allocation, so `buffer_new<float>(1)[0]`
+        // is read as a float element rather than the syntactic `int`.
+        ExprKind::BufferNew { element_type, .. } => {
+            PhpType::Buffer(Box::new(ctx.type_expr_to_php_type_for_value(element_type)))
+        }
         ExprKind::PropertyAccess { object, property } => {
-            property_access_expr_type_for_ir(ctx, object, property)
+            nullable_pointer_property_type(ctx, object, property)
+                .or_else(|| property_access_expr_type_for_ir(ctx, object, property))
+                .unwrap_or_else(|| fallback_expr_type(expr))
+        }
+        // A static property holding one raw word is resolved here: a `?ptr<T>` keeps its null
+        // member through the merge, and a `buffer<T>` or `ptr<T>` keeps its handle or address
+        // instead of the syntactic `int`. Other static reads keep the syntactic answer.
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            static_property_word_type(ctx, receiver, property, expr)
                 .unwrap_or_else(|| fallback_expr_type(expr))
         }
         // Calls are typed from the return metadata their own lowering uses. The syntactic
@@ -178,8 +439,74 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         }
         ExprKind::ClosureCall { var, .. } => closure_call_type_for_merge(ctx, var),
         ExprKind::ExprCall { .. } => PhpType::Mixed,
+        // A literal is typed by the context-aware literal typer, the element storage its own
+        // lowering builds. The syntactic fallback types a buffer handle, a float local or a packed
+        // field read `int`, so a merge temp typed from it stored the literal under an int element
+        // type (no container coercion converts between typed elements) and read the payload bits
+        // back as integers, or boxed buffer handles into cells the buffer readers took for handles.
+        ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, expr),
+        ExprKind::ArrayLiteralAssoc(pairs) => {
+            super::assoc_array_literals::assoc_array_literal_type_for_ir(ctx, pairs, expr)
+        }
         _ => fallback_expr_type(expr),
     }
+}
+
+/// Returns the expression an assignment expression evaluates to, for type prediction.
+///
+/// That is its result target, or the assigned value when there is none. A non-local assignment
+/// binds a value it cannot replay into a generated local in its prelude and reads that local
+/// back; a merge or literal is typed before the prelude runs, when the local is still unknown,
+/// so the local resolves to the value the prelude binds into it.
+pub(super) fn assignment_result_expr<'e>(
+    value: &'e Expr,
+    result_target: Option<&'e Expr>,
+    prelude: &'e [Stmt],
+) -> &'e Expr {
+    let result = result_target.unwrap_or(value);
+    let ExprKind::Variable(name) = &result.kind else {
+        return result;
+    };
+    prelude
+        .iter()
+        .rev()
+        .find_map(|stmt| match &stmt.kind {
+            StmtKind::Assign { name: bound, value } if bound == name => Some(value),
+            _ => None,
+        })
+        .unwrap_or(result)
+}
+
+/// Estimates the type the value side of `??` materializes before its null arm is removed.
+///
+/// A local keeps its declared PHP type here: `?int` stays `int|null`, so stripping the null
+/// leaves `int`, the same answer `null_coalesce_result_type` reads from the lowered load. The
+/// codegen representation (`TaggedScalar`) would hide the int behind the nullable carrier.
+fn null_coalesce_value_type_for_merge(ctx: &LoweringContext<'_, '_>, value: &Expr) -> PhpType {
+    match &value.kind {
+        ExprKind::Variable(name) => normalize_value_php_type(ctx.local_type(name)),
+        _ => null_only_call_merge_type(ctx, value)
+            .unwrap_or_else(|| materialized_expr_type_for_merge(ctx, value)),
+    }
+}
+
+/// Returns the declared type of an instance property read when it is a `?ptr<T>`.
+///
+/// `property_access_expr_type_for_ir` answers the codegen form, the bare pointer, which is what
+/// literal storage wants but would drop the null member from a merge.
+fn nullable_pointer_property_type(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+) -> Option<PhpType> {
+    let class_name = instance_callable_object_class(ctx, object)?;
+    let class_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
+    class_info
+        .properties
+        .iter()
+        .find(|(name, _)| name == property)
+        .map(|(_, ty)| ty.clone())
+        .filter(crate::types::is_nullable_pointer_type)
 }
 
 /// Returns the merge type of a named function call before it is lowered.
@@ -261,6 +588,11 @@ pub(super) fn coerce_value_for_temp(
     }
     match &target_ty {
         PhpType::Mixed => ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span)),
+        PhpType::Pointer(_)
+            if matches!(source_ty, PhpType::Packed(_) | PhpType::Void | PhpType::Never) =>
+        {
+            ctx.retype_packed_address_for_pointer_sink(value, &target_ty, Some(span))
+        }
         PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never => {
             coerce_to_int_at_span(ctx, value, Some(span))
         }
@@ -302,7 +634,8 @@ pub(super) fn coerce_value_for_temp(
 /// concrete container must box its slots via `ArrayToMixed` / `HashToMixed`: storing the raw
 /// pointer would let Mixed-element reads misinterpret typed slot bytes. Borrowed sources are
 /// retained first so the conversion's copy-on-write split rewrites a private copy; owning
-/// temporaries transfer their reference into the converted result.
+/// temporaries transfer their reference into the converted result. A pointer-array target
+/// converts boxed indexed sources to pointer words under the same ownership rule.
 pub(in crate::ir_lower) fn coerce_container_to_mixed_payload(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
@@ -348,7 +681,14 @@ pub(in crate::ir_lower) fn coerce_container_to_mixed_payload(
             }
             return unboxed;
         }
-        return value;
+        // An indexed array whose static element is not a pointer can still hold boxed cells: a
+        // `[null]` local, or the `array<mixed>` result of `function boxed() { return [null]; }`,
+        // which `null_only_call_merge_type` lets `?:` and `??` merge as a null-only arm. Stored
+        // in a pointer-array temporary unconverted, those cells would reach pointer-word readers,
+        // whichever way the merging arm was lowered.
+        return super::indexed_array_literals::convert_array_to_pointer_storage(
+            ctx, value, target_ty, span,
+        );
     }
     let op = match (source_ty, target_ty) {
         (PhpType::Array(source_elem), PhpType::Array(_))

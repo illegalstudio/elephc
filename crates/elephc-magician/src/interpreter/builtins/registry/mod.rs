@@ -353,6 +353,32 @@ fn call_shared_runtime_builtin(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    // `pow()` is PHP's one math builtin whose operand overload reaches internal value objects.
+    // The generated runtime adapter works on scalars only, so route an object operand through
+    // the same `RuntimeValueOps::pow` default that `**` uses.
+    if id == elephc_builtin_contract::RuntimeBuiltinId::Unserialize {
+        if let [data] = args {
+            if let Some(function) = context.native_function("__elephc_gmp_unserialize") {
+                let arguments = vec![EvaluatedCallArg {
+                    name: None,
+                    value: data.borrowed(),
+                    ref_target: None,
+                }];
+                let bound =
+                    bind_evaluated_native_function_args(&function, arguments, context, values)?;
+                return eval_native_function_with_values(function, bound, context, values).map(Some);
+            }
+        }
+    }
+    if id == elephc_builtin_contract::RuntimeBuiltinId::Pow {
+        if let [base, exponent] = args {
+            if values.type_tag(*base)? == EVAL_TAG_OBJECT
+                || values.type_tag(*exponent)? == EVAL_TAG_OBJECT
+            {
+                return values.pow(*base, *exponent).map(Some);
+            }
+        }
+    }
     if id.is_mbstring() {
         let contract = elephc_builtin_contract::lookup_id(id.builtin_id()).expect("shared mbstring contract");
         for (parameter, value) in contract.params.iter().zip(args) {

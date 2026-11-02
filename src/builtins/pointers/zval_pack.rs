@@ -20,7 +20,7 @@ builtin! {
 }
 
 /// Accepts any value and returns an untyped raw pointer to the allocated zval.
-fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+pub(crate) fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
     Ok(PhpType::Pointer(None))
 }

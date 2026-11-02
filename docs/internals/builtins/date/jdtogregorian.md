@@ -2,7 +2,7 @@
 title: "jdtogregorian() - internals"
 description: "Compiler internals for jdtogregorian(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 231
+  order: 234
 ---
 
 ## `jdtogregorian()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:762](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L762) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:886](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L886) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

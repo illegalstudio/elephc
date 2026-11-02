@@ -150,6 +150,13 @@ Magician history explains each case's intended path.
 
 ## Internal measurements
 
+For an isolated numeric accumulator, compile `benchmark/diagnostics/numeric_local.php`
+and pass the iteration count at runtime. Run the same source and arguments with
+`php -n`, with CLI OPcache and JIT disabled. Output is `checksum|body_ns`; argument
+parsing and process startup precede the body clock. Measure several iteration
+counts with alternating compiler/PHP executions and report dispersion. Collect
+`--gc-stats` in separate diagnostic binaries so timings use ordinary code generation.
+
 For controlled revision comparisons of the mixed workload, select each compiler
 explicitly and supply its source revision. This diagnostic runner is separate
 from the historical process-only suites:

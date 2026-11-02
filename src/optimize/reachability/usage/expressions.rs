@@ -165,8 +165,13 @@ impl Scanner<'_> {
             ExprKind::BinaryOp { left, right, .. } => { self.scan_expr(left); self.scan_expr(right); }
             ExprKind::Negate(e) | ExprKind::Not(e) | ExprKind::BitNot(e) | ExprKind::Throw(e)
             | ExprKind::Clone(e) | ExprKind::ErrorSuppress(e) | ExprKind::Print(e)
-            | ExprKind::Spread(e) | ExprKind::PtrCast { expr: e, .. }
-            | ExprKind::YieldFrom(e) => self.scan_expr(e),
+            | ExprKind::Spread(e) | ExprKind::YieldFrom(e) => self.scan_expr(e),
+            // `ptr_cast<T>` may be the only mention of a packed or extern class `T`, and field
+            // access through the resulting `ptr<T>` needs that class's layout at lowering time.
+            ExprKind::PtrCast { target_type, expr: e } => {
+                self.record_class(target_type.as_str());
+                self.scan_expr(e);
+            }
             ExprKind::IncludeValue { path, .. } => {
                 // The resolver inlines every include it can read, so one still here resolves at
                 // runtime; inside a literal fragment the loaded file can name anything.
@@ -280,6 +285,11 @@ impl Scanner<'_> {
         // The xml registry builtins' EIR lowerings call the xml prelude's helpers directly;
         // the same rule keeps those edges next to that lowering contract.
         for helper in crate::builtins::xml::prelude_helpers_for(&key) {
+            self.record_callable(helper);
+        }
+        // The GMP registry builtins' EIR lowerings call their prelude helpers directly;
+        // root the whole family next to that lowering contract.
+        for helper in crate::builtins::gmp::prelude_helpers_for(&key) {
             self.record_callable(helper);
         }
         let normalized = self.normalized_function_arguments(&key, args);
@@ -1190,11 +1200,25 @@ impl Scanner<'_> {
             for (_, method) in operators.arithmetic {
                 self.usage.methods.insert((key.clone(), php_symbol_key(method), true));
             }
+            for (_, method) in operators.bitwise {
+                self.usage.methods.insert((key.clone(), php_symbol_key(method), true));
+            }
+            for (_, method) in operators.shift {
+                self.usage.methods.insert((key.clone(), php_symbol_key(method), true));
+            }
             if let Some(method) = operators.compare {
                 self.usage.methods.insert((key.clone(), php_symbol_key(method), true));
             }
             if let Some(method) = operators.boolean {
                 self.usage.methods.insert((key.clone(), php_symbol_key(method), false));
+            }
+            if let Some(casts) = operators.casts {
+                for method in [casts.to_int, casts.to_float, casts.to_number, casts.to_bool]
+                    .into_iter()
+                    .flatten()
+                {
+                    self.usage.methods.insert((key.clone(), php_symbol_key(method), false));
+                }
             }
         }
         if key

@@ -47,7 +47,7 @@ pub(super) fn class_static_method_visibility_bridge_supported(
 /// Emits one native-function registration call into the just-created eval context.
 pub(super) fn register_eval_native_function(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     registration: &EvalNativeFunctionRegistration,
 ) -> Result<()> {
     let invoker_label = emit_eval_native_function_invoker_inline(ctx, &registration.signature, &registration.name);
@@ -65,7 +65,7 @@ pub(super) fn register_eval_native_function(
         ),
         Some(&invoker_label),
     );
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     let (name_label, name_len) = ctx.data.add_string(registration.name.as_bytes());
     abi::emit_symbol_address(
         ctx.emitter,
@@ -100,7 +100,7 @@ pub(super) fn register_eval_native_function(
     abi::emit_call_label(ctx.emitter, &symbol);
     register_eval_native_function_bridge_support(
         ctx,
-        context_offset,
+        context_source,
         &name_label,
         name_len,
         registration.bridge_supported,
@@ -109,7 +109,7 @@ pub(super) fn register_eval_native_function(
     // observe a signature whose arity is still being inferred from the registered defaults.
     register_eval_native_function_shape(
         ctx,
-        context_offset,
+        context_source,
         &name_label,
         name_len,
         &eval_native_signature_shape(&registration.signature),
@@ -131,7 +131,7 @@ pub(super) fn register_eval_native_function(
         };
         register_eval_native_function_param(
             ctx,
-            context_offset,
+            context_source,
             &name_label,
             name_len,
             registered_index,
@@ -141,7 +141,7 @@ pub(super) fn register_eval_native_function(
             signature_param_is_variadic(&registration.signature, physical_index, param_name);
         register_eval_native_function_param_flags(
             ctx,
-            context_offset,
+            context_source,
             &name_label,
             name_len,
             registered_index,
@@ -159,7 +159,7 @@ pub(super) fn register_eval_native_function(
         {
             register_eval_native_function_param_type(
                 ctx,
-                context_offset,
+                context_source,
                 &name_label,
                 name_len,
                 registered_index,
@@ -170,12 +170,12 @@ pub(super) fn register_eval_native_function(
         if is_variadic {
             continue;
         }
-        if register_eval_native_param_default_error(ctx, context_offset,
+        if register_eval_native_param_default_error(ctx, context_source,
             (&name_label, name_len), registered_index,
             registration.signature.defaults.get(physical_index).and_then(Option::as_ref),
             &default_context, "__elephc_eval_register_native_function_param_default_error")
         {
-            register_eval_native_function_param_default_constant_name(ctx, context_offset,
+            register_eval_native_function_param_default_constant_name(ctx, context_source,
                 (&name_label, name_len), registered_index,
                 source_constant_names.get(physical_index).and_then(Option::as_deref));
             continue;
@@ -191,27 +191,27 @@ pub(super) fn register_eval_native_function(
         };
         register_eval_native_function_param_default(
             ctx,
-            context_offset,
+            context_source,
             &name_label,
             name_len,
             registered_index,
             &default,
         );
-        register_eval_native_function_param_default_constant_name(ctx, context_offset,
+        register_eval_native_function_param_default_constant_name(ctx, context_source,
             (&name_label, name_len), registered_index,
             source_constant_names.get(physical_index).and_then(Option::as_deref));
     }
     if let Some(type_spec) = eval_native_callable_return_type_spec(&registration.signature) {
         register_eval_native_function_return_type(
             ctx,
-            context_offset,
+            context_source,
             &name_label,
             name_len,
             &type_spec,
         );
     }
     if registration.signature.by_ref_return {
-        register_eval_native_function_returns_reference(ctx, context_offset, &name_label, name_len);
+        register_eval_native_function_returns_reference(ctx, context_source, &name_label, name_len);
     }
     Ok(())
 }

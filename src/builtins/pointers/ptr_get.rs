@@ -22,7 +22,7 @@ builtin! {
 /// Validates that the argument is a pointer type and returns `PhpType::Int`.
 ///
 /// The registry's `check_arity` handles arity enforcement (exactly 1 argument).
-fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+pub(crate) fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     cx.checker.ensure_pointer_type(&ty, cx.span, &format!("{}()", cx.name))?;
     Ok(PhpType::Int)

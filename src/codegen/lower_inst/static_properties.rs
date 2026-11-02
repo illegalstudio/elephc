@@ -6,7 +6,8 @@
 //! - `crate::codegen::lower_inst::lower_instruction()`.
 //!
 //! Key details:
-//! - Scalar, string, array, object and inferred callable slots share typed storage helpers.
+//! - Scalar, string, array, object, buffer, pointer and inferred callable slots share typed
+//!   storage helpers; buffer handles and pointers are plain words that own nothing.
 //! - Named, lexical `self` and lexical `parent` receivers resolve declaring-class symbols.
 //! - `static::` receivers use native class-id branches for generated classes and
 //!   the eval native-frame override when late static scope points at an eval class.
@@ -765,6 +766,10 @@ fn static_property_is_visible(
 /// declared type whose method-body writes settle on a closure/first-class callable). This does
 /// not introduce a PHP callable-typed static property syntax; it only lets a settled Callable
 /// slot lower its symbol-backed load/store through the descriptor-aware paths.
+///
+/// `buffer<T>` handles and `ptr`/`ptr<T>` addresses are one plain word that owns nothing, as in
+/// an instance property slot: a store overwrites the word without releasing or freeing the
+/// previous buffer, and a read copies the word out.
 fn ensure_static_property_type_supported(php_type: &PhpType, inst: &Instruction) -> Result<()> {
     match php_type {
         PhpType::Bool
@@ -777,6 +782,8 @@ fn ensure_static_property_type_supported(php_type: &PhpType, inst: &Instruction)
         | PhpType::Union(_)
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }
+        | PhpType::Buffer(_)
+        | PhpType::Pointer(_)
         | PhpType::Callable
         | PhpType::Object(_) => Ok(()),
         _ => Err(CodegenIrError::unsupported(format!(
@@ -800,6 +807,16 @@ fn ensure_static_property_value_supported(
         return Ok(());
     }
     if matches!(slot.php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        return Ok(());
+    }
+    // A `?ptr<T>` slot is one raw pointer word (null is address 0), and any pointer fits any
+    // pointer slot once the checker has accepted the assignment. Arrays and hashes of pointer
+    // words share one storage whatever their element's target or nullability.
+    if matches!(
+        (value_ty.codegen_repr(), slot.php_type.codegen_repr()),
+        (PhpType::Pointer(_), PhpType::Pointer(_))
+    ) || pointer_word_containers(value_ty, &slot.php_type)
+    {
         return Ok(());
     }
     if matches!(slot.php_type.codegen_repr(), PhpType::Int)
@@ -826,6 +843,20 @@ fn ensure_static_property_value_supported(
     )))
 }
 
+/// Returns true when both types are arrays (or both hashes) whose elements are pointer words.
+fn pointer_word_containers(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
+    let is_pointer = |ty: &PhpType| matches!(ty.codegen_repr(), PhpType::Pointer(_));
+    match (value_ty.codegen_repr(), slot_ty.codegen_repr()) {
+        (PhpType::Array(value_elem), PhpType::Array(slot_elem)) => {
+            is_pointer(&value_elem) && is_pointer(&slot_elem)
+        }
+        (PhpType::AssocArray { value: value_elem, .. }, PhpType::AssocArray { value: slot_elem, .. }) => {
+            is_pointer(&value_elem) && is_pointer(&slot_elem)
+        }
+        _ => false,
+    }
+}
+
 /// Returns true when an empty array literal initializes a typed static array property.
 fn is_empty_array_for_array_static_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
     let PhpType::Array(value_elem) = value_ty.codegen_repr() else {
@@ -837,13 +868,19 @@ fn is_empty_array_for_array_static_property(value_ty: &PhpType, slot_ty: &PhpTyp
     matches!(value_elem.codegen_repr(), PhpType::Never | PhpType::Void)
 }
 
-/// Returns true when a boxed Mixed value can be coerced before a scalar static-property store.
+/// Returns true when a boxed Mixed value can be coerced before a scalar or `?ptr<T>`
+/// static-property store.
+///
+/// A `?ptr<T>` slot casts the value like an int, so PHP null becomes address 0 (reflection
+/// setters pass Mixed values through); a plain `ptr<T>` slot stays refused, as for instance
+/// properties.
 fn can_coerce_mixed_to_scalar_static_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
     matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
-        && matches!(
-            slot_ty.codegen_repr(),
-            PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str
-        )
+        && (crate::types::is_nullable_pointer_type(slot_ty)
+            || matches!(
+                slot_ty.codegen_repr(),
+                PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str
+            ))
 }
 
 /// Returns true when a value can materialize the inline nullable-int static-property shape.
@@ -910,6 +947,12 @@ fn load_static_property_store_value_to_result(
         load_value_to_first_int_arg(ctx, value)?;
         match slot_ty.codegen_repr() {
             PhpType::Int => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int"),
+            // A `?ptr<T>` slot stores the address word, cast like an int: PHP null becomes 0.
+            // The slot keeps no pointer to the box, so an adopted source is retired here.
+            PhpType::Pointer(_) => {
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+                objects::release_adopted_mixed_source(ctx, value, &PhpType::Int)?;
+            }
             PhpType::Bool => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool"),
             PhpType::Float => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float"),
             // An object slot stores the unboxed object POINTER, retained on its own, so the
@@ -924,7 +967,22 @@ fn load_static_property_store_value_to_result(
         return Ok(());
     }
     ctx.load_value_to_result(value)?;
-    box_static_property_value_if_needed(ctx, slot_ty, &value_ty);
+    let box_ty = ctx.mixed_box_type(value)?;
+    let staged = if matches!(
+        slot_ty.codegen_repr(),
+        PhpType::Str | PhpType::Mixed | PhpType::Union(_)
+    ) && value_ty.codegen_repr() == PhpType::Str
+    {
+        let (pointer_reg, length_reg) = abi::string_result_regs(ctx.emitter);
+        super::ownership::stage_string_byte_view(ctx, value, pointer_reg, length_reg)
+    } else {
+        false
+    };
+    if staged && slot_ty.codegen_repr() == PhpType::Str {
+        abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    }
+    box_static_property_value_if_needed(ctx, slot_ty, &box_ty);
+    super::ownership::release_string_byte_stage(ctx, staged);
     Ok(())
 }
 
@@ -954,7 +1012,7 @@ fn box_static_property_value_if_needed(
     if matches!(slot_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
         && !matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
     {
-        emit_box_current_value_as_mixed(ctx.emitter, &value_ty.codegen_repr());
+        emit_box_current_value_as_mixed(ctx.emitter, value_ty);
     }
 }
 

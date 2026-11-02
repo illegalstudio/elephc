@@ -46,12 +46,16 @@ mod formatting;
 mod interpolation_and_hashes;
 #[path = "strings/misc.rs"]
 mod misc;
+#[path = "strings/transient_string_ownership.rs"]
+mod transient_string_ownership;
 #[path = "strings/openssl.rs"]
 mod openssl;
 #[path = "strings/parse_url.rs"]
 mod parse_url;
 #[path = "strings/offset_warnings.rs"]
 mod offset_warnings;
+#[path = "strings/offset_writes.rs"]
+mod offset_writes;
 
 #[path = "strings/mbstring.rs"]
 mod mbstring;

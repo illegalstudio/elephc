@@ -2,7 +2,7 @@
 title: "mysqli_fetch_lengths()"
 description: "Returns the byte lengths of the columns in the current row."
 sidebar:
-  order: 122
+  order: 125
 ---
 
 ## mysqli_fetch_lengths()

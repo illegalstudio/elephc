@@ -411,6 +411,8 @@ older generic and ordinary eval entries, including incorrectly rewritten PHPDoc 
 member annotations discarded after uppercase or mixed-case native class-like keywords.
 Earlier format changes also invalidated stored parse errors for valid comparisons after class references.
 The format guard covers the combined serialized IR and its corresponding type sources.
+Retained token streams distinguish reserved words used as qualified-name segments, so
+entries written before that token variant was introduced must also be rejected.
 
 Native callable defaults retain array-unpack operands through a private array-element marker.
 Registration validates and normalizes that marker before execution; it is not public PHP syntax.
@@ -528,7 +530,8 @@ same configuration. The blacklist is loaded once per process.
   `opcache.file_cache_read_only` writes nothing and deletes nothing.
 - **bincode is not self-describing**, so an entry written for another EvalIR
   shape can decode into plausible garbage. `format_guard` fingerprints the
-  code lines of `eval_ir/*.rs`, `segments.rs` and `errors.rs`; when it fails,
+  code lines of `eval_ir/*.rs`, serialized lexer tokens and parser import state,
+  the generic type contract, `segments.rs` and `errors.rs`; when it fails,
   bump `FORMAT_VERSION` and re-record the fingerprint. A change to the stored
   header (`CacheFile`, in `file_store.rs`) is invisible to the guard and needs
   a manual bump. Never reuse a version number that has been published.

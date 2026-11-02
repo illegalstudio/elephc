@@ -13,6 +13,7 @@ use crate::parser::ast::{CallableTarget, Expr, ExprKind, InstanceOfTarget};
 use crate::span::Span;
 
 use super::stmts::{walk_program, walk_stmt};
+use super::call_types::{walk_function_name, walk_method_name};
 use super::{walk_static_receiver, Pass};
 
 /// Recursively walks an expression AST, applying `pass` transformations to magic constants and
@@ -84,7 +85,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             conditional_value_temp,
         },
         ExprKind::FunctionCall { name, args } => ExprKind::FunctionCall {
-            name,
+            name: walk_function_name(name, pass, span),
             args: args.into_iter().map(|a| walk_expr(a, pass)).collect(),
         },
         ExprKind::ArrayLiteral(items) => {
@@ -159,7 +160,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
                 .map(|(n, t, default, by_ref)| {
                     (
                         n,
-                        t.map(|ty| pass.transform_type(ty, span)),
+                        t.map(|ty| pass.transform_value_type(ty, span)),
                         default.map(|d| walk_expr(d, pass)),
                         by_ref,
                     )
@@ -168,8 +169,8 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             let new_body = walk_program(body, pass);
             // Before `leave_closure`, for the reason the function arm documents: a struct
             // literal's fields are evaluated after the statements above it.
-            let new_variadic_type = variadic_type.map(|ty| pass.transform_type(ty, span));
-            let new_return_type = return_type.map(|ty| pass.transform_type(ty, span));
+            let new_variadic_type = variadic_type.map(|ty| pass.transform_value_type(ty, span));
+            let new_return_type = return_type.map(|ty| pass.transform_value_type(ty, span));
             pass.leave_closure();
             ExprKind::Closure {
                 params: new_params,
@@ -268,7 +269,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             args,
         } => ExprKind::MethodCall {
             object: Box::new(walk_expr(*object, pass)),
-            method: pass.transform_method_call_name(method, span),
+            method: pass.transform_method_call_name(walk_method_name(method, pass, span), span),
             args: args.into_iter().map(|a| walk_expr(a, pass)).collect(),
         },
         ExprKind::NullsafeMethodCall {
@@ -279,7 +280,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             object: Box::new(walk_expr(*object, pass)),
             // Renamed like `->`: the checker records an inferred generic method call on the
             // nullsafe path too, and the template it names is stripped before lowering.
-            method: pass.transform_method_call_name(method, span),
+            method: pass.transform_method_call_name(walk_method_name(method, pass, span), span),
             args: args.into_iter().map(|a| walk_expr(a, pass)).collect(),
         },
         ExprKind::NullsafeDynamicMethodCall {
@@ -301,7 +302,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             // under its INSTANTIATED name, and leaving the static spelling alone left the backend
             // looking for a template that was stripped from the program. A call the checker
             // recorded nothing for is keyed by nothing and passes through unchanged.
-            method: pass.transform_method_call_name(method, span),
+            method: pass.transform_method_call_name(walk_method_name(method, pass, span), span),
             args: args.into_iter().map(|a| walk_expr(a, pass)).collect(),
         },
         ExprKind::FirstClassCallable(target) => {
@@ -351,12 +352,12 @@ fn walk_callable_target<P: Pass>(
     match target {
         CallableTarget::Method { object, method } => CallableTarget::Method {
             object: Box::new(walk_expr(*object, pass)),
-            method,
+            method: walk_method_name(method, pass, span),
         },
-        CallableTarget::Function(name) => CallableTarget::Function(name),
+        CallableTarget::Function(name) => CallableTarget::Function(walk_function_name(name, pass, span)),
         CallableTarget::StaticMethod { receiver, method } => CallableTarget::StaticMethod {
             receiver: walk_static_receiver(receiver, pass, span),
-            method,
+            method: walk_method_name(method, pass, span),
         },
     }
 }

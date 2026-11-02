@@ -23,7 +23,7 @@ use super::indexed_array_literals::{
     array_literal_type_for_ir, assoc_array_literal_type_from_entries, builtin_call_result_type_for_ir,
     ir_array_storage_type,
 };
-use super::lazy_branches::{strip_void_from_union, wider_type_for_merge};
+use super::lazy_branches::{materialized_merge_type, strip_void_from_union};
 use super::merge_temps::{
     branch_merge_result_type, fallback_expr_type, match_merge_result_type,
     short_ternary_merge_result_type,
@@ -280,9 +280,17 @@ fn null_coalesce_source_type(
     value: &Expr,
     default: &Expr,
 ) -> PhpType {
-    let value_ty = strip_void_from_union(array_cast_source_type_for_ir(ctx, value)).codegen_repr();
-    let default_ty = array_cast_source_type_for_ir(ctx, default).codegen_repr();
-    wider_type_for_merge(&value_ty, &default_ty)
+    // An all-null user call on either side is typed as the merge types it (`null_only_call_merge_type`).
+    let value_ty = strip_void_from_union(
+        super::merge_temps::null_only_call_merge_type(ctx, value)
+            .unwrap_or_else(|| array_cast_source_type_for_ir(ctx, value)),
+    )
+    .codegen_repr();
+    let default_ty = super::merge_temps::null_only_call_merge_type(ctx, default)
+        .unwrap_or_else(|| array_cast_source_type_for_ir(ctx, default))
+        .codegen_repr();
+    // Must agree with `null_coalesce_result_type`, which boxes an int/bool pair.
+    materialized_merge_type(&value_ty, &default_ty)
 }
 
 /// Returns the type of a direct, extern, or builtin call.

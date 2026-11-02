@@ -166,6 +166,38 @@ impl Checker {
         })
     }
 
+    /// Returns true when a by-reference argument is an object-property place whose declared
+    /// parameter and property both carry object storage.
+    ///
+    /// The direct user method/constructor lowering rewrites such a place through a hidden
+    /// boxed temporary and writes it back after the call. Scalar/array places stay rejected:
+    /// their write-back needs a conversion the object-only rewrite does not provide.
+    pub(crate) fn by_ref_property_place(
+        &mut self,
+        arg: &Expr,
+        expected_ty: &PhpType,
+        env: &TypeEnv,
+    ) -> Result<bool, CompileError> {
+        if !crate::types::param_binding::by_ref_property_writeback_supported(expected_ty) {
+            return Ok(false);
+        }
+        let mut arg = arg;
+        while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &arg.kind {
+            arg = value;
+        }
+        if !matches!(
+            arg.kind,
+            ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. }
+        ) {
+            return Ok(false);
+        }
+        let property_ty = self.infer_type(arg, env)?;
+        Ok(crate::types::param_binding::by_ref_property_storage_compatible(
+            expected_ty,
+            &property_ty,
+        ))
+    }
+
     /// Returns true when an argument expression is an l-value supported by by-reference calls.
     pub(crate) fn is_by_ref_argument_lvalue(
         &mut self,
@@ -217,6 +249,29 @@ impl Checker {
                     callee_desc, variadic_name, detail
                 ),
             ));
+        }
+        if self.by_ref_property_place(storage_arg, &PhpType::Mixed, caller_env)? {
+            // A property place is rewritten through its own temporary and write-back; it has no
+            // caller local to widen or to publish as a boxed reference output. Array properties
+            // still need their container payload repacked by the variadic collector, which the
+            // property temporary does not provide.
+            let property_ty = self.infer_type(storage_arg, caller_env)?;
+            if property_ty.is_php_array()
+                || matches!(
+                    property_ty.codegen_repr(),
+                    PhpType::Array(_) | PhpType::AssocArray { .. }
+                )
+            {
+                return Err(CompileError::new(
+                    storage_arg.span,
+                    &format!(
+                        "{} variadic parameter ${} cannot bind an array property by reference; bind the property to a local variable first",
+                        callee_desc, variadic_name
+                    ),
+                ));
+            }
+            self.record_reference_alias_root(arg);
+            return Ok(());
         }
         if !self.is_by_ref_argument_lvalue(storage_arg, caller_env)? {
             return Err(CompileError::new(
@@ -306,7 +361,7 @@ impl Checker {
     }
 
     /// Resolves a stable declared property without changing its storage representation.
-    fn ref_property_slot_addressability(
+    pub(super) fn ref_property_slot_addressability(
         &mut self,
         object: &Expr,
         property: &str,
@@ -517,6 +572,14 @@ impl Checker {
             (PhpType::Int, PhpType::Bool | PhpType::False | PhpType::Void) => true,
             (PhpType::Bool, PhpType::Int | PhpType::Void) => true,
             (PhpType::Pointer(_), PhpType::Pointer(_) | PhpType::Void) => true,
+            // `buffer<mixed>` is the internal any-buffer parameter of the `buffer_len(...)` and
+            // `buffer_ptr(...)` callable wrappers, which take the raw handle of every buffer; a
+            // program cannot declare it, so it never widens a user signature.
+            (PhpType::Buffer(expected_elem), PhpType::Buffer(_))
+                if **expected_elem == PhpType::Mixed =>
+            {
+                true
+            }
             (PhpType::Resource(_), PhpType::Resource(_)) => {
                 PhpType::resource_types_compatible(expected, actual)
             }
@@ -575,6 +638,7 @@ impl Checker {
             false,
             false,
             false,
+            false,
         )
     }
 
@@ -607,6 +671,7 @@ impl Checker {
             false,
             coercive,
             false,
+            true,
         )
     }
 
@@ -632,6 +697,7 @@ impl Checker {
             callee_desc,
             true,
             coercive,
+            true,
             true,
         )
     }
@@ -683,6 +749,7 @@ impl Checker {
             true,
             false,
             true,
+            false,
         )
     }
 
@@ -703,6 +770,7 @@ impl Checker {
         allow_by_ref_spread: bool,
         coercive_param_binding: bool,
         descriptor_invocation: bool,
+        allow_property_ref_places: bool,
     ) -> Result<PhpType, CompileError> {
         let plan = if descriptor_invocation {
             self.plan_descriptor_call_args(sig, args, span, callee_desc)?
@@ -818,7 +886,15 @@ impl Checker {
                     // The callee holds a reference to this local from here on, and it can
                     // escape, so the local is never kill/retype eligible in this body.
                     self.record_reference_alias_root(arg);
-                    if !self.is_by_ref_argument_lvalue(arg, caller_env)? {
+                    let property_place = allow_property_ref_places
+                        && !source_has_spread
+                        && match sig.params.get(param_idx).map(|(_, ty)| ty) {
+                            Some(expected_ty) => {
+                                self.by_ref_property_place(arg, expected_ty, caller_env)?
+                            }
+                            None => false,
+                        };
+                    if !property_place && !self.is_by_ref_argument_lvalue(arg, caller_env)? {
                         let param_name = sig
                             .params
                             .get(param_idx)

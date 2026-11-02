@@ -1,0 +1,10 @@
+[package]
+name = "elephc-random"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Pure-Rust PHP random extension engines and stable C ABI for elephc"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "rlib"]

@@ -49,3 +49,19 @@ echo "done";
             "expression|finally|call|finally|finally|done", "ir_opt={ir_opt}");
     }
 }
+
+/// Implicit append errors survive DCE and catch pruning after the maximum integer key.
+#[test]
+fn test_array_max_key_append_preserves_catch() {
+    let source = r#"<?php
+function rhs(): string { echo 'rhs|'; return 'tail'; }
+try { $a = [9223372036854775807 => 'max', rhs()]; }
+catch (Error $e) { echo $e->getMessage(), "|"; }
+try { [9223372036854775807 => 1, $argc > 0 ? 2 : 3]; }
+catch (Error $e) { echo 'discarded'; }
+"#;
+    for ir_opt in [true, false] {
+        assert_eq!(run_spread_effect_fixture(source, ir_opt),
+            "rhs|Cannot add element to the array as the next element is already occupied|discarded");
+    }
+}

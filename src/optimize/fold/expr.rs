@@ -243,12 +243,13 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
                 .map(|(key, value)| (fold_expr(key), fold_expr(value)))
                 .collect(),
         ),
-        ExprKind::ArrayLiteralMixed(entries) => ExprKind::ArrayLiteralMixed(
-            entries
-                .into_iter()
-                .map(|entry| entry.map_exprs(fold_expr))
-                .collect(),
-        ),
+        ExprKind::ArrayLiteralMixed(entries) => {
+            let literal = ExprKind::ArrayLiteralMixed(entries.into_iter()
+                .map(|entry| entry.map_exprs(fold_expr)).collect());
+            crate::types::fold_spreadless_mixed_array_literal(
+                &literal, crate::codegen_support::compile_php_version(),
+            ).unwrap_or(literal)
+        }
         ExprKind::Match {
             subject,
             arms,
@@ -459,7 +460,7 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         // Namespace resolution has already fixed a named receiver's spelling. Lexical
         // and late-static class names still depend on their declaration or runtime scope.
         ExprKind::ClassConstant { receiver: crate::parser::ast::StaticReceiver::Named(name) } => {
-            ExprKind::StringLiteral(name.as_str().trim_start_matches('\\').to_string())
+            ExprKind::StringLiteral(crate::names::class_name_literal(name.as_str()))
         }
         ExprKind::ClassConstant { receiver } => ExprKind::ClassConstant { receiver },
         ExprKind::ObjectClassName { object } => ExprKind::ObjectClassName {

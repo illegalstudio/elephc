@@ -703,6 +703,12 @@ impl<'a> ConcatInertAnalysis<'a> {
                 return self.release_slot_is_concat_inert(inst);
             }
             Op::Cast => return self.cast_is_concat_inert(inst),
+            Op::StrIncDec if super::numeric_domain::increment(inst) => {
+                return super::numeric_domain::inputs(self.function, &inst.operands);
+            }
+            Op::PhpRelCmp if super::numeric_domain::comparison(inst) => {
+                return super::numeric_domain::inputs(self.function, &inst.operands);
+            }
             Op::IterStart
             | Op::IterNext
             | Op::IterCurrentKey
@@ -806,6 +812,9 @@ impl<'a> ConcatInertAnalysis<'a> {
             | Op::BufferLen
             | Op::BufferGet
             | Op::BufferSet
+            | Op::BufferResolve
+            | Op::BufferGetResolved
+            | Op::BufferSetResolved
             | Op::BufferFree
             | Op::ArrayNew
             | Op::HashNew
@@ -845,6 +854,8 @@ impl<'a> ConcatInertAnalysis<'a> {
                 .first()
                 .is_some_and(|&key| key_operand_is_concat_inert(self.function, key)),
 
+            // A packed field read or write is one load or store at a fixed record offset.
+            Op::PropGet | Op::PropSet => self.function.is_packed_field_access(inst),
             Op::LoadLocal | Op::LoadRefCell => load_local_is_concat_inert(self.function, inst),
             Op::StoreLocal => self.store_local_is_concat_inert(inst),
             Op::Acquire => true,
@@ -986,6 +997,11 @@ impl<'a> ConcatInertAnalysis<'a> {
             Some(VisitState::Unvisited) => {
                 self.value_state[idx] = VisitState::Visiting;
             }
+        }
+
+        if super::numeric_domain::inputs(self.function, &[value]) {
+            self.value_state[idx] = VisitState::Done(true);
+            return true;
         }
 
         if self.alloc_disqualified.get(idx).copied().unwrap_or(true)
