@@ -72,6 +72,7 @@ fn dispatch(
 /// Lends the common owner to a mutually exclusive getter or physical read.
 fn borrow_receiver(ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, span: Span) -> LoweredValue {
     let ty = ctx.builder.value_php_type(object.value);
+    if !Ownership::php_type_needs_lifetime_tracking(&ty) { return object; }
     let value = ctx.emit_value(Op::Borrow, vec![object.value], None, ty, Op::Borrow.default_effects(), Some(span));
     ctx.builder.set_value_ownership(value.value, Ownership::Borrowed);
     value

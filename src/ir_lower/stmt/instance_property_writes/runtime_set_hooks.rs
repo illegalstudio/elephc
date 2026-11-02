@@ -72,6 +72,7 @@ pub(super) fn lower_dynamic(
 /// Lends the caller's existing operand lease to one mutually exclusive setter branch.
 fn borrow_dynamic_operand(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span) -> LoweredValue {
     let ty = ctx.builder.value_php_type(value.value);
+    if !Ownership::php_type_needs_lifetime_tracking(&ty) { return value; }
     let value = ctx.emit_value(Op::Borrow, vec![value.value], None, ty,
         Op::Borrow.default_effects(), Some(span));
     ctx.builder.set_value_ownership(value.value, Ownership::Borrowed);

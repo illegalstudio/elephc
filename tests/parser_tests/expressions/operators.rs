@@ -348,7 +348,7 @@ fn test_computed_instance_incdec_values_share_scoped_update_kernel() {
         };
         assert_eq!(prelude.len(), 1, "{expression}: no separate read traversal");
         let rendered = format!("{prelude:?}");
-        assert_eq!(rendered.matches("name: \"root\"").count(), 1, "{expression}: {rendered}");
+        assert_eq!(rendered.matches("text: \"root\"").count(), 1, "{expression}: {rendered}");
         assert!(rendered.contains("__elephc_incdec_work_"), "{expression}: {rendered}");
         assert!(!rendered.contains("BinaryOp"), "{expression}: preserve the PHP incdec kernel");
     }

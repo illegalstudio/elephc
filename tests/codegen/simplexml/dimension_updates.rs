@@ -206,6 +206,8 @@ function instanceStepErased(mixed $node): mixed { echo 'root|'; return $node; }
 function instanceStepName(): mixed { echo 'new-name|'; return new InstanceStepName(); }
 function instanceStepKey(): int { echo 'key|'; return 0; }
 function instanceStepReturn(SimpleXMLElement $node): mixed { return ++$node->a[0]; }
+function instanceStepArray(mixed $array): mixed { return $array[0]++; }
+function instanceStepPrefixArray(mixed $array): mixed { return ++$array[0]; }
 function instanceStepReport(mixed $value, SimpleXMLElement $doc): void {
     echo gettype($value), ':', (string)$value, ':', (string)$doc->a, '|';
 }
@@ -227,10 +229,16 @@ instanceStepReport($doc->a[0][0]++, $doc);
 instanceStepReport(--instanceStepRoot($doc)->a[0][0], $doc);
 instanceStepReport($doc->{instanceStepName()}[instanceStepKey()]++, $doc);
 instanceStepReport(instanceStepReturn($doc), $doc);
+$array = [4];
+echo instanceStepArray($array), ':', instanceStepPrefixArray($array), ':', json_encode($array), '|';
+$holder->erased = [4];
+echo $holder->erased[0]++, ':', ++$holder->erased[0], ':', json_encode($holder->erased), '|';
+echo instanceStepErased($holder)->erased[0]++, ':', ++instanceStepErased($holder)->erased[0], ':',
+    json_encode($holder->erased), '|';
 $old = instanceStepRoot($doc)->a[0]++;
 $doc->a = '12';
 echo 'live:', (string)$old, '|';
-unset($old, $holder, $view, $doc);
+unset($old, $holder, $view, $doc, $array);
 "#;
     let expected = concat!(
         "root|new-name|name|name-dtor|object:7:7|",
@@ -239,7 +247,8 @@ unset($old, $holder, $view, $doc);
         "root|new-name|name|name-dtor|integer:6:7|",
         "object:7:7|integer:8:7|object:7:7|integer:6:7|",
         "object:7:7|integer:8:7|object:7:7|root|integer:6:7|",
-        "new-name|key|name|name-dtor|object:7:7|integer:8:7|root|live:12|",
+        "new-name|key|name|name-dtor|object:7:7|integer:8:7|",
+        "4:5:[4]|4:6:[6]|root|6:root|8:[8]|root|live:12|",
     );
     let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(source, &[&[]]);
     preserve_stdout_mismatches(source, &assembly, &runs, &[expected]);

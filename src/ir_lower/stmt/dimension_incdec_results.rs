@@ -38,9 +38,12 @@ pub(crate) fn publish_value_incdec(
 ) {
     let Some(locals) = locals else { return; };
     let ty = ctx.builder.value_php_type(previous.value);
-    let previous = ctx.emit_value(Op::Borrow, vec![previous.value], None, ty.clone(),
-        Op::Borrow.default_effects(), Some(span));
-    ctx.builder.set_value_ownership(previous.value, Ownership::Borrowed);
+    let previous = if Ownership::php_type_needs_lifetime_tracking(&ty) {
+        let borrowed = ctx.emit_value(Op::Borrow, vec![previous.value], None, ty.clone(),
+            Op::Borrow.default_effects(), Some(span));
+        ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+        borrowed
+    } else { previous };
     let previous = crate::ir_lower::ownership::copy_assignment_value(ctx, previous, Some(span));
     ctx.store_call_argument_local(locals.old, previous, ty, Some(span));
     let stepped = crate::ir_lower::ownership::acquire_if_refcounted(ctx, stepped, Some(span));
