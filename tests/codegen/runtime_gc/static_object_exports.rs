@@ -15,11 +15,12 @@ fn test_rejected_static_and_hook_stores_release_temporary_boxes() {
     if skip_without_xml_native("test_rejected_static_and_hook_stores_release_temporary_boxes") { return; }
     let output = compile_and_run_with_heap_debug(r#"<?php
 class RejectedStaticAndHookStores {
-    public static iterable $items = [];
+    public static iterable $items;
     public object $node { set { echo 'unexpected'; } }
 }
 $root = new SimpleXMLElement('<r/>');
 $box = new RejectedStaticAndHookStores();
+RejectedStaticAndHookStores::$items = [];
 $caught = 0;
 for ($index = 0; $index < 8; $index++) {
     try { RejectedStaticAndHookStores::$items = $root->missing->child; }

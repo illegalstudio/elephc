@@ -495,8 +495,8 @@ fn test_error_unresolved_member_and_expression_call_argument_order() {
         "eval('return null;'); UnresolvedAfterEval::run(ARGS);",
         "eval('return null;'); unresolvedAfterEval(ARGS);",
         "eval('return null;'); declaredAfterEval(ARGS); function declaredAfterEval(int $value): void {}",
-        "class OrderedMagicBox { public function __call(string $name, array $args): void {} } function invoke(OrderedMagicBox $box): void { [$box, 'missing'](ARGS); }",
-        "class OrderedPrivateBox { private function hidden(int $value): void {} } function invoke(OrderedPrivateBox $box): void { [$box, 'hidden'](ARGS); }",
+        "class OrderedMagicBox { public function __call(string $name, array $args): void {} } function invoke(OrderedMagicBox $box): void { ([$box, 'missing'])(ARGS); }",
+        "class OrderedPrivateBox { private function hidden(int $value): void {} } function invoke(OrderedPrivateBox $box): void { ([$box, 'hidden'])(ARGS); }",
         "class OrderedPrivateInvoker { private function __invoke(int $value): void {} } function invoke(OrderedPrivateInvoker $box): void { $box(ARGS); }",
     ];
     for call in calls {

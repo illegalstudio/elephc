@@ -56,7 +56,7 @@ function lateNameRhs(bool $reject): mixed {
     if ($reject) { throw new RuntimeException('rhs'); }
     return 3;
 }
-function lateComputedName(string $name): string { return $name; }
+function lateComputedName(string $name): string { return str_repeat($name, 1); }
 function lateNameWrite(bool $reject): void {
     $object = new LateNameTarget();
     $name = 'value';

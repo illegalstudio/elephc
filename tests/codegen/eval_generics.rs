@@ -710,7 +710,7 @@ $callback = native_shared(...); $callback(second: $b, first: $a); echo $a[0], '|
 $plain = 1;
 $reader = function () use (&$plain): mixed { return $plain; };
 native_reentrant($plain, $reader); echo $plain, '|';
-$plain = 7; @call_user_func('native_reentrant', $plain, $reader); echo $plain;
+$plain = 7; call_user_func('native_reentrant', $plain, $reader); echo $plain;
 "#);
     let source = eval.replacen("<?php", "<?php\nfunction native_replace(array &$value): void { $value = ['bad']; }\nfunction native_shared(array &$first, array &$second): void { $first = [2]; echo $second[0], '|'; $second = [3]; echo $first[0], '|'; }\nfunction native_reentrant(mixed &$value, callable $read): void { $value = 2; echo $read(), '|'; $value = 3; echo $read(), '|'; }", 1);
     let output = compile_and_run_with_heap_debug(&source);
