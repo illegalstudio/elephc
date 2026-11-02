@@ -252,6 +252,7 @@ impl Checker {
         }
 
         if self.eval_barrier_active {
+            self.require_valid_unresolved_call_argument_order(args, &format!("Function '{name}'"))?;
             for arg in args {
                 self.infer_type(arg, caller_env)?;
             }

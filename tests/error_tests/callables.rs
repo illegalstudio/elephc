@@ -482,6 +482,11 @@ fn test_error_unresolved_member_and_expression_call_argument_order() {
         "function invoke(?stdClass $receiver): void { $receiver?->run(ARGS); }",
         "function invoke(?stdClass $receiver, string $method): void { $receiver?->$method(ARGS); }",
         "eval('return null;'); UnresolvedAfterEval::run(ARGS);",
+        "eval('return null;'); unresolvedAfterEval(ARGS);",
+        "eval('return null;'); declaredAfterEval(ARGS); function declaredAfterEval(int $value): void {}",
+        "class OrderedMagicBox { public function __call(string $name, array $args): void {} } function invoke(OrderedMagicBox $box): void { [$box, 'missing'](ARGS); }",
+        "class OrderedPrivateBox { private function hidden(int $value): void {} } function invoke(OrderedPrivateBox $box): void { [$box, 'hidden'](ARGS); }",
+        "class OrderedPrivateInvoker { private function __invoke(int $value): void {} } function invoke(OrderedPrivateInvoker $box): void { $box(ARGS); }",
     ];
     for call in calls {
         for (args, detail) in [
@@ -506,6 +511,7 @@ fn test_unresolved_call_named_argument_after_spread_is_allowed() {
         "function invoke(mixed $receiver): void { $receiver->run(...[], value: 1); }",
         "function invoke(callable $callback): void { $callback->call(new stdClass(), ...[], value: 1); }",
         "eval('return null;'); UnresolvedAfterEval::run(...[], value: 1);",
+        "eval('return null;'); unresolvedAfterEval(...[], value: 1);",
     ] {
         expect_no_error(&format!("<?php {call}"));
     }

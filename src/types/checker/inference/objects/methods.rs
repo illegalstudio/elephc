@@ -460,6 +460,7 @@ impl Checker {
         env: &TypeEnv,
         allow_by_ref_spread: bool,
     ) -> Result<PhpType, CompileError> {
+        self.require_valid_unresolved_call_argument_order(args, "Method call")?;
         let method_key = php_symbol_key(method);
         if self.enums.contains_key(class_name)
             && args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
