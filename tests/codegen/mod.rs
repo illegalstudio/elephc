@@ -42,6 +42,7 @@ mod benchmarks;
 mod echo_vars;
 mod eval;
 mod eval_native_string_context;
+mod eval_property_name_lifetimes;
 mod eval_reference_returns;
 mod descriptor_reference_layouts;
 mod eval_generics;

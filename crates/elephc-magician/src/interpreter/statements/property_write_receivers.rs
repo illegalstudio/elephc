@@ -112,15 +112,27 @@ fn finish_receiver(
             else { eval_write_property_get_result(parent, &property, context, values)? }
         }
         PreparedWriteReceiver::DynamicProperty(parent, property, name_first) => {
-            let early = if name_first && !unset { Some(finish_name(property, owners, context, scope, values)?) } else { None };
+            let early = if name_first && !unset { Some(finish_name_with_source(property, owners, context, scope, values)?) } else { None };
             let parent = finish_receiver(*parent, owners, context, scope, values, unset, true)?;
             owners.push(parent);
             if unset && !matches!(values.type_tag(parent)?, EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE) { return values.null(); }
-            let property = if let Some(property) = early { property } else {
-                finish_name(property, owners, context, scope, values)?
+            let (property, name_owner) = if let Some(property) = early { property } else {
+                finish_name_with_source(property, owners, context, scope, values)?
             };
-            if unset { eval_unset_property_get_result(parent, &property, context, values)? }
-            else { eval_write_property_get_result(parent, &property, context, values)? }
+            let selected = if unset { eval_unset_property_get_result(parent, &property, context, values) }
+                else { eval_write_property_get_result(parent, &property, context, values) };
+            // A property-name temporary expires at this traversal step. Its destructor can
+            // change the selected object's fields before the outer write reads them.
+            let selected = selected.and_then(|value| if value.is_borrowed() { values.retain(value) } else { Ok(value) });
+            let released = retire_name_source(name_owner, owners, context, values);
+            return match (selected, released) {
+                (Ok(value), Ok(())) => Ok(value),
+                (Ok(value), Err(status)) => {
+                    let _ = eval_release_value(context, values, value);
+                    Err(status)
+                }
+                (Err(status), _) => Err(status),
+            };
         }
         PreparedWriteReceiver::Index(parent, index) => {
             let parent = finish_receiver(*parent, owners, context, scope, values, unset, false)?;
@@ -341,12 +353,32 @@ pub(super) fn finish_name(
     name: PreparedWriteIndex<'_>, owners: &mut Vec<RuntimeCellHandle>, context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<String, EvalStatus> {
+    finish_name_with_source(name, owners, context, scope, values).map(|(name, _)| name)
+}
+
+/// Keeps the source lease identifiable until its property traversal has selected a value.
+fn finish_name_with_source(
+    name: PreparedWriteIndex<'_>, owners: &mut Vec<RuntimeCellHandle>, context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
+) -> Result<(String, RuntimeCellHandle), EvalStatus> {
     let source = finish_index(name, owners, context, scope, values)?;
     let converted = eval_string_context_value(source, context, values)?;
     let bytes = values.string_bytes(converted);
     let released = if converted != source { release_expr_result(converted, context, values) } else { Ok(()) };
     let bytes = bytes.and_then(|bytes| released.map(|()| bytes))?;
-    String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)
+    String::from_utf8(bytes).map(|name| (name, source)).map_err(|_| EvalStatus::RuntimeFatal)
+}
+
+/// Retires a captured name without shifting indices held by dimension receiver plans.
+fn retire_name_source(
+    source: RuntimeCellHandle, owners: &mut Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let index = owners.iter().rposition(|value| *value == source).ok_or(EvalStatus::RuntimeFatal)?;
+    // Dimension handoff records refer to capture indices, so leave harmless owned storage.
+    let placeholder = values.null()?;
+    let source = std::mem::replace(&mut owners[index], placeholder);
+    eval_release_value(context, values, source)
 }
 
 /// Releases all captures even when an earlier receiver destructor throws.
