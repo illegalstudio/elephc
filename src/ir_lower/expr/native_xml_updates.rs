@@ -96,7 +96,7 @@ pub(super) fn lower_assignment(
     };
     if scoped { super::super::scoped_writes::consume_update_operands(ctx); }
     for stmt in &prelude[..prefix] { crate::ir_lower::stmt::lower_stmt(ctx, stmt); }
-    let reread = result.is_some_and(|result| result == target);
+    let reread = !post;
     Some(lower(ctx, object, property, op, right, post, scoped, reread, "increment/decrement", expr))
 }
 
@@ -232,10 +232,11 @@ fn ordinary(
     }
     let result = if reread {
         let receiver = load(ctx, &parent, expr.span);
-        match property {
-            Property::Named(property) => lower_property_get_from_value(ctx, receiver, property, Op::PropGet, expr),
-            Property::Dynamic(_) => prepared_dynamic_property_fetch(ctx, receiver, name, expr),
-        }
+        let name = load(ctx, name, expr.span);
+        let computed = load(ctx, &next, expr.span);
+        super::ordinary_prefix_storage::lower(ctx, receiver, name,
+            match property { Property::Named(name) => Some(name), Property::Dynamic(_) => None },
+            computed, expr.span)
     } else { load(ctx, if post { &current } else { &next }, expr.span) };
     // The ordinary getter/arithmetic may produce a concrete scalar or string. The
     // common result owner has boxed storage and must outlive every operand lease.

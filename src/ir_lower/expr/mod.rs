@@ -53,6 +53,7 @@ mod lazy_branches;
 mod pipe;
 mod assignments;
 mod ordinary_property_incdec;
+mod ordinary_prefix_storage;
 mod native_xml_updates;
 mod static_dimension_incdec;
 pub(crate) use native_xml_updates::lower_statement as lower_native_xml_property_update;

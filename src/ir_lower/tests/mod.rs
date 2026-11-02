@@ -50,6 +50,7 @@ mod runtime_property_setters;
 mod callable_argument_labels;
 mod source_variadic_calls;
 mod erased_xml_presence;
+mod ordinary_prefix_storage;
 mod global_return_owners;
 mod conditional_assignment_owners;
 mod borrowed_string_reads;

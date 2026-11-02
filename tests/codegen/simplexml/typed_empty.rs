@@ -446,3 +446,41 @@ unset($holder, $empty, $nested, $doc, $copy, $mixedCopy, $staticCopy);
     assert_eq!(runs.len(), 2);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// Erased ordinary scalar properties return their coerced prefix value without replaying hooks.
+#[test]
+fn test_simplexml_ordinary_prefix_results_follow_typed_storage_bundle() {
+    if skip_without_xml_native("test_simplexml_ordinary_prefix_results_follow_typed_storage_bundle") { return; }
+    let source = r#"<?php
+class PrefixStorageXmlCapability extends SimpleXMLElement {}
+class PrefixStorageString { public string $value = '5'; }
+class PrefixStorageInt { public int $value = 5; }
+class PrefixStorageFloat { public float $value = 5.0; }
+class PrefixStorageMixed { public mixed $value = '5'; }
+class PrefixStorageMagic {
+    public function __get(string $name): mixed { echo 'get|'; return '5'; }
+    public function __set(string $name, mixed $value): void { echo 'set|'; }
+}
+class PrefixStorageHook {
+    public string $value = '5' {
+        get { echo 'hook-get|'; return $this->value; }
+        set { echo 'hook-set|'; $this->value = $value; }
+    }
+}
+function prefixStorageNamed(mixed $object): mixed { return ++$object->value; }
+function prefixStorageDynamic(mixed $object, string $name): mixed { return --$object->{$name}; }
+foreach ([new PrefixStorageString(), new PrefixStorageInt(), new PrefixStorageFloat(),
+    new PrefixStorageMixed(), new PrefixStorageMagic(), new PrefixStorageHook()] as $object) {
+    var_dump(prefixStorageNamed($object), prefixStorageDynamic($object, 'value'));
+}
+unset($object);
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, concat!(
+        "string(1) \"6\"\nstring(1) \"5\"\nint(6)\nint(5)\nfloat(6)\nfloat(5)\n",
+        "int(6)\nint(5)\nget|set|get|set|int(6)\nint(4)\n",
+        "hook-get|hook-set|hook-get|hook-set|int(6)\nint(5)\n",
+    ));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
