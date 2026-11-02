@@ -33,7 +33,6 @@ pub(super) fn load_scalar(
         (PhpType::Str, Arch::AArch64) => {}
         (PhpType::Str, Arch::X86_64) => {
             ctx.emitter.instruction("mov rax, rdi");                            // expose the borrowed string pointer beside its returned length
-            ctx.emitter.instruction("mov rdx, rsi");                            // expose the borrowed canonical child's string length
         }
         (PhpType::Float, Arch::AArch64) => {
             ctx.emitter.instruction("fmov d0, x1");                             // reinterpret the validated float payload without numeric coercion
@@ -108,6 +107,16 @@ mod tests {
                     "{target} {name}: canonical payloads must expose the actual child");
                 assert!(body[probe..].contains("scalar_reference_raw_payload"),
                     "{target} {name}: headerless arguments must retain their raw layout");
+                if target == "linux-x86_64" && name == "readNativeStringReference" {
+                    let unbox = body[probe..].find("__rt_mixed_unbox").unwrap() + probe;
+                    let canonical = body[unbox..].lines().take_while(|line|
+                        !(line.trim_end().ends_with(':') && line.contains("scalar_reference_raw_payload")))
+                        .collect::<Vec<_>>().join("\n");
+                    assert!(canonical.contains("mov rax, rdi"),
+                        "{target}: unbox returns the canonical string pointer in rdi");
+                    assert!(!canonical.contains("mov rdx, rsi"),
+                        "{target}: unbox already returns the string length in rdx");
+                }
             }
         }
     }
