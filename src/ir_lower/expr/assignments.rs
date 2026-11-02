@@ -590,6 +590,7 @@ pub(super) fn lower_dynamic_property_assign_prepared(
         let property = lower_expr(ctx, property);
         let property = property_access::coerce_runtime_property_name(ctx, property, span);
         let property = crate::ir_lower::ownership::persist_string_byte_view(ctx, property, Some(span));
+        let property = lease_provisional_property_name(ctx, property, span);
         let property_pins = pin_in_flight_owners(ctx, &[property.value], span);
         // The traversal must not pin this same lease again at a nullable hop. Its
         // borrowed guard view remains protected by the earlier name record below it.
@@ -609,12 +610,26 @@ pub(super) fn lower_dynamic_property_assign_prepared(
         let property = lower_expr(ctx, property);
         let property = property_access::coerce_runtime_property_name(ctx, property, span);
         let property = crate::ir_lower::ownership::persist_string_byte_view(ctx, property, Some(span));
+        let property = lease_provisional_property_name(ctx, property, span);
         let property_pins = pin_in_flight_owners(ctx, &[property.value], span);
         let value = lower_expr(ctx, value);
         unpin_in_flight_owners(ctx, property_pins, span);
         (receiver, property, ctx.borrow_write_operand_if_needed(value, span))
     };
     lower_dynamic_property_assign_with_values(ctx, receiver, property, value, span);
+}
+
+/// Turns a possibly detached local string read into an independently pinnable name before the RHS.
+fn lease_provisional_property_name(
+    ctx: &mut LoweringContext<'_, '_>, property: LoweredValue, span: Span,
+) -> LoweredValue {
+    ctx.with_independent_write_receiver(|ctx| {
+        if !matches!(ctx.builder.value_defining_op(property.value), Some(Op::LoadLocal | Op::LoadStaticLocal))
+            || !ctx.value_needs_release_after_use(property) { return property; }
+        let leased = crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, property, Some(span));
+        crate::ir_lower::ownership::release_if_owned(ctx, property, Some(span));
+        leased
+    })
 }
 
 /// Writes a runtime-name property from operands whose name was already coerced once.
@@ -642,7 +657,8 @@ fn lower_dynamic_property_assign_with_values(
 ) {
     // A later eval can widen the name's local after this read was lowered, making the
     // read detach an owned string. Publish its lifetime before any write guard can throw.
-    let (property, property_owner) = root_owned_call_operand(ctx, property, span);
+    let (property, property_owner) = ctx.with_independent_write_receiver(|ctx|
+        root_owned_call_operand(ctx, property, span));
     let property = if property_owner.is_some() {
         let ty = ctx.builder.value_php_type(property.value);
         let borrowed = ctx.emit_value(Op::Borrow, vec![property.value], None, ty,

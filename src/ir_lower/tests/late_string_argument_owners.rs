@@ -52,10 +52,14 @@ supported_target_cases!(late_string_argument_owners, verify_late_string_argument
 fn verify_late_property_name_owner(target: &str) {
     let module = super::lower_source_at_for_target(r#"<?php
 class LateNameTarget { public int $value = 1; }
+function lateNameRhs(bool $reject): mixed {
+    if ($reject) { throw new RuntimeException('rhs'); }
+    return 3;
+}
 function lateNameWrite(bool $reject): void {
     $object = new LateNameTarget();
     $name = 'value';
-    try { $object->{$name} = $reject ? 'bad' : 3; } catch (TypeError $error) {}
+    try { $object->{$name} = $reject ? 'bad' : lateNameRhs($reject); } catch (TypeError $error) {}
     $code = $reject ? '$widened = 1;' : '';
     eval($code);
     echo $name;
@@ -64,6 +68,13 @@ lateNameWrite(false);
 "#, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen::platform::Target::parse(target).unwrap());
     let function = module.functions.iter().find(|function| function.name == "lateNameWrite").unwrap();
+    let rhs = function.instructions.iter().position(|inst| inst.op == Op::Call
+        && matches!(inst.immediate, Some(Immediate::Data(id))
+            if module.data.function_names[id.as_raw() as usize] == "lateNameRhs")).unwrap();
+    assert!(function.instructions[..rhs].iter().any(|inst| inst.op == Op::PushCallOperandOwner
+        && matches!(inst.immediate, Some(Immediate::LocalSlot(slot))
+            if function.locals[slot.as_raw() as usize].php_type.codegen_repr() == crate::types::PhpType::Str)),
+        "{target}: the name must survive a throwing RHS before the property store exists");
     let (store_index, store) = function.instructions.iter().enumerate()
         .find(|(_, inst)| inst.op == Op::DynamicPropSet).expect("the runtime name must stay dynamic");
     let borrowed = function.instructions.iter().find(|inst| inst.result == Some(store.operands[1])).unwrap();

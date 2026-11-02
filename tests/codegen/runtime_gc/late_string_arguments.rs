@@ -15,20 +15,24 @@ use crate::support::*;
 fn test_late_property_name_owners_bundle() {
     let source = r#"<?php
 class LatePropertyNameBox { public int $value = 1; }
-function latePropertyNameStore(bool $reject): void {
+function latePropertyNameRhs(): int { throw new RuntimeException('rhs'); }
+function latePropertyNameStore(bool $reject, bool $throwRhs = false): void {
     $object = new LatePropertyNameBox();
     $name = 'value';
-    try { $object->{$name} = $reject ? 'bad' : 3; }
+    try { $object->{$name} = $throwRhs ? latePropertyNameRhs() : ($reject ? 'bad' : 3); }
     catch (TypeError $error) { echo 'bad|'; unset($error); }
+    catch (RuntimeException $error) { echo 'rhs|'; unset($error); }
     $code = $reject ? '$widened = 1;' : '';
     eval($code);
     echo $name, '|';
     unset($name, $object, $code);
 }
-for ($i = 0; $i < 3; $i++) { latePropertyNameStore(false); latePropertyNameStore(true); }
+for ($i = 0; $i < 3; $i++) {
+    latePropertyNameStore(false); latePropertyNameStore(true); latePropertyNameStore(false, true);
+}
 "#;
     let (output, assembly) = compile_and_run_with_heap_debug_and_asm(source);
-    let expected = "value|bad|value|".repeat(3);
+    let expected = "value|bad|value|rhs|value|".repeat(3);
     preserve_stdout_mismatches(source, &assembly, std::slice::from_ref(&output), &[&expected]);
     assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
     assert_eq!(output.stdout, expected);
