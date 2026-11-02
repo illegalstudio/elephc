@@ -56,6 +56,14 @@ impl LocalSlotAnalysis {
                     stored_slots.insert(slot);
                 }
             }
+            // Promotion reads the raw occupant before publishing its cell pointer. A first-use
+            // output (for example preg_match's captures) has no ordinary StoreLocal, but its raw
+            // slot must still be initialized by the prologue before that read can acquire it.
+            if inst.op == Op::PromoteLocalRefCell {
+                if let Some(Immediate::LocalSlotPair { first, .. }) = inst.immediate {
+                    stored_slots.insert(first);
+                }
+            }
             // `IterStart` writes a successful getIterator Mixed cell into this
             // slot from the backend, so prologue zero-init and epilogue
             // cleanup must treat it as a stored owner.
@@ -1301,5 +1309,32 @@ mod tests {
         }
         let analysis = LocalSlotAnalysis::new(&function);
         assert!(analysis.has_store(owner));
+    }
+}
+
+#[cfg(test)]
+mod promotion_initialization_tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// First-use capture outputs need raw-slot initialization before their first promotion.
+    #[test]
+    fn fresh_capture_promotions_count_as_stores_on_every_target() {
+        let source = "<?php preg_match('/a/', 'a', $single); preg_match_all('/b/', 'bb', $many);";
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let module = crate::ir_lower::tests::lower_source_at_for_target(
+                source, std::path::Path::new("main.php"), std::path::Path::new("."), Target::parse(name).unwrap(),
+            );
+            let main = module.functions.iter().find(|function| function.name == "main").unwrap();
+            let analysis = LocalSlotAnalysis::new(main);
+            for output in ["single", "many"] {
+                let slot = main.locals.iter().find(|local| local.name.as_deref() == Some(output)).unwrap();
+                assert!(main.instructions.iter().any(|inst| inst.op == Op::PromoteLocalRefCell
+                    && matches!(inst.immediate, Some(Immediate::LocalSlotPair { first, .. }) if first == slot.id)),
+                    "{name}: {output} must promote its first output binding");
+                assert!(analysis.has_store(slot.id), "{name}: {output} raw payload needs prologue zero initialization");
+            }
+            crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        }
     }
 }
