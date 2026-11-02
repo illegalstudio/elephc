@@ -43,8 +43,8 @@ buildHiddenCollectorReference($argc > 0);
         "{target}: both call shapes must select the parent and inherited constructor branches");
     assert!(constructors.iter().all(|inst| inst.operands.len() == constructor.params.len()),
         "{target}: every constructor branch must supply its hidden collector");
-    assert!(factory.instructions.iter().any(|inst| inst.op == Op::PromoteLocalRefCell),
-        "{target}: the caller binding must survive constructor frame retirement");
+    assert_eq!(factory.instructions.iter().filter(|inst| inst.op == Op::PromoteLocalRefCell).count(), 4,
+        "{target}: each positional and named class arm must promote its own caller path");
     crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
 }
 

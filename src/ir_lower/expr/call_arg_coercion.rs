@@ -397,7 +397,9 @@ fn promote_boxed_reference_local_argument(
     {
         return;
     }
-    if !ctx.is_ref_bound_local(name) && ctx.local_can_own_reference_cell(name) {
+    let owner_needs_promotion = ctx.local_type(name).codegen_repr() == PhpType::Mixed
+        && ctx.ref_cell_owner_slot(name).is_some_and(|owner| !ctx.slot_is_initialized(owner));
+    if (!ctx.is_ref_bound_local(name) || owner_needs_promotion) && ctx.local_can_own_reference_cell(name) {
         ctx.promote_local_mixed_ref_cell(name, Some(arg.span));
     }
 }

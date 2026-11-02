@@ -56,6 +56,7 @@ pub(super) fn lower_new_dynamic_planned_value(
     let merge = ctx
         .builder
         .create_named_block("new.dynamic.planned.merge", Vec::new());
+    let mut initialized_exits = Vec::new();
 
     for class_name in candidates {
         let match_block = ctx
@@ -79,22 +80,33 @@ pub(super) fn lower_new_dynamic_planned_value(
             else_target: next_block,
             else_args: Vec::new(),
         });
+        let split_initialized = ctx.initialized_slots_snapshot();
 
         ctx.builder.position_at_end(match_block);
         let class = Name::unqualified(class_name.clone());
         let object = lower_new_object(ctx, &class, args, expr);
         store_value_into_temp(ctx, &result_temp, PhpType::Mixed, object, expr.span);
+        initialized_exits.push(ctx.initialized_slots_snapshot());
         branch_to(ctx, merge);
 
         ctx.builder.position_at_end(next_block);
+        // Ref-bound aliases are MAY facts, but an owner created by a different class arm
+        // is not initialized on this miss path. Restore MUST facts so each selected arm
+        // emits its own idempotent promotion before a constructor can retain the binding.
+        ctx.restore_initialized_slots(split_initialized);
     }
 
     let name_value = ctx.load_local(&name_temp, Some(expr.span));
     let fallback = super::object_construction::lower_new_dynamic_generic(ctx, name_value, args, expr);
     store_value_into_temp(ctx, &result_temp, PhpType::Mixed, fallback, expr.span);
+    let mut joined_initialized = ctx.initialized_slots_snapshot();
+    for arm in initialized_exits {
+        joined_initialized.retain(|slot| arm.contains(slot));
+    }
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);
+    ctx.restore_initialized_slots(joined_initialized);
     retire_owned_call_operand(ctx, ctx.local_slots[&name_temp], expr.span);
     take_owned_temp(ctx, &result_temp, expr.span)
 }
