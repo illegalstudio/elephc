@@ -22,6 +22,7 @@ mod control;
 mod normalize;
 mod performance;
 mod target_guards;
+mod generator_identity;
 
 /// Runs DCE over a hand-built AST that no checker ever saw.
 ///

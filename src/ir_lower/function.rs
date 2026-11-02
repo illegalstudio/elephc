@@ -106,6 +106,7 @@ pub(crate) fn lower_main(
         &check_result.extern_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.closure_generator_spans,
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
 
@@ -252,6 +253,7 @@ pub(crate) fn lower_user_function(
         &check_result.extern_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.closure_generator_spans,
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
 
@@ -379,6 +381,7 @@ pub(crate) fn lower_class_method(
         &check_result.extern_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.closure_generator_spans,
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
 
@@ -499,6 +502,7 @@ pub(crate) fn lower_eval_aot_function(
         &check_result.extern_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.closure_generator_spans,
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
 
@@ -630,6 +634,7 @@ pub(crate) fn lower_eval_aot_scope_function(
         &check_result.extern_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.closure_generator_spans,
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
 
@@ -751,6 +756,7 @@ pub(crate) fn lower_property_init_thunk(
         &check_result.extern_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.closure_generator_spans,
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
 
@@ -1120,6 +1126,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         &check_result.extern_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.closure_generator_spans,
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
 
@@ -1245,6 +1252,7 @@ pub(crate) fn lower_clone_override_function(
         &check_result.extern_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.closure_generator_spans,
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
         &check_result.boxed_reference_promotion_sites,
@@ -1414,6 +1422,7 @@ pub(crate) fn lower_eval_native_default_helpers(
             &check_result.extern_classes,
             &check_result.throw_access_sites,
             &check_result.builtin_call_types,
+            &check_result.closure_generator_spans,
             &check_result.array_push_property_plans,
             &check_result.member_receiver_types,
             &check_result.boxed_reference_promotion_sites,
@@ -1481,6 +1490,7 @@ pub(crate) fn lower_closure_function(
     self_ref_callable_capture: Option<&str>,
     by_ref_return: bool,
     loop_storage_scope: String,
+    source_is_generator: bool,
 ) -> FunctionSig {
     let mut signature = closure_signature_from_ast(
         params,
@@ -1490,6 +1500,7 @@ pub(crate) fn lower_closure_function(
         body,
         signature_captures,
         parent,
+        source_is_generator,
     );
     signature.by_ref_return = by_ref_return;
     lower_closure_function_with_signature(
@@ -1529,6 +1540,7 @@ pub(crate) fn lower_closure_function_with_context(
     self_ref_callable_capture: Option<&str>,
     by_ref_return: bool,
     loop_storage_scope: String,
+    source_is_generator: bool,
 ) -> FunctionSig {
     let mut signature = closure_signature_from_ast(
         params,
@@ -1538,6 +1550,7 @@ pub(crate) fn lower_closure_function_with_context(
         body,
         signature_captures,
         parent,
+        source_is_generator,
     );
     signature.by_ref_return = by_ref_return;
     if let Some(contextual_return_type) = contextual_return_type {
@@ -1652,6 +1665,7 @@ fn lower_closure_function_with_signature(
         parent.extern_classes,
         parent.throw_access_sites,
         parent.builtin_call_types,
+        parent.closure_generator_spans,
         parent.array_push_property_plans,
         parent.member_receiver_types,
 
@@ -1709,6 +1723,7 @@ fn lower_body_into_function(
     extern_classes: &std::collections::HashMap<String, crate::types::ExternClassInfo>,
     throw_access_sites: &std::collections::HashMap<Span, crate::types::ThrowAccessInfo>,
     builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    closure_generator_spans: &std::collections::HashSet<Span>,
     array_push_property_plans: &std::collections::HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
     member_receiver_types: &std::collections::HashMap<(String, Span), Option<PhpType>>,
 
@@ -1779,6 +1794,7 @@ fn lower_body_into_function(
         extern_classes,
         throw_access_sites,
         builtin_call_types,
+        closure_generator_spans,
         array_push_property_plans,
         member_receiver_types,
 
@@ -1921,7 +1937,7 @@ fn mark_generator_if_needed(
     is_generator: bool,
 ) {
     // Named functions and methods pass the checker's source-body bit as `is_generator`.
-    // Closures pass the optimized-body scan from `closure_signature_from_ast` instead.
+    // Closures preserve the checker's source-body classification by literal span.
     // Retaining a true classification matters for two separate reasons:
     //
     // - Scanning `body` alone answers `false` once a pass has pruned the last `yield`, which is
@@ -1946,8 +1962,8 @@ fn mark_generator_if_needed(
 /// read by `Generator::getReturn()`, so the body return type is `Mixed`. For every other
 /// function it is the declared signature return type.
 ///
-/// `is_generator` comes from the source-body checker bit for named functions/methods and from
-/// the optimized-body signature scan for closures. The additional body scan can only add
+/// `is_generator` comes from source-body checker metadata for named callables and closures.
+/// The additional body scan can only add
 /// generator-ness, never withhold it. A declared `: Generator` return is
 /// deliberately NOT consulted, because a factory declares one without being one.
 fn generator_body_return_type(
@@ -2306,6 +2322,7 @@ fn closure_signature_from_ast(
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
     ctx: &LoweringContext<'_, '_>,
+    source_is_generator: bool,
 ) -> FunctionSig {
     let mut signature =
         signature_from_ast_with_variadic(params, return_type, variadic, variadic_by_ref);
@@ -2316,7 +2333,8 @@ fn closure_signature_from_ast(
         *default = crate::types::checker::normalize_lexical_callable_default(default, owner, parent)
             .expect("closure defaults passed lexical validation before EIR lowering");
     }
-    signature.is_generator = crate::types::checker::yield_validation::body_contains_yield(body);
+    signature.is_generator = source_is_generator
+        || crate::types::checker::yield_validation::body_contains_yield(body);
     if signature.is_generator {
         signature.return_type = PhpType::Object("Generator".to_string());
         return signature;
