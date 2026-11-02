@@ -9,6 +9,19 @@
 
 use crate::ir::{Immediate, IrHeapKind, IrType, Op};
 
+/// Every supported target retains object binding types after temporary ternary capabilities.
+#[test]
+fn test_nullable_fallback_flow_r57_instanceof_views_all_targets() {
+    let source = include_str!("../../../examples/instanceof/main.php");
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = crate::codegen::platform::Target::parse(name).unwrap();
+        let module = super::lower_source_at_for_target(source,
+            std::path::Path::new("examples/instanceof/main.php"),
+            std::path::Path::new("examples/instanceof"), target);
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Every target handles reference backedges and catch storage reused after unset.
 #[test]
 fn test_nullable_fallback_flow_ci_binding_storage_all_targets() {

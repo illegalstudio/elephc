@@ -84,11 +84,23 @@ impl Checker {
         let mut saved = Vec::with_capacity(guards.len());
         for guard in guards {
             let view = if then_branch { &guard.then_ty } else { &guard.else_ty };
-            saved.push(self.enter_flow_narrowing(&guard.var, env.get(&guard.var), view));
+            let previous = env.get(&guard.var).cloned();
+            saved.push((self.enter_flow_narrowing(&guard.var, previous.as_ref(), view), previous));
             env.insert(guard.var.clone(), view.clone());
         }
         let result = body(self, env);
-        for origin in saved.into_iter().rev() {
+        for (origin, previous) in saved.into_iter().rev() {
+            // An unrelated object capability is an intersection inside this region, not
+            // a new value stored by the branch. Close it before the arm's exit is joined.
+            let guard_only = self.narrowed_local_origins.get(&origin.name).is_some_and(|entry|
+                !entry.stored_in_region && entry.view.as_ref() == env.get(&origin.name));
+            if let Some(previous) = previous {
+                if guard_only && env.get(&origin.name).is_some_and(|view|
+                    matches!(view, PhpType::Object(_)) && !self.type_accepts(&previous, view))
+                {
+                    env.insert(origin.name.clone(), previous);
+                }
+            }
             self.exit_flow_narrowing(origin);
         }
         self.restore_guarded_storage_provenance(&storage_entry);

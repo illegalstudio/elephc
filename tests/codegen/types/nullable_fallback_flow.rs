@@ -9,6 +9,13 @@
 
 use super::*;
 
+/// Object guard capabilities leave the existing example's later typed calls intact.
+#[test]
+fn test_nullable_fallback_flow_r57_instanceof_ternary_runtime() {
+    assert_nullable_flow_cli_heap_output_with_native(include_str!("../../../examples/instanceof/main.php"),
+        "button\nwidget\nrenderable\nnot missing\ndynamic class\ndynamic interface\ndynamic object\nnot late\nlate\nrule accepts button\nrule rejects widget\n", true);
+}
+
 /// Nullable boxing alone cannot admit object iteration by reference through the production CLI.
 #[test]
 fn test_nullable_fallback_flow_r55_nullable_iterable_cli_refusal() {
@@ -1441,6 +1448,11 @@ fn assert_nullable_flow_heap_output(source: &str, expected: &str) {
 
 /// Checks production exception pruning and read views with owned fixture cleanup in both IR modes.
 fn assert_nullable_flow_cli_heap_output(source: &str, expected: &str) {
+    assert_nullable_flow_cli_heap_output_with_native(source, expected, false);
+}
+
+/// Supplies a hermetic PCRE2 project when dynamic class metadata emits regex iterators.
+fn assert_nullable_flow_cli_heap_output_with_native(source: &str, expected: &str, managed_pcre2: bool) {
     /// Owns only the CLI artifacts created for this fixture.
     struct FixtureDirectory(std::path::PathBuf);
     impl Drop for FixtureDirectory {
@@ -1451,8 +1463,11 @@ fn assert_nullable_flow_cli_heap_output(source: &str, expected: &str) {
     let path = directory.0.join("main.php");
     std::fs::write(&path, source).unwrap();
     for mode in ["on", "off"] {
-        let compiled = elephc_cli_command(&directory.0)
-            .args(["--heap-debug", &format!("--ir-opt={mode}")]).arg(&path).output().unwrap();
+        let mut command = if managed_pcre2 {
+            elephc_cli_command_with_managed_pcre2(&directory.0)
+        } else { elephc_cli_command(&directory.0) };
+        let compiled = command.args(["--heap-debug", &format!("--ir-opt={mode}")])
+            .arg(&path).output().unwrap();
         assert!(compiled.status.success(), "{}", String::from_utf8_lossy(&compiled.stderr));
         let output = run_binary(&path.with_extension(""), &directory.0);
         assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));

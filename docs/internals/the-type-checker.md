@@ -808,6 +808,8 @@ Object guards preserve a known subclass when probing its parent class or an impl
 
 Nullable boxing alone does not establish a prior reference binding. A null-guarded `?iterable` parameter without an earlier boxed-reference promotion retains the by-reference foreach diagnostic, including an Iterator whose first `valid()` result is false.
 
+An object capability introduced only by a ternary guard ends with that guard region. If it is incompatible with the entry type and the branch made no store, restore the entry view before joining the ternary alternatives. This keeps an `instanceof Missing` probe from changing later typed calls, while retaining actual branch assignments.
+
 #### Lazy initialization (the singleton shape)
 
 A completed `$this->p = <non-null>` or `self::$p = <non-null>` write re-establishes the fact for that place, recorded as the property's *declared* type minus `null` (never the assigned expression's type — a declared property coerces what it stores). When a single guarded clause both falls through and wrote its guarded place, the type after the `if` is the union of the then-branch exit fact and the guard complement instead of the pre-`if` type. Together those make PHP's lazy-initialization idiom check:

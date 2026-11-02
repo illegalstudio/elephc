@@ -9,6 +9,14 @@
 
 use super::*;
 
+/// Temporary object capabilities in ternaries cannot change the following binding contract.
+#[test]
+fn test_nullable_fallback_flow_r57_instanceof_ternary_binding_views() {
+    check_source(include_str!("../../examples/instanceof/main.php"))
+        .unwrap_or_else(|error| panic!("existing instanceof example: {error}"));
+    expect_error("<?php interface Flag {} class Base {} function replace(?Base $item): Base { $item instanceof Flag ? ($item = null) : ($item = new Base()); return $item; }", "return type expects Base");
+}
+
 /// A boxed reference-local retains dynamic foreach dispatch behind an Iterable read view.
 #[test]
 fn test_nullable_fallback_flow_ci_boxed_iterable_foreach_admission() {
