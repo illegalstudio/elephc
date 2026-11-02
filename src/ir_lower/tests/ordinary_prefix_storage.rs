@@ -14,7 +14,11 @@ use crate::types::PhpType;
 /// Every supported target retains the typed string read after an erased prefix write.
 fn verify_ordinary_prefix_storage(target: &str) {
     let module = super::lower_source_at_for_target(r#"<?php
-class EirPrefixScalar { public string $value = '5'; }
+class EirPrefixScalar {
+    public string $value = '5';
+    public function __get(string $name): mixed { return '5'; }
+    public function __set(string $name, mixed $value): void {}
+}
 function eirPrefixScalar(mixed $object): mixed { return ++$object->value; }
 $xml = new SimpleXMLElement('<r/>');
 var_dump(eirPrefixScalar(new EirPrefixScalar()));
@@ -29,6 +33,10 @@ var_dump(eirPrefixScalar(new EirPrefixScalar()));
         && matches!(inst.immediate, Some(Immediate::Data(data))
             if module.data.strings[data.as_raw() as usize] == "value")),
         "{target}: the result must preserve the string property's stored coercion");
+    assert!(function.instructions.iter().any(|inst| inst.op == Op::PropInitialized
+        && matches!(inst.immediate, Some(Immediate::Data(data))
+            if module.data.strings[data.as_raw() as usize] == "value")),
+        "{target}: a readback must not invoke a magic getter for an uninitialized slot");
 }
 
 supported_target_cases!(ordinary_prefix_storage, verify_ordinary_prefix_storage);

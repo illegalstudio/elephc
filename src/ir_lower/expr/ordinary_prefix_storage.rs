@@ -6,7 +6,7 @@
 //!
 //! Key details:
 //! - Exact runtime class and property names select only declared scalar backing slots.
-//! - Accessor and magic classes keep the captured result without a second observable getter.
+//! - Accessors keep their captured result; magic classes expose only initialized backing slots.
 //! - The caller holds receiver, name and computed value throughout this non-callback selection.
 
 use super::*;
@@ -19,8 +19,7 @@ pub(super) fn lower(
 ) -> LoweredValue {
     let mut candidates = Vec::new();
     for (class, info) in ctx.classes {
-        if info.methods.contains_key("__get") || info.methods.contains_key("__set")
-            || crate::types::builtin_classes::has_native_dimensions(class, ctx.classes) { continue; }
+        if crate::types::builtin_classes::has_native_dimensions(class, ctx.classes) { continue; }
         for (property, ty) in &info.properties {
             if known_name.is_some_and(|name| name != property)
                 || !info.declared_properties.contains(property)
@@ -72,6 +71,12 @@ pub(super) fn lower(
             if raw { op.default_effects() } else { Op::mixed_unbox_effects(&concrete) }, Some(span));
         ctx.builder.set_value_ownership(receiver.value, Ownership::Borrowed);
         let data = ctx.intern_string(&property);
+        let initialized = ctx.emit_value(Op::PropInitialized, vec![receiver.value], Some(Immediate::Data(data)),
+            PhpType::Bool, Op::PropInitialized.default_effects(), Some(span));
+        let read = ctx.builder.create_named_block("property.prefix.initialized", vec![]);
+        ctx.builder.terminate(Terminator::CondBr { cond: initialized.value,
+            then_target: read, then_args: vec![], else_target: next, else_args: vec![] });
+        ctx.builder.position_at_end(read);
         let value = ctx.emit_value(Op::PropGet, vec![receiver.value], Some(Immediate::Data(data)), ty,
             Op::PropGet.default_effects(), Some(span));
         store_value_into_temp(ctx, &result, PhpType::Mixed, value, span);

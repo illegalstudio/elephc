@@ -480,6 +480,11 @@ class PrefixStorageString { public string $value = '5'; }
 class PrefixStorageInt { public int $value = 5; }
 class PrefixStorageFloat { public float $value = 5.0; }
 class PrefixStorageMixed { public mixed $value = '5'; }
+class PrefixStorageDeclaredMagic {
+    public string $value = '5';
+    public function __get(string $name): mixed { echo 'unexpected-get|'; return '5'; }
+    public function __set(string $name, mixed $value): void { echo 'unexpected-set|'; }
+}
 class PrefixStorageMagic {
     public function __get(string $name): mixed { echo 'get|'; return '5'; }
     public function __set(string $name, mixed $value): void { echo 'set|'; }
@@ -493,7 +498,7 @@ class PrefixStorageHook {
 function prefixStorageNamed(mixed $object): mixed { return ++$object->value; }
 function prefixStorageDynamic(mixed $object, string $name): mixed { return --$object->{$name}; }
 foreach ([new PrefixStorageString(), new PrefixStorageInt(), new PrefixStorageFloat(),
-    new PrefixStorageMixed(), new PrefixStorageMagic(), new PrefixStorageHook()] as $object) {
+    new PrefixStorageMixed(), new PrefixStorageDeclaredMagic(), new PrefixStorageMagic(), new PrefixStorageHook()] as $object) {
     var_dump(prefixStorageNamed($object), prefixStorageDynamic($object, 'value'));
 }
 unset($object);
@@ -502,7 +507,7 @@ unset($object);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, concat!(
         "string(1) \"6\"\nstring(1) \"5\"\nint(6)\nint(5)\nfloat(6)\nfloat(5)\n",
-        "int(6)\nint(5)\nget|set|get|set|int(6)\nint(4)\n",
+        "int(6)\nint(5)\nstring(1) \"6\"\nstring(1) \"5\"\nget|set|get|set|int(6)\nint(4)\n",
         "hook-get|hook-set|hook-get|hook-set|int(6)\nint(5)\n",
     ));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
