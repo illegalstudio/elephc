@@ -1219,3 +1219,33 @@ $db->query("DROP TABLE msu");
         "1:0:-1|first=1|busy=2014|busy-prepare=2014|rest=2,3|rows=3|affected=3|free=7|after-free=8|after-scope=9|pending=2014|streamed=321|batch=1,ok1,2"
     );
 }
+
+/// `mysqli_poll()` / `mysqli::poll()` take php's exact `?array &$read, ?array &$error,
+/// array &$reject` signature: typed link arrays are rewritten in place, either list may be
+/// `null`, and passing two `null` lists is php's ValueError.
+#[test]
+#[ignore]
+fn test_mysqli_poll_accepts_null_link_lists() {
+    let out = compile_and_run(&my_program(
+        r#"
+$other = new mysqli($host, $user, $pass, $dbname, $port);
+$db->query("SELECT 42", MYSQLI_ASYNC);
+$read = [$db, $other];
+$error = null;
+$reject = [];
+echo mysqli_poll($read, $error, $reject, 1), "|", count($read), "|", count($reject), "|", var_export($error, true);
+echo "|", $read[0]->reap_async_query()->fetch_row()[0];
+$noRead = null;
+$errors = [$db];
+echo "|", mysqli::poll($noRead, $errors, $reject, 0), "|", var_export($noRead, true), "|", count($errors);
+try {
+    $a = null;
+    $b = null;
+    mysqli_poll($a, $b, $reject, 0);
+} catch (ValueError $e) {
+    echo "|", $e->getMessage();
+}
+"#,
+    ));
+    assert_eq!(out, "1|1|1|NULL|42|0|NULL|0|No stream arrays were passed");
+}

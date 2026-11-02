@@ -1138,8 +1138,8 @@ pub(super) fn decl_fn_mysqli_reap_async_query() -> Stmt {
 /// `mysqli_poll` — transcribed from the PHP form.
 pub(super) fn decl_fn_mysqli_poll() -> Stmt {
     function("mysqli_poll")
-        .param_by_ref("read", Some(t_array()))
-        .param_by_ref("error", Some(t_array()))
+        .param_by_ref("read", Some(t_nullable(t_array())))
+        .param_by_ref("error", Some(t_nullable(t_array())))
         .param_by_ref("reject", Some(t_array()))
         .param("seconds", TypeExpr::Int)
         .param_default("microseconds", TypeExpr::Int, e_int(0))

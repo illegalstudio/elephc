@@ -1417,8 +1417,8 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
         .method(
             method("poll")
                 .static_()
-                .param_by_ref("read", Some(t_array()))
-                .param_by_ref("error", Some(t_array()))
+                .param_by_ref("read", Some(t_nullable(t_array())))
+                .param_by_ref("error", Some(t_nullable(t_array())))
                 .param_by_ref("reject", Some(t_array()))
                 .param("seconds", TypeExpr::Int)
                 .param_default("microseconds", TypeExpr::Int, e_int(0))
@@ -1440,30 +1440,52 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         vec![],
                         None,
                     ),
+                    s_if(
+                        e_binop(e_binop(e_var("read"), BinOp::StrictEq, e_null()), BinOp::And, e_binop(e_var("error"), BinOp::StrictEq, e_null())),
+                        vec![
+                            s_throw(e_new("ValueError", vec![e_str("No stream arrays were passed")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
                     s_assign("_ready", e_array(vec![])),
                     s_assign("_rejected", e_array(vec![])),
-                    s_foreach(e_var("read"), None, "_link", vec![
-                        s_if(
-                            e_not(e_instance_of(e_var("_link"), "mysqli")),
-                            vec![
-                                s_throw(e_new("TypeError", vec![e_str("mysqli::poll(): Argument #1 ($read) must only contain objects of type mysqli")])),
-                            ],
-                            vec![],
-                            None,
-                        ),
-                        s_if(
-                            e_method_call(e_var("_link"), "__elephcAsyncPending", vec![]),
-                            vec![
-                                s_array_push("_ready", e_var("_link")),
-                            ],
-                            vec![],
-                            Some(vec![
-                            s_array_push("_rejected", e_var("_link")),
-                        ]),
-                        ),
-                    ]),
-                    s_assign("read", e_var("_ready")),
-                    s_assign("error", e_array(vec![])),
+                    s_if(
+                        e_binop(e_var("read"), BinOp::StrictNotEq, e_null()),
+                        vec![
+                            s_foreach(e_var("read"), None, "_link", vec![
+                                s_if(
+                                    e_not(e_instance_of(e_var("_link"), "mysqli")),
+                                    vec![
+                                        s_throw(e_new("TypeError", vec![e_str("mysqli::poll(): Argument #1 ($read) must only contain objects of type mysqli")])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_if(
+                                    e_method_call(e_var("_link"), "__elephcAsyncPending", vec![]),
+                                    vec![
+                                        s_array_push("_ready", e_var("_link")),
+                                    ],
+                                    vec![],
+                                    Some(vec![
+                                    s_array_push("_rejected", e_var("_link")),
+                                ]),
+                                ),
+                            ]),
+                            s_assign("read", e_var("_ready")),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("error"), BinOp::StrictNotEq, e_null()),
+                        vec![
+                            s_assign("error", e_array(vec![])),
+                        ],
+                        vec![],
+                        None,
+                    ),
                     s_assign("reject", e_var("_rejected")),
                     s_return(e_call("count", vec![e_var("_ready")])),
                 ]),

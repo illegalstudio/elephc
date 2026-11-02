@@ -361,8 +361,6 @@ they keep working (elephc raises no runtime `E_DEPRECATED`).
 - **MYSQLI_ASYNC queries complete when sent** (the bridge client is
   synchronous): `poll()` never waits, and a long query blocks `query()` rather
   than `reap_async_query()`.
-- **`mysqli::poll()` / `mysqli_poll()` take `array` link lists** (php's
-  `?array` would also accept `null` for `$read` / `$error`); pass `[]` instead.
 - **A connection statement while a prepared result is pending is permitted**,
   not rejected. A `mysqli_stmt::execute()` whose result set has not yet been
   drained leaves those rows buffered on the bridge (the connection wire is

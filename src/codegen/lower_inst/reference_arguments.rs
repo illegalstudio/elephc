@@ -315,9 +315,21 @@ pub(super) fn plan_ref_arg_writebacks(
     Ok(writebacks)
 }
 
-/// Rejects scalar-to-Mixed temporary ref cells whose writeback shape is not supported yet.
+/// Rejects concrete-to-Mixed temporary ref cells whose writeback shape is not supported yet.
+///
+/// Scalars (`int`, `bool`, `float`) and the heap containers whose payload is one pointer word
+/// (indexed arrays, hashes, objects) are written back; the writeback verifies the callee left a
+/// value of the same runtime kind (see [`emit_heap_ref_writeback`]).
 pub(super) fn reject_unsupported_mixed_ref_writeback_source(source_ty: &PhpType) -> Result<()> {
-    if matches!(source_ty.codegen_repr(), PhpType::Int | PhpType::Bool) {
+    if matches!(
+        source_ty.codegen_repr(),
+        PhpType::Int
+            | PhpType::Bool
+            | PhpType::Float
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Object(_)
+    ) {
         return Ok(());
     }
     Err(CodegenIrError::unsupported(format!(
@@ -700,8 +712,20 @@ pub(super) fn emit_ref_arg_writebacks(
         );
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-        move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
-        store_current_scalar_result_to_ref_source(ctx, writeback)?;
+        match writeback.source_ty.codegen_repr() {
+            PhpType::Float => {
+                emit_ref_writeback_tag_guard(ctx, 2);
+                emit_low_payload_to_float_result(ctx);
+                store_current_scalar_result_to_ref_source(ctx, writeback)?;
+            }
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+                emit_heap_ref_writeback(ctx, writeback)?;
+            }
+            _ => {
+                move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
+                store_current_scalar_result_to_ref_source(ctx, writeback)?;
+            }
+        }
         abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
     }
@@ -726,6 +750,123 @@ pub(super) fn emit_ref_arg_writebacks(
         )?;
     }
     Ok(())
+}
+
+/// Fatals unless the unboxed writeback cell (tag in the first result register) carries
+/// `expected_tag`: a typed local cannot hold a value of another kind, so a callee that replaced
+/// the by-reference argument with one is stopped instead of corrupting the slot.
+fn emit_ref_writeback_tag_guard(ctx: &mut FunctionContext<'_>, expected_tag: u8) {
+    let ok = ctx.next_label("ref_writeback_kind_ok");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp x0, #{}", expected_tag));     // did the callee leave a value of the local's runtime kind?
+            ctx.emitter.instruction(&format!("b.eq {}", ok));                   // same kind: the typed writeback is exact
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp rax, {}", expected_tag));     // did the callee leave a value of the local's runtime kind?
+            ctx.emitter.instruction(&format!("je {}", ok));                     // same kind: the typed writeback is exact
+        }
+    }
+    super::objects::emit_fatal_message(
+        ctx,
+        b"Fatal error: a by-reference argument was replaced by a value its typed variable cannot hold\n",
+    );
+    ctx.emitter.label(&ok);
+}
+
+/// Moves the unboxed low payload word (raw float bits) into the float result register.
+fn emit_low_payload_to_float_result(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("fmov d0, x1");                             // reinterpret the unboxed float bits as the float result
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("movq xmm0, rdi");                          // reinterpret the unboxed float bits as the float result
+        }
+    }
+}
+
+/// Produces an OWNED `array<element>` for the writeback from the unboxed array payload in the
+/// result register. An empty array, or one whose slots already have the element layout (its
+/// header `value_type` equals the element's tag), is retained as it is. An array whose slots are
+/// boxed Mixed cells — what a callee builds from Mixed values — is converted by
+/// `__rt_array_unbox_slots`, which fails when an element has another kind. Every other
+/// layout fatals: the typed slot cannot describe it.
+fn emit_typed_array_ref_writeback_payload(ctx: &mut FunctionContext<'_>, element: &PhpType) {
+    let keep = ctx.next_label("ref_writeback_keep_array");
+    let done = ctx.next_label("ref_writeback_array_done");
+    let converted = ctx.next_label("ref_writeback_array_converted");
+    let boxed_tag = crate::codegen_support::runtime_value_tag(&PhpType::Mixed) as i64;
+    let element_tag = crate::codegen_support::container_value_tag(element);
+    let convertible = *element != PhpType::Mixed;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [x0]");                            // load the written-back array's element count
+            ctx.emitter.instruction(&format!("cbz x9, {}", keep));              // an empty array fits every element layout
+            ctx.emitter.instruction("ldr x9, [x0, #-8]");                       // load the written-back array's packed kind word
+            ctx.emitter.instruction("lsr x9, x9, #8");                          // shift the runtime value_type tag into the low bits
+            ctx.emitter.instruction("and x9, x9, #0x7f");                       // isolate the value_type, dropping the COW bit
+            ctx.emitter.instruction(&format!("cmp x9, #{}", element_tag));      // do the slots already have the element layout?
+            ctx.emitter.instruction(&format!("b.eq {}", keep));                 // yes: the typed contract is exact
+            if convertible {
+                ctx.emitter.instruction(&format!("cmp x9, #{}", boxed_tag));    // are the slots boxed Mixed cells?
+                ctx.emitter.instruction(&format!("b.ne {}_fail", converted));   // any other layout cannot be converted
+                ctx.emitter.instruction(&format!("mov x1, #{}", element_tag));  // pass the element tag the typed local expects
+                ctx.emitter.instruction("bl __rt_array_unbox_slots");           // build an owned raw-slot copy of the array
+                ctx.emitter.instruction(&format!("cbnz x0, {}", converted));    // a non-null copy means every element matched
+            }
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r10, QWORD PTR [rax]");                // load the written-back array's element count
+            ctx.emitter.instruction("test r10, r10");                           // is the written-back array empty?
+            ctx.emitter.instruction(&format!("je {}", keep));                   // an empty array fits every element layout
+            ctx.emitter.instruction("mov r10, QWORD PTR [rax - 8]");            // load the written-back array's packed kind word
+            ctx.emitter.instruction("shr r10, 8");                              // shift the runtime value_type tag into the low bits
+            ctx.emitter.instruction("and r10, 0x7f");                           // isolate the value_type, dropping the COW bit
+            ctx.emitter.instruction(&format!("cmp r10, {}", element_tag));      // do the slots already have the element layout?
+            ctx.emitter.instruction(&format!("je {}", keep));                   // yes: the typed contract is exact
+            if convertible {
+                ctx.emitter.instruction(&format!("cmp r10, {}", boxed_tag));    // are the slots boxed Mixed cells?
+                ctx.emitter.instruction(&format!("jne {}_fail", converted));    // any other layout cannot be converted
+                abi::emit_load_int_immediate(ctx.emitter, "rdi", element_tag);
+                ctx.emitter.instruction("call __rt_array_unbox_slots");         // build an owned raw-slot copy of the array
+                ctx.emitter.instruction("test rax, rax");                       // a non-null copy means every element matched
+                ctx.emitter.instruction(&format!("jne {}", converted));         // keep the converted owned copy
+            }
+        }
+    }
+    ctx.emitter.label(&format!("{}_fail", converted));
+    super::objects::emit_fatal_message(
+        ctx,
+        b"Fatal error: a by-reference argument was replaced by an array whose elements its typed variable cannot hold\n",
+    );
+    ctx.emitter.label(&keep);
+    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Array(Box::new(element.clone())));
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&converted);
+    ctx.emitter.label(&done);
+}
+
+/// Writes an unboxed heap payload (indexed array, hash, or object) back into its typed local.
+///
+/// The cell keeps its own reference until the caller decrefs it, so the local takes a fresh
+/// retain of the new payload and releases the value it held before the call (retain first, so
+/// a callee that left the very same container never drops it to zero). An indexed array whose
+/// slots are boxed Mixed cells cannot back a typed element contract and fatals, the policy the
+/// Mixed-to-typed runtime conversion already applies.
+fn emit_heap_ref_writeback(ctx: &mut FunctionContext<'_>, writeback: &RefArgWriteback) -> Result<()> {
+    let source_ty = writeback.source_ty.codegen_repr();
+    emit_ref_writeback_tag_guard(ctx, crate::codegen_support::runtime_value_tag(&source_ty));
+    move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
+    match &source_ty {
+        PhpType::Array(element) => emit_typed_array_ref_writeback_payload(ctx, &element.codegen_repr()),
+        _ => abi::emit_incref_if_refcounted(ctx.emitter, &source_ty),
+    }
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    ctx.load_local_to_result(writeback.source_slot)?;
+    abi::emit_decref_if_refcounted(ctx.emitter, &source_ty);
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    store_current_scalar_result_to_ref_source(ctx, writeback)
 }
 
 /// Returns the low payload register produced by `__rt_mixed_unbox` on the active target.

@@ -54,6 +54,7 @@ mod array_intersect;
 mod array_intersect_refcounted;
 mod array_intersect_key;
 mod array_is_list;
+mod array_unbox_slots;
 mod array_key_exists;
 mod array_key_exists_mixed_key;
 mod array_map;
@@ -315,6 +316,8 @@ pub use array_intersect_refcounted::emit_array_intersect_refcounted;
 pub use array_intersect_key::emit_array_intersect_key;
 /// Emit array list-shape predicate helper (array_is_list).
 pub use array_is_list::emit_array_is_list;
+/// Emit the boxed-slot to raw-slot indexed array conversion helper.
+pub use array_unbox_slots::emit_array_unbox_slots;
 /// Emit array key existence check helper.
 pub use array_key_exists::emit_array_key_exists;
 /// Emit the storage-kind-dispatching presence-only array key existence helper.

@@ -25337,13 +25337,13 @@ echo memory_get_peak_usage();
         params: &[
             ParamSpec {
                 name: "read",
-                ty: TypeSpec::Array,
+                ty: TypeSpec::Nullable(&TypeSpec::Array),
                 default: None,
                 by_ref: true,
             },
             ParamSpec {
                 name: "error",
-                ty: TypeSpec::Array,
+                ty: TypeSpec::Nullable(&TypeSpec::Array),
                 default: None,
                 by_ref: true,
             },

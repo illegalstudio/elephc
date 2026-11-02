@@ -850,29 +850,36 @@ class mysqli {
     // was sent, so a link with an unreaped query is immediately readable and
     // every other link is reported in $reject (mysqlnd's "nothing to poll").
     // Links listed in $error are never in error state at poll time (a failed
-    // async query is reported by reap_async_query()). Returns the number of
-    // readable links.
-    public static function poll(array &$read, array &$error, array &$reject, int $seconds, int $microseconds = 0): int|false {
+    // async query is reported by reap_async_query()). php's exact signature:
+    // $read / $error may be null, but not both. Returns the readable count.
+    public static function poll(?array &$read, ?array &$error, array &$reject, int $seconds, int $microseconds = 0): int|false {
         if ($seconds < 0) {
             throw new ValueError("mysqli::poll(): Argument #4 (\$seconds) must be greater than or equal to 0");
         }
         if ($microseconds < 0) {
             throw new ValueError("mysqli::poll(): Argument #5 (\$microseconds) must be greater than or equal to 0");
         }
+        if ($read === null && $error === null) {
+            throw new ValueError("No stream arrays were passed");
+        }
         $_ready = [];
         $_rejected = [];
-        foreach ($read as $_link) {
-            if (!($_link instanceof mysqli)) {
-                throw new TypeError("mysqli::poll(): Argument #1 (\$read) must only contain objects of type mysqli");
+        if ($read !== null) {
+            foreach ($read as $_link) {
+                if (!($_link instanceof mysqli)) {
+                    throw new TypeError("mysqli::poll(): Argument #1 (\$read) must only contain objects of type mysqli");
+                }
+                if ($_link->__elephcAsyncPending()) {
+                    $_ready[] = $_link;
+                } else {
+                    $_rejected[] = $_link;
+                }
             }
-            if ($_link->__elephcAsyncPending()) {
-                $_ready[] = $_link;
-            } else {
-                $_rejected[] = $_link;
-            }
+            $read = $_ready;
         }
-        $read = $_ready;
-        $error = [];
+        if ($error !== null) {
+            $error = [];
+        }
         $reject = $_rejected;
         return count($_ready);
     }

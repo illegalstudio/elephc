@@ -228,6 +228,9 @@ impl Checker {
         let array_value = actual.is_php_array()
             || matches!(actual, PhpType::Array(_) | PhpType::AssocArray { .. });
         let guarded_storage = self.guarded_local_storage_type(arg, env).cloned();
+        if guarded_storage.is_none() && nullable_reference_keeps_concrete_storage(expected, actual) {
+            return;
+        }
         let actual = guarded_storage.as_ref().unwrap_or(actual);
         let output_ty = if expected.is_php_array()
             && array_value
@@ -332,5 +335,41 @@ impl Checker {
                 env.insert(name, output_ty);
             }
         }
+    }
+}
+
+/// Whether a concrete local bound to a NULLABLE typed by-reference parameter keeps its own
+/// concrete storage across the call (`?array &$read` given an `array<Foo>` local, `?Foo &$o`
+/// given an object, `?float &$f` given a float).
+///
+/// The parameter's boxed cell is written back into the typed slot after the call, and the
+/// writeback verifies the callee left a value of the local's own kind (converting an array
+/// built from Mixed values into the typed element layout) — so the local's type is unchanged and
+/// needs no promotion to boxed storage. The only other value such a parameter admits is `null`,
+/// which the typed slot cannot hold; the writeback stops the program there with a diagnostic.
+pub(crate) fn nullable_reference_keeps_concrete_storage(expected: &PhpType, actual: &PhpType) -> bool {
+    let PhpType::Union(members) = expected else {
+        return false;
+    };
+    if !members.iter().any(|member| matches!(member, PhpType::Void)) {
+        return false;
+    }
+    let non_null: Vec<&PhpType> = members
+        .iter()
+        .filter(|member| !matches!(member, PhpType::Void))
+        .collect();
+    match actual {
+        PhpType::Array(element) => {
+            !matches!(element.codegen_repr(), PhpType::Mixed | PhpType::Str)
+                && non_null.iter().all(|member| {
+                    member.is_php_array()
+                        || matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. })
+                })
+        }
+        PhpType::Object(_) => non_null
+            .iter()
+            .all(|member| matches!(member, PhpType::Object(_))),
+        PhpType::Float => non_null.iter().all(|member| matches!(member, PhpType::Float)),
+        _ => false,
     }
 }

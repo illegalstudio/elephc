@@ -461,7 +461,7 @@ function mysqli_reap_async_query(mixed $mysql): mysqli_result|bool {
 }
 
 // Same contract as mysqli::poll() (the link arrays are rewritten in place).
-function mysqli_poll(array &$read, array &$error, array &$reject, int $seconds, int $microseconds = 0): int|false {
+function mysqli_poll(?array &$read, ?array &$error, array &$reject, int $seconds, int $microseconds = 0): int|false {
     return mysqli::poll($read, $error, $reject, $seconds, $microseconds);
 }
 

@@ -432,6 +432,15 @@ type dispatch the rewrite does not implement (`iterable`, pointers, buffers) sti
 returns; if the callee throws after mutating the reference, the property keeps its previous
 value (PHP would already have applied the mutation).
 
+A concrete local passed to a **nullable typed** by-reference parameter keeps its own type
+(`?array &$items` given an `array<Item>`, `?Item &$item` given an `Item`, `?float &$f` given a
+`float`): the parameter's boxed cell is written back into the typed variable when the call
+returns. An array the callee built from `mixed` values is converted into the variable's
+element layout on the way back, and a local that only ever holds `null` gets boxed storage so
+the callee can write any value through it. A callee that leaves a value the typed variable
+cannot hold — `null`, or elements of another kind — stops the program with a diagnostic
+(PHP would rebind the variable to the new value).
+
 ## References to array elements
 
 A local can alias an element of an **indexed array** (`$b =& $a[0]`). Writing through

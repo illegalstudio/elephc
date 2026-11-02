@@ -285,6 +285,14 @@ impl Checker {
                 ),
             ));
         }
+        // A concrete array/object/float local bound to a nullable parameter of its own kind
+        // keeps its typed slot: the call writes the boxed cell back and verifies its kind.
+        if crate::types::checker::functions::nullable_reference_keeps_concrete_storage(
+            expected_ty,
+            actual_ty,
+        ) {
+            return Ok(());
+        }
         // The call lowering boxes PHP array locals before exposing their ref-cell address.
         // This changes storage, not the declared values accepted by the reference parameter.
         if expected_ty.is_php_array()

@@ -90,6 +90,11 @@ struct NameFacts {
     assigns: Vec<AssignSite>,
     /// Set by any write or aliasing shape that is not a plain statement-form assignment.
     disqualified: bool,
+    /// Set when the bare local is an argument of a call that may bind it BY REFERENCE. Such a
+    /// name is never marked for branch divergence, but a local that only ever holds `null` gets
+    /// boxed storage so the callee can write any value through the reference (see
+    /// [`Checker::mark_null_reference_outputs`]).
+    passed_by_ref: bool,
 }
 
 /// Everything one scan of one body collects.
@@ -274,6 +279,7 @@ impl Checker {
                 warns,
             ));
         }
+        self.mark_null_reference_outputs(&facts);
         // `sort_by` rather than `sort_by_key`: a key closure would have to CLONE the name to own
         // the tuple it returns, once per comparison.
         marks.sort_by(|(left_span, left_name, ..), (right_span, right_name, ..)| {
@@ -303,6 +309,34 @@ impl Checker {
                     .insert(name.clone());
             }
             self.mixed_storage_locals.insert(name);
+        }
+    }
+
+    /// Gives boxed `Mixed` storage to every local that only ever holds `null` (each of its
+    /// assignments is the `null` literal) and is passed bare to a call that may bind it by
+    /// reference: `$read = null; mysqli_poll($read, …)`. Its natural storage is `void`, which no
+    /// value written through the reference fits; the boxed slot is the callee's own cell, so the
+    /// write needs no conversion. Marked silently — nothing about the program is incompatible.
+    fn mark_null_reference_outputs(&mut self, facts: &Facts) {
+        for (name, name_facts) in &facts.names {
+            if !name_facts.passed_by_ref
+                || name_facts.disqualified
+                || name_facts.assigns.is_empty()
+                || !name_facts.assigns.iter().all(|site| matches!(site.ty, PhpType::Void))
+                || !name_facts.assigns.iter().all(|site| site.span.identifies_a_node())
+                || self.active_ref_params.contains(name)
+                || self.local_binding_depth.contains_key(name)
+                || self.name_is_seeded_program_storage(name)
+            {
+                continue;
+            }
+            for site in &name_facts.assigns {
+                self.mixed_storage_store_sites
+                    .entry(site.span)
+                    .or_default()
+                    .insert(name.clone());
+            }
+            self.mixed_storage_locals.insert(name.clone());
         }
     }
 
@@ -339,7 +373,7 @@ impl Checker {
     /// Separated from the replay so the caller can answer it BEFORE building the per-name
     /// transparency vector, which walks every guard region in the body.
     fn name_is_markable(&self, name: &str, facts: &NameFacts) -> bool {
-        if facts.disqualified || facts.assigns.len() < 2 {
+        if facts.disqualified || facts.passed_by_ref || facts.assigns.len() < 2 {
             return false;
         }
         // A reference-aliased name is NEVER markable: the mark gives the local one boxed `Mixed`
@@ -1066,6 +1100,12 @@ fn collect_expr(checker: &Checker, expr: &Expr, depth: u32, facts: &mut Facts) {
                 for arg in args {
                     disqualify_root(facts, arg);
                 }
+            } else if callee_binds_pointer_by_ref(checker, name) {
+                // `?ptr<T> &$p` gives a null local POINTER storage instead (see
+                // `record_boxed_reference_output`), so such a local is never boxed here.
+                for arg in args {
+                    disqualify_root(facts, arg);
+                }
             } else if callee_may_bind_arguments_by_ref(checker, name) {
                 disqualify_call_arguments(facts, args);
             }
@@ -1263,6 +1303,14 @@ fn collect_exprs(checker: &Checker, exprs: &[Expr], depth: u32, facts: &mut Fact
 /// its callee declares a by-reference parameter at all (or cannot be resolved), which is rare.
 fn disqualify_call_arguments(facts: &mut Facts, args: &[Expr]) {
     for arg in args {
+        let mut bare = arg;
+        while let ExprKind::NamedArg { value, .. } = &bare.kind {
+            bare = value;
+        }
+        if let ExprKind::Variable(name) = &bare.kind {
+            facts.names.entry(name.clone()).or_default().passed_by_ref = true;
+            continue;
+        }
         disqualify_root(facts, arg);
     }
 }
@@ -1298,6 +1346,35 @@ fn callee_may_bind_arguments_by_ref(checker: &Checker, name: &Name) -> bool {
         return def.ref_params.iter().any(|by_ref| *by_ref);
     }
     true
+}
+
+/// Returns whether a called NAME declares a by-reference parameter of pointer type
+/// (`?ptr<T> &$p`), whose null locals take pointer storage rather than boxed Mixed storage.
+fn callee_binds_pointer_by_ref(checker: &Checker, name: &Name) -> bool {
+    let raw = name.as_str();
+    let trimmed = raw.trim_start_matches('\\');
+    let Some(decl) = checker
+        .fn_decls
+        .get(raw)
+        .or_else(|| checker.fn_decls.get(trimmed))
+    else {
+        return false;
+    };
+    decl.param_types
+        .iter()
+        .zip(decl.ref_params.iter())
+        .any(|(ty, by_ref)| *by_ref && ty.as_ref().is_some_and(type_expr_mentions_pointer))
+}
+
+/// Whether a declared parameter type is, or contains, a `ptr<T>` member.
+fn type_expr_mentions_pointer(ty: &crate::parser::ast::TypeExpr) -> bool {
+    use crate::parser::ast::TypeExpr;
+    match ty {
+        TypeExpr::Ptr(_) => true,
+        TypeExpr::Nullable(inner) => type_expr_mentions_pointer(inner),
+        TypeExpr::Union(members) => members.iter().any(type_expr_mentions_pointer),
+        _ => false,
+    }
 }
 
 /// Returns whether a called name is PHP's `eval`.
