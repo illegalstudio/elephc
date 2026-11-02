@@ -117,6 +117,12 @@ pub(crate) struct Usage {
     callable_current_class: Option<String>,
     /// Extra dispatch metadata is only needed by web environment demand, not ordinary consumers.
     environment_mode: bool,
+    /// Whole-program call sites and escaped declaration identities, before name resolution.
+    callable_parameter_inputs: super::environment_parameters::ParameterInputs,
+    /// Present only in the environment walk, whose local binding facts are scope-isolated.
+    callable_parameter_proof: Option<super::environment_parameters::ParameterProof>,
+    /// Reachable global bindings whose mutation can invalidate top-level callable identities.
+    callable_global_writes: HashSet<String>,
 }
 
 impl Usage {
@@ -386,14 +392,17 @@ pub(crate) fn has_reachable_unknown_callable(program: &[Stmt], all_usage: &Usage
         return true;
     };
     let mut roots = roots.implicit_only(all_usage);
+    let parameters = all_usage.callable_parameter_inputs.prove(&all_usage.literals, &roots, &all_usage.callable_class_edges);
     let constructors = super::environment_callables::ConstructorMetadata::collect(all_usage);
     loop {
         let mut usage = Usage {
             callable_declaration_roots: Some(roots.clone()),
             callable_constructor_metadata: Some(constructors.clone()),
+            callable_parameter_proof: Some(parameters.clone()),
             environment_mode: true, ..Usage::default()
         };
         scan_program(program, &mut usage);
+        for name in &usage.callable_global_writes { usage.callable_names.write(name); }
         let Some(next) = super::environment_callables::declaration_roots(&usage) else { return true; };
         if !roots.expand(next) { return usage.callable_names.has_unknown_target(); }
     }
@@ -463,10 +472,15 @@ fn record_literal_function(usage: &mut Usage, expr: Option<&Expr>) {
 /// Scans parameter default expressions.
 fn scan_params(
     params: &[(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)],
+    owner: Option<&str>,
     usage: &mut Usage,
 ) {
-    for (name, ty, default, _) in params {
-        usage.callable_names.write(name);
+    for (index, (name, ty, default, _)) in params.iter().enumerate() {
+        if owner.zip(usage.callable_parameter_proof.as_ref())
+            .is_some_and(|(owner, proof)| proof.contains(owner, index))
+        {
+            usage.callable_names.simple_binding(name);
+        } else { usage.callable_names.write(name); }
         if let Some(ty) = ty {
             scan_type(ty, usage);
         }
@@ -517,6 +531,13 @@ fn scan_property(property: &ClassProperty, usage: &mut Usage) {
 fn scan_method(method: &ClassMethod, usage: &mut Usage, can_exclude: bool) {
     let name = usage.callable_current_class.as_ref()
         .map(|class| format!("{class}::{}", method.name));
+    if usage.environment_mode {
+        // Trait/enum/interface methods may have no lexical class in this scan.
+        usage.callable_parameter_inputs.declaration(
+            name.as_deref().unwrap_or(&method.name), &method.params,
+            can_exclude && method.attributes.is_empty(),
+        );
+    }
     scan_callable(
         name.as_deref().filter(|_| can_exclude && method.attributes.is_empty()),
         &method.params, method.variadic.as_deref(), method.return_type.as_ref(), &method.body, usage,
@@ -537,12 +558,29 @@ fn scan_callable(
         !super::environment_callables::is_referenced(roots, name)
     });
     if exclude { return; }
-    scan_params(params, usage);
+    let outer = enter_callable_scope(usage, &[]);
+    scan_params(params, name, usage);
     if let Some(name) = variadic { usage.callable_names.write(name); }
     if let Some(ty) = return_type {
         scan_type(ty, usage);
     }
     scan_program(body, usage);
+    leave_callable_scope(usage, outer);
+}
+
+/// Separates callable-local bindings while preserving only explicitly captured identities.
+fn enter_callable_scope(usage: &mut Usage, captures: &[String]) -> Option<super::callable_names::CallableNames> {
+    usage.callable_parameter_proof.as_ref()?;
+    let inner = usage.callable_names.captures(captures);
+    Some(std::mem::replace(&mut usage.callable_names, inner))
+}
+
+/// Propagates unresolved child calls without leaking its local identities into its parent.
+fn leave_callable_scope(usage: &mut Usage, outer: Option<super::callable_names::CallableNames>) {
+    if let Some(mut outer) = outer {
+        if usage.callable_names.has_unknown_target() { outer.unknown_call(); }
+        usage.callable_names = outer;
+    }
 }
 
 /// Scans one class constant initializer.
@@ -564,15 +602,21 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
         | StmtKind::StaticVar { name, init: value } => usage.callable_names.assignment(name, value),
         StmtKind::RefAssign { target, source } => {
             usage.callable_names.write(target);
-            if let ExprKind::Variable(name) = &source.kind { usage.callable_names.write(name); }
+            usage.callable_names.write_target(source);
         }
         StmtKind::ArrayAssign { array, .. } | StmtKind::ArrayPush { array, .. } => usage.callable_names.write(array),
-        StmtKind::Global { vars } | StmtKind::ListUnpack { vars, .. } => {
+        StmtKind::NestedArrayAssign { target, .. } => usage.callable_names.write_target(target),
+        StmtKind::Global { vars } => {
+            for name in vars { usage.callable_names.write(name); }
+            if usage.environment_mode { usage.callable_global_writes.extend(vars.iter().cloned()); }
+        }
+        StmtKind::ListUnpack { vars, .. } => {
             for name in vars { usage.callable_names.write(name); }
         }
-        StmtKind::Foreach { key_var, value_var, .. } => {
+        StmtKind::Foreach { array, key_var, value_var, value_by_ref, .. } => {
             if let Some(name) = key_var { usage.callable_names.write(name); }
             usage.callable_names.write(value_var);
+            if *value_by_ref { usage.callable_names.write_target(array); }
         }
         StmtKind::Try { catches, .. } => {
             for name in catches.iter().filter_map(|catch| catch.variable.as_ref()) {
@@ -738,6 +782,9 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
             // same name registered, so the interpreter can refuse the duplicate as PHP does.
             if usage.scanning_eval_fragment {
                 record_name(usage, name);
+            }
+            if usage.environment_mode {
+                usage.callable_parameter_inputs.declaration(name, params, stmt.attributes.is_empty());
             }
             scan_callable(
                 stmt.attributes.is_empty().then_some(name.as_str()),
@@ -905,6 +952,9 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
                 }
                 record_name(usage, &name);
                 record_class(usage, &name);
+                if usage.environment_mode && import.kind == crate::parser::ast::UseKind::Function {
+                    usage.callable_parameter_inputs.escape(&name, false);
+                }
                 if callable_taking_builtin(&php_symbol_key(&name)) {
                     usage.callable_names.unknown_call();
                 }
@@ -912,7 +962,10 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
         }
         StmtKind::FunctionVariantGroup { variants, .. } => {
             // The resolver dispatches the public name through any of these internal bodies.
-            for variant in variants { record_name(usage, variant); }
+            for variant in variants {
+                record_name(usage, variant);
+                if usage.environment_mode { usage.callable_parameter_inputs.escape(variant, false); }
+            }
         }
         StmtKind::ExternFunctionDecl { params, .. } => {
             // Native code can retain and invoke an escaped callable without a PHP call site.
@@ -939,6 +992,20 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
 
 /// Scans every child and callable position of one expression.
 fn scan_expr(expr: &Expr, usage: &mut Usage) {
+    if usage.environment_mode {
+        match &expr.kind {
+            ExprKind::FunctionCall { name, args } => usage.callable_parameter_inputs.call(name.as_str(), false, args),
+            ExprKind::StaticMethodCall { receiver, method, args } => usage.callable_parameter_inputs.static_call(
+                receiver, usage.callable_current_class.as_deref(), method, args,
+            ),
+            ExprKind::MethodCall { method, args, .. }
+            | ExprKind::NullsafeMethodCall { method, args, .. } => usage.callable_parameter_inputs.call(method, true, args),
+            ExprKind::FirstClassCallable(CallableTarget::Function(name)) => usage.callable_parameter_inputs.escape(name.as_str(), false),
+            ExprKind::FirstClassCallable(CallableTarget::Method { method, .. }
+                | CallableTarget::StaticMethod { method, .. }) => usage.callable_parameter_inputs.escape(method, true),
+            _ => {}
+        }
+    }
     match &expr.kind {
         ExprKind::FunctionCall { args, .. } | ExprKind::ExprCall { args, .. }
         | ExprKind::ClosureCall { args, .. } | ExprKind::MethodCall { args, .. }
@@ -1180,9 +1247,14 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         ExprKind::Closure { params, variadic, body, captures, capture_refs, .. } => {
             for name in capture_refs { usage.callable_names.write(name); }
             usage.storage_variables.extend(captures.iter().chain(capture_refs).cloned());
-            scan_params(params, usage);
+            let mut outer = enter_callable_scope(usage, captures);
+            scan_params(params, None, usage);
             if let Some(name) = variadic { usage.callable_names.write(name); }
             scan_program(body, usage);
+            if let Some(outer) = &mut outer {
+                usage.callable_names.propagate_capture_calls(outer, captures);
+            }
+            leave_callable_scope(usage, outer);
         }
         ExprKind::NamedArg { value, .. } => scan_expr(value, usage),
         ExprKind::StaticMethodCall {

@@ -59,6 +59,38 @@ Elephc\Web\Worker::register(new Application());
     }
 }
 
+/// Literal factories and decoders crossing helper boundaries do not copy unused ENV entries.
+#[test]
+fn web_application_environment_literal_parameter_entries_do_not_allocate() {
+    let dir = EnvironmentFixture(make_test_dir("web_application_environment_parameters"));
+    let binary = compile_web_with_flags(&dir.0, r#"<?php
+function environment_through(callable $factory): string { return $factory(); }
+final class EnvironmentHost {
+    public static function serve(callable $factory): string {
+        return self::dispatch(fn(): string => $factory());
+    }
+    private static function dispatch(callable $factory): string { return $factory(); }
+}
+class ParameterApplication implements Elephc\Web\WorkerApplication {
+    private int $previous = 0;
+    public function __construct() { $this->previous = memory_get_allocations(); }
+    public function handle(Elephc\Web\Request $request): void {
+        $value = environment_through(fn(): string => 'ok');
+        $value = EnvironmentHost::serve(fn(): string => $value);
+        $now = memory_get_allocations();
+        echo $now - $this->previous, ':', $value, ':', getenv('ELEPHC_WEB_TEST_ENV');
+        $this->previous = $now;
+    }
+    public function shutdown(): void {}
+}
+Elephc\Web\Worker::register(new ParameterApplication());
+"#, "parameters", &["--web-lifecycle=application"]);
+    let small = application_allocation_responses(&binary, false);
+    let large = application_allocation_responses(&binary, true);
+    assert!(small.iter().all(|response| response.ends_with(":ok:present")), "{small:?}");
+    assert_eq!(small, large, "literal helper arguments must not add per-request ENV allocation");
+}
+
 /// Bootstrap environment snapshots survive fresh request copies and reset after a throwing request.
 #[test]
 fn web_application_environment_observers_preserve_bootstrap_and_isolation() {
