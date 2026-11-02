@@ -22,6 +22,9 @@ class SourceVariadicXml extends SimpleXMLElement {
 }
 class SourceVariadicInherited extends SourceVariadicXml {}
 function sourceVariadicMake(): mixed { return new SourceVariadicInherited('<r/>'); }
+function sourceVariadicNullable(bool $present): ?SourceVariadicXml {
+    return $present ? new SourceVariadicXml('<r/>') : null;
+}
 $node = sourceVariadicMake();
 $present = $node;
 $code = $argc > 0 ? '
@@ -49,7 +52,7 @@ try { $node->prefix(); } catch (ArgumentCountError $error) {
 $number = 1; $node->change($number); echo $number, '|';
 $evalChild->collect($missing);
 $other->collect(1);
-$nullable = $argc > 0 ? null : $node;
+$nullable = sourceVariadicNullable($argc < 0);
 $nullable?->collect(print('unexpected|'));
 echo 'done';
 "#);
@@ -64,7 +67,7 @@ echo 'done';
 fn test_simplexml_callable_argument_guards_keep_source_labels() {
     if skip_without_xml_native("test_simplexml_callable_argument_guards_keep_source_labels") { return; }
     let out = compile_and_run_with_heap_debug(r#"<?php
-function callableLabelMaybe(bool $present): ?SimpleXMLElement {
+function callableLabelMaybe(bool $present): mixed {
     return $present ? new SimpleXMLElement('<r/>') : null;
 }
 function callableLabelFunction(SimpleXMLElement $node): void { echo 'unexpected|'; }

@@ -11,7 +11,7 @@
 /// Every target retains callable labels before argument coercion emits an exception.
 fn verify_callable_argument_labels(target: &str) {
     let module = super::lower_source_at_for_target(r#"<?php
-function labelMaybe(bool $present): ?SimpleXMLElement {
+function labelMaybe(bool $present): mixed {
     return $present ? new SimpleXMLElement('<r/>') : null;
 }
 function labelFunction(SimpleXMLElement $node): void {}
