@@ -10,7 +10,7 @@
 
 /// Lowers one complete corpus with the same frontend and target pipeline as the core probes.
 fn lower_corpus(source: &str, target: &str) -> crate::ir::Module {
-    super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+    super::lower_reachable_source_at_for_target(source, std::path::Path::new("main.php"),
         std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap())
 }
 

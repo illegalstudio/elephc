@@ -198,6 +198,21 @@ fn try_lower_source_at_for_target(
     parent: &Path,
     target: Target,
 ) -> Result<crate::ir::Module, crate::ir_lower::LoweringError> {
+    try_lower_source_at_for_target_with_reachability(source, main_file_path, parent, target, false)
+}
+
+/// Emits executable corpora after the same declaration reachability pass used in production.
+fn lower_reachable_source_at_for_target(
+    source: &str, main_file_path: &Path, parent: &Path, target: Target,
+) -> crate::ir::Module {
+    try_lower_source_at_for_target_with_reachability(source, main_file_path, parent, target, true)
+        .unwrap_or_else(|error| panic!("EIR corpus lowering failed for {}: {error:?}", main_file_path.display()))
+}
+
+/// Shares frontend setup while declaration-inspection tests retain their unpruned functions.
+fn try_lower_source_at_for_target_with_reachability(
+    source: &str, main_file_path: &Path, parent: &Path, target: Target, prune: bool,
+) -> Result<crate::ir::Module, crate::ir_lower::LoweringError> {
     let source_mode = crate::source::SourceMode::from_path(main_file_path);
     let tokens =
         crate::lexer::tokenize_with_mode(source, source_mode).expect("tokenize failed");
@@ -279,7 +294,7 @@ fn try_lower_source_at_for_target(
     // CLASS is instantiated by that driver rather than by the checker, so a plain
     // `check_with_target` here hands the checker a template and reports `Unknown type: T` on an
     // example that compiles perfectly well through the CLI.
-    let (ast, check_result) = crate::generics::monomorphize(ast, |program, bounds| {
+    let (ast, mut check_result) = crate::generics::monomorphize(ast, |program, bounds| {
         crate::types::check_with_target_and_bounds(program, target, bounds)
     })
     .expect("type check failed");
@@ -294,6 +309,15 @@ fn try_lower_source_at_for_target(
     );
     let ast =
         crate::optimize::eliminate_dead_code(ast, check_result.local_binding_decision_spans());
+    let ast = if prune {
+        let roots = crate::generics::instantiation_roots(&check_result.requested_instantiations)
+            .into_iter().collect();
+        crate::optimize::prune_unreachable_declarations(ast, &mut check_result,
+            crate::optimize::reachability::PruneOptions {
+                inventory: &prelude_inventory, forced_groups: &HashSet::new(),
+                exported_functions: &roots, eval_forced: false,
+            })
+    } else { ast };
     crate::ir_lower::lower_program(&ast, &check_result, target, false)
 }
 
