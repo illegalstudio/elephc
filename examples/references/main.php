@@ -95,6 +95,15 @@ $text = &$label->text;
 $text = "final";                 // writes through to the property
 echo $label->text, "\n";         // final
 
+// Serialization reads the property value through its reference cell.
+echo json_encode($label), "\n";  // {"text":"final"}
+
+// Unsetting the property detaches it from an alias that remains usable.
+unset($label->text);
+$text = "detached";
+$label->text = "recreated";
+echo $text, ":", $label->text, "\n"; // detached:recreated
+
 // --- Reassigning an array reference to a typed literal keeps it readable ---
 $bag = new Bag();
 $entries = &$bag->items;

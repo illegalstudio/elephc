@@ -82,8 +82,8 @@ mod tests {
             let mut emitter = Emitter::new(target);
             emit_property_unset(&mut emitter);
             let runtime = emitter.output();
-            let publish = if target.arch == Arch::AArch64 { "str x0, [x10, #0]" }
-                else { "mov QWORD PTR [r10 + 0], rax" };
+            let publish = if target.arch == Arch::AArch64 { "str x0, [x10]" }
+                else { "mov QWORD PTR [r10], rax" };
             let release = runtime.find("__rt_decref_any").unwrap();
             assert!(runtime.find(publish).is_some_and(|position| position < release), "{name}: detach before destructor");
         }

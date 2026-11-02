@@ -375,7 +375,7 @@ exerciseConditionalNativeAlias(true, $argc > 0);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// Eval writes preserve promoted native cell aliases and by-value array snapshots.
+/// Eval writes preserve native aliases and snapshots, and unset detaches surviving aliases.
 #[test]
 fn test_eval_native_reference_property_payloads_and_aliases() {
     let out = compile_and_run_with_heap_debug(r#"<?php
@@ -400,9 +400,11 @@ $box->number = 7; $box->weight = 2.5; $box->maybe = 3;
 $copy = $box->value; $copy[0] = 9;
 echo json_encode($box->value), ":", json_encode($copy), "|";
 echo $box->text, ":", $box->number, ":", $box->weight, ":", $box->maybe, "|";
-try { unset($box->value); }
-catch (Error $error) { echo $error->getMessage(), "|"; }
-unset($copy, $error);
+unset($box->value);
+echo isset($box->value) ? "present|" : "unset|";
+$box->value = [8, 9];
+echo json_encode($value), ":", json_encode($box->value), "|";
+unset($copy);
 ' : '';
 eval($source);
 echo json_encode($value), ':', $text, ':', $number, ':', $weight, ':', $maybe;
@@ -412,7 +414,7 @@ echo '|', $box->text, ':', $box->number, ':', $box->weight, ':', $box->maybe;
 unset($box, $value, $text, $number, $weight, $maybe, $source);
 "#);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "[1,2]:[9,2]|new:7:2.5:3|Unsupported unset(): by-reference property|[1,2]:new:7:2.5:3|alias:8:3.5:4");
+    assert_eq!(out.stdout, "[1,2]:[9,2]|new:7:2.5:3|unset|[1,2]:[8,9]|[1,2]:new:7:2.5:3|alias:8:3.5:4");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
