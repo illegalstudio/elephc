@@ -102,3 +102,35 @@ try { echo json_encode(u([1], 2)), "\n"; } catch (TypeError $e) { echo "C: ", $e
     );
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
+
+/// A declared `array` operand of `+` (a method or function return, which is either storage
+/// shape until run time) unites with a concrete array or another declared one, and `+=` takes
+/// one too; the union keeps the left operand's keys and order (AIC #57).
+#[test]
+fn test_array_union_takes_a_declared_array_operand() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+declare(strict_types=1);
+final class Source
+{
+    /** @return array<string, string> */
+    public function pairs(): array { return ['b' => 'B', 'c' => 'C']; }
+}
+function left(): array { return ['a' => 'A', 'b' => 'x']; }
+$fromMethod = (new Source())->pairs();
+$left = ['a' => 'A'];
+$sum = $fromMethod + $left;
+echo implode(',', array_keys($sum)), "\n";
+echo implode(',', $sum), "\n";
+$both = left() + $fromMethod;
+echo implode(',', array_keys($both)), ' ', implode(',', $both), "\n";
+$acc = [];
+$acc += left();
+$acc += [5 => 'five'];
+echo implode(',', array_keys($acc)), "\n";
+"#,
+    );
+    assert!(output.success, "stdout={:?}\nstderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "b,c,a\nB,C,A\na,b,c A,x,C\na,b,5\n", "{}", output.stderr);
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}

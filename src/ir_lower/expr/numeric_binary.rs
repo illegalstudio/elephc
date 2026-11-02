@@ -161,6 +161,30 @@ fn lower_numeric_binary_values(
             }
             return result;
         }
+        // A declared `array` (either storage shape until run time) is a boxed cell. Its union
+        // with a concrete array boxes that side too, so the runtime unions two boxed arrays.
+        let lhs_ty = ctx.builder.value_php_type(lhs.value).codegen_repr();
+        let rhs_ty = ctx.builder.value_php_type(rhs.value).codegen_repr();
+        let concrete = |ty: &PhpType| matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. });
+        let boxed = |ty: &PhpType| matches!(ty, PhpType::Mixed | PhpType::Union(_));
+        if (concrete(&lhs_ty) && boxed(&rhs_ty)) || (boxed(&lhs_ty) && concrete(&rhs_ty)) {
+            let lhs = if concrete(&lhs_ty) {
+                ctx.box_value_as_mixed(lhs, PhpType::Mixed, Some(expr.span))
+            } else {
+                lhs
+            };
+            let rhs = if concrete(&rhs_ty) {
+                ctx.box_value_as_mixed(rhs, PhpType::Mixed, Some(expr.span))
+            } else {
+                rhs
+            };
+            let result = lower_mixed_numeric_binary(ctx, lhs, rhs, MixedNumericOp::Add, expr);
+            release_binary_operand_temporary(ctx, lhs, expr.span);
+            if rhs.value != lhs.value {
+                release_binary_operand_temporary(ctx, rhs, expr.span);
+            }
+            return result;
+        }
     }
     let numeric_ty = numeric_binary_result_type(
         op,
