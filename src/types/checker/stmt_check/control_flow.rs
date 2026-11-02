@@ -975,7 +975,7 @@ impl Checker {
                 }
                 self.enter_finally_catches();
                 for (index, (catch_clause, resolved_types)) in catches.iter().zip(resolved_catches).enumerate() {
-                    let reachable = self.enter_catch_flow(index, &try_tail, env);
+                    let reachable = self.enter_catch_flow(index, &try_tail, &try_entry, env);
                     self.boxed_ref_aliased_locals = branch_entry_boxed_refs.clone();
                     if let Some(variable) = &catch_clause.variable {
                         let retired = self.binding_retirement_type(variable, env);
@@ -1000,13 +1000,13 @@ impl Checker {
                     }
                 }
                 let falls_through = !normal_exits.is_empty();
-                if let Some(joined) = self.join_flow_snapshots(&normal_exits) {
+                if let Some(joined) = self.join_scoped_flow_snapshots(&normal_exits, &try_entry) {
                     self.restore_flow_snapshot(&joined, env);
                 } else { self.restore_flow_snapshot(&try_entry, env); }
                 let function_exits = self.end_finally_region();
                 if let Some(body) = finally_body {
                     let continuation = falls_through.then(|| self.snapshot_flow_exit(env));
-                    self.join_pending_finally_inputs(&pending_exits, &function_exits, falls_through, env);
+                    self.join_pending_finally_inputs(&pending_exits, &function_exits, falls_through, &try_entry, env);
                     let before_finally_exits = self.pending_finally_exit_counts();
                     let invalidated = self
                         .conditional_boxed_ref_invalidations

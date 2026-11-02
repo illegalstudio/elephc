@@ -8,6 +8,7 @@
 //! - Arms share entry contracts; guarded and boxable local exits are joined afterwards.
 
 use std::collections::{HashMap, HashSet};
+use std::borrow::Cow;
 
 use crate::errors::CompileError;
 use crate::parser::ast::Expr;
@@ -78,14 +79,17 @@ impl Checker {
     pub(in crate::types::checker) fn snapshot_flow_exit(&self, env: &TypeEnv) -> FlowSnapshot {
         let mut edge = FlowSnapshot { views: env.clone(), bound: self.definitely_bound_locals.clone(), storage: self.guarded_union_types.clone(),
             origins: self.narrowed_local_origins.clone() };
-        for (name, origin) in &mut edge.origins {
+        for (name, origin) in &edge.origins {
             let Some(view) = edge.views.get_mut(name) else { continue; };
             if !origin.stored_in_region && origin.view.as_ref() == Some(&*view)
                 && !self.type_contains_values(&origin.read_input, view)
             {
                 *view = origin.read_input.clone();
-                // Keep the physical origin behind this contained snapshot read.
-                origin.view = Some(view.clone());
+                // Retain the captured guard separately so a destination inside its
+                // lexical scope can recover it without reviving a pre-store value.
+                edge.storage.insert(name.clone(), GuardedLocalStorage {
+                    ty: origin.origin.clone(), coalesced: false,
+                });
             }
         }
         edge
@@ -95,6 +99,9 @@ impl Checker {
     pub(in crate::types::checker) fn restore_flow_snapshot(&mut self, edge: &FlowSnapshot, env: &mut TypeEnv) {
         self.guarded_union_types = edge.storage.clone();
         self.narrowed_local_origins = edge.origins.clone();
+        for (name, origin) in &mut self.narrowed_local_origins {
+            if origin.view.is_some() { origin.view = edge.views.get(name).cloned(); }
+        }
         self.definitely_bound_locals = edge.bound.clone();
         *env = edge.views.clone();
     }
@@ -111,11 +118,44 @@ impl Checker {
 
     /// Joins continuing edges while retaining the physical storage behind each read view.
     pub(in crate::types::checker) fn join_flow_snapshots(&self, edges: &[FlowSnapshot]) -> Option<FlowSnapshot> {
-        let mut joined = edges.first()?.clone();
+        self.join_flow_snapshots_with_guards(edges, &self.narrowed_local_origins)
+    }
+
+    /// Joins handler inputs in the lexical guard scope that enclosed their try statement.
+    pub(in crate::types::checker) fn join_scoped_flow_snapshots(&self, edges: &[FlowSnapshot], scope: &FlowSnapshot) -> Option<FlowSnapshot> {
+        self.join_flow_snapshots_with_guards(edges, &scope.origins)
+    }
+
+    /// Restores only destination guards on the same unwritten binding revision.
+    fn flow_snapshot_in_guard_scope<'a>(&self, edge: &'a FlowSnapshot, guards: &HashMap<String, NarrowedLocalOrigin>) -> Cow<'a, FlowSnapshot> {
+        let mut edge = Cow::Borrowed(edge);
+        for (name, guard) in guards {
+            let Some(view) = guard.view.as_ref().filter(|_| !guard.stored_in_region) else { continue; };
+            let Some(origin) = edge.origins.get(name).filter(|origin|
+                !origin.stored_in_region && origin.view.is_some()
+                    && origin.binding_revision == guard.binding_revision && origin.origin == guard.origin) else { continue; };
+            let Some(read) = edge.views.get(name) else { continue; };
+            let scoped_read = if self.type_contains_values(view, read) { read } else { view };
+            if read == scoped_read && origin.view.as_ref() == Some(scoped_read)
+                && origin.read_input == guard.read_input { continue; }
+            let read = scoped_read.clone();
+            let edge = edge.to_mut();
+            edge.views.insert(name.clone(), read.clone());
+            let mut origin = guard.clone();
+            origin.view = Some(read);
+            edge.origins.insert(name.clone(), origin);
+        }
+        edge
+    }
+
+    /// Projects each captured edge into its destination before merging reads and storage.
+    fn join_flow_snapshots_with_guards(&self, edges: &[FlowSnapshot], guards: &HashMap<String, NarrowedLocalOrigin>) -> Option<FlowSnapshot> {
+        let mut joined = self.flow_snapshot_in_guard_scope(edges.first()?, guards).into_owned();
         for edge in &edges[1..] {
+            let edge = self.flow_snapshot_in_guard_scope(edge, guards);
             joined.bound.retain(|name| edge.bound.contains(name));
             for (name, view) in &edge.views {
-                let next_storage = self.snapshot_storage_type(edge, name).expect("edge local");
+                let next_storage = self.snapshot_storage_type(&edge, name).expect("edge local");
                 let physical = self.snapshot_storage_type(&joined, name).map_or_else(
                     || next_storage.clone(), |previous| self.join_flow_views(previous, next_storage));
                 let read = joined.views.get(name).map_or_else(|| view.clone(),
@@ -123,8 +163,15 @@ impl Checker {
                 if physical != read || matches!(physical.codegen_repr(), PhpType::Mixed | PhpType::TaggedScalar) {
                     joined.storage.insert(name.clone(), GuardedLocalStorage { ty: physical, coalesced: false });
                 } else { joined.storage.remove(name); }
-                joined.views.insert(name.clone(), read);
-                joined.origins.remove(name);
+                let common_guard = joined.origins.get(name).filter(|previous|
+                    !previous.stored_in_region && edge.origins.get(name).is_some_and(|next|
+                        !next.stored_in_region && next.binding_revision == previous.binding_revision
+                            && next.origin == previous.origin)).cloned();
+                joined.views.insert(name.clone(), read.clone());
+                if let Some(mut origin) = common_guard {
+                    origin.view = Some(read);
+                    joined.origins.insert(name.clone(), origin);
+                } else { joined.origins.remove(name); }
             }
         }
         // A single edge can carry its physical type only in a guard origin.
@@ -144,7 +191,14 @@ impl Checker {
         for name in edge.views.keys() {
             if self.narrowed_local_origins.get(name).is_some_and(|origin|
                 origin.view.as_ref() != edge.views.get(name)) {
-                self.record_store_over_flow_narrowing(name);
+                let unchanged = self.narrowed_local_origins.get(name).is_some_and(|before|
+                    !before.stored_in_region && edge.origins.get(name).is_some_and(|after|
+                        !after.stored_in_region && before.binding_revision == after.binding_revision
+                            && before.origin == after.origin));
+                if unchanged {
+                    // A read-only join changes the view without replacing the binding.
+                    self.narrowed_local_origins.get_mut(name).expect("active guard").view = edge.views.get(name).cloned();
+                } else { self.record_store_over_flow_narrowing(name); }
             }
         }
     }
@@ -260,16 +314,19 @@ impl Checker {
 
     /// Joins an edge's logical values separately from its retained physical representation.
     pub(in crate::types::checker) fn observe_flow_snapshot(&self, flow: &mut ConditionalFlow, edge: &FlowSnapshot, reads: bool) {
+        let edge = self.flow_snapshot_in_guard_scope(edge, &flow.origins);
         flow.stored.extend(edge.origins.iter().filter(|(_, origin)| origin.stored_in_region)
             .map(|(name, _)| name.clone()));
         flow.stored.extend(flow.origins.keys().filter(|name| !edge.origins.contains_key(*name)).cloned());
+        flow.stored.extend(flow.origins.iter().filter(|(name, before)| edge.origins.get(*name)
+            .is_some_and(|after| before.binding_revision != after.binding_revision)).map(|(name, _)| name.clone()));
         if reads {
             if let Some(bound) = &mut flow.bound_joined { bound.retain(|name| edge.bound.contains(name)); }
             else { flow.bound_joined = Some(edge.bound.clone()); }
         }
         for (name, view) in &edge.views {
             if name.starts_with('\u{1}') || flow.views.contains_key(name) { continue; }
-            let physical = self.snapshot_storage_type(edge, name).unwrap_or(view);
+            let physical = self.snapshot_storage_type(&edge, name).unwrap_or(view);
             if flow.all_locals || Self::binding_storage_admits_null(physical) {
                 flow.views.insert(name.clone(), view.clone());
                 flow.physical.insert(name.clone(), physical.clone());
@@ -356,6 +413,10 @@ impl Checker {
         edge.bound = after.bound.clone();
         for (name, ty) in &after.views {
             if let Some(before) = edge.views.get(name).cloned() {
+                let common_guard = edge.origins.get(name).filter(|previous|
+                    !previous.stored_in_region && after.origins.get(name).is_some_and(|next|
+                        !next.stored_in_region && next.binding_revision == previous.binding_revision
+                            && next.origin == previous.origin)).cloned();
                 let read = self.join_flow_views(&before, ty);
                 let old_storage = edge.storage.get(name).map(|entry| &entry.ty).unwrap_or(&before);
                 let new_storage = after.storage.get(name).map(|entry| &entry.ty).unwrap_or(ty);
@@ -367,7 +428,8 @@ impl Checker {
                     edge.storage.insert(name.clone(), GuardedLocalStorage { ty: storage, coalesced: false });
                 } else { edge.storage.remove(name); }
                 edge.views.insert(name.clone(), read);
-                edge.origins.remove(name);
+                if let Some(origin) = common_guard { edge.origins.insert(name.clone(), origin); }
+                else { edge.origins.remove(name); }
             }
         }
     }

@@ -138,7 +138,7 @@ impl Checker {
     }
 
     /// Includes paths already leaving the try in the environment its finally body observes.
-    pub(super) fn join_pending_finally_inputs(&mut self, counts: &[(usize, usize)], function_exits: &[FlowSnapshot], falls_through: bool, env: &mut TypeEnv) {
+    pub(super) fn join_pending_finally_inputs(&mut self, counts: &[(usize, usize)], function_exits: &[FlowSnapshot], falls_through: bool, scope: &FlowSnapshot, env: &mut TypeEnv) {
         let mut edges = Vec::new();
         if falls_through { edges.push(self.snapshot_flow_exit(env)); }
         edges.extend_from_slice(function_exits);
@@ -146,7 +146,7 @@ impl Checker {
             edges.extend(frame.breaks[breaks..].iter().chain(&frame.continues[continues..]).cloned());
         }
         if edges.is_empty() { edges.push(self.snapshot_flow_exit(env)); }
-        if let Some(joined) = self.join_flow_snapshots(&edges) {
+        if let Some(joined) = self.join_scoped_flow_snapshots(&edges, scope) {
             self.restore_tail_flow_storage(&joined);
             *env = joined.views;
         }

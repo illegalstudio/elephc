@@ -9,6 +9,13 @@
 
 use super::*;
 
+/// Production CLI preserves active interface guards through catch, finally and loop exits.
+#[test]
+fn test_nullable_fallback_flow_r61_exception_guard_views_runtime() {
+    assert_nullable_flow_cli_heap_output(include_str!("../../fixtures/nullable_fallback_exception_guard_views.php"),
+        "marker\nint(1)\nint(0)\nmarker\nint(1)\nint(0)\nmarker\nmarker\nmarker\nmarker\nint(1)\nint(1)\nmarker\nmarker\nmarker\nint(1)\nint(0)\n");
+}
+
 /// Continue snapshots retain logical reads, physical slots and actual writes in both IR modes.
 #[test]
 fn test_nullable_fallback_flow_r59_loop_guard_views_runtime() {

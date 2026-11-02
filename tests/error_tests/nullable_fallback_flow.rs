@@ -9,6 +9,21 @@
 
 use super::*;
 
+/// Exception destinations retain enclosing guards but never revive a value replaced in the try.
+#[test]
+fn test_nullable_fallback_flow_r61_exception_guard_views() {
+    check_source(include_str!("../fixtures/nullable_fallback_exception_guard_views.php"))
+        .unwrap_or_else(|error| panic!("active exception guard: {error}"));
+    for body in [
+        "try { $value = new Base(); throw new Exception(); } catch (Exception $error) { consume($value); }",
+        "try { if (($value = new Base()) instanceof Other) { throw new Exception(); } } finally { consume($value); }",
+        "try { if ($flag) { $value = new Base(); } throw new Exception(); } catch (Exception $error) { consume($value); }",
+    ] {
+        let source = format!("<?php interface Marker {{}} interface Other {{}} class Base {{}} function consume(Marker $value): void {{}} function run(?Base $value, bool $flag): void {{ if ($value === null) {{ return; }} if ($value instanceof Marker) {{ {body} }} }}");
+        expect_error(&source, "expects Marker");
+    }
+}
+
 /// Loop-tail snapshots contain guard views while preserving nullable writes and refinements.
 #[test]
 fn test_nullable_fallback_flow_r59_loop_guard_views() {

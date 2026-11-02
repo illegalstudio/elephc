@@ -535,6 +535,8 @@ pub(crate) struct Checker {
     /// Empty outside a guarded region, and reset per body — a name narrowed in the caller says
     /// nothing about a same-named local in a closure checked inside the branch.
     pub narrowed_local_origins: HashMap<String, NarrowedLocalOrigin>,
+    /// Monotonic binding revisions distinguish a fresh guard from an intervening store.
+    pub next_guard_binding_revision: u64,
     /// Locals of the current body that a reference can reach: `=&` target or source,
     /// by-reference closure captures (`use (&$x)`), any plain variable passed to a
     /// by-reference parameter, and BOTH names a `foreach ($arr as &$v)` touches — the iterable
@@ -749,6 +751,8 @@ pub struct NarrowedLocalOrigin {
     pub origin: PhpType,
     /// Logical value read before this guard, independent of its outer physical origin.
     pub read_input: PhpType,
+    /// Identity of the value guarded, inherited by nested guards until a real store.
+    pub binding_revision: u64,
     /// The guard's own view, or `None` once the region has stored something of its own.
     ///
     /// A failed assignment merge is re-measured against `origin` only while the environment
@@ -1027,6 +1031,10 @@ impl Checker {
             self.definitely_bound_locals.insert(name.to_string());
         }
         let previous = self.narrowed_local_origins.get(name).cloned();
+        let binding_revision = previous.as_ref().map_or_else(|| {
+            self.next_guard_binding_revision += 1;
+            self.next_guard_binding_revision
+        }, |entry| entry.binding_revision);
         let read_input = pre_guard.map(|input| previous.as_ref()
             .filter(|entry| !entry.stored_in_region && entry.view.as_ref() == Some(input)
                 && !self.type_contains_values(&entry.read_input, input))
@@ -1050,6 +1058,7 @@ impl Checker {
                     NarrowedLocalOrigin {
                         origin,
                         read_input,
+                        binding_revision,
                         view: Some(view.clone()),
                         // The REGION is new even when the entry inherits an outer origin, so a
                         // store the enclosing region already made does not follow it inward. It
@@ -1099,6 +1108,8 @@ impl Checker {
     /// A no-op for a name no guard has narrowed, which is every name most of the time.
     pub(crate) fn record_store_over_flow_narrowing(&mut self, name: &str) {
         if let Some(entry) = self.narrowed_local_origins.get_mut(name) {
+            self.next_guard_binding_revision += 1;
+            entry.binding_revision = self.next_guard_binding_revision;
             entry.view = None;
             entry.stored_in_region = true;
         }
@@ -1111,15 +1122,16 @@ impl Checker {
     /// its view cleared. See [`NarrowedLocalOrigin::stored_in_region`] for why nesting would
     /// otherwise be a way around the rule.
     pub(crate) fn exit_flow_narrowing(&mut self, saved: SavedNarrowingOrigin) {
-        let region_stored = self
+        let region = self
             .narrowed_local_origins
             .get(&saved.name)
-            .is_some_and(|entry| entry.stored_in_region);
+            .map(|entry| (entry.stored_in_region, entry.binding_revision));
         match saved.previous {
             Some(mut entry) => {
-                if region_stored {
+                if let Some((true, revision)) = region {
                     entry.view = None;
                     entry.stored_in_region = true;
+                    entry.binding_revision = revision;
                 }
                 self.narrowed_local_origins.insert(saved.name, entry);
             }

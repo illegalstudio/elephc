@@ -89,11 +89,12 @@ impl Checker {
     }
 
     /// Restores each handler from its own first-match incoming states.
-    pub(super) fn enter_catch_flow(&mut self, handler: usize, fallback: &FlowSnapshot, env: &mut TypeEnv) -> bool {
+    pub(super) fn enter_catch_flow(&mut self, handler: usize, fallback: &FlowSnapshot, scope: &FlowSnapshot, env: &mut TypeEnv) -> bool {
         let edges: Vec<_> = self.finally_flow_frames.last().expect("active try").inputs.iter()
             .filter(|edge| edge.handler == Some(handler)).map(|edge| edge.flow.clone()).collect();
         let reachable = !edges.is_empty();
-        let incoming = self.join_flow_snapshots(&edges).unwrap_or_else(|| fallback.clone());
+        let incoming = self.join_scoped_flow_snapshots(&edges, scope)
+            .unwrap_or_else(|| self.join_scoped_flow_snapshots(std::slice::from_ref(fallback), scope).expect("fallback edge"));
         self.restore_flow_snapshot(&incoming, env);
         reachable
     }

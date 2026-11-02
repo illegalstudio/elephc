@@ -9,6 +9,19 @@
 
 use crate::ir::{Immediate, IrHeapKind, IrType, Op};
 
+/// Every target emits interface guards retained inside exception destinations.
+#[test]
+fn test_nullable_fallback_flow_r61_exception_guard_views_all_targets() {
+    let source = include_str!("../../../tests/fixtures/nullable_fallback_exception_guard_views.php");
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = crate::codegen::platform::Target::parse(name).unwrap();
+        let module = super::lower_source_at_for_target(source,
+            std::path::Path::new("tests/fixtures/nullable_fallback_exception_guard_views.php"),
+            std::path::Path::new("tests/fixtures"), target);
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Every target emits loop-tail guard reads without losing physical binding layouts.
 #[test]
 fn test_nullable_fallback_flow_r59_loop_guard_views_all_targets() {
