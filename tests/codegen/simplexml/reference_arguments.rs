@@ -17,14 +17,19 @@ fn test_simplexml_reference_argument_selections_bundle() {
     let body = r#"
 class ReferenceSelectionXml extends SimpleXMLElement {}
 function replaceReferenceSelection(&$value): void { $value = "new"; }
-function escapeReferenceSelection(&$value): array { return [&$value]; }
+function escapeReferenceSelection(&$value): callable {
+    return function (bool $replace) use (&$value): mixed {
+        if ($replace) { $value = "detached"; }
+        return $value;
+    };
+}
 function touchReferenceSelection(&$value): void { $value["id"] = "kept"; }
 function throwReferenceSelection(&$value): void { $value = "throw"; throw new RuntimeException("stop"); }
 function exerciseReferenceSelection(SimpleXMLElement $root): void {
     replaceReferenceSelection($root->p); echo (string)$root->p, "|";
     $references = escapeReferenceSelection($root->p);
-    $root->p = "changed"; echo (string)$references[0], "|";
-    $references[0] = "detached"; echo (string)$root->p, "|";
+    $root->p = "changed"; echo (string)$references(false), "|";
+    $references(true); echo (string)$root->p, "|";
     replaceReferenceSelection($root->p[0]); echo (string)$root->p, "|";
     replaceReferenceSelection($root->a->b); echo (string)$root->a->b, "|";
     $name = "p"; replaceReferenceSelection($root->{$name}); echo (string)$root->p, "|";

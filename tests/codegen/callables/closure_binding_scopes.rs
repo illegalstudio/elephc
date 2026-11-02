@@ -19,11 +19,12 @@ function conditionalBindOwner(callable $reader, bool $same): callable {
     if ($same) { return $reader; }
     return Closure::bind($reader, new ConditionalBindOwner(), ConditionalBindOwner::class);
 }
+function sameConditionalBindOwner(mixed $left, mixed $right): bool { return $left === $right; }
 $reader = function () { return $this->value; };
 $bound = conditionalBindOwner($reader, false);
 $same = conditionalBindOwner($bound, $argc > 0);
 $different = conditionalBindOwner($bound, $argc < 0);
-echo $bound(), "|", $same(), "|", $different(), "|", (int)($bound === $same), ":", (int)($bound === $different);
+echo $bound(), "|", $same(), "|", $different(), "|", (int)sameConditionalBindOwner($bound, $same), ":", (int)sameConditionalBindOwner($bound, $different);
 unset($different, $same, $bound, $reader);
 "#;
     let (out, assembly) = compile_and_run_with_heap_debug_and_asm(source);
