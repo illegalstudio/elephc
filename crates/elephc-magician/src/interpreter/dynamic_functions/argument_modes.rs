@@ -16,19 +16,24 @@ pub(in crate::interpreter) struct CallArgumentModes {
     names: Vec<String>,
     references: Vec<bool>,
     variadic: Option<usize>,
+    native_boxed_references: Vec<bool>,
 }
 
 impl CallArgumentModes {
     /// Captures an eval-declared function's public signature.
     pub(in crate::interpreter) fn for_function(function: &EvalFunction) -> Self {
         Self { names: function.params().to_vec(), references: function.parameter_is_by_ref().to_vec(),
-            variadic: function.parameter_is_variadic().iter().position(|flag| *flag) }
+            variadic: function.parameter_is_variadic().iter().position(|flag| *flag),
+            ..Self::default() }
     }
 
     /// Captures a registered free function without the compiler's hidden collector.
     pub(in crate::interpreter) fn for_native_function(function: &NativeFunction) -> Self {
         Self { names: function.param_names().to_vec(),
             references: (0..function.param_count()).map(|index| function.param_by_ref(index)).collect(),
+            native_boxed_references: (0..function.param_count()).map(|index| function.param_by_ref(index)
+                && super::function_staging::native_reference_uses_boxed_staging(
+                    function.param_type(index), function.param_tagged_scalar_ref(index))).collect(),
             variadic: function.source_variadic_index() }
     }
 
@@ -37,6 +42,8 @@ impl CallArgumentModes {
         let indexes = signature.visible_param_indexes();
         Self { names: indexes.iter().map(|index| signature.param_names().get(*index).cloned().unwrap_or_default()).collect(),
             references: indexes.iter().map(|index| signature.param_by_ref(*index)).collect(),
+            native_boxed_references: indexes.iter().map(|index| signature.param_by_ref(*index)
+                && super::function_staging::native_reference_uses_boxed_staging(signature.param_type(*index), false)).collect(),
             variadic: signature.source_variadic_index().and_then(|physical| indexes.iter().position(|index| *index == physical)) }
     }
 
@@ -44,16 +51,27 @@ impl CallArgumentModes {
     pub(in crate::interpreter) fn for_builtin(name: &str) -> Self {
         let Some(contract) = elephc_builtin_contract::lookup(name) else { return Self::default(); };
         Self { names: contract.params.iter().map(|parameter| parameter.name.to_string()).collect(),
-            references: contract.params.iter().map(|parameter| parameter.by_ref).collect(), variadic: None }
+            references: contract.params.iter().map(|parameter| parameter.by_ref).collect(), variadic: None,
+            ..Self::default() }
     }
 
     /// Chooses the declared parameter or the source variadic without rebinding values.
     pub(in crate::interpreter) fn by_reference(&self, name: Option<&str>, position: usize) -> bool {
-        let index = match name {
+        self.parameter_index(name, position).and_then(|index| self.references.get(index)).copied().unwrap_or(false)
+    }
+
+    /// Promotes fresh variables only for native boxed slots that may acquire a lasting cell owner.
+    pub(super) fn persistent_native_reference(&self, name: Option<&str>, position: usize) -> bool {
+        self.parameter_index(name, position).and_then(|index| self.native_boxed_references.get(index))
+            .copied().unwrap_or(false)
+    }
+
+    /// Shares positional, named and variadic selection between passing-mode views.
+    fn parameter_index(&self, name: Option<&str>, position: usize) -> Option<usize> {
+        match name {
             Some(name) => self.names.iter().position(|candidate| candidate == name).or(self.variadic),
             None => Some(self.variadic.map_or(position, |index| index.min(position))),
-        };
-        index.and_then(|index| self.references.get(index)).copied().unwrap_or(false)
+        }
     }
 
     /// Resolves the method selected by the active lexical scope without executing it.
@@ -76,7 +94,7 @@ impl CallArgumentModes {
         if let Some((owner, method)) = dynamic {
             if validate_eval_member_access(&owner, method.visibility(), context).is_ok() {
                 return Self { names: method.params().to_vec(), references: method.parameter_is_by_ref().to_vec(),
-                    variadic: method.parameter_is_variadic().iter().position(|flag| *flag) };
+                    variadic: method.parameter_is_variadic().iter().position(|flag| *flag), ..Self::default() };
             }
             return Self::default();
         }
@@ -103,7 +121,10 @@ impl CallArgumentModes {
             EvaluatedCallable::NativeDescriptor { callback, .. } => {
                 match values.native_callable_signature(*callback)? {
                     Some(signature) => Self { names: signature.parameters.iter().map(|parameter| parameter.name.clone()).collect(),
-                        references: signature.parameters.iter().map(|parameter| parameter.by_ref).collect(), variadic: signature.variadic_index },
+                        references: signature.parameters.iter().map(|parameter| parameter.by_ref).collect(),
+                        native_boxed_references: signature.parameters.iter().map(|parameter|
+                            parameter.by_ref && matches!(parameter.type_tag, 4 | 5 | 6 | 7)).collect(),
+                        variadic: signature.variadic_index },
                     None => Self::default(),
                 }
             }

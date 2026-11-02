@@ -15,6 +15,13 @@
 
 use super::*;
 
+/// Identifies native parameters whose retaining consumers need a persistent boxed reference.
+pub(super) fn native_reference_uses_boxed_staging(
+    param_type: Option<&EvalParameterType>, tagged_scalar: bool,
+) -> bool {
+    !tagged_scalar && native_function_raw_ref_kind(param_type).is_none()
+}
+
 /// Transfers value arguments or prepares reference markers, rolling back partial staging on errors.
 pub(in crate::interpreter) fn stage_native_function_invoker_args(
     function: &NativeFunction,
@@ -82,7 +89,7 @@ pub(in crate::interpreter) fn stage_native_function_shared_ref_arg(
 ) -> Result<(RuntimeCellHandle, Option<BoundNativeFunctionRefSlot>), EvalStatus> {
     let guarded_writeback = target.as_ref()
         .is_none_or(|target| !generic_reference_contracts(target, context).is_empty());
-    if target.is_some() && !tagged_scalar && native_function_raw_ref_kind(param_type).is_none()
+    if target.is_some() && native_reference_uses_boxed_staging(param_type, tagged_scalar)
         && values.is_reference(original)?
     {
         for existing in &mut staged.ref_slots {

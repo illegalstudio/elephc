@@ -51,8 +51,8 @@ pub(in crate::interpreter) fn eval_owned_call_arg_values(
 
             if let Some(name) = arg.name() {
                 saw_named = true;
-                let (value, ref_target) = eval_call_arg_value_with_mode(arg.value(),
-                    modes.by_reference(Some(name), evaluated_args.len()), context, caller_scope, values)?;
+                let (value, ref_target) = eval_source_call_argument(
+                    arg, evaluated_args.len(), modes, context, caller_scope, values)?;
                 let (value, mut ref_target) = own_temporary_reference(value, ref_target, context, values)?;
                 capture_argument_receiver_owners(ref_target.as_mut(), &mut receiver_owners);
                 let value = if value.is_borrowed() {
@@ -71,8 +71,8 @@ pub(in crate::interpreter) fn eval_owned_call_arg_values(
             if saw_named {
                 return Err(EvalStatus::RuntimeFatal);
             }
-            let (value, ref_target) = eval_call_arg_value_with_mode(arg.value(),
-                modes.by_reference(None, evaluated_args.len()), context, caller_scope, values)?;
+            let (value, ref_target) = eval_source_call_argument(
+                arg, evaluated_args.len(), modes, context, caller_scope, values)?;
             let (value, mut ref_target) = own_temporary_reference(value, ref_target, context, values)?;
             capture_argument_receiver_owners(ref_target.as_mut(), &mut receiver_owners);
             let value = if value.is_borrowed() {
@@ -98,6 +98,22 @@ pub(in crate::interpreter) fn eval_owned_call_arg_values(
         return Err(status);
     }
     Ok((evaluated_args, receiver_owners))
+}
+
+/// Captures a retaining native boxed argument without changing legacy or intermediate receivers.
+fn eval_source_call_argument(
+    argument: &EvalCallArg, position: usize, modes: &CallArgumentModes,
+    context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
+    if modes.persistent_native_reference(argument.name(), position) {
+        if let EvalExpr::LoadVar(name) = argument.value() {
+            if let Some(reference) = eval_persistent_variable_reference(name, context, scope, values)? {
+                return Ok((reference.borrowed(), Some(EvalReferenceTarget::Cell { cell: reference.borrowed() })));
+            }
+        }
+    }
+    eval_call_arg_value_with_mode(argument.value(), modes.by_reference(argument.name(), position), context, scope, values)
 }
 
 /// Resolves a reference receiver once and retires metadata belonging only to an intermediate hop.
