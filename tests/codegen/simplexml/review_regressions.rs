@@ -495,9 +495,9 @@ reviewNativeHookCoalesce();
 $projectedXml = simplexml_load_string('<r id="1"><a>x</a><b><c/></b></r>', 'ReviewProjectionXml');
 echo 'J|', json_encode($projectedXml), '|';
 echo 'P|'; $projectedPrint = print_r($projectedXml, true);
-echo (int)str_contains($projectedPrint, 'ReviewProjectionXml Object'), ':', substr_count($projectedPrint, 'D:b|'), '|';
+echo (int)str_contains($projectedPrint, 'ReviewProjectionXml Object'), ':', reviewProjectionOccurrences($projectedPrint, 'D:b|'), '|';
 echo 'V|'; ob_start(); var_dump($projectedXml); $projectedDump = ob_get_clean();
-echo (int)str_contains($projectedDump, 'object(ReviewProjectionXml)'), ':', substr_count($projectedDump, 'D:b|'), '|';
+echo (int)str_contains($projectedDump, 'object(ReviewProjectionXml)'), ':', reviewProjectionOccurrences($projectedDump, 'D:b|'), '|';
 echo 'A|'; $projectedArray = (array)$projectedXml;
 echo get_class($projectedArray['b']), '|'; unset($projectedArray);
 echo 'O|'; $projectedVars = get_object_vars($projectedXml);
@@ -934,7 +934,8 @@ function reviewOrderOrdinary(mixed $items): void {
 class ReviewWriteName {
     public function __toString(): string { echo 'name|'; return 'converted'; }
 }
-function reviewChangeWriteName(string &$lateName): int {
+function reviewProjectionOccurrences(string $text, string $needle): int { return substr_count($text, $needle); }
+function reviewChangeWriteName(mixed &$lateName): int {
     echo 'rhs|'; $lateName = 'new'; return 1;
 }
 class ReviewHookInner { public string $label = ''; }
