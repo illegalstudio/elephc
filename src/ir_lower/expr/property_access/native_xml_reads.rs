@@ -98,6 +98,8 @@ fn dynamic_with_result(
     selection: Option<elephc_builtin_contract::ObjectProperty>, expr: &Expr,
     native_result: impl FnOnce(&mut LoweringContext<'_, '_>, LoweredValue) -> LoweredValue,
 ) -> LoweredValue {
+    let literal_name = ctx.builder.value_defining_instruction(property.value)
+        .is_some_and(|instruction| instruction.op == Op::ConstStr).then_some(property);
     let temp = ctx.declare_owned_hidden_temp(PhpType::Str);
     store_value_into_temp(ctx, &temp, PhpType::Str, property, expr.span);
     let slot = ctx.local_slots[&temp];
@@ -117,7 +119,7 @@ fn dynamic_with_result(
             native_result(ctx, value)
         },
         |ctx, receiver| {
-            let property = borrow_owned_name(ctx, &temp, expr.span);
+            let property = literal_name.unwrap_or_else(|| borrow_owned_name(ctx, &temp, expr.span));
             lower_dynamic_property_fetch_without_native(
                 ctx, receiver, property, PhpType::Mixed, mode, expr,
             )

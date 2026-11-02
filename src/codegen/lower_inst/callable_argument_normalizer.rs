@@ -67,13 +67,12 @@ mod tests {
     use crate::codegen_support::platform::Target;
 
     /// Shared argument normalization discovers an eval closure owner without a source eval local.
-    #[test]
-    fn callable_argument_normalizer_discovers_eval_callback_owner_on_every_target() {
+    fn verify_callable_argument_normalizer_discovers_eval_callback_owner(name: &str) {
         let source = "<?php function acceptOwnedEvalCallback(callable $callback): mixed { return $callback(); } \
             class NativeNormalizerInvoke { public function __invoke(): int { return 2; } } \
-            acceptOwnedEvalCallback(new NativeNormalizerInvoke()); \
+            function makeNativeNormalizerInvoke(): mixed { return new NativeNormalizerInvoke(); } \
+            acceptOwnedEvalCallback(makeNativeNormalizerInvoke()); \
             $code = $argc > 0 ? 'acceptOwnedEvalCallback(function (): int { return 1; });' : ''; eval($code);";
-        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let target = Target::parse(name).unwrap();
             let module = crate::ir_lower::tests::lower_source_at_for_target(
                 source, std::path::Path::new("main.php"), std::path::Path::new("."), target,
@@ -85,6 +84,8 @@ mod tests {
             let wrapper = helper.find("__elephc_eval_wrap_callback").unwrap();
             assert!(owner < probe && probe < wrapper,
                 "{name}: native shape misses must discover and probe the callback's real owner");
-        }
     }
+
+    supported_target_cases!(callable_argument_normalizer_discovers_eval_callback_owner,
+        verify_callable_argument_normalizer_discovers_eval_callback_owner);
 }
