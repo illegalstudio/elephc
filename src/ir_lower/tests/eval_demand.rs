@@ -14,6 +14,26 @@ use std::collections::HashSet;
 use super::lower_source;
 use crate::ir_lower::program::{eval_demand, EvalDemand};
 
+/// An eval-only method is dispatched from a native Mixed frame with no native candidate.
+#[test]
+fn eval_only_method_from_context_free_mixed_frame_on_all_targets() {
+    let source = r#"<?php
+function callEvalOnlyMixed(mixed $object): mixed { return $object->evalOnlyRoundtrip(); }
+eval('class EvalOnlyMixedReceiver { public function evalOnlyRoundtrip(): string { return "ok"; } }
+echo callEvalOnlyMixed(new EvalOnlyMixedReceiver());');
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let body = assembly.split_once("@fn name=callEvalOnlyMixed symbol=").unwrap().1
+            .split_once("@endfn name=callEvalOnlyMixed").unwrap().0;
+        let owner = body.find("__elephc_eval_object_context").expect("borrow the eval object's owner");
+        let call = body.find("__elephc_eval_method_call").expect("dispatch the eval-only method");
+        assert!(owner < call, "{target}: resolve object identity before entering its method");
+    }
+}
+
 /// Collects the lowered class method names of a module.
 fn lowered_methods(module: &crate::ir::Module) -> HashSet<String> {
     module
