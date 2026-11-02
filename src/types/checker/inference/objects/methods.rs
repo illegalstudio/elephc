@@ -36,8 +36,15 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
-        self.require_valid_unresolved_call_argument_order(args, "Method call")?;
         let obj_ty = self.infer_type(object, env)?;
+        let class = match &obj_ty {
+            PhpType::Object(name) if !name.is_empty() => Some(name.clone()),
+            PhpType::Union(_) => self.union_single_object_class(&obj_ty),
+            _ => None,
+        };
+        let description = class.map(|class| format!("Method {class}::{method}"))
+            .unwrap_or_else(|| "Method call".to_string());
+        self.require_valid_unresolved_call_argument_order(args, &description)?;
         self.record_member_receiver_type(expr.span, &obj_ty);
         if let PhpType::Object(class_name) = &obj_ty {
             if !class_name.is_empty() {
@@ -460,7 +467,7 @@ impl Checker {
         env: &TypeEnv,
         allow_by_ref_spread: bool,
     ) -> Result<PhpType, CompileError> {
-        self.require_valid_unresolved_call_argument_order(args, "Method call")?;
+        self.require_valid_unresolved_call_argument_order(args, &format!("Method {class_name}::{method}"))?;
         let method_key = php_symbol_key(method);
         if self.enums.contains_key(class_name)
             && args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
@@ -1003,7 +1010,16 @@ impl Checker {
         env: &TypeEnv,
         allow_by_ref_spread: bool,
     ) -> Result<PhpType, CompileError> {
-        self.require_valid_unresolved_call_argument_order(args, "Static method call")?;
+        let named_class = match receiver.written_class_receiver() {
+            StaticReceiver::Named(name) => Some(name.as_str().to_string()),
+            StaticReceiver::Self_ | StaticReceiver::Static => self.current_class.clone(),
+            StaticReceiver::Parent => self.current_class.as_ref().and_then(|name|
+                self.classes.get(name).and_then(|class| class.parent.clone())),
+            StaticReceiver::Generic(_) => None,
+        };
+        let description = named_class.map(|class| format!("Static method {class}::{method}"))
+            .unwrap_or_else(|| "Static method call".to_string());
+        self.require_valid_unresolved_call_argument_order(args, &description)?;
         // `Box::of(5)` on a generic class, BEFORE the receiver is resolved against the class
         // table: a template is stripped from the program, so the table has no entry for it and
         // the ordinary path reports it as an undefined class.

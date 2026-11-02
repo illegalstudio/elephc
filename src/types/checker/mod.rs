@@ -30,6 +30,7 @@ pub(crate) mod scope_dynamic_storage;
 mod driver;
 mod extern_decl;
 mod functions;
+pub(crate) use functions::validate_unresolved_call_argument_order;
 mod generic_bounds;
 mod generic_method;
 mod generic_new;

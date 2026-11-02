@@ -135,6 +135,28 @@ fn is_assoc_spread_source(expr: &Expr, env: &TypeEnv) -> bool {
     }
 }
 
+/// Maps shared signature-independent ordering rules for checker and parser call surfaces.
+pub(crate) fn validate_unresolved_call_argument_order(args: &[Expr], callee_desc: &str) -> Result<(), CompileError> {
+    call_args::validate_unresolved_call_argument_order(args).map_err(|err| match err {
+        CallArgPlanError::SpreadAfterNamed { span } => {
+            spread_after_named_error(span, callee_desc)
+        }
+        CallArgPlanError::PositionalAfterNamed { span } => CompileError::new(span,
+            &format!("{} cannot use positional arguments after named arguments", callee_desc)),
+        CallArgPlanError::PositionalAfterSpread { span } => CompileError::new(span,
+            &format!("{} cannot use positional arguments after spread arguments", callee_desc)),
+        CallArgPlanError::PositionalAfterNamedUnpack { span } => CompileError::new(span,
+            &format!("{} cannot use positional argument after named argument during unpacking", callee_desc)),
+        // The remaining variants need a signature and cannot originate here. Keep
+        // the match exhaustive so a future rule still reports a real span.
+        CallArgPlanError::UnknownNamed { span, .. }
+        | CallArgPlanError::Duplicate { span, .. }
+        | CallArgPlanError::MissingRequired { span, .. } => {
+            CompileError::new(span, &format!("{} has invalid arguments", callee_desc))
+        }
+    })
+}
+
 impl Checker {
     /// Enforces PHP's syntactic argument ordering on a callee not resolvable at compile time
     /// (string callables, `new $class(...)`), where no signature is available to
@@ -147,24 +169,7 @@ impl Checker {
         args: &[Expr],
         callee_desc: &str,
     ) -> Result<(), CompileError> {
-        call_args::validate_unresolved_call_argument_order(args).map_err(|err| match err {
-            CallArgPlanError::SpreadAfterNamed { span } => {
-                spread_after_named_error(span, callee_desc)
-            }
-            CallArgPlanError::PositionalAfterNamed { span } => CompileError::new(span,
-                &format!("{} cannot use positional arguments after named arguments", callee_desc)),
-            CallArgPlanError::PositionalAfterSpread { span } => CompileError::new(span,
-                &format!("{} cannot use positional arguments after spread arguments", callee_desc)),
-            CallArgPlanError::PositionalAfterNamedUnpack { span } => CompileError::new(span,
-                &format!("{} cannot use positional argument after named argument during unpacking", callee_desc)),
-            // The remaining variants need a signature and cannot originate here. Keep
-            // the match exhaustive so a future rule still reports a real span.
-            CallArgPlanError::UnknownNamed { span, .. }
-            | CallArgPlanError::Duplicate { span, .. }
-            | CallArgPlanError::MissingRequired { span, .. } => {
-                CompileError::new(span, &format!("{} has invalid arguments", callee_desc))
-            }
-        })
+        validate_unresolved_call_argument_order(args, callee_desc)
     }
 
     /// Returns true when a by-reference argument is an object-property place whose declared
@@ -221,7 +226,7 @@ impl Checker {
     pub(crate) fn is_native_selection_reference_argument(
         &mut self, arg: &Expr, env: &TypeEnv,
     ) -> Result<bool, CompileError> {
-        if let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &arg.kind {
+        if let ExprKind::NamedArg { value, .. } = &arg.kind {
             return self.is_native_selection_reference_argument(value, env);
         }
         let Some(receiver) = crate::types::param_binding::native_selection_reference_receiver(arg) else {

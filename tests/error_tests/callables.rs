@@ -455,6 +455,17 @@ fn test_error_boxed_direct_callable_spread_after_named_argument() {
     }
 }
 
+/// Suppression produces a value expression and cannot turn an XML selection into an lvalue.
+#[test]
+fn test_error_suppressed_xml_selection_is_not_a_reference_argument() {
+    for call in ["acceptSuppressedXml(@$xml->missing);",
+        "$callback = acceptSuppressedXml(...); $callback(@$xml->missing);"]
+    {
+        expect_error(&format!("<?php function acceptSuppressedXml(&$value): void {{}} \
+            $xml = new SimpleXMLElement('<r/>'); {call}"), "must be passed a variable");
+    }
+}
+
 /// Unresolved callees obey PHP's positional ordering before runtime signature lookup.
 #[test]
 fn test_error_unresolved_call_positional_argument_order() {

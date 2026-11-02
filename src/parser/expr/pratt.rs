@@ -718,6 +718,7 @@ pub(in crate::parser) fn reject_named_args_in_dynamic_call(
     args: &[Expr],
     span: Span,
 ) -> Result<(), CompileError> {
+    crate::types::checker::validate_unresolved_call_argument_order(args, "Dynamic method call")?;
     if args
         .iter()
         .any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. }))
