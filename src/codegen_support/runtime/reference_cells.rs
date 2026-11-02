@@ -241,6 +241,10 @@ fn emit_clone(emitter: &mut Emitter) {
     abi::emit_jump(emitter, "__rt_reference_cell_clone_finish");
     emitter.label("__rt_reference_cell_clone_mixed");
     abi::emit_call_label(emitter, "__rt_mixed_clone");
+    abi::emit_jump(emitter, "__rt_reference_cell_clone_store");
+    emitter.label("__rt_reference_cell_clone_reference");
+    abi::emit_call_label(emitter, "__rt_reference_new");
+    emitter.label("__rt_reference_cell_clone_store");
     abi::load_at_offset(emitter, scratch, 16);
     abi::emit_store_to_address(emitter, result, scratch, 0);
     emitter.label("__rt_reference_cell_clone_finish");
@@ -295,7 +299,7 @@ fn emit_singleton_mixed_clone_branch(emitter: &mut Emitter) {
             emitter.instruction("ja __rt_reference_cell_clone_retain");         // preserve references shared outside the native cell
         }
     }
-    abi::emit_jump(emitter, "__rt_reference_cell_clone_mixed");
+    abi::emit_jump(emitter, "__rt_reference_cell_clone_reference");
     emitter.label("__rt_reference_cell_clone_dispatch");
 }
 
@@ -459,6 +463,25 @@ mod tests {
             let (framed, early) = assembly.split_once("__rt_reference_cell_clone_done:").unwrap();
             assert!(framed.trim_end().ends_with("ret"), "{name}: framed path must return before the early-out label");
             assert!(early.trim_start().starts_with("ret"), "{name}: null path must not restore a frame");
+        }
+    }
+
+    /// Detached canonical cells keep a PHPRef payload, as scalar readers require for descriptor seven.
+    #[test]
+    fn singleton_canonical_cell_clone_preserves_wrapper_shape_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_clone(&mut emitter);
+            let assembly = emitter.output();
+            let select = assembly.split_once("__rt_reference_cell_clone_dispatch:").unwrap().0;
+            assert!(select.contains(if name == "linux-x86_64" {
+                "jmp __rt_reference_cell_clone_reference"
+            } else { "b __rt_reference_cell_clone_reference" }), "{name}: singleton references preserve their physical shape");
+            let reference = assembly.split_once("__rt_reference_cell_clone_reference:").unwrap().1
+                .split_once("__rt_reference_cell_clone_store:").unwrap().0;
+            assert!(reference.contains("__rt_reference_new"), "{name}: allocate an independent wrapper");
+            assert!(!reference.contains("__rt_mixed_clone"), "{name}: flattened values cannot inhabit canonical scalar cells");
+            assert!(assembly.contains("__rt_reference_cell_clone_retain"), "{name}: live aliases remain shared");
         }
     }
 
