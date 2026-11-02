@@ -83,9 +83,15 @@ pub(super) fn lower_dynamic(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, name: LoweredValue, expr: &Expr,
 ) -> Option<LoweredValue> {
     let mut properties = std::collections::BTreeSet::new();
-    for info in ctx.classes.values() {
+    let object_type = ctx.builder.value_php_type(object.value);
+    if singular_object_class(&object_type).is_some_and(|(_, nullable)| nullable) { return None; }
+    let known_class = singular_object_class(&object_type).map(|(class, _)| class);
+    for (class, info) in ctx.classes {
+        if known_class.is_some_and(|known| known != class) { continue; }
         for property in info.property_hooks.keys() {
             if !ctx.in_own_property_accessor(property)
+                && known_class.is_none_or(|known|
+                    property_is_accessible_for_ir(ctx, known, info, property))
                 && info.methods.contains_key(&php_symbol_key(&property_hook_get_method(property))) {
                 properties.insert(property.clone());
             }

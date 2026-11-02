@@ -18,6 +18,31 @@
 
 use super::*;
 
+/// Unrelated public hooks cannot grant runtime-name access to a typed receiver's private slot.
+#[test]
+fn test_runtime_name_getter_hooks_preserve_typed_visibility() {
+    let source = r#"<?php
+class PublicDynamicHook {
+    public string $value = 'public' { get { return $this->value; } }
+}
+class PrivateDynamicSlot { private string $value = 'secret'; }
+class PrivateDynamicHook {
+    private string $value = 'secret' { get { echo 'unexpected|'; return $this->value; } }
+}
+function readPrivateDynamicSlot(PrivateDynamicSlot $object, string $name): mixed { return $object->{$name}; }
+function readPrivateDynamicHook(PrivateDynamicHook $object, string $name): mixed { return $object->{$name}; }
+try { echo readPrivateDynamicSlot(new PrivateDynamicSlot(), 'value'); }
+catch (Error $error) { echo $error->getMessage(), '|'; }
+try { echo readPrivateDynamicHook(new PrivateDynamicHook(), 'value'); }
+catch (Error $error) { echo $error->getMessage(), '|'; }
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, concat!("Cannot access private property PrivateDynamicSlot::$value|",
+        "Cannot access private property PrivateDynamicHook::$value|"));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Verifies a runtime-name value READ php refuses raises the catchable `Error` instead of
 /// reading the slot, while `isset()` answers false without raising.
 ///
