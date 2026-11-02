@@ -25,6 +25,9 @@ function sourceVariadicMake(): mixed { return new SourceVariadicInherited('<r/>'
 function sourceVariadicNullable(bool $present): ?SourceVariadicXml {
     return $present ? new SourceVariadicXml('<r/>') : null;
 }
+function sourceVariadicArgument(): SourceVariadicXml {
+    echo 'unexpected|'; return new SourceVariadicXml('<r/>');
+}
 $node = sourceVariadicMake();
 $present = $node;
 $code = $argc > 0 ? '
@@ -53,7 +56,7 @@ $number = 1; $node->change($number); echo $number, '|';
 $evalChild->collect($missing);
 $other->collect(1);
 $nullable = sourceVariadicNullable($argc < 0);
-$nullable?->collect(print('unexpected|'));
+$nullable?->collect(sourceVariadicArgument());
 echo 'done';
 "#);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
