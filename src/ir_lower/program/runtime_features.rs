@@ -114,6 +114,10 @@ fn lowered_runtime_features_with(module: &Module, count_opcache_links: bool) -> 
         for (inst_index, inst) in function.instructions.iter().enumerate() {
             match inst.op {
                 Op::RuntimeCall => {
+                    if matches!(inst.immediate, Some(Immediate::RuntimeCall(
+                        crate::ir::RuntimeCallTarget::CallableParameterIsByRef))) {
+                        features.eval_bridge = true;
+                    }
                     // `opcache_compile_file()` is the ONE runtime-tier operation whose job is
                     // to CREATE a cache entry, so it is the one whose pay-for-use fold is a
                     // lie rather than a truth. `is_cached` and `discard` fold to `false` in a

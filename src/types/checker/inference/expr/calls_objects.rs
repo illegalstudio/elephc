@@ -472,6 +472,9 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        // Descriptor dispatch can select a reference parameter at runtime. Preserve the
+        // checked XML receiver before whole-program alias storage widens its local slot.
+        self.is_native_selection_reference_argument(expr, env)?;
         self.infer_runtime_iterated_call_arg_type(expr, env)
     }
 

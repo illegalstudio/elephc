@@ -221,6 +221,9 @@ impl Checker {
     pub(crate) fn is_native_selection_reference_argument(
         &mut self, arg: &Expr, env: &TypeEnv,
     ) -> Result<bool, CompileError> {
+        if let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &arg.kind {
+            return self.is_native_selection_reference_argument(value, env);
+        }
         let Some(receiver) = crate::types::param_binding::native_selection_reference_receiver(arg) else {
             return Ok(false);
         };
