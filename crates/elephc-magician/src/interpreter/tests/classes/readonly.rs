@@ -40,10 +40,10 @@ fn execute_program_computed_array_property_handoff_preserves_parent_lifetime() {
         public function __destruct() { echo 'drop:', count($this->items), '|'; }
     }
     function dimensionArrayTemporary() { return new DimensionArrayParent(); }
-    function dimensionArrayShared() { global $shared; return $shared; }
+    function dimensionArrayShared(DimensionArrayParent $shared) { return $shared; }
     dimensionArrayTemporary()->items[] = 2;
     $shared = new DimensionArrayParent();
-    dimensionArrayShared()->items[] = 2;
+    dimensionArrayShared($shared)->items[] = 2;
     echo 'shared:', count($shared->items), '|';
     unset($shared);
     return true;"#).expect("parse computed array parent handoff");
