@@ -36,8 +36,10 @@ pub(super) fn lower(
     let mut names = ctx.classes.iter().filter(|(class, _)|
         bound.as_ref().is_none_or(|base| *class == base
             || crate::types::class_inherits_from(ctx.classes, class, base)))
-        .flat_map(|(_, info)| info.properties.iter()
-            .filter(|(_, ty)| container_slot(ctx, ty)).map(|(name, _)| name.clone()))
+        .flat_map(|(class, info)| info.properties.iter()
+            .filter(|(name, ty)| container_slot(ctx, ty)
+                && super::property_array_writes::has_declared_readwrite_candidate(ctx, class, info, name))
+            .map(|(name, _)| name.clone()))
         .collect::<Vec<_>>();
     names.sort(); names.dedup();
     if names.is_empty() { return false; }

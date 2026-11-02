@@ -81,6 +81,38 @@ function capturedKernelUpdate(mixed $object, string $name): mixed {
 
 supported_target_cases!(captured_property_incdec_dispatch_is_shared, verify_captured_property_incdec_dispatch_is_shared);
 
+/// Private catalog fields with no writer arm must not add whole named-update kernels.
+fn verify_inaccessible_property_catalog_does_not_expand_incdec(target: &str) {
+    let mut counts = Vec::new();
+    for hidden in [0, 16] {
+        let properties = (0..hidden).map(|index| format!("private mixed $hidden{index};"))
+            .collect::<Vec<_>>().join("\n");
+        let source = format!(r#"<?php
+class IncdecPrivateCatalog {{ {properties} private array $items = []; }}
+class IncdecPublicCatalog {{ public array $items = [4]; }}
+function incdecCatalogStep(mixed $object, string $name): mixed {{
+    return $object->{{$name}}[0]++;
+}}
+$xml = new SimpleXMLElement('<r><items>7</items></r>');
+$private = new IncdecPrivateCatalog();
+$public = new IncdecPublicCatalog();
+incdecCatalogStep($public, 'items');
+try {{ incdecCatalogStep($private, 'items'); }} catch (Error $error) {{}}
+incdecCatalogStep($xml, 'items');
+"#);
+        let module = super::lower_source_at_for_target(&source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        crate::ir::validate_module(&module).unwrap();
+        let function = module.functions.iter().find(|function| function.name == "incdecCatalogStep").unwrap();
+        let named = function.instructions.iter().filter(|inst| inst.op == crate::ir::Op::StrictEq).count();
+        assert!(named > 0, "{target}: keep the accessible items writer even when another class makes it private");
+        counts.push(named);
+    }
+    assert_eq!(counts[0], counts[1], "{target}: inaccessible private fields must not generate update arms");
+}
+
+supported_target_cases!(inaccessible_property_catalog_does_not_expand_incdec, verify_inaccessible_property_catalog_does_not_expand_incdec);
+
 /// Replayed property receivers retain a fresh class guard before their native property read.
 fn verify_replayed_property_incdec_receiver_is_checked(target: &str) {
     let source = r#"<?php

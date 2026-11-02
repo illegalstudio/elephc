@@ -25,6 +25,13 @@ use compound::{compound_source, with_compound_value, write_ordinary_compound};
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum PropertyDimensionFetchMode { Write, ReadWrite }
 
+/// Shares the declared-writer candidate rule with runtime-name update planning.
+pub(super) fn has_declared_readwrite_candidate(
+    ctx: &LoweringContext<'_, '_>, name: &str, info: &crate::types::ClassInfo, property: &str,
+) -> bool {
+    runtime_receivers::has_declared_readwrite_candidate(ctx, name, info, property)
+}
+
 /// Guards a stabilized expression increment receiver before its prelude reads the element.
 pub(super) fn guard_property_dimension_readwrite(
     ctx: &mut LoweringContext<'_, '_>, object: &Expr, property: &str, span: Span,

@@ -123,6 +123,41 @@ fn slot_guard(
     Some(SlotGuard { action: SlotAction::Reject { exception, message }, nullable, object_only })
 }
 
+/// Selects exactly the accessible declared slots that the runtime writer can handle.
+fn declared_slot_candidate(
+    ctx: &LoweringContext<'_, '_>, name: &str, info: &crate::types::ClassInfo,
+    property: &str, mode: FetchMode,
+) -> Option<(Option<SlotGuard>, bool)> {
+    if info.property_hooks.get(property).is_some_and(|hooks| hooks.any())
+        || !crate::ir_lower::expr::property_is_accessible_for_ir(ctx, name, info, property)
+    { return None; }
+    // Use the writer's own classifier, which excludes inherited native XML properties.
+    let property_ty = object_type_property_type(ctx, &PhpType::Object(name.to_string()), property)?;
+    let (_, (_, declared)) = info.visible_property(property)?;
+    let object_container = type_satisfies_array_access_for_ir(ctx, declared);
+    let supported = property_ty.is_php_array()
+        || matches!(property_ty.codegen_repr(), PhpType::Mixed | PhpType::Iterable)
+        || matches!(property_ty.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. }
+            | PhpType::Buffer(_)) || object_container;
+    let mut writable = supported && (object_container || !info.readonly_properties.contains(property));
+    // Mutating an ArrayAccess object's contents only reads the owning property.
+    if let Some(visibility) = info.property_set_visibilities.get(property).filter(|_| !object_container) {
+        let declaring = info.property_declaring_classes.get(property).map(String::as_str)
+            .unwrap_or(name);
+        if !crate::ir_lower::expr::ir_can_access_member(ctx, declaring, visibility) { writable = false; }
+    }
+    let null_error = slot_guard(ctx, name, info, property, mode);
+    if !writable && null_error.is_none() { return None; }
+    Some((null_error, writable))
+}
+
+/// Lets runtime-name update planning omit names that would produce no declared dispatch arm.
+pub(super) fn has_declared_readwrite_candidate(
+    ctx: &LoweringContext<'_, '_>, name: &str, info: &crate::types::ClassInfo, property: &str,
+) -> bool {
+    declared_slot_candidate(ctx, name, info, property, FetchMode::ReadWrite).is_some()
+}
+
 /// Shares exact-class selection between final stores and guards that precede element reads.
 fn dispatch(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, span: Span,
@@ -159,26 +194,7 @@ fn dispatch(
             || magic_append::is_candidate(ctx, name, info, property)) {
             return Some((name.clone(), None, true));
         }
-        if info.property_hooks.get(property).is_some_and(|hooks| hooks.any())
-            || !crate::ir_lower::expr::property_is_accessible_for_ir(ctx, name, info, property)
-        { return None; }
-        // Use the writer's own classifier, which excludes inherited native XML properties.
-        let property_ty = object_type_property_type(ctx, &PhpType::Object(name.clone()), property)?;
-        let (_, (_, declared)) = info.visible_property(property)?;
-        let object_container = type_satisfies_array_access_for_ir(ctx, declared);
-        let supported = property_ty.is_php_array()
-            || matches!(property_ty.codegen_repr(), PhpType::Mixed | PhpType::Iterable)
-            || matches!(property_ty.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. }
-                | PhpType::Buffer(_)) || object_container;
-        let mut writable = supported && (object_container || !info.readonly_properties.contains(property));
-        // Mutating an ArrayAccess object's contents only reads the owning property.
-        if let Some(visibility) = info.property_set_visibilities.get(property).filter(|_| !object_container) {
-            let declaring = info.property_declaring_classes.get(property).map(String::as_str)
-                .unwrap_or(name);
-            if !crate::ir_lower::expr::ir_can_access_member(ctx, declaring, visibility) { writable = false; }
-        }
-        let null_error = slot_guard(ctx, name, info, property, mode);
-        if !writable && null_error.is_none() { return None; }
+        let (null_error, writable) = declared_slot_candidate(ctx, name, info, property, mode)?;
         if guard_only && null_error.is_none() { return None; }
         Some((name.clone(), null_error, writable))
     }).collect();
