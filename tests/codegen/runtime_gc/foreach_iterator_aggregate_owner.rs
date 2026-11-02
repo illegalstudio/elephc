@@ -39,11 +39,16 @@ catch (RuntimeException $error) { echo $error->getMessage(); }
 unset($error, $aggregate); echo '|';
 unset($count);
 "#;
-    let body = body.replace('\'', "\\'");
-    let source = format!("<?php {PRELUDE}\n$code = $argc > 0 ? '{body}' : ''; eval($code);");
+    let native_body = body.replace('\'', "\\'");
+    let eval_prelude = PRELUDE.replace("RangeIter", "EvalApplyRangeIter")
+        .replace("FreshAgg", "EvalApplyFreshAgg").replace("ExistingAgg", "EvalApplyExistingAgg");
+    let eval_body = body.replace("FreshAgg", "EvalApplyFreshAgg");
+    let eval_body = format!("{eval_prelude}{eval_body}").replace('\'', "\\'");
+    let source = format!("<?php {PRELUDE}\n$code = $argc > 0 ? '{native_body}' : ''; eval($code);\n\
+        $code = $argc > 0 ? '{eval_body}' : ''; eval($code);");
     let out = compile_and_run_with_heap_debug(&source);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-    assert_clean(out, "IA2|IA1|Iapply-throwA|");
+    assert_clean(out, &"IA2|IA1|Iapply-throwA|".repeat(2));
 }
 
 const PRELUDE: &str = r#"
