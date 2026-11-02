@@ -2502,6 +2502,7 @@ echo preg_replace_callback("/x/", $callback, "axb");
 "#,
     );
     assert_eq!(out, "()0|()|empty|a[x]b");
+}
 
 /// Verifies the regex functions accept PHP's other delimiters: any punctuation byte, and the
 /// four bracket pairs, with modifiers after the closing delimiter.
