@@ -134,6 +134,9 @@ mod tests {
                 return new OwnedMixedChild($value); } \
             function makeFreshOwnedMixed(): OwnedMixedConstructor { \
                 return new OwnedMixedConstructor($fresh); } \
+            function makeDynamicOwnedMixed(string $class): mixed { \
+                $value = 'before'; $object = new $class($value); \
+                $value = 'after'; return $object; } \
             $object = makeOwnedMixed('initial'); $object->value = 'updated'; \
             $freshObject = makeFreshOwnedMixed();";
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
@@ -144,6 +147,9 @@ mod tests {
             for class in ["OwnedMixedConstructor", "OwnedMixedChild"] {
                 assert!(module.class_infos[class].property_slot_owns_reference(0), "{name}: {class}");
             }
+            let dynamic = module.functions.iter().find(|function| function.name == "makeDynamicOwnedMixed").unwrap();
+            assert_eq!(dynamic.instructions.iter().filter(|inst| inst.op == crate::ir::Op::ObjectNew).count(), 2,
+                "{name}: both declaring and inherited constructors normalize the caller reference");
             let user = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
             assert!(user.contains("__rt_reference_cell_retain_mixed"), "{name}: constructor retains its binding");
             assert!(user.contains("__rt_reference_cell_release"), "{name}: placeholder owner retires");

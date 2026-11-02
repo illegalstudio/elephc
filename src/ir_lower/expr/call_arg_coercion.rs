@@ -393,12 +393,27 @@ fn promote_boxed_reference_local_argument(
     };
     if !ctx.boxed_reference_promotion_is_authorized(name, arg.span)
         && ctx.local_type(name) != PhpType::Mixed
+        && !constructor_argument_owns_mixed_reference(ctx, index)
     {
         return;
     }
     if !ctx.is_ref_bound_local(name) && ctx.local_can_own_reference_cell(name) {
         ctx.promote_local_mixed_ref_cell(name, Some(arg.span));
     }
+}
+
+/// Applies the selected constructor's storage contract after dynamic class dispatch.
+fn constructor_argument_owns_mixed_reference(ctx: &LoweringContext<'_, '_>, index: usize) -> bool {
+    let Some((class, method)) = ctx.call_description.as_deref().and_then(|name| name.rsplit_once("::")) else {
+        return false;
+    };
+    if !method.eq_ignore_ascii_case("__construct") { return false; }
+    let Some((owner, info)) = crate::types::constructor_owner(ctx.classes, class) else { return false; };
+    let implementation = info.method_impl_classes.get("__construct").map(String::as_str).unwrap_or(owner);
+    let Some(info) = ctx.classes.get(implementation) else { return false; };
+    let Some(property) = info.constructor_param_to_prop.get(index).and_then(Option::as_ref) else { return false; };
+    info.visible_property_index(property).is_some_and(|slot|
+        info.property_slot_owns_reference(slot) && info.properties[slot].1 == PhpType::Mixed)
 }
 
 /// Materializes a proven callable array as the descriptor required by a Callable slot.

@@ -220,14 +220,20 @@ fn dynamic_new_class_is_planning_candidate(
     if class_info.declaration_span == Span::dummy() {
         return false;
     }
-    if !class_info
+    let Some((owner_name, constructor_owner)) = crate::types::constructor_owner(ctx.classes, class_name) else {
+        return false;
+    };
+    let implementation = constructor_owner.method_impl_classes.get(constructor_key)
+        .map(String::as_str).unwrap_or(owner_name);
+    let Some(body_owner) = ctx.classes.get(implementation) else { return false; };
+    if body_owner.declaration_span == Span::dummy() || !body_owner
         .method_decls
         .iter()
         .any(|method| php_symbol_key(&method.name) == constructor_key && method.has_body)
     {
         return false;
     }
-    let Some(sig) = class_info.methods.get(constructor_key) else {
+    let Some(sig) = constructor_owner.methods.get(constructor_key) else {
         return false;
     };
     if sig.variadic.is_some() {
