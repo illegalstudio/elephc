@@ -383,11 +383,13 @@ fn lower_dynamic_prop_unset(
 /// Used only for the diagnostic text; the ordering matters because a slot can be both
 /// undeclared and by-reference, and the by-reference storage is the more specific
 /// obstacle to report.
-fn unset_unsupported_slot_reason(slot: &PropertySlot) -> Option<&'static str> {
+fn unset_unsupported_slot_reason(ctx: &FunctionContext<'_>, slot: &PropertySlot) -> Option<&'static str> {
     if slot.is_packed {
         return Some("packed class field");
     }
-    if slot.is_reference {
+    let owned_reference = slot.is_declared && ctx.module.class_infos.get(&slot.class_name)
+        .is_some_and(|class| class.owned_reference_properties.contains(&slot.property));
+    if slot.is_reference && !owned_reference {
         return Some("by-reference property");
     }
     if !slot.is_declared && !slot_supports_untyped_unset_marker(slot) {

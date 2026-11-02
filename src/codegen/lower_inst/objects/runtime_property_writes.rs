@@ -1784,10 +1784,9 @@ pub(super) fn emit_runtime_stdclass_set_for_stacked_name(
 /// removal path and matches PHP exactly: the key disappears, `isset()` answers false,
 /// the value renderers stop listing it, and a later write re-appends it.
 ///
-/// Every other slot shape is REFUSED rather than silently skipped. A by-reference
-/// property slot holds an object-owned ref-cell pointer that the destructor still has
-/// to free and that a later write would write THROUGH — reviving the alias PHP's
-/// `unset()` just broke — so neither zeroing nor keeping the cell reproduces PHP.
+/// An object-owned typed reference property receives a fresh uninitialized cell before its
+/// old cell owner is released. Surviving aliases keep the old cell independently of the object.
+/// Borrowed and untyped reference-property slots retain their explicit unsupported diagnostic.
 /// A packed field and a refined untyped slot that type checking did not widen have no removable
 /// storage. Skipping them quietly leaves `isset()` answering `true` after an `unset()`, so they
 /// name themselves instead.
@@ -1847,7 +1846,7 @@ pub(super) fn lower_named_prop_unset(
         return Ok(());
     }
     let slot = resolve_property_slot(ctx, object, property, inst)?;
-    if let Some(reason) = unset_unsupported_slot_reason(&slot) {
+    if let Some(reason) = unset_unsupported_slot_reason(ctx, &slot) {
         return Err(CodegenIrError::unsupported(format!(
             "unset() of {} {}::${}",
             reason, slot.class_name, slot.property
@@ -1874,7 +1873,7 @@ pub(super) fn emit_dynamic_plan_unset(
 ) -> Result<()> {
     match &arm.action {
         PropertyRuntimeAction::Slot(slot) => {
-            if let Some(reason) = unset_unsupported_slot_reason(slot) {
+            if let Some(reason) = unset_unsupported_slot_reason(ctx, slot) {
                 return Err(CodegenIrError::unsupported(format!(
                     "unset() of {} {}::${}",
                     reason, slot.class_name, slot.property
@@ -2193,7 +2192,7 @@ fn emit_mixed_runtime_name_unset_arm(
         // and this scope resolves the name to it. No ancestor's private slot is reachable here:
         // such a name resolves to `DynamicHash` or `DynamicMissing` instead.
         PropertyRuntimeAction::Slot(slot) => {
-            if let Some(reason) = unset_unsupported_slot_reason(slot) {
+            if let Some(reason) = unset_unsupported_slot_reason(ctx, slot) {
                 return Err(CodegenIrError::unsupported(format!(
                     "unset() of {} {}::${}",
                     reason, slot.class_name, slot.property
@@ -2241,6 +2240,12 @@ fn detach_and_release_unset_property_value(
     slot: &PropertySlot,
     base_reg: &str,
 ) {
+    if slot.is_reference {
+        crate::codegen_support::runtime::reference_cells::emit_owned_property_unset(
+            ctx.emitter, base_reg, slot.offset,
+        );
+        return;
+    }
     let prop_ty = slot.php_type.codegen_repr();
     let releases_value =
         matches!(prop_ty, PhpType::Str | PhpType::Callable) || prop_ty.is_refcounted();

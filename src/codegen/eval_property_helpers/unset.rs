@@ -74,10 +74,28 @@ pub(super) fn emit_property_unset_helper(
     abi::emit_jump(emitter, fail);
     for slot in &slots {
         emitter.label(&slot_body_label(module, slot, "unset"));
-        // Native unset lowering also refuses reference properties. Do not replace their
-        // cell pointer or alter a live alias while reporting that unsupported shape.
         if slot.is_reference {
-            abi::emit_jump(emitter, reference_error);
+            let owned = slot.is_declared && module.class_infos.get(&slot.class_name)
+                .is_some_and(|class| class.owned_reference_properties.contains(&slot.property));
+            if owned {
+                let base = match emitter.target.arch {
+                    Arch::AArch64 => {
+                        emitter.instruction("ldr x9, [sp, #16]");               // recover the receiver before addressing its physical reference slot
+                        "x9"
+                    }
+                    Arch::X86_64 => {
+                        emitter.instruction("mov r11, QWORD PTR [rbp - 24]");   // recover the receiver before addressing its physical reference slot
+                        "r11"
+                    }
+                };
+                crate::codegen_support::runtime::reference_cells::emit_owned_property_unset(
+                    emitter, base, slot.offset,
+                );
+                abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 1);
+                abi::emit_jump(emitter, done);
+            } else {
+                abi::emit_jump(emitter, reference_error);
+            }
             continue;
         }
         emit_unset_slot(emitter, slot);

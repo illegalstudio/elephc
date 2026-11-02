@@ -132,7 +132,7 @@ pub(crate) fn lower_class_alias(ctx: &mut FunctionContext<'_>, inst: &Instructio
 ///
 /// Fixed untyped slots selected by reachable property `unset()` operations are widened to
 /// boxed `Mixed` and lowered through `PropUnset`, so they do not reach this fallback. Packed
-/// fields, by-reference property slots, and dynamic shapes whose magic behavior depends on
+/// fields, borrowed or untyped reference-property slots, and dynamic shapes whose magic behavior depends on
 /// runtime state remain deliberately unsupported.
 ///
 /// A BY-REFERENCE INDEXED ARRAY is the shape named here. `unset()` removes a key without
@@ -155,7 +155,7 @@ pub(super) fn lower_unset_builtin(
          properties and of declared `array` static properties, ArrayAccess offsets, \
          __unset()-backed properties, declared fixed object properties, and dynamic \
          object properties). \
-         Packed fields, by-reference property slots, and runtime-dependent magic \
+         Packed fields, borrowed or untyped reference-property slots, and runtime-dependent magic \
          property shapes are not supported. An element of a by-reference INDEXED array \
          (`function f(array &$a) {{ unset($a[1]); }}`) would leave a key hole, so the \
          local must become a hash, and the caller's slot still says `array<T>`; the \

@@ -17,6 +17,9 @@ use crate::codegen_support::sentinels::{
 };
 use crate::types::PhpType;
 
+mod property_unset;
+pub(crate) use property_unset::emit_owned_property_unset;
+
 /// Byte length of `_unmanaged_reference_escape_msg`, kept beside the data that defines it.
 const UNMANAGED_REFERENCE_ESCAPE_MSG_LEN: i64 = 73;
 
@@ -49,6 +52,7 @@ pub(super) fn emit_reference_cells(emitter: &mut Emitter) {
     emit_value_release(emitter);
     emit_release(emitter);
     emit_clone(emitter);
+    property_unset::emit_property_unset(emitter);
     emit_owner_lookup(emitter);
     emit_unmanaged_borrow_lookup(emitter);
     emit_unmanaged_borrow_escape_error(emitter);

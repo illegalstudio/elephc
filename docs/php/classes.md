@@ -1096,10 +1096,13 @@ removed, `isset()` answers `false`, object-property renderers omit the property,
 normal read emits `Warning: Undefined property: C::$foo` and answers `null`. A later
 assignment clears the marker and recreates the property with any supported PHP value.
 
-`unset()` on a **by-reference** property (`public function __construct(public int
-&$p) {}`) is rejected for the same reason: the slot holds an object-owned reference
-cell that the destructor still frees and that a later write would write *through*,
-which would revive the very alias `unset()` is supposed to break.
+For an object-owned typed property referenced through `$alias = &$object->value`
+or a method returning that property by reference, `unset()` installs a fresh
+uninitialized cell. Surviving aliases keep the old value, and later writes to the
+property leave those aliases detached. Native code and opaque eval use the same
+operation, including when the old value's destructor recreates the property.
+Borrowed constructor-promoted references (`public function __construct(public int
+&$p) {}`) and untyped reference-property slots remain unsupported.
 
 Packed fields are also rejected because their native layout has no room for a removed
 marker. A dynamic name on a class that both permits dynamic properties and declares
@@ -1768,6 +1771,6 @@ Constants are inherited from parents and implemented interfaces (transitively). 
 ## Limitations
 - `readonly static` properties are rejected to match PHP. Static properties in a `readonly class` are still mutable.
 - Backed property hooks may read and write their own backing slot.
-- `unset()` is supported on typed declared properties (the slot becomes uninitialized), untyped fixed properties selected by reachable removal paths (the slot carries an internal removed marker), and dynamic properties (`stdClass`, undeclared names on `#[AllowDynamicProperties]` classes, where the entry is removed). It is rejected on by-reference properties, packed fields, and dynamic names of a class that also declares `__unset()`. See "`unset()` limitations" above.
+- `unset()` is supported on typed declared properties, including object-owned reference cells (the property becomes uninitialized and surviving aliases keep their detached value), untyped fixed properties selected by reachable removal paths (the slot carries an internal removed marker), and dynamic properties (`stdClass`, undeclared names on `#[AllowDynamicProperties]` classes, where the entry is removed). It is rejected on borrowed or untyped reference-property slots, packed fields, and dynamic names of a class that also declares `__unset()`. See "`unset()` limitations" above.
 - Class constants must be literal-or-foldable expressions; cyclic constant references are not supported.
 - Class and function attribute names and supported literal args are exposed at runtime through `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, and the supported `ReflectionClass`/`ReflectionObject`/`ReflectionEnum`/`ReflectionFunction`/`ReflectionMethod`/`ReflectionProperty`/`ReflectionParameter`/`ReflectionClassConstant`/`ReflectionEnumUnitCase`/`ReflectionEnumBackedCase::getAttributes()` APIs; function and method parameter names, counts, positions, optional/variadic/by-reference flags, declared-type presence, simple named, union, and intersection type metadata, function and method parameter attributes, supported scalar/null/class-constant/array/object parameter defaults, parameter declaring-class/function metadata, and reflected member/constant declaring-class metadata are exposed through the supported Reflection APIs. `#[\Override]`, `#[\Deprecated]`, and `#[\AllowDynamicProperties]` are enforced/diagnosed/honored at compile time and runtime; `#[\SensitiveParameter]` replaces backtrace arguments with `SensitiveParameterValue` wrappers in native code and eval. Core attribute targets and repeatability are validated, with `#[\DelayedTargetValidation]` deferring target errors to reflection construction. `#[\NoDiscard]` diagnoses discarded direct-call results; assigning a result to `$_` explicitly consumes it.
