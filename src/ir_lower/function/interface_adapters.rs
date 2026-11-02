@@ -107,6 +107,7 @@ fn lower_interface_adapter(
         &module.extern_class_infos,
         &Default::default(), // throw access sites
         &Default::default(), // builtin call types
+        &Default::default(), // source generator closure spans
         &Default::default(), // array_push property plans
         &Default::default(), // checked member receiver types
         &Default::default(), // boxed reference promotions

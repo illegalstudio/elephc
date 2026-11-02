@@ -148,6 +148,7 @@ fn dummy_check_result() -> CheckResult {
         warnings: Vec::new(),
         throw_access_sites: HashMap::new(),
         builtin_call_types: HashMap::new(),
+        closure_generator_spans: Default::default(),
         array_push_property_plans: HashMap::new(),
         member_receiver_types: HashMap::new(),
         boxed_reference_promotion_sites: HashMap::new(),

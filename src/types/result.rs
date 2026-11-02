@@ -125,6 +125,8 @@ pub struct CheckResult {
     pub throw_access_sites: HashMap<Span, ThrowAccessInfo>,
     /// Authoritative checker result types for builtin calls, keyed by call span.
     pub builtin_call_types: HashMap<Span, PhpType>,
+    /// Closure literals whose checked source bodies contain yield, keyed by source identity.
+    pub closure_generator_spans: HashSet<Span>,
     /// Native array_push property decisions, scoped to the body and original place span.
     pub array_push_property_plans: HashMap<(String, Span), ArrayPushPropertyPlan>,
     /// Checked member receiver types by body scope and source node; conflicting visits are None.

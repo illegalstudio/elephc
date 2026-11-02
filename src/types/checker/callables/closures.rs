@@ -192,9 +192,6 @@ impl Checker {
             declared_params: closure_sig.declared_params,
             variadic: variadic.clone(),
             deprecation: None,
-            // The checker classifies this source body for callable typing. Unlike named
-            // functions, EIR closures rebuild their signature from the optimized body, so
-            // optimizer passes must retain a yield token to preserve that classification.
             is_generator: super::super::yield_validation::body_contains_yield(body),
         })
     }
@@ -212,6 +209,7 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<(PhpType, bool), CompileError> {
         if super::super::yield_validation::body_contains_yield(body) {
+            self.closure_generator_spans.insert(span);
             let generator_ty = PhpType::Object("Generator".to_string());
             if let Some(type_ann) = return_type {
                 let declared_ret =

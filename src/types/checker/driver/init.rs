@@ -132,6 +132,7 @@ impl Checker {
             scope_dynamic_mutation_targets: Default::default(),
             throw_access_sites: HashMap::new(),
             builtin_call_types: HashMap::new(),
+            closure_generator_spans: HashSet::new(),
             array_push_property_plans: HashMap::new(),
             member_receiver_types: HashMap::new(),
             member_receiver_analysis_scopes: Vec::new(),

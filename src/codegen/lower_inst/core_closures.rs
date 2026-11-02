@@ -489,141 +489,14 @@ pub(super) fn store_current_result_to_ref_cell(
     }
 }
 
-/// Reconstructs callable signature metadata from an emitted EIR function.
-pub(in crate::codegen) fn function_signature_from_eir(function: &crate::ir::Function) -> FunctionSig {
-    function_signature_from_eir_with_param_count(function, function.params.len())
-}
-
-/// Reconstructs signature metadata from the first `param_count` EIR params.
-pub(super) fn function_signature_from_eir_with_param_count(
-    function: &crate::ir::Function,
-    param_count: usize,
-) -> FunctionSig {
-    if let Some(signature) = &function.signature {
-        let mut signature = signature.clone();
-        let original_param_count = signature.params.len();
-        ensure_variadic_param_slot(&mut signature);
-        if original_param_count == param_count {
-            return signature.clone();
-        }
-    }
-
-    FunctionSig {
-        params: function
-            .params
-            .iter()
-            .take(param_count)
-            .map(|param| (param.name.clone(), param.php_type.clone()))
-            .collect(),
-        param_type_exprs: vec![None; param_count],
-        param_attributes: Vec::new(),
-        defaults: function
-            .params
-            .iter()
-            .take(param_count)
-            .map(|_| None)
-            .collect(),
-        return_type: function.return_php_type.clone(),
-        declared_return: !matches!(function.return_php_type, PhpType::Mixed),
-        by_ref_return: function
-            .signature
-            .as_ref()
-            .map_or(function.flags.by_ref_return, |signature| signature.by_ref_return),
-        ref_params: function
-            .params
-            .iter()
-            .take(param_count)
-            .map(|param| param.by_ref)
-            .collect(),
-        declared_params: function
-            .params
-            .iter()
-            .take(param_count)
-            .map(|param| !matches!(param.php_type, PhpType::Mixed))
-            .collect(),
-        variadic: function
-            .params
-            .iter()
-            .take(param_count)
-            .find(|param| param.variadic)
-            .map(|param| param.name.clone()),
-        deprecation: None,
-        is_generator: false,
-    }
-}
-
-/// Adds the virtual variadic array slot when the EIR ABI stores it outside `params`.
-pub(super) fn ensure_variadic_param_slot(signature: &mut FunctionSig) {
-    let Some(variadic) = signature.variadic.clone() else {
-        return;
-    };
-    if signature.params.iter().any(|(name, _)| name == &variadic) {
-        return;
-    }
-    let variadic_index = signature.params.len();
-    let variadic_type_expr = if signature.param_type_exprs.len() > variadic_index {
-        signature.param_type_exprs.remove(variadic_index)
-    } else {
-        None
-    };
-    let variadic_ref = if signature.ref_params.len() > variadic_index {
-        signature.ref_params.remove(variadic_index)
-    } else {
-        false
-    };
-    let variadic_declared = if signature.declared_params.len() > variadic_index {
-        signature.declared_params.remove(variadic_index)
-    } else {
-        false
-    };
-    signature
-        .params
-        .push((variadic, PhpType::Array(Box::new(PhpType::Mixed))));
-    signature.defaults.push(None);
-    signature.ref_params.push(variadic_ref);
-    signature.declared_params.push(variadic_declared);
-    signature.param_type_exprs.push(variadic_type_expr);
-}
+pub(in crate::codegen) use crate::codegen::callable_signatures::{
+    function_signature_from_eir, function_signature_from_eir_with_param_count,
+};
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
-
-    /// EIR-only callable metadata retains the declaration's reference-return flag.
-    #[test]
-    fn callable_signature_fallback_preserves_eir_reference_return() {
-        for by_ref_return in [false, true] {
-            let mut function = crate::ir::Function::new("ref_result".into(), IrType::I64, PhpType::Int);
-            function.flags.by_ref_return = by_ref_return;
-
-            assert_eq!(function_signature_from_eir(&function).by_ref_return, by_ref_return);
-        }
-    }
-
-    /// A parameter-count mismatch must not discard stored declaration metadata.
-    #[test]
-    fn callable_signature_fallback_preserves_stored_reference_return() {
-        for by_ref_return in [false, true] {
-            let mut function = crate::ir::Function::new("ref_result".into(), IrType::I64, PhpType::Int);
-            let mut signature = function_signature_from_eir(&function);
-            signature.by_ref_return = by_ref_return;
-            function.signature = Some(signature);
-            function.params.push(crate::ir::FunctionParam {
-                name: "capture".into(),
-                ir_type: IrType::I64,
-                php_type: PhpType::Int,
-                by_ref: false,
-                variadic: false,
-            });
-
-            assert_eq!(function_signature_from_eir(&function).by_ref_return, by_ref_return);
-            assert_eq!(
-                function_signature_from_eir_with_param_count(&function, 0).by_ref_return,
-                by_ref_return,
-            );
-        }
-    }
 
     /// ARM64 string capture cleanup forwards the string pointer from x1, not the scalar result x0.
     #[test]
