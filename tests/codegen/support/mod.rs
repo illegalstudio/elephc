@@ -36,6 +36,7 @@ pub(crate) static TEST_TARGET: OnceLock<Target> = OnceLock::new();
 
 mod platform;
 mod runner;
+mod magician_link;
 mod bundle;
 mod c_fixture;
 mod compiler;
