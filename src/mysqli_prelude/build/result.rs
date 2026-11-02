@@ -24,6 +24,7 @@ use crate::synthetic_class::{
     e_index,
     e_int,
     e_method_call,
+    e_neg,
     e_new,
     e_new_dynamic,
     e_null,
@@ -75,6 +76,11 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
         .private_prop("metaDecimals", t_array(), Some(e_array(vec![])))
         .private_prop("rowCount", TypeExpr::Int, Some(e_int(0)))
         .private_prop("pos", TypeExpr::Int, Some(e_int(0)))
+        .private_prop("streamStmt", TypeExpr::Int, Some(e_neg(e_int(1))))
+        .private_prop("streamStep", TypeExpr::Int, Some(e_int(0)))
+        .private_prop("streamLink", t_nullable(t_class("mysqli")), Some(e_null()))
+        .private_prop("streamKinds", t_array(), Some(e_array(vec![])))
+        .private_prop("streamRows", TypeExpr::Int, Some(e_int(0)))
         .method(
             method("__construct")
                 .param("mysql", t_class("mysqli"))
@@ -147,6 +153,41 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                 ]),
         )
         .method(
+            method("__elephcFromStream")
+                .private()
+                .static_()
+                .param("link", t_class("mysqli"))
+                .param("stmt", TypeExpr::Int)
+                .param("firstStep", TypeExpr::Int)
+                .param("names", t_array())
+                .param("tables", t_array())
+                .param("nativeTypes", t_array())
+                .param("flags", t_array())
+                .param("lens", t_array())
+                .param("decimals", t_array())
+                .param("kinds", t_array())
+                .returns(t_class("mysqli_result"))
+                .body(vec![
+                    s_static_prop_assign("mysqli_result", "fromFactory", e_bool(true)),
+                    s_assign("_result", e_new("mysqli_result", vec![e_new("mysqli", vec![])])),
+                    s_static_prop_assign("mysqli_result", "fromFactory", e_bool(false)),
+                    s_prop_assign(e_var("_result"), "names", e_var("names")),
+                    s_prop_assign(e_var("_result"), "metaTables", e_var("tables")),
+                    s_prop_assign(e_var("_result"), "metaNativeTypes", e_var("nativeTypes")),
+                    s_prop_assign(e_var("_result"), "metaFlags", e_var("flags")),
+                    s_prop_assign(e_var("_result"), "metaLens", e_var("lens")),
+                    s_prop_assign(e_var("_result"), "metaDecimals", e_var("decimals")),
+                    s_prop_assign(e_var("_result"), "field_count", e_call("count", vec![e_var("names")])),
+                    s_prop_assign(e_var("_result"), "type", e_int(1)),
+                    s_prop_assign(e_var("_result"), "num_rows", e_int(0)),
+                    s_prop_assign(e_var("_result"), "streamStmt", e_var("stmt")),
+                    s_prop_assign(e_var("_result"), "streamStep", e_var("firstStep")),
+                    s_prop_assign(e_var("_result"), "streamLink", e_var("link")),
+                    s_prop_assign(e_var("_result"), "streamKinds", e_var("kinds")),
+                    s_return(e_var("_result")),
+                ]),
+        )
+        .method(
             method("__elephcCopyInto")
                 .private()
                 .param("target", t_class("mysqli_result"))
@@ -164,22 +205,26 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                     s_prop_assign(e_var("target"), "field_count", e_this_prop("field_count")),
                     s_prop_assign(e_var("target"), "type", e_var("mode")),
                     s_prop_assign(e_var("target"), "num_rows", e_ternary(e_binop(e_var("mode"), BinOp::Eq, e_int(1)), e_int(0), e_this_prop("rowCount"))),
-                ]),
-        )
-        .method(
-            method("__elephcSetType")
-                .private()
-                .param("type", TypeExpr::Int)
-                .returns(TypeExpr::Void)
-                .body(vec![
-                    s_prop_assign(e_this(), "type", e_var("type")),
-                    s_prop_assign(e_this(), "num_rows", e_ternary(e_binop(e_var("type"), BinOp::Eq, e_int(1)), e_int(0), e_this_prop("rowCount"))),
+                    s_prop_assign(e_var("target"), "streamStmt", e_this_prop("streamStmt")),
+                    s_prop_assign(e_var("target"), "streamStep", e_this_prop("streamStep")),
+                    s_prop_assign(e_var("target"), "streamLink", e_this_prop("streamLink")),
+                    s_prop_assign(e_var("target"), "streamKinds", e_this_prop("streamKinds")),
+                    s_prop_assign(e_this(), "streamStmt", e_neg(e_int(1))),
+                    s_prop_assign(e_this(), "streamLink", e_null()),
                 ]),
         )
         .method(
             method("fetch_row")
                 .returns(t_nullable(t_array()))
                 .body(vec![
+                    s_if(
+                        e_binop(e_binop(e_this_prop("streamStmt"), BinOp::GtEq, e_int(0)), BinOp::Or, e_binop(e_this_prop("type"), BinOp::Eq, e_int(1))),
+                        vec![
+                            s_return(e_method_call(e_this(), "streamRow", vec![])),
+                        ],
+                        vec![],
+                        None,
+                    ),
                     s_if(
                         e_binop(e_this_prop("pos"), BinOp::GtEq, e_this_prop("rowCount")),
                         vec![
@@ -500,6 +545,7 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
             method("close")
                 .returns(TypeExpr::Void)
                 .body(vec![
+                    s_expr(e_method_call(e_this(), "discardStream", vec![])),
                     s_prop_assign(e_this(), "cells", e_array(vec![])),
                     s_prop_assign(e_this(), "rowCount", e_int(0)),
                     s_prop_assign(e_this(), "num_rows", e_int(0)),
@@ -526,6 +572,152 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                 .returns(t_class("Iterator"))
                 .body(vec![
                     s_return(e_new("__ElephcMysqliResultIterator", vec![e_this()])),
+                ]),
+        )
+        .method(
+            method("__destruct")
+                .body(vec![
+                    s_expr(e_method_call(e_this(), "discardStream", vec![])),
+                ]),
+        )
+        .method(
+            method("streamRow")
+                .private()
+                .returns(t_nullable(t_array()))
+                .body(vec![
+                    s_if(
+                        e_binop(e_binop(e_this_prop("streamStmt"), BinOp::Lt, e_int(0)), BinOp::Or, e_binop(e_this_prop("streamStep"), BinOp::NotEq, e_int(1))),
+                        vec![
+                            s_expr(e_method_call(e_this(), "endStream", vec![])),
+                            s_prop_assign(e_this(), "lengths", e_null()),
+                            s_prop_assign(e_this(), "num_rows", e_this_prop("streamRows")),
+                            s_return(e_null()),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_assign("_row", e_array(vec![])),
+                    s_assign("_lengths", e_array(vec![])),
+                    s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_this_prop("field_count"))), Some(s_expr(e_post_inc("_i"))), vec![
+                        s_assign("_value", e_method_call(e_this(), "columnValue", vec![e_var("_i")])),
+                        s_assign("_kind", e_cast(CastType::Int, e_index(e_this_prop("streamKinds"), e_var("_i")))),
+                        s_if(
+                            e_binop(e_binop(e_var("_value"), BinOp::StrictNotEq, e_null()), BinOp::And, e_binop(e_var("_kind"), BinOp::Eq, e_int(1))),
+                            vec![
+                                s_assign("_value", e_cast(CastType::Int, e_var("_value"))),
+                            ],
+                            vec![
+                            (e_binop(e_binop(e_var("_value"), BinOp::StrictNotEq, e_null()), BinOp::And, e_binop(e_var("_kind"), BinOp::Eq, e_int(2))), vec![
+                                s_assign("_value", e_cast(CastType::Float, e_var("_value"))),
+                            ]),
+                        ],
+                            None,
+                        ),
+                        s_array_push("_row", e_var("_value")),
+                        s_if(
+                            e_binop(e_var("_value"), BinOp::StrictEq, e_null()),
+                            vec![
+                                s_array_push("_lengths", e_int(0)),
+                            ],
+                            vec![],
+                            Some(vec![
+                            s_array_push("_lengths", e_call("strlen", vec![e_cast(CastType::String, e_var("_value"))])),
+                        ]),
+                        ),
+                    ]),
+                    s_prop_assign(e_this(), "streamRows", e_binop(e_this_prop("streamRows"), BinOp::Add, e_int(1))),
+                    s_prop_assign(e_this(), "streamStep", e_call("elephc_pdo_step", vec![e_this_prop("streamStmt")])),
+                    s_prop_assign(e_this(), "lengths", e_var("_lengths")),
+                    s_return(e_var("_row")),
+                ]),
+        )
+        .method(
+            method("discardStream")
+                .private()
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_if(
+                        e_binop(e_this_prop("streamStmt"), BinOp::Lt, e_int(0)),
+                        vec![
+                            s_return_void(),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_while(e_binop(e_this_prop("streamStep"), BinOp::Eq, e_int(1)), vec![
+                        s_prop_assign(e_this(), "streamRows", e_binop(e_this_prop("streamRows"), BinOp::Add, e_int(1))),
+                        s_prop_assign(e_this(), "streamStep", e_call("elephc_pdo_step", vec![e_this_prop("streamStmt")])),
+                    ]),
+                    s_expr(e_method_call(e_this(), "endStream", vec![])),
+                ]),
+        )
+        .method(
+            method("endStream")
+                .private()
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_if(
+                        e_binop(e_this_prop("streamStmt"), BinOp::Lt, e_int(0)),
+                        vec![
+                            s_return_void(),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_prop_assign(e_this(), "streamStmt", e_neg(e_int(1))),
+                    s_assign("_link", e_this_prop("streamLink")),
+                    s_prop_assign(e_this(), "streamLink", e_null()),
+                    s_if(
+                        e_binop(e_var("_link"), BinOp::StrictNotEq, e_null()),
+                        vec![
+                            s_expr(e_method_call(e_var("_link"), "__elephcStreamFinished", vec![e_this_prop("streamRows")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                ]),
+        )
+        .method(
+            method("columnValue")
+                .private()
+                .param("index", TypeExpr::Int)
+                .returns(t_mixed())
+                .body(vec![
+                    s_assign("_type", e_call("elephc_pdo_column_type", vec![e_this_prop("streamStmt"), e_var("index")])),
+                    s_if(
+                        e_binop(e_var("_type"), BinOp::Eq, e_int(1)),
+                        vec![
+                            s_return(e_call("elephc_pdo_column_int", vec![e_this_prop("streamStmt"), e_var("index")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("_type"), BinOp::Eq, e_int(2)),
+                        vec![
+                            s_return(e_call("elephc_pdo_column_double", vec![e_this_prop("streamStmt"), e_var("index")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("_type"), BinOp::Eq, e_int(5)),
+                        vec![
+                            s_return(e_null()),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_assign("_len", e_call("elephc_pdo_column_data_len", vec![e_this_prop("streamStmt"), e_var("index")])),
+                    s_if(
+                        e_binop(e_var("_len"), BinOp::Gt, e_int(0)),
+                        vec![
+                            s_return(e_call("__elephc_ptr_read_string", vec![e_call("elephc_pdo_column_data_ptr", vec![e_this_prop("streamStmt"), e_var("index")]), e_var("_len")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_str("")),
                 ]),
         )
         .method(

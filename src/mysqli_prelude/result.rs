@@ -15,9 +15,10 @@
 //! - The public constructor (`new mysqli_result($link, $mode)`) picks up the
 //!   connection's pending result like `store_result()` / `use_result()`; the
 //!   internal factory bypasses it through a static flag.
-//! - `$type` records MYSQLI_STORE_RESULT / MYSQLI_USE_RESULT. Rows are always
-//!   buffered, but a USE_RESULT result keeps mysqlnd's observable unbuffered
-//!   rules (num_rows 0 until exhausted, data_seek / mysqli_num_rows throw).
+//! - `$type` records MYSQLI_STORE_RESULT / MYSQLI_USE_RESULT. A USE_RESULT
+//!   result streams its rows from the server one fetch at a time (the link
+//!   stays busy until the set is exhausted or freed); num_rows reads 0 until
+//!   exhausted and data_seek / mysqli_num_rows throw, like mysqlnd.
 //! - `fetch_column` is PHP 8.1+; its block is version-gated in `fragments.rs`.
 
 /// The `mysqli_result` class and its iterator (fragment without a `<?php`
@@ -32,10 +33,9 @@ class mysqli_result implements IteratorAggregate {
     // null before the first fetch / after exhaustion (php-src's $lengths).
     public ?array $lengths = null;
     public int $num_rows = 0;
-    // MYSQLI_STORE_RESULT (0) or MYSQLI_USE_RESULT (1): how the result was
-    // requested. Rows are always buffered; a USE_RESULT result still behaves
-    // like mysqlnd's unbuffered one where php can observe it (num_rows reads 0
-    // until the last row was fetched, data_seek / mysqli_num_rows throw).
+    // MYSQLI_STORE_RESULT (0) or MYSQLI_USE_RESULT (1). A USE_RESULT result
+    // reads its rows from the server on demand (num_rows reads 0 until the
+    // last row was fetched; data_seek / mysqli_num_rows throw, like mysqlnd).
     public int $type = 0;
 
     // Set by the internal factory so `new mysqli_result($link)` inside it skips
@@ -54,6 +54,16 @@ class mysqli_result implements IteratorAggregate {
     private array $metaDecimals = [];
     private int $rowCount = 0;
     private int $pos = 0;
+
+    // MYSQLI_USE_RESULT: the live bridge statement the rows are read from, one
+    // fetch at a time (-1 for a buffered result), its next step verdict, the
+    // owning link (notified when the set is exhausted or freed), the
+    // MYSQLI_OPT_INT_AND_FLOAT_NATIVE conversion per column, and the rows read.
+    private int $streamStmt = -1;
+    private int $streamStep = 0;
+    private ?mysqli $streamLink = null;
+    private array $streamKinds = [];
+    private int $streamRows = 0;
 
     // php: `new mysqli_result($mysql, $mode)` takes over the connection's
     // pending result set exactly like store_result() / use_result().
@@ -95,9 +105,31 @@ class mysqli_result implements IteratorAggregate {
         return $_result;
     }
 
-    // Copies this buffered result into $target (the public constructor's
-    // pickup of a pending result); a method receiver, so the narrowed source
-    // never needs a typed-property read.
+    // Internal factory behind MYSQLI_USE_RESULT: a result that streams the
+    // current set of $stmt from the server (its first step verdict is $firstStep).
+    private static function __elephcFromStream(mysqli $link, int $stmt, int $firstStep, array $names, array $tables, array $nativeTypes, array $flags, array $lens, array $decimals, array $kinds): mysqli_result {
+        mysqli_result::$fromFactory = true;
+        $_result = new mysqli_result(new mysqli());
+        mysqli_result::$fromFactory = false;
+        $_result->names = $names;
+        $_result->metaTables = $tables;
+        $_result->metaNativeTypes = $nativeTypes;
+        $_result->metaFlags = $flags;
+        $_result->metaLens = $lens;
+        $_result->metaDecimals = $decimals;
+        $_result->field_count = count($names);
+        $_result->type = 1;
+        $_result->num_rows = 0;
+        $_result->streamStmt = $stmt;
+        $_result->streamStep = $firstStep;
+        $_result->streamLink = $link;
+        $_result->streamKinds = $kinds;
+        return $_result;
+    }
+
+    // Copies this result into $target (the public constructor's pickup of a
+    // pending result) and hands over a live stream; a method receiver, so the
+    // narrowed source never needs a typed-property read.
     private function __elephcCopyInto(mysqli_result $target, int $mode): void {
         $target->cells = $this->cells;
         $target->names = $this->names;
@@ -110,15 +142,18 @@ class mysqli_result implements IteratorAggregate {
         $target->field_count = $this->field_count;
         $target->type = $mode;
         $target->num_rows = $mode == 1 ? 0 : $this->rowCount;
-    }
-
-    // Marks the result as STORE (0) or USE (1) mode once its producer knows.
-    private function __elephcSetType(int $type): void {
-        $this->type = $type;
-        $this->num_rows = $type == 1 ? 0 : $this->rowCount;
+        $target->streamStmt = $this->streamStmt;
+        $target->streamStep = $this->streamStep;
+        $target->streamLink = $this->streamLink;
+        $target->streamKinds = $this->streamKinds;
+        $this->streamStmt = -1;
+        $this->streamLink = null;
     }
 
     public function fetch_row(): ?array {
+        if ($this->streamStmt >= 0 || $this->type == 1) {
+            return $this->streamRow();
+        }
         if ($this->pos >= $this->rowCount) {
             $this->lengths = null;
             if ($this->type == 1) {
@@ -291,6 +326,9 @@ class mysqli_result implements IteratorAggregate {
     }
 
     public function close(): void {
+        // An unbuffered set is skipped to its end (mysqlnd reads and discards
+        // the remaining rows) so the link becomes usable again.
+        $this->discardStream();
         // Drop the buffered cells; further fetches see an exhausted cursor.
         $this->cells = [];
         $this->rowCount = 0;
@@ -309,6 +347,88 @@ class mysqli_result implements IteratorAggregate {
 
     public function getIterator(): Iterator {
         return new __ElephcMysqliResultIterator($this);
+    }
+
+    public function __destruct() {
+        $this->discardStream();
+    }
+
+    // Reads the next row of a MYSQLI_USE_RESULT set from the server; null —
+    // and the link released — once the set is exhausted.
+    private function streamRow(): ?array {
+        if ($this->streamStmt < 0 || $this->streamStep != 1) {
+            $this->endStream();
+            $this->lengths = null;
+            $this->num_rows = $this->streamRows;
+            return null;
+        }
+        $_row = [];
+        $_lengths = [];
+        for ($_i = 0; $_i < $this->field_count; $_i++) {
+            $_value = $this->columnValue($_i);
+            $_kind = (int) $this->streamKinds[$_i];
+            if ($_value !== null && $_kind == 1) {
+                $_value = (int) $_value;
+            } elseif ($_value !== null && $_kind == 2) {
+                $_value = (float) $_value;
+            }
+            $_row[] = $_value;
+            if ($_value === null) {
+                $_lengths[] = 0;
+            } else {
+                $_lengths[] = strlen((string) $_value);
+            }
+        }
+        $this->streamRows = $this->streamRows + 1;
+        // A failed advance ends the set like an EOF (the link is reset anyway).
+        $this->streamStep = elephc_pdo_step($this->streamStmt);
+        $this->lengths = $_lengths;
+        return $_row;
+    }
+
+    // Skips the rest of a MYSQLI_USE_RESULT set and releases the link.
+    private function discardStream(): void {
+        if ($this->streamStmt < 0) {
+            return;
+        }
+        while ($this->streamStep == 1) {
+            $this->streamRows = $this->streamRows + 1;
+            $this->streamStep = elephc_pdo_step($this->streamStmt);
+        }
+        $this->endStream();
+    }
+
+    // Detaches from the live statement and tells the link its set is consumed.
+    private function endStream(): void {
+        if ($this->streamStmt < 0) {
+            return;
+        }
+        $this->streamStmt = -1;
+        $_link = $this->streamLink;
+        $this->streamLink = null;
+        if ($_link !== null) {
+            $_link->__elephcStreamFinished($this->streamRows);
+        }
+    }
+
+    // Decodes one cell of the streamed row (int / float / null / length-counted
+    // bytes), the same dispatch as the connection's columnValue.
+    private function columnValue(int $index): mixed {
+        $_type = elephc_pdo_column_type($this->streamStmt, $index);
+        if ($_type == 1) {
+            return elephc_pdo_column_int($this->streamStmt, $index);
+        }
+        if ($_type == 2) {
+            return elephc_pdo_column_double($this->streamStmt, $index);
+        }
+        if ($_type == 5) {
+            return null;
+        }
+        $_len = elephc_pdo_column_data_len($this->streamStmt, $index);
+        if ($_len > 0) {
+            return __elephc_ptr_read_string(elephc_pdo_column_data_ptr($this->streamStmt, $index), $_len);
+        }
+        return "";
     }
 
     // Builds php's field-description object for column $index. Metadata the

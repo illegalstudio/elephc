@@ -1155,3 +1155,67 @@ echo "|", $slow->errno, "|", $slow->error;
     ));
     assert_eq!(out, "opt|failed|fast|2006|MySQL server has gone away");
 }
+
+/// MYSQLI_USE_RESULT / use_result() stream the rows from the server one fetch
+/// at a time: the link answers every other command with mysqlnd's 2014 until
+/// the set is exhausted or freed (or the result is destroyed), num_rows reads
+/// 0 until the end, and real_query() + use_result() / store_result() and
+/// multi_query() batches walk the same on-demand protocol.
+#[test]
+#[ignore]
+fn test_mysqli_use_result_streams_and_guards_the_link() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->query("DROP TABLE IF EXISTS msu");
+$db->query("CREATE TABLE msu (id INT)");
+$db->query("INSERT INTO msu VALUES (1), (2), (3)");
+$r = $db->query("SELECT id FROM msu ORDER BY id", MYSQLI_USE_RESULT);
+echo $r->type, ":", $r->num_rows, ":", $db->affected_rows;
+echo "|first=", $r->fetch_row()[0];
+echo "|busy=", $db->query("SELECT 1") === false ? $db->errno : "ran";
+echo "|busy-prepare=", $db->prepare("SELECT 1") === false ? $db->errno : "ran";
+$rest = [];
+while ($row = $r->fetch_row()) {
+    $rest[] = $row[0];
+}
+echo "|rest=", implode(",", $rest), "|rows=", $r->num_rows, "|affected=", $db->affected_rows;
+echo "|free=", $db->query("SELECT 7")->fetch_row()[0];
+$partial = $db->query("SELECT id FROM msu", MYSQLI_USE_RESULT);
+$partial->fetch_row();
+$partial->free();
+echo "|after-free=", $db->query("SELECT 8")->fetch_row()[0];
+function read_one(mysqli $db): void {
+    $result = $db->query("SELECT id FROM msu", MYSQLI_USE_RESULT);
+    $result->fetch_row();
+}
+read_one($db);
+echo "|after-scope=", $db->query("SELECT 9")->fetch_row()[0];
+$db->real_query("SELECT id FROM msu ORDER BY id DESC");
+echo "|pending=", $db->query("SELECT 1") === false ? $db->errno : "ran";
+$stream = $db->use_result();
+$ids = "";
+foreach ($stream as $row) {
+    $ids .= $row["id"];
+}
+echo "|streamed=", $ids;
+$db->multi_query("SELECT 1 AS a; INSERT INTO msu VALUES (4); SELECT 2 AS b");
+$sets = [];
+do {
+    $set = $db->use_result();
+    if ($set instanceof mysqli_result) {
+        $sets[] = $set->fetch_row()[0];
+        $set->free();
+    } else {
+        $sets[] = "ok" . $db->affected_rows;
+    }
+} while ($db->more_results() && $db->next_result());
+echo "|batch=", implode(",", $sets);
+$db->query("DROP TABLE msu");
+"#,
+    ));
+    assert_eq!(
+        out,
+        "1:0:-1|first=1|busy=2014|busy-prepare=2014|rest=2,3|rows=3|affected=3|free=7|after-free=8|after-scope=9|pending=2014|streamed=321|batch=1,ok1,2"
+    );
+}

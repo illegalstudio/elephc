@@ -116,10 +116,19 @@ Field metadata comes from the wire protocol: `name`, `table`, `type`
 `orgtable` mirror `name` and `table`; `max_length` is `0` (as in mysqlnd); the
 metadata the bridge does not expose (`def`, `db`, `charsetnr`) reads `0` / `""`.
 
+`query($sql, MYSQLI_USE_RESULT)` and `use_result()` return an **unbuffered**
+result: rows stay on the server and every fetch reads the next one. Like
+mysqlnd, the link answers every other command (`query()`, `prepare()`, …) with
+errno 2014 "Commands out of sync" until the set is exhausted or the result is
+freed (or destroyed), `num_rows` reads `0` until the last row was fetched
+(`affected_rows` is `-1` meanwhile), and `data_seek()` / `mysqli_num_rows()`
+throw.
+
 Non-select statements return `true` and refresh `affected_rows`,
 `insert_id`, `warning_count`, and `info` (the server's "Records: … Duplicates:
 … Warnings: …" string). `real_query()` runs the statement and leaves the result
-pending for `store_result()` / `use_result()` / `new mysqli_result($db)`.
+on the server for `store_result()` (buffer it) / `use_result()` (stream it) /
+`new mysqli_result($db, $mode)`.
 
 ## Prepared statements
 
@@ -192,8 +201,10 @@ while ($db->more_results()) {
 }
 ```
 
-Each produced `mysqli_result` is independent and stays valid while the batch
-advances.
+A `store_result()` result is independent and stays valid while the batch
+advances; with `use_result()` each set streams and must be consumed (or freed)
+before `next_result()`, which — like mysqlnd — returns `false` while the current
+set is unread.
 
 ## Async queries
 
@@ -347,10 +358,6 @@ they keep working (elephc raises no runtime `E_DEPRECATED`).
 
 ## Divergences from php-src
 
-- **Results are always buffered.** `MYSQLI_USE_RESULT` / `use_result()` keep
-  mysqlnd's observable unbuffered rules (`$type` is `MYSQLI_USE_RESULT`,
-  `num_rows` reads `0` until the last row was fetched, `data_seek()` and
-  `mysqli_num_rows()` throw), but the rows are read eagerly.
 - **MYSQLI_ASYNC queries complete when sent** (the bridge client is
   synchronous): `poll()` never waits, and a long query blocks `query()` rather
   than `reap_async_query()`.

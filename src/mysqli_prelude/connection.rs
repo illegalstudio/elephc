@@ -91,12 +91,17 @@ class mysqli {
     private string $sslCapath = "";
     private string $sslCipher = "";
     private bool $persistent = false;
-    // Buffered result produced by real_query() and picked up by store_result()
-    // (and, in the multi_query path, by next_result()).
-    private ?mysqli_result $pendingResult = null;
-    // multi_query() batch state: the live bridge statement (kept alive until
-    // every result set is consumed) and the eager next_rowset probe verdict.
-    private int $multiStmt = -1;
+    // The live bridge statement of real_query() / multi_query() /
+    // query(MYSQLI_USE_RESULT), kept until every result set is consumed; -1
+    // when the link is idle. Its CURRENT set is either unclaimed
+    // ($liveSetPending: waiting for store_result() / use_result()) or being
+    // streamed by a MYSQLI_USE_RESULT result ($streaming). Rows are read from
+    // the server on demand, so any other command meanwhile is mysqlnd's 2014.
+    private int $liveStmt = -1;
+    private int $liveStep = 0;
+    private bool $liveSetPending = false;
+    private bool $streaming = false;
+    // Whether $liveStmt is already positioned on a further result set.
     private bool $multiMore = false;
     // MYSQLI_ASYNC query state: the query runs eagerly when it is sent (the
     // bridge is synchronous); its outcome waits here until reap_async_query().
@@ -395,8 +400,7 @@ class mysqli {
         if (elephc_pdo_mysql_change_user($this->conn, $username, $password, $_db, $_hasDb) < 0) {
             return $this->opFailed();
         }
-        $this->multiClose();
-        $this->pendingResult = null;
+        $this->closeLive();
         $this->asyncState = 0;
         $this->asyncResult = null;
         $this->thread_id = elephc_pdo_mysql_thread_id($this->conn);
@@ -801,20 +805,20 @@ class mysqli {
         if (($result_mode & 8) != 0) {
             return $this->sendAsyncQuery($query);
         }
-        // MYSQLI_USE_RESULT is accepted but still buffered (documented divergence).
-        $_code = $this->runQuery($query);
+        // MYSQLI_USE_RESULT streams the rows from the server on demand; the
+        // default MYSQLI_STORE_RESULT buffers them all before returning.
+        $_unbuffered = $_base == 1;
+        $_code = $this->runQuery($query, $_unbuffered);
         if ($_code == 0) {
             return false;
         }
         if ($_code == 1) {
             return true;
         }
-        $_result = $this->pendingResult;
-        $this->pendingResult = null;
+        $_result = $_unbuffered ? $this->claimStream() : $this->claimStored();
         if ($_result === null) {
             return false;
         }
-        $_result->__elephcSetType($_base == 1 ? 1 : 0);
         return $_result;
     }
 
@@ -943,9 +947,9 @@ class mysqli {
     // -- elephc PHP >= 8.2 mysqli execute_query end --
 
     public function real_query(string $query): bool {
-        // Same drain as query(); a produced result set stays pending until
-        // store_result() picks it up.
-        return $this->runQuery($query) != 0;
+        // A produced result set stays on the server until store_result() buffers
+        // it or use_result() streams it (mysqlnd's two-step protocol).
+        return $this->runQuery($query, true) != 0;
     }
 
     public function multi_query(string $query): bool {
@@ -955,12 +959,11 @@ class mysqli {
         if (!$this->requireNoPendingResults()) {
             return false;
         }
-        // One server round-trip for the whole batch: the bridge's emulated
-        // prepare + step executes the string with multi-statements enabled and
-        // retains every wire result set for elephc_pdo_next_rowset.
-        $this->multiClose();
+        // One server round-trip for the whole batch: the bridge executes the
+        // string with multi-statements enabled and streams its result sets,
+        // walked with store_result() / use_result() / next_result().
         $this->bump("com_query");
-        $_stmt = elephc_pdo_prepare($this->conn, $query, 1);
+        $_stmt = $this->prepareText($query, true);
         if ($_stmt < 0) {
             return $this->opFailed();
         }
@@ -970,8 +973,9 @@ class mysqli {
             elephc_pdo_finalize($_stmt);
             return false;
         }
-        $this->multiStmt = $_stmt;
-        return $this->multiDrainCurrent($_rc);
+        $this->liveStmt = $_stmt;
+        $this->enterSet($_rc);
+        return true;
     }
 
     public function more_results(): bool {
@@ -981,44 +985,46 @@ class mysqli {
 
     public function next_result(): bool {
         $this->requireInitialized();
-        // The probe in multiDrainCurrent already advanced the statement onto
-        // the next retained result set; step its first row and drain it.
-        if (!$this->multiMore || $this->multiStmt < 0) {
+        // Like mysqlnd, the current set must have been consumed first (an
+        // unclaimed or still-streaming set leaves the link out of sync).
+        if ($this->liveSetPending || $this->streaming) {
+            return false;
+        }
+        // finishSet() already advanced the statement onto the next set; step
+        // its first row.
+        if (!$this->multiMore || $this->liveStmt < 0) {
             $this->multiMore = false;
             return false;
         }
-        $_rc = elephc_pdo_step($this->multiStmt);
+        $this->multiMore = false;
+        $_rc = elephc_pdo_step($this->liveStmt);
         if ($_rc < 0) {
             $this->opFailed();
-            $this->multiClose();
+            $this->closeLive();
             return false;
         }
-        return $this->multiDrainCurrent($_rc);
+        $this->enterSet($_rc);
+        return true;
     }
 
     public function store_result(int $mode = 0): mysqli_result|false {
         $this->requireInitialized();
         // $mode (MYSQLI_STORE_RESULT_COPY_DATA) has been ignored since PHP 8.1.
         $_ignoredMode = $mode;
-        $_result = $this->pendingResult;
+        $_result = $this->claimStored();
         if ($_result === null) {
             return false;
         }
-        $this->pendingResult = null;
-        $_result->__elephcSetType(0);
         return $_result;
     }
 
     public function use_result(): mysqli_result|false {
         $this->requireInitialized();
-        // Results are always buffered (documented divergence); the result still
-        // reports MYSQLI_USE_RESULT through its $type property.
-        $_result = $this->pendingResult;
+        // The rows stay on the server and are read one fetch at a time.
+        $_result = $this->claimStream();
         if ($_result === null) {
             return false;
         }
-        $this->pendingResult = null;
-        $_result->__elephcSetType(1);
         return $_result;
     }
 
@@ -1140,13 +1146,12 @@ class mysqli {
         if ($this->conn < 0) {
             return;
         }
-        $this->multiClose();
+        $this->closeLive();
         if (elephc_pdo_in_transaction($this->conn) === 1) {
             elephc_pdo_rollback($this->conn);
         }
         elephc_pdo_release($this->conn, 0);
         $this->conn = -1;
-        $this->pendingResult = null;
         $this->asyncState = 0;
         $this->asyncResult = null;
         mysqli::$openLinks = mysqli::$openLinks - 1;
@@ -1170,7 +1175,10 @@ class mysqli {
         // Run with reporting suppressed so a server error is stored, not thrown.
         $_mode = mysqli::$reportMode;
         mysqli::$reportMode = 0;
-        $_code = $this->runQuery($query);
+        $_code = $this->runQuery($query, false);
+        if ($_code == 2) {
+            $this->asyncResult = $this->claimStored();
+        }
         mysqli::$reportMode = $_mode;
         if ($_code == 0) {
             $this->asyncState = 3;
@@ -1185,8 +1193,6 @@ class mysqli {
             return true;
         }
         $this->asyncState = 2;
-        $this->asyncResult = $this->pendingResult;
-        $this->pendingResult = null;
         return true;
     }
 
@@ -1230,7 +1236,7 @@ class mysqli {
     // Read-only pending probe for mysqli_stmt's two-step prepare()/execute()
     // guard (the statement records the 2014 on ITS OWN error state).
     private function __elephcHasPendingResults(): bool {
-        return $this->multiStmt >= 0 || $this->multiMore || $this->pendingResult !== null;
+        return $this->liveStmt >= 0;
     }
 
     // Percent-encodes one packed driver-config value ('%' first, then ';' and
@@ -1372,12 +1378,13 @@ class mysqli {
         }
     }
 
-    // Executes one statement through the bridge and fully buffers any result
-    // set (result identity: a later query must never invalidate an earlier
-    // mysqli_result). Returns 0 = failure (error state recorded and reported),
-    // 1 = success with no result set (DML/DDL: affected_rows/insert_id set),
-    // 2 = success with a result buffered into $this->pendingResult.
-    private function runQuery(string $query): int {
+    // Executes one statement through the bridge. Returns 0 = failure (error
+    // state recorded and reported), 1 = success with no result set (DML/DDL:
+    // affected_rows/insert_id set), 2 = success with a result set left
+    // unclaimed on $liveStmt (claimStored() / claimStream() pick it up).
+    // $unbuffered prepares the statement in the bridge's streaming mode, so the
+    // rows stay on the server until they are fetched.
+    private function runQuery(string $query, bool $unbuffered): int {
         if (!$this->requireConnection()) {
             return 0;
         }
@@ -1395,7 +1402,7 @@ class mysqli {
             return 0;
         }
         $this->bump("com_query");
-        $_stmt = elephc_pdo_prepare($this->conn, $query, 1);
+        $_stmt = $this->prepareText($query, $unbuffered);
         if ($_stmt < 0) {
             $this->opFailed();
             return 0;
@@ -1415,16 +1422,135 @@ class mysqli {
             $this->field_count = 0;
             elephc_pdo_finalize($_stmt);
             $this->clearError();
-            $this->pendingResult = null;
             return 1;
         }
-        $_result = $this->drainResultSet($_stmt, $_rc, $_columnCount);
-        elephc_pdo_finalize($_stmt);
-        if ($_result === null) {
-            return 0;
-        }
-        $this->pendingResult = $_result;
+        $this->liveStmt = $_stmt;
+        $this->liveStep = $_rc;
+        $this->liveSetPending = true;
+        $this->field_count = $_columnCount;
+        $this->clearError();
         return 2;
+    }
+
+    // Prepares a text-protocol statement, in the bridge's streaming
+    // (unbuffered) mode when $unbuffered: the connection's buffering default is
+    // flipped only around the prepare, which snapshots it.
+    private function prepareText(string $query, bool $unbuffered): int {
+        if (!$unbuffered) {
+            return elephc_pdo_prepare($this->conn, $query, 1);
+        }
+        elephc_pdo_set_buffered_query($this->conn, 0);
+        $_stmt = elephc_pdo_prepare($this->conn, $query, 1);
+        elephc_pdo_set_buffered_query($this->conn, 1);
+        return $_stmt;
+    }
+
+    // Records the live statement's CURRENT set after a step: a column-less set
+    // (an OK packet inside a batch) refreshes the status and is consumed at
+    // once; a result set waits for store_result() / use_result().
+    private function enterSet(int $firstStep): void {
+        $_cols = elephc_pdo_column_count($this->liveStmt);
+        if ($_cols == 0) {
+            $this->bump("non_result_set_queries");
+            $this->refreshStatus();
+            $this->field_count = 0;
+            $this->clearError();
+            $this->finishSet();
+            return;
+        }
+        $this->liveStep = $firstStep;
+        $this->liveSetPending = true;
+        $this->field_count = $_cols;
+        $this->clearError();
+    }
+
+    // Buffers the unclaimed current set into an independent mysqli_result
+    // (MYSQLI_STORE_RESULT), or null when there is none or a step failed.
+    private function claimStored(): ?mysqli_result {
+        if (!$this->liveSetPending) {
+            return null;
+        }
+        $this->liveSetPending = false;
+        $_cols = elephc_pdo_column_count($this->liveStmt);
+        $_result = $this->drainResultSet($this->liveStmt, $this->liveStep, $_cols);
+        if ($_result === null) {
+            $this->closeLive();
+            return null;
+        }
+        $this->finishSet();
+        return $_result;
+    }
+
+    // Hands the unclaimed current set to a streaming mysqli_result
+    // (MYSQLI_USE_RESULT): every fetch reads the next row from the server, and
+    // the link stays busy (2014) until the set is exhausted or freed.
+    private function claimStream(): ?mysqli_result {
+        if (!$this->liveSetPending) {
+            return null;
+        }
+        $this->liveSetPending = false;
+        $this->streaming = true;
+        $_stmt = $this->liveStmt;
+        $_cols = elephc_pdo_column_count($_stmt);
+        $_names = [];
+        $_tables = [];
+        $_natives = [];
+        $_flags = [];
+        $_lens = [];
+        $_decimals = [];
+        $_kinds = [];
+        for ($_i = 0; $_i < $_cols; $_i++) {
+            $_names[] = elephc_pdo_column_name($_stmt, $_i);
+            $_tables[] = elephc_pdo_column_table_name($_stmt, $_i);
+            $_native = elephc_pdo_column_native_type($_stmt, $_i);
+            $_natives[] = $_native;
+            $_flags[] = elephc_pdo_column_flags($_stmt, $_i);
+            $_lens[] = elephc_pdo_column_len($_stmt, $_i);
+            $_decimals[] = elephc_pdo_column_precision($_stmt, $_i);
+            $_kinds[] = $this->optIntAndFloatNative ? $this->nativeKind($_native) : 0;
+        }
+        $this->bump("unbuffered_sets");
+        // mysqlnd reports -1 affected rows until an unbuffered set is read.
+        $this->affected_rows = -1;
+        $this->insert_id = 0;
+        $this->field_count = $_cols;
+        $this->info = null;
+        $this->clearError();
+        return mysqli_result::__elephcFromStream($this, $_stmt, $this->liveStep, $_names, $_tables, $_natives, $_flags, $_lens, $_decimals, $_kinds);
+    }
+
+    // Called by a streaming mysqli_result once its set is exhausted or freed.
+    private function __elephcStreamFinished(int $rows): void {
+        if (!$this->streaming || $this->liveStmt < 0) {
+            return;
+        }
+        $this->connStats["rows_fetched_from_server_normal"] = ((int) ($this->connStats["rows_fetched_from_server_normal"] ?? 0)) + $rows;
+        $this->affected_rows = $rows;
+        $this->finishSet();
+    }
+
+    // The current set is consumed: probe for a further set (multi_query /
+    // CALL) and release the statement when the batch is done.
+    private function finishSet(): void {
+        $this->liveSetPending = false;
+        $this->streaming = false;
+        $this->warning_count = elephc_pdo_warning_count($this->conn);
+        $this->multiMore = elephc_pdo_next_rowset($this->liveStmt) == 1;
+        if (!$this->multiMore) {
+            elephc_pdo_finalize($this->liveStmt);
+            $this->liveStmt = -1;
+        }
+    }
+
+    // Abandons the live statement (close, reconnect, change_user, failures).
+    private function closeLive(): void {
+        if ($this->liveStmt >= 0) {
+            elephc_pdo_finalize($this->liveStmt);
+            $this->liveStmt = -1;
+        }
+        $this->liveSetPending = false;
+        $this->streaming = false;
+        $this->multiMore = false;
     }
 
     // Drains the current result set of a bridge statement (whose first step
@@ -1501,48 +1627,6 @@ class mysqli {
             return 2;
         }
         return 0;
-    }
-
-    // Drains the CURRENT result set of the active multi_query batch into
-    // $this->pendingResult (or records affected_rows/insert_id for a
-    // non-select set), then eagerly probes elephc_pdo_next_rowset so
-    // more_results() can answer without consuming; the batch statement is
-    // finalized as soon as the probe reports no further set. Returns false —
-    // error recorded, batch closed, nothing buffered — if a step fails mid-drain.
-    private function multiDrainCurrent(int $firstStep): bool {
-        $_stmt = $this->multiStmt;
-        $_cols = elephc_pdo_column_count($_stmt);
-        if ($_cols == 0) {
-            $this->bump("non_result_set_queries");
-            $this->refreshStatus();
-            $this->field_count = 0;
-            $this->pendingResult = null;
-        } else {
-            $_result = $this->drainResultSet($_stmt, $firstStep, $_cols);
-            if ($_result === null) {
-                $this->multiClose();
-                $this->pendingResult = null;
-                return false;
-            }
-            $this->pendingResult = $_result;
-        }
-        $this->warning_count = elephc_pdo_warning_count($this->conn);
-        $this->clearError();
-        $this->multiMore = elephc_pdo_next_rowset($_stmt) == 1;
-        if (!$this->multiMore) {
-            elephc_pdo_finalize($_stmt);
-            $this->multiStmt = -1;
-        }
-        return true;
-    }
-
-    // Finalizes any active multi_query batch statement and clears its state.
-    private function multiClose(): void {
-        if ($this->multiStmt >= 0) {
-            elephc_pdo_finalize($this->multiStmt);
-            $this->multiStmt = -1;
-        }
-        $this->multiMore = false;
     }
 
     // Decodes one cell of the current row (int / float / null / length-counted
