@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::codegen_support::data_section::comm_directive;
 use crate::codegen_support::platform::Target;
-use crate::codegen_support::sentinels::{SERPROP_FALSE_ONLY_BIT, TAGGED_SCALAR_PROPERTY_TAG};
+use crate::codegen_support::sentinels::{JSON_REFERENCE_PROPERTY_FLAG, SERPROP_FALSE_ONLY_BIT, TAGGED_SCALAR_PROPERTY_TAG};
 use crate::codegen_support::source_method_adapters::{self, MethodAbiPlan, MethodKind};
 use crate::names::{
     enum_case_symbol, function_variant_active_symbol, interface_method_wrapper_symbol, mangle_fqn,
@@ -1377,9 +1377,7 @@ pub(crate) fn emit_runtime_data_user(
         }
         out.push_str(&format!("    .quad {}\n", public_props.len()));
         for (prop_index, (prop_name, prop_ty)) in &public_props {
-            let tag = if class_info.property_slot_is_reference(*prop_index, prop_name) {
-                0
-            } else if prop_ty.codegen_repr() == PhpType::TaggedScalar {
+            let tag = if prop_ty.codegen_repr() == PhpType::TaggedScalar {
                 TAGGED_SCALAR_PROPERTY_TAG
             } else if crate::types::is_nullable_pointer_type(prop_ty) {
                 // A `?ptr<T>` slot holds the bare pointer word (null is 0), like a `ptr` slot.
@@ -1407,6 +1405,9 @@ pub(crate) fn emit_runtime_data_user(
                     | PhpType::Void => 0,
                 }
             };
+            let tag = tag | if class_info.property_slot_is_reference(*prop_index, prop_name) {
+                JSON_REFERENCE_PROPERTY_FLAG
+            } else { 0 };
             out.push_str(&format!(
                 "    .quad _class_json_pname_{}_{}\n",
                 class_info.class_id, prop_index,

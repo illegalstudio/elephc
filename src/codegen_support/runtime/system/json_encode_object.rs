@@ -12,7 +12,10 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::abi;
-use crate::codegen_support::sentinels::emit_resolve_tagged_scalar_property_tag;
+use crate::codegen_support::sentinels::{emit_resolve_tagged_scalar_property_tag, JSON_REFERENCE_PROPERTY_FLAG};
+
+#[cfg(test)]
+mod reference_tests;
 
 /// __rt_json_encode_object: encode a PHP object instance as JSON.
 ///
@@ -295,6 +298,12 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("mul x9, x16, x9");                                     // compute the property slot byte offset within the instance
     emitter.instruction("add x9, x9, #8");                                      // skip the leading class_id field at offset 0
     emitter.instruction("add x9, x0, x9");                                      // resolve the absolute address of the property slot
+    emitter.instruction("ldr x17, [sp, #56]");                                  // recover the payload tag and reference-storage flag
+    emitter.instruction(&format!("tbz x17, #{}, __rt_json_obj_direct_payload", JSON_REFERENCE_PROPERTY_FLAG.trailing_zeros())); // ordinary properties already point at their payload words
+    emitter.instruction("ldr x9, [x9]");                                        // follow the reference cell without acquiring another owner
+    emitter.instruction("and x17, x17, #255");                                  // leave the concrete PHP tag for value encoding
+    emitter.instruction("str x17, [sp, #56]");                                  // preserve the resolved tag across nested encoding
+    emitter.label("__rt_json_obj_direct_payload");
     // x14, not x18: Apple AArch64 reserves x18 for the OS, which is free to overwrite it at
     // any point — the load and the store below are two instructions apart, and that is enough.
     // x14 carries nothing across this whole region, and x15 already served the same purpose
@@ -668,6 +677,13 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("shl rcx, 4");                                          // multiply by 16 (slot stride)
     emitter.instruction("add rcx, 8");                                          // skip the leading class_id field at offset 0
     emitter.instruction("add rax, rcx");                                        // resolve the absolute address of the property slot
+    emitter.instruction("mov r9, QWORD PTR [rbp - 64]");                        // recover the payload tag and reference-storage flag
+    emitter.instruction(&format!("test r9, {JSON_REFERENCE_PROPERTY_FLAG}"));   // distinguish indirect reference storage from ordinary payload words
+    emitter.instruction("jz __rt_json_obj_direct_payload_x");                   // ordinary properties already address their payload
+    emitter.instruction("mov rax, QWORD PTR [rax]");                            // follow the reference cell without acquiring another owner
+    emitter.instruction("and r9, 255");                                         // leave the concrete PHP tag for value encoding
+    emitter.instruction("mov QWORD PTR [rbp - 64], r9");                        // preserve the resolved tag across nested encoding
+    emitter.label("__rt_json_obj_direct_payload_x");
     emitter.instruction("mov rdx, QWORD PTR [rax]");                            // load the property low payload word
     emitter.instruction("mov rsi, QWORD PTR [rax + 8]");                        // load the property high payload word
     emitter.instruction("mov QWORD PTR [rbp - 72], rdx");                       // save the property low payload across the encoder dispatch

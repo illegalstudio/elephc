@@ -10,6 +10,38 @@
 
 use super::*;
 
+/// JSON follows native reference cells while preserving each property's declared value type.
+#[test]
+fn test_json_encode_native_reference_property_payloads() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class JsonReferenceProperties {
+    public string $text = 'kept';
+    public int $count = 2;
+    public array $items = [3];
+    public mixed $value = null;
+    public function &textRef(): string { return $this->text; }
+    public function &countRef(): int { return $this->count; }
+    public function &itemsRef(): array { return $this->items; }
+    public function &valueRef(): mixed { return $this->value; }
+}
+$object = new JsonReferenceProperties();
+$text =& $object->textRef();
+$count =& $object->countRef();
+$items =& $object->itemsRef();
+$value =& $object->valueRef();
+echo json_encode($object), '|';
+$text = 'changed';
+$count = 4;
+$items = [5];
+$value = 'mixed';
+echo json_encode($object), '|';
+unset($text, $count, $items, $value, $object);
+"#);
+    assert!(out.success, "status={} stdout={} stderr={}", out.status, out.stdout, out.stderr);
+    assert_eq!(out.stdout, "{\"text\":\"kept\",\"count\":2,\"items\":[3],\"value\":null}|{\"text\":\"changed\",\"count\":4,\"items\":[5],\"value\":\"mixed\"}|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Verifies an empty class encodes as {} with no public properties.
 #[test]
 fn test_json_encode_empty_object() {
