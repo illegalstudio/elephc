@@ -2268,3 +2268,38 @@ echo $list[0], "|", $a[0], "|", count($a), "|", $map["k"], "|", $b["k"], "|", im
     assert_eq!(out.stdout, "direct|changed|2|1|9|k,j|two", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Verifies `array_map()` over a string-keyed map whose values are objects (of one class or of
+/// several), floats or mixed values, and over a list of objects: such a source maps through the
+/// boxed-array path, keeps its keys, and leaves a clean heap (AIC #67).
+#[test]
+fn test_array_map_over_object_and_mixed_valued_sources() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+interface Named { public function name(): string; }
+final class A implements Named { public function name(): string { return 'a'; } }
+final class B implements Named { public function name(): string { return 'b'; } }
+final class Box { public function __construct(public int $n) {} }
+$m = ['x' => new A(), 'y' => new B()];
+foreach (array_map(fn (Named $n): string => $n->name(), $m) as $k => $v) { echo "$k=$v,"; }
+$same = ['p' => new A(), 'q' => new A()];
+foreach (array_map(fn (A $n): string => strtoupper($n->name()), $same) as $k => $v) { echo "$k=$v,"; }
+$f = ['u' => 1.5, 'v' => 2.25];
+foreach (array_map(fn (float $x): float => $x * 2, $f) as $k => $v) { echo "$k=$v,"; }
+$mixed = ['i' => 1, 's' => 'two', 'o' => new B()];
+foreach (array_map(fn (mixed $x): string => is_object($x) ? $x->name() : (string) $x, $mixed) as $k => $v) { echo "$k=$v,"; }
+$suffix = '!';
+foreach (array_map(function (Named $n) use ($suffix): string { return $n->name() . $suffix; }, $m) as $k => $v) { echo "$k=$v,"; }
+$items = [new Box(1), new Box(2), new Box(3)];
+echo implode(',', array_map(static fn (Box $b): int => $b->n * 10, $items)), "|";
+foreach (array_map(static fn (Box $b): Box => new Box($b->n + 1), $items) as $i => $b) { echo $i, ':', $b->n, ','; }
+echo "\n";
+"#,
+    );
+    assert!(output.success, "stdout={:?}\nstderr={}", output.stdout, output.stderr);
+    assert_eq!(
+        output.stdout,
+        "x=a,y=b,p=A,q=A,u=3,v=4.5,i=1,s=two,o=b,x=a!,y=b!,10,20,30|0:2,1:3,2:4,\n"
+    );
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}

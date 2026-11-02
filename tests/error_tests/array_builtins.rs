@@ -823,12 +823,15 @@ fn test_indexed_array_unrelated_object_values_widen_to_mixed() {
     );
 }
 
-/// Verifies `array_map()` rejects object elements until its callback runtime supports them.
+/// Verifies `array_map()` accepts a list of objects: it maps through the boxed-array path.
 #[test]
-fn test_error_array_map_rejects_object_elements() {
-    expect_error(
-        "<?php final class Box {} $items = [new Box()]; array_map(static fn(Box $box): Box => $box, $items);",
-        "array_map() does not yet support object array elements",
+fn test_array_map_accepts_object_elements() {
+    assert!(
+        check_source(
+            "<?php final class Box {} $items = [new Box()]; array_map(static fn(Box $box): Box => $box, $items);"
+        )
+        .is_ok(),
+        "array_map() over a list of objects should type-check",
     );
 }
 
