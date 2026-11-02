@@ -45,6 +45,9 @@ runtimeHookAssignBase($object, 'derived');
         && matches!(inst.immediate, Some(Immediate::Data(data))
             if module.data.strings[data.as_raw() as usize] == "__propset_value")),
         "{target}: raw base-class receivers also need the subclass setter arm");
+    assert!(base.instructions.iter().any(|inst| inst.op == Op::DynamicPropSet
+        && base.value(inst.operands[0]).unwrap().php_type == PhpType::Mixed),
+        "{target}: fallback storage must dispatch the runtime class instead of a missing base slot");
 }
 
 supported_target_cases!(runtime_property_setters, verify_runtime_property_setters);

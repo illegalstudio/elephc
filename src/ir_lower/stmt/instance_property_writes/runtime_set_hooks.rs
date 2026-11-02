@@ -54,7 +54,7 @@ pub(super) fn lower(
     ctx.builder.position_at_end(fallback);
     ctx.restore_initialized_slots(initial.clone());
     let retained = receiver_retains_abstract_setter(ctx, object.value, property);
-    lower_property_slot_assign(ctx, object, property, value, preserve_property_operand, retained, span);
+    fallback_slot_assign(ctx, object, property, value, preserve_property_operand, retained, span);
     branch_to(ctx, done);
     let fallback_slots = ctx.initialized_slots_snapshot();
     ctx.builder.position_at_end(done);
@@ -95,7 +95,7 @@ fn dispatch(
 ) {
     let Some((class, rest)) = classes.split_first() else {
         let retained = receiver_retains_abstract_setter(ctx, object.value, property);
-        lower_property_slot_assign(ctx, object, property, value, true, retained, span);
+        fallback_slot_assign(ctx, object, property, value, true, retained, span);
         return;
     };
     let data = ctx.intern_string(class.trim_start_matches('\\'));
@@ -117,7 +117,7 @@ fn dispatch(
         emit_setter(ctx, object, value, class, method, span);
     } else {
         let retained = receiver_retains_abstract_setter(ctx, object.value, property);
-        lower_property_slot_assign(ctx, object, property, value, true, retained, span);
+        fallback_slot_assign(ctx, object, property, value, true, retained, span);
     }
     let yes_live = !ctx.builder.insertion_block_is_terminated();
     if yes_live { branch_to(ctx, done); }
@@ -160,5 +160,22 @@ fn emit_setter(
     crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
     for argument in extra { crate::ir_lower::ownership::release_if_owned(ctx, argument, Some(span)); }
     release_magic_set_value_after_call(ctx, value, span);
+    if let Some(owner) = owner { crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span); }
+}
+
+/// Keeps raw base-class fallbacks representable when only descendants declare the property.
+fn fallback_slot_assign(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str,
+    value: LoweredValue, preserve: bool, retained: bool, span: Span,
+) {
+    let ty = ctx.builder.value_php_type(object.value);
+    let (object, owner) = if matches!(ty.codegen_repr(), PhpType::Object(_)) {
+        let borrowed = ctx.emit_value(Op::Borrow, vec![object.value], None, ty,
+            Op::Borrow.default_effects(), Some(span));
+        ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+        let boxed = ctx.box_value_as_mixed(borrowed, PhpType::Mixed, Some(span));
+        crate::ir_lower::expr::root_owned_call_operand(ctx, boxed, span)
+    } else { (object, None) };
+    lower_property_slot_assign(ctx, object, property, value, preserve || owner.is_some(), retained, span);
     if let Some(owner) = owner { crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span); }
 }
