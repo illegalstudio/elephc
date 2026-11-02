@@ -7,7 +7,7 @@
 //! Key details:
 //! - Every source sees the original RHS; no candidate feeds another property's coercion.
 //! - Native callbacks contain PHP throws and keep all borrowed inputs alive across re-entry.
-//! - Records and candidates are copied outside metadata borrows; only matched sources are cached.
+//! - The initial matching source set is copied before PHP, without retaining receivers or cells.
 
 use std::collections::BTreeMap;
 use std::ffi::c_void;
@@ -101,7 +101,9 @@ fn callback_status(status: i32) -> i32 {
 ///
 /// # Safety
 /// `ops` and `output` must point to complete readable/writable ABI records. Every callback and
-/// `context` must remain valid through this call, including cleanup. The caller owns a detached
+/// `context` must remain valid through this call, including cleanup. Source validator descriptors
+/// contain only declaration metadata and must outlive receiver retirement during a callback.
+/// The caller owns a detached
 /// concrete RHS and keeps it and the destination reference alive through every callback. Native
 /// binding hooks keep the weak wrapper index current. Shape probes and identity comparison run no
 /// PHP. Coercers contain every native throw before returning across Rust. Cleanup consumes its
@@ -125,58 +127,52 @@ pub unsafe extern "C" fn __elephc_reference_validate_v1(
         let (Some(is_current), Some(coerce), Some(identical), Some(release)) =
             (ops.is_current, ops.coerce, ops.identical, ops.release) else { return FAILURE; };
         let mut candidates = Candidates { values: BTreeMap::new(), context, release };
-        'rescan: loop {
-            let mut matched = Vec::new();
-            for source in snapshot_reference_sources(reference) {
-                match unsafe { is_current(context, &source, reference) } {
-                    0 => continue,
-                    1 => {}
-                    _ => return FAILURE,
-                }
-                if !candidates.values.contains_key(&source.token) {
-                    let mut value = 0;
-                    let status = unsafe { coerce(context, source.validator, original, &mut value) };
-                    if status != SUCCESS { return callback_status(status); }
-                    if value == 0 { return FAILURE; }
-                    candidates.values.insert(source.token, Candidate { source, value });
-                    // A callback can remove sources, add a clone, or promote an older unmatched
-                    // cell. Restart with copied metadata, retaining only successful coercions.
-                    continue 'rescan;
-                }
-                matched.push(source.token);
+        let mut matched = Vec::new();
+        for source in snapshot_reference_sources(reference) {
+            match unsafe { is_current(context, &source, reference) } {
+                0 => continue,
+                1 => matched.push(source),
+                _ => return FAILURE,
             }
-            let selected = matched.first().copied();
-            if let Some(first) = selected {
-                let first = &candidates.values[&first];
-                for token in matched.iter().skip(1) {
-                    let second = &candidates.values[token];
-                    // Unchanged input acceptance must not compare NaN against itself or walk
-                    // an accepted recursive array. Both owners already name the same PHP value.
-                    if first.value == second.value { continue; }
-                    let mut same = 0;
-                    let status = unsafe { identical(context, first.value, second.value, &mut same) };
-                    if status != SUCCESS { return callback_status(status); }
-                    if same == 0 {
-                        let first = first.source;
-                        let second = second.source;
-                        if let Err(status) = candidates.finish(None) { return status; }
-                        unsafe { output.write(NativeReferenceValidationOutcome {
-                            candidate: 0, first, second,
-                        }); }
-                        return CONFLICT;
-                    }
-                    if same != 1 { return FAILURE; }
-                }
-            }
-            return match candidates.finish(selected) {
-                Ok(candidate) => {
-                    unsafe { output.write(NativeReferenceValidationOutcome { candidate,
-                        ..NativeReferenceValidationOutcome::default() }); }
-                    SUCCESS
-                }
-                Err(status) => status,
-            };
         }
+        // PHP keeps the current assignment's coercion even when __toString unsets its source.
+        // Validate the initial source set once. No receiver or cell address is read after PHP;
+        // subsequent assignments observe the registry's new bindings and wrapper associations.
+        let selected = matched.first().map(|source| source.token);
+        for source in &matched {
+            let mut value = 0;
+            let status = unsafe { coerce(context, source.validator, original, &mut value) };
+            if status != SUCCESS { return callback_status(status); }
+            if value == 0 { return FAILURE; }
+            candidates.values.insert(source.token, Candidate { source: *source, value });
+            let first = &candidates.values[&selected.unwrap()];
+            let second = &candidates.values[&source.token];
+            // Unchanged input acceptance must not compare NaN against itself or walk an
+            // accepted recursive array. Both owners already name the same PHP value.
+            if first.value == second.value { continue; }
+            let mut same = 0;
+            let status = unsafe { identical(context, first.value, second.value, &mut same) };
+            if status != SUCCESS { return callback_status(status); }
+            if same == 0 {
+                let first = first.source;
+                let second = second.source;
+                if let Err(status) = candidates.finish(None) { return status; }
+                unsafe { output.write(NativeReferenceValidationOutcome {
+                    candidate: 0, first, second,
+                }); }
+                return CONFLICT;
+            }
+            if same != 1 { return FAILURE; }
+        }
+        match candidates.finish(selected) {
+            Ok(candidate) => {
+                unsafe { output.write(NativeReferenceValidationOutcome { candidate,
+                    ..NativeReferenceValidationOutcome::default() }); }
+                SUCCESS
+            }
+            Err(status) => status,
+        }
+
     })).unwrap_or(FAILURE)
 }
 

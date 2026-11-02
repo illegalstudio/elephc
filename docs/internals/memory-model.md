@@ -606,18 +606,22 @@ cells may name one wrapper, and each physical property still contributes its own
 source token. Native hooks bind a property before reporting its authenticated
 wrapper shape. An unknown cell retains no address association, and removing its
 last binding clears that association before allocator reuse. Shape changes update
-the metadata epoch. After a callback, iteration restarts so an older source that
-just joined the target wrapper is visited; only already matched coercion results
-can be reused by their still-live source token.
+the metadata epoch. A fresh query after PHP starts again so an older source that
+just joined the target wrapper is visited. A cursor from an earlier physical state
+does not describe the current source set.
 An unchanged metadata epoch does not prove that a native cell stayed raw across
 PHP re-entry; callers must recheck physical shape and previously unmatched cells.
 
 The versioned native validation coordinator prepares property candidates without
-publishing a destination. Every source receives the same detached original RHS,
-and each matched source generation coerces once. A contained PHP callback restarts
-source discovery; retired and physically detached sources do not constrain the
-result. Live candidates must agree before one owned result transfers to the
-publisher. Failure and conflict retire every candidate. Unchanged type acceptance
+publishing a destination. It copies and physically checks the initial matching
+source set before PHP, then each selected property receives the same detached
+original RHS exactly once. Removing a property during its `__toString` does not
+undo that assignment's coercion or the already selected property checks. Newly
+attached sources constrain later assignments. The coordinator never rereads a
+receiver or cell after PHP; copied declaration validators outlive their receivers.
+It checks agreement after each coercion, before invoking a later source, and
+transfers one owned result to the publisher. Failure and conflict retire every
+candidate. Unchanged type acceptance
 retains the original cell so accepted `NaN` and recursive arrays do not require a
 non-reflexive or recursive value comparison. Native callbacks must contain throws
 before returning through Rust, keep probes/comparison free of PHP re-entry, and

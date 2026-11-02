@@ -16,7 +16,7 @@ use crate::ffi::native_reference_sources::{
 
 /// Scalar PHP values sufficient to distinguish independent coercion from chained coercion.
 #[derive(Clone, Debug, PartialEq)]
-enum Value { Int(i64), Text(String), Float(f64) }
+enum Value { Int(i64), Text(String), Float(f64), Stringable }
 
 /// Test-native ownership and physical-binding state behind the opaque callback context.
 struct Native {
@@ -78,14 +78,20 @@ unsafe extern "C" fn coerce(context: *mut c_void, validator: usize, original: us
     native.calls.push(validator);
     if let Some(action) = native.action { action(native, validator); }
     if validator == 4 { native.pending_throw = true; return 2; }
-    if validator == 5 {
+    if validator == 5 || (validator == 2 && matches!(native.values.get(&original),
+        Some(Value::Int(_) | Value::Text(_))))
+    {
         *native.owners.get_mut(&original).unwrap() += 1;
         unsafe { output.write(original); }
         return SUCCESS;
     }
     let value = native.values[&original].clone();
     let value = if validator == 1 || validator == 3 {
-        match value { Value::Int(value) => Value::Text(value.to_string()), value => value }
+        match value {
+            Value::Int(value) => Value::Text(value.to_string()),
+            Value::Stringable => Value::Text(format!("value{}", native.calls.len())),
+            value => value,
+        }
     } else { value };
     let identity = native.next_value;
     native.next_value += 1;
@@ -162,13 +168,13 @@ fn attach_older_source(native: &mut Native, validator: usize) {
     assert_eq!(__elephc_reference_sources_unbind_v1(30), SUCCESS);
 }
 
-/// Reentrant metadata changes force a fresh scan without repeating a successful source coercion.
+/// Reentrant binding changes affect later writes while the current source snapshot completes once.
 #[test]
-fn native_reference_validation_rescans_after_coercion_and_skips_retired_sources() {
+fn native_reference_validation_keeps_the_initial_assignment_source_set() {
     let mut native = Native::new();
-    native.bind(10, 100, 1, 600);
+    native.bind(10, 100, 4, 600);
     native.bind(20, 200, 3, 500);
-    native.bind(30, 300, 4, 500);
+    native.bind(30, 300, 1, 500);
     native.action = Some(attach_older_source);
     let (status, outcome) = native.prepare();
     assert_eq!(status, SUCCESS);
@@ -176,6 +182,9 @@ fn native_reference_validation_rescans_after_coercion_and_skips_retired_sources(
     assert!(!native.pending_throw);
     assert_eq!(native.values[&outcome.candidate], Value::Text("2".into()));
     assert_eq!(unsafe { release((&mut native as *mut Native).cast(), outcome.candidate) }, SUCCESS);
+    let (next_status, next_outcome) = native.prepare();
+    assert_eq!(next_status, 2, "the newly attached source constrains the next assignment");
+    assert_eq!(next_outcome.candidate, 0);
 }
 
 /// A contained native coercion throw retires prior candidates without transferring a result.
@@ -243,4 +252,72 @@ fn native_reference_validation_preserves_unchanged_nan_input_identity() {
     assert!(matches!(native.values[&1], Value::Float(value) if value.is_nan()));
     assert_eq!(unsafe { release((&mut native as *mut Native).cast(), outcome.candidate) }, SUCCESS);
     assert_eq!(native.owners[&1], 1);
+}
+
+/// Runs a nested reference write while the outer coercion holds no source-table borrow.
+fn nested_validation(native: &mut Native, _validator: usize) {
+    native.action = None;
+    let (status, outcome) = native.prepare();
+    assert_eq!(status, SUCCESS);
+    assert_eq!(unsafe { release((native as *mut Native).cast(), outcome.candidate) }, SUCCESS);
+}
+
+/// Reentrant assignments have separate once-per-source caches and independent candidate owners.
+#[test]
+fn native_reference_validation_supports_nested_assignment_transactions() {
+    let mut native = Native::new();
+    native.bind(10, 100, 1, 500);
+    native.action = Some(nested_validation);
+    let (status, outcome) = native.prepare();
+    assert_eq!(status, SUCCESS);
+    assert_eq!(native.calls, [1, 1]);
+    assert_eq!(native.released.len(), 1, "the nested assignment retires only its own candidate");
+    assert_eq!(native.values[&outcome.candidate], Value::Text("2".into()));
+    assert_eq!(unsafe { release((&mut native as *mut Native).cast(), outcome.candidate) }, SUCCESS);
+}
+
+/// Simulates unset detaching the only property while its scalar coercion runs.
+fn remove_only_source(native: &mut Native, _validator: usize) {
+    native.action = None;
+    native.bindings.remove(&10);
+    assert_eq!(__elephc_reference_sources_unbind_v1(10), SUCCESS);
+}
+
+/// Unsetting the only source during __toString retains its already-started coercion result.
+#[test]
+fn native_reference_validation_keeps_the_current_coercion_after_source_unset() {
+    let mut native = Native::new();
+    native.bind(10, 100, 1, 500);
+    native.action = Some(remove_only_source);
+    let (status, outcome) = native.prepare();
+    assert_eq!(status, SUCCESS);
+    assert_eq!(native.calls, [1]);
+    assert_eq!(native.values[&outcome.candidate], Value::Text("2".into()));
+    assert_eq!(unsafe { release((&mut native as *mut Native).cast(), outcome.candidate) }, SUCCESS);
+    assert_eq!(native.values, BTreeMap::from([(1, Value::Int(2))]));
+    assert_eq!(native.released.len(), 1);
+}
+
+/// Removes the first property source while preserving another already selected source.
+fn remove_first_source(native: &mut Native, validator: usize) {
+    if validator != 1 { return; }
+    remove_only_source(native, validator);
+}
+
+/// A removed source's completed coercion still participates in this assignment's agreement.
+#[test]
+fn native_reference_validation_keeps_retired_source_coercions_and_stops_on_conflict() {
+    let mut native = Native::new();
+    native.values.insert(1, Value::Stringable);
+    native.bind(10, 100, 1, 500);
+    native.bind(20, 200, 3, 500);
+    native.bind(30, 300, 4, 500);
+    native.action = Some(remove_first_source);
+    let (status, outcome) = native.prepare();
+    assert_eq!(status, CONFLICT, "differing strings reject before the third source can throw");
+    assert_eq!(native.calls, [1, 3]);
+    assert!(!native.pending_throw);
+    assert_eq!((outcome.first.binding, outcome.second.binding), (10, 20));
+    assert_eq!(native.values, BTreeMap::from([(1, Value::Stringable)]));
+    assert_eq!(native.released.len(), 2);
 }
