@@ -282,6 +282,8 @@ fn scan_constructor_callbacks(usage: &mut Usage, receiver: &crate::parser::ast::
 /// by its SHAPE calls both analysable; judging it by what could be read separates them.
 fn record_literal_callable(usage: &mut Usage, expr: &Expr) -> bool {
     match &expr.kind {
+        // The ordinary expression scan still visits the closure body and its symbol uses.
+        ExprKind::Closure { .. } => true,
         ExprKind::StringLiteral(text) => {
             let Some(text) = crate::names::literal_symbol_name(text) else { return false; };
             if callable_gateway(&text) { usage.callable_names.unknown_call(); }
@@ -1339,6 +1341,22 @@ mod tests {
     fn parse(source: &str) -> Program {
         let tokens = crate::lexer::tokenize(source).expect("fixture must tokenize");
         crate::parser::parse(&tokens).expect("fixture must parse")
+    }
+
+    /// Literal XML handlers retain their bodies without activating unrelated native bridges.
+    #[test]
+    fn literal_xml_handlers_do_not_activate_tokenizer() {
+        let program = parse(include_str!("../../scripts/ci/fixtures/ios-xml-link/main.php"));
+        assert!(!crate::tokenizer_prelude::program_uses_surface(&program));
+        assert!(!collect(&program).dynamic_function_call);
+
+        let observing = parse("<?php xml_set_character_data_handler($parser, function () { echo $_ENV['PATH']; });");
+        assert!(!crate::tokenizer_prelude::program_uses_surface(&observing));
+        assert!(crate::web_prelude::program_observes_environment(&observing));
+
+        let opaque = parse("<?php xml_set_character_data_handler($parser, $callback);");
+        assert!(crate::tokenizer_prelude::program_uses_surface(&opaque));
+        assert!(crate::web_prelude::program_observes_environment(&opaque));
     }
 
     /// A literal eval contributes the names and literals of its source and is not introspection.
