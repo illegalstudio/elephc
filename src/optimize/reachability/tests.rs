@@ -32,6 +32,34 @@ echo ("RETAINEDTARGET")();
     assert!(!has_function(&program, "unusedTarget"));
 }
 
+/// A literal callable array names its method without preserving unrelated declarations.
+#[test]
+fn prune_literal_array_expression_calls_keep_exact_methods() {
+    for call in [
+        "echo (['LiteralArrayBox', 'ping'])();",
+        "eval('echo ([\"LiteralArrayBox\", \"ping\"])();');",
+    ] {
+        let source = format!(r#"<?php
+function unusedArrayTarget(): int {{ return 2; }}
+class LiteralArrayBox {{
+    public static function ping(): int {{ return 1; }}
+    public static function other(): int {{ return 3; }}
+}}
+class UnrelatedArrayBox {{ public static function other(): int {{ return 4; }} }}
+{call}
+"#);
+        let usage = scan_program(&parse(&source));
+        assert!(!usage.hazards.dynamic_function, "{call}");
+        assert!(!usage.hazards.dynamic_method, "{call}");
+        assert!(!usage.hazards.dynamic_class, "{call}");
+        let (program, _) = prune(&source);
+        assert!(has_method(&program, "LiteralArrayBox", "ping"), "{call}");
+        assert!(!has_method(&program, "LiteralArrayBox", "other"), "{call}");
+        assert!(!has_function(&program, "unusedArrayTarget"), "{call}");
+        assert!(!has_class(&program, "UnrelatedArrayBox"), "{call}");
+    }
+}
+
 /// Runtime expression-call targets retain conservative lookup, including inside literal eval.
 #[test]
 fn scan_runtime_expression_calls_keep_lookup_hazards() {

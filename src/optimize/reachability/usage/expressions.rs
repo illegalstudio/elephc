@@ -25,7 +25,10 @@ impl Scanner<'_> {
             ExprKind::FunctionCall { name, args } => self.scan_function_call(name.as_str(), args),
             ExprKind::FirstClassCallable(target) => self.scan_callable_target(target),
             ExprKind::ExprCall { callee, args } => {
-                if let ExprKind::StringLiteral(_) = &callee.kind {
+                let exact = matches!(&callee.kind, ExprKind::StringLiteral(_))
+                    || matches!(&callee.kind, ExprKind::ArrayLiteral(values) if values.len() == 2
+                        && matches!(&values[1].kind, ExprKind::StringLiteral(_)));
+                if exact {
                     self.callable_or_hazard(Some(callee));
                 } else {
                     self.unresolved_callable_hazard();
