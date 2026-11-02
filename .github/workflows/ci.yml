@@ -3409,7 +3409,24 @@ jobs:
           ./target/debug/elephc \
             --target "${{ matrix.target }}" \
             examples/date-json-regex/main.php
-          ./examples/date-json-regex/main > "$RUNNER_TEMP/date-json-regex.out"
+          if ./examples/date-json-regex/main > "$RUNNER_TEMP/date-json-regex.out"; then
+            cat "$RUNNER_TEMP/date-json-regex.out"
+          else
+            smoke_status=$?
+            cat "$RUNNER_TEMP/date-json-regex.out"
+            if [[ "${{ runner.os }}" == "Linux" ]]; then
+              if ! command -v gdb >/dev/null; then
+                sudo apt-get update && sudo apt-get install -y gdb
+              fi
+              gdb --batch -ex run -ex bt -ex 'info registers' -ex 'x/16gx $sp' \
+                --args ./examples/date-json-regex/main || true
+            else
+              lldb --batch -o run -o bt -o 'register read' \
+                -o 'memory read --count 16 --format x --size 8 $sp' \
+                -- ./examples/date-json-regex/main || true
+            fi
+            exit "$smoke_status"
+          fi
           grep -F "Valid email pattern" "$RUNNER_TEMP/date-json-regex.out"
           grep -F "Unicode letters detected" "$RUNNER_TEMP/date-json-regex.out"
 
