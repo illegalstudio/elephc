@@ -144,6 +144,8 @@ pub(super) fn lower_reflection_property_set_value(
         &property_ty,
         expr.span,
     );
+    // PHP null or a packed record address bound for a pointer slot becomes the stored word.
+    let value = ctx.retype_packed_address_for_pointer_sink(value, &property_ty, Some(expr.span));
     let slot = reflection_property_physical_ref(ctx, declaring_class, property)?;
     let retained_abstract_setter = ctx.classes.get(declaring_class.trim_start_matches('\\'))
         .is_some_and(|info| info.retained_abstract_setter(property).is_some());
@@ -285,6 +287,7 @@ pub(super) fn lower_reflection_property_set_static_value(
     let (ignored_object, value_arg) = reflection_property_static_set_value_args(args)?;
     lower_ignored_reflection_argument(ctx, &ignored_object);
     let value = lower_expr(ctx, &value_arg);
+    let value = retype_reflection_static_property_value(ctx, declaring_class, property, value, expr.span);
     store_reflection_static_property_by_class_name(
         ctx,
         declaring_class,
@@ -399,7 +402,7 @@ pub(super) fn reflection_property_any_instance_target(
     Some((
         class_name,
         property,
-        normalize_value_php_type(property_ty.codegen_repr()),
+        normalize_value_php_type(crate::types::eir_value_php_type(property_ty)),
     ))
 }
 

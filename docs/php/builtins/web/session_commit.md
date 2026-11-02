@@ -2,7 +2,7 @@
 title: "session_commit()"
 description: "Alias of session_write_close()."
 sidebar:
-  order: 984
+  order: 1061
 ---
 
 ## session_commit()

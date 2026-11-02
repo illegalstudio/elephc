@@ -56,6 +56,8 @@ pub(super) fn array_pop_element_type(ty: PhpType) -> Result<PhpType> {
                     | PhpType::Mixed
                     | PhpType::Void
                     | PhpType::Never
+                    | PhpType::Pointer(_)
+                    | PhpType::Buffer(_)
             ) || elem.is_refcounted()
             {
                 return Ok(elem);
@@ -145,7 +147,12 @@ pub(super) fn lower_array_pop_x86_64(
 /// Loads the removed AArch64 indexed-array payload into the canonical result registers.
 pub(super) fn emit_array_pop_value_aarch64(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType) -> Result<()> {
     match elem_ty {
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Mixed => {
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Callable
+        | PhpType::Mixed
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_) => {
             ctx.emitter.instruction("add x10, x0, #24");                        // compute the first pointer-sized payload slot in the indexed array
             ctx.emitter.instruction("ldr x0, [x10, x9, lsl #3]");               // load the removed pointer-sized payload into the result register
         }
@@ -180,7 +187,12 @@ pub(super) fn emit_array_pop_value_aarch64(ctx: &mut FunctionContext<'_>, elem_t
 /// Loads the removed x86_64 indexed-array payload into the canonical result registers.
 pub(super) fn emit_array_pop_value_x86_64(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType) -> Result<()> {
     match elem_ty {
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Mixed => {
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Callable
+        | PhpType::Mixed
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_) => {
             ctx.emitter.instruction("lea r11, [rax + 24]");                     // compute the first pointer-sized payload slot in the indexed array
             ctx.emitter
                 .instruction("mov rax, QWORD PTR [r11 + r10 * 8]"); // load the removed pointer-sized payload into the result register

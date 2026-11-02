@@ -588,3 +588,50 @@ echo ptr_get($p);
     );
     assert!(err.contains("Fatal error: null pointer dereference"));
 }
+
+/// Tests `ptr_write_f32`/`ptr_read_f32` and `ptr_write_f64`/`ptr_read_f64` through malloc'd memory: the
+/// single store rounds 0.1 to its 32-bit value while the double keeps it, an int value is converted, and
+/// the stored bits match the C `float` layout (`1.5f` is `0x3fc00000`).
+#[test]
+fn test_ptr_read_write_f32_and_f64() {
+    let out = compile_and_run(
+        r#"<?php
+extern function malloc(u64 $size): ptr;
+extern function free(ptr $p): void;
+$buf = malloc(16);
+$three = 3;
+ptr_write_f32($buf, 1.5);
+ptr_write_f32(ptr_offset($buf, 4), 0.1);
+ptr_write_f32(ptr_offset($buf, 8), $three);
+var_dump(ptr_read_f32($buf));
+var_dump(ptr_read_f32(ptr_offset($buf, 4)));
+var_dump(ptr_read_f32(ptr_offset($buf, 8)));
+echo ptr_read32($buf), "\n";
+ptr_write_f64(ptr_offset($buf, 8), 0.1);
+var_dump(ptr_read_f64(ptr_offset($buf, 8)));
+ptr_write_f64($buf, $three);
+var_dump(ptr_read_f64($buf));
+free($buf);
+"#,
+    );
+    assert_eq!(
+        out,
+        "float(1.5)\nfloat(0.10000000149011612)\nfloat(3)\n1069547520\nfloat(0.1)\nfloat(3)\n"
+    );
+}
+
+/// Tests the float pointer builtins resolve case-insensitively like every PHP function name.
+#[test]
+fn test_ptr_float_builtins_are_case_insensitive() {
+    let out = compile_and_run(
+        r#"<?php
+extern function malloc(u64 $size): ptr;
+extern function free(ptr $p): void;
+$buf = malloc(8);
+PTR_WRITE_F64($buf, 2.5);
+echo Ptr_Read_F64($buf);
+free($buf);
+"#,
+    );
+    assert_eq!(out, "2.5");
+}

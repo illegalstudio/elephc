@@ -290,6 +290,7 @@ pub fn emit_print_r_value(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: print_r_value ---");
     emitter.label_global("__rt_print_r_value");
+    crate::codegen_support::sentinels::emit_normalize_pointer_word_tag(emitter, "x0", "x1", "x9", "__rt_print_r_value_tag_ready");
 
     emitter.instruction("sub sp, sp, #48");                                     // allocate the value frame
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
@@ -384,6 +385,7 @@ fn emit_print_r_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: print_r_value ---");
     emitter.label_global("__rt_print_r_value");
+    crate::codegen_support::sentinels::emit_normalize_pointer_word_tag(emitter, "rdi", "rsi", "r11", "__rt_print_r_value_tag_ready");
 
     emitter.instruction("push rbp");                                            // save caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the value frame pointer

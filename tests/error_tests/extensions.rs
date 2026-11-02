@@ -36,6 +36,66 @@ fn test_error_buffer_new_rejects_union_element_type() {
     );
 }
 
+/// Verifies that a statically known float length is still rejected: only `int` lengths and the
+/// runtime-converted `mixed` / `int|float` lengths of int arithmetic size a buffer (task f9ea1d1e).
+#[test]
+fn test_error_buffer_new_rejects_static_float_length() {
+    expect_error(
+        "<?php function half(int $n): void { $values = buffer_new<int>($n / 2); } half(4);",
+        "buffer_new<T>() length must be integer",
+    );
+}
+
+/// Verifies that a statically known string length is still rejected, like a string buffer index.
+#[test]
+fn test_error_buffer_new_rejects_static_string_length() {
+    expect_error(
+        "<?php string $n = \"2\"; $values = buffer_new<int>($n);",
+        "buffer_new<T>() length must be integer",
+    );
+}
+
+/// Verifies a packed class reusing an ordinary class name (case-insensitively) is still a
+/// duplicate now that packed classes are registered before the class schema pass.
+#[test]
+fn test_error_packed_class_reusing_class_name_is_duplicate() {
+    expect_error(
+        "<?php class Vec2 {} packed class vec2 { public float $x; }",
+        "Duplicate packed class declaration: vec2",
+    );
+}
+
+/// Verifies an extern class reusing an ordinary class name (case-insensitively) is still a
+/// duplicate now that extern classes are registered before the class schema pass.
+#[test]
+fn test_error_extern_class_reusing_class_name_is_duplicate() {
+    expect_error(
+        "<?php class Point {} extern class point { public int $x; }",
+        "Duplicate class declaration: point",
+    );
+}
+
+/// Verifies a packed class reusing an enum name is still a duplicate: enums are only
+/// pre-declared when the packed prescan runs.
+#[test]
+fn test_error_packed_class_reusing_enum_name_is_duplicate() {
+    expect_error(
+        "<?php enum Mode { case A; } packed class Mode { public int $x; }",
+        "Duplicate packed class declaration: Mode",
+    );
+}
+
+/// Verifies a packed class reusing a builtin enum name keeps the builtin redeclaration
+/// diagnostic: the packed prescan sees builtin enum names as pointer targets only, not as
+/// pre-declared classes that would report a packed duplicate instead.
+#[test]
+fn test_error_packed_class_reusing_builtin_enum_name_reports_builtin_redeclaration() {
+    expect_error(
+        "<?php packed class SortDirection { public int $x; }",
+        "Cannot redeclare built-in type: SortDirection",
+    );
+}
+
 /// Verifies that a packed class with a nullable field (?int) is rejected.
 #[test]
 fn test_error_packed_class_rejects_nullable_field() {
@@ -74,12 +134,182 @@ fn test_error_buffer_write_rejects_static_string_index() {
     );
 }
 
-/// Verifies that packed buffer elements cannot be assigned directly; must use field access.
+/// Verifies that a packed buffer element rejects an integer source.
 #[test]
-fn test_error_buffer_packed_element_requires_field_assignment() {
+fn test_error_buffer_record_copy_local_requires_record() {
     expect_error(
         "<?php packed class Vec2 { public float $x; public float $y; } buffer<Vec2> $points = buffer_new<Vec2>(1); $points[0] = 1;",
-        "Assign packed buffer elements through field access like $buf[$i]->field",
+        "Buffer element type mismatch: expected Vec2 record, got int",
+    );
+}
+
+/// Verifies a packed buffer element through an object property rejects an integer source.
+#[test]
+fn test_error_buffer_record_copy_property_requires_record() {
+    expect_error(
+        r#"<?php
+packed class Vec2 { public float $x; public float $y; }
+class Points { public buffer<Vec2> $values; }
+$points = new Points();
+$points->values = buffer_new<Vec2>(1);
+$points->values[0] = 1;
+"#,
+        "Buffer element type mismatch: expected Vec2 record, got int",
+    );
+}
+
+/// Verifies a buffer property uses the same element mismatch diagnostic as a local buffer.
+#[test]
+fn test_error_buffer_property_scalar_assign_type_mismatch() {
+    expect_error(
+        r#"<?php
+class IntBufferStore { public buffer<int> $values; }
+$store = new IntBufferStore();
+$store->values = buffer_new<int>(1);
+$store->values[0] = "wrong";
+"#,
+        "Buffer element type mismatch: expected int, got string",
+    );
+}
+
+/// Verifies a statically known string index is rejected for a buffer property write.
+#[test]
+fn test_error_buffer_property_write_rejects_static_string_index() {
+    expect_error(
+        r#"<?php
+class IndexedBufferStore { public buffer<int> $values; }
+$store = new IndexedBufferStore();
+$store->values = buffer_new<int>(1);
+string $index = "0";
+$store->values[$index] = 1;
+"#,
+        "Buffer index must be integer",
+    );
+}
+
+/// Verifies a static buffer property uses the same element mismatch diagnostic as a local buffer.
+#[test]
+fn test_error_static_buffer_property_scalar_assign_type_mismatch() {
+    expect_error(
+        r#"<?php
+final class StaticIntBuffer { public static buffer<int> $values; }
+StaticIntBuffer::$values = buffer_new<int>(1);
+StaticIntBuffer::$values[0] = "wrong";
+"#,
+        "Buffer element type mismatch: expected int, got string",
+    );
+}
+
+/// Verifies a statically known string index is rejected for a static buffer property write.
+#[test]
+fn test_error_static_buffer_property_write_rejects_static_string_index() {
+    expect_error(
+        r#"<?php
+final class StaticIndexedBuffer { public static buffer<int> $values; }
+StaticIndexedBuffer::$values = buffer_new<int>(1);
+string $index = "0";
+StaticIndexedBuffer::$values[$index] = 1;
+"#,
+        "Buffer index must be integer",
+    );
+}
+
+/// Verifies a packed buffer element through a static property rejects an integer source.
+#[test]
+fn test_error_buffer_record_copy_static_requires_record() {
+    expect_error(
+        r#"<?php
+packed class Vec2 { public float $x; public float $y; }
+final class StaticPoints { public static buffer<Vec2> $values; }
+StaticPoints::$values = buffer_new<Vec2>(1);
+StaticPoints::$values[0] = 1;
+"#,
+        "Buffer element type mismatch: expected Vec2 record, got int",
+    );
+}
+
+/// Verifies an append to a static buffer property is rejected with the buffer push diagnostic.
+#[test]
+fn test_error_static_buffer_property_rejects_push() {
+    expect_error(
+        r#"<?php
+final class StaticPushBuffer { public static buffer<int> $values; }
+StaticPushBuffer::$values = buffer_new<int>(1);
+StaticPushBuffer::$values[] = 1;
+"#,
+        "buffer<T> does not support push; allocate with buffer_new<T>(len)",
+    );
+}
+
+/// Verifies a nested packed field rejects a scalar where a whole record is expected.
+#[test]
+fn test_error_nested_packed_field_rejects_scalar_record_assignment() {
+    expect_error(
+        "<?php packed class Vec2 { public float $x; public float $y; } packed class Body { public Vec2 $pos; } $b = buffer_new<Body>(1); $b[0]->pos = 5;",
+        "cannot assign int to packed field Body::pos of type Vec2; a nested packed field takes a Vec2 record",
+    );
+}
+
+/// Verifies a nested packed field rejects a record of a different packed class.
+#[test]
+fn test_error_nested_packed_field_rejects_other_record_class() {
+    expect_error(
+        "<?php packed class Vec2 { public float $x; public float $y; } packed class Other { public float $x; public float $y; } packed class Body { public Vec2 $pos; } $b = buffer_new<Body>(1); $o = buffer_new<Other>(1); $b[0]->pos = $o[0];",
+        "cannot assign ptr<Other> to packed field Body::pos of type Vec2",
+    );
+}
+
+/// Verifies a packed class that embeds itself has no finite layout and is reported.
+#[test]
+fn test_error_packed_class_embedding_itself_is_rejected() {
+    expect_error(
+        "<?php packed class Node { public int $value; public Node $next; }",
+        "Packed class Node embeds itself through its packed class fields",
+    );
+}
+
+/// Verifies packed classes that embed each other in a cycle are reported.
+#[test]
+fn test_error_packed_classes_embedding_each_other_are_rejected() {
+    expect_error(
+        "<?php packed class A { public B $b; } packed class B { public A $a; }",
+        "Packed class A embeds itself through its packed class fields",
+    );
+}
+
+/// Verifies predeclared native record names do not make an actually missing pointer target valid.
+#[test]
+fn test_error_packed_pointer_field_rejects_unknown_target() {
+    expect_error(
+        "<?php packed class Holder { public ptr<Missing> $value; }",
+        "Unknown pointer target type: Missing",
+    );
+}
+
+/// Verifies reading an undefined field of a nested record names the inner packed class.
+#[test]
+fn test_error_nested_packed_field_read_of_undefined_inner_field() {
+    expect_error(
+        "<?php packed class Vec2 { public float $x; public float $y; } packed class Body { public Vec2 $pos; } $b = buffer_new<Body>(1); echo $b[0]->pos->z;",
+        "Undefined packed field: Vec2::z",
+    );
+}
+
+/// Verifies writing an undefined field of a nested record names the inner packed class.
+#[test]
+fn test_error_nested_packed_field_write_of_undefined_inner_field() {
+    expect_error(
+        "<?php packed class Vec2 { public float $x; public float $y; } packed class Body { public Vec2 $pos; } $b = buffer_new<Body>(1); $b[0]->pos->z = 1.0;",
+        "Undefined packed field: Vec2::z",
+    );
+}
+
+/// Verifies a nested record's scalar field keeps the packed field type check.
+#[test]
+fn test_error_nested_packed_inner_field_type_mismatch() {
+    expect_error(
+        "<?php packed class Vec2 { public float $x; public float $y; } packed class Body { public Vec2 $pos; } $b = buffer_new<Body>(1); $b[0]->pos->x = \"far\";",
+        "cannot assign string to packed field Vec2::x of type float",
     );
 }
 
@@ -89,6 +319,24 @@ fn test_error_buffer_len_requires_buffer_argument() {
     expect_error(
         "<?php echo buffer_len(1);",
         "buffer_len() argument must be buffer<T>",
+    );
+}
+
+/// Verifies that buffer_ptr rejects a non-buffer argument (int).
+#[test]
+fn test_error_buffer_ptr_requires_buffer_argument() {
+    expect_error(
+        "<?php $p = buffer_ptr(1);",
+        "buffer_ptr() argument must be buffer<T>",
+    );
+}
+
+/// Verifies that buffer_ptr rejects calls with more than one argument.
+#[test]
+fn test_error_buffer_ptr_wrong_arg_count() {
+    expect_error(
+        "<?php buffer<int> $b = buffer_new<int>(1); $p = buffer_ptr($b, 1);",
+        "buffer_ptr() takes exactly 1 argument",
     );
 }
 
@@ -164,13 +412,13 @@ fn test_error_extern_unknown_int_width() {
     );
 }
 
-/// Verifies that explicit C integer widths are rejected on extern class fields, which still use
-/// 8-byte slots.
+/// Verifies that a `string` value cannot be stored into an extern class `f32` field: float fields
+/// take a float or an int, nothing else.
 #[test]
-fn test_error_extern_class_field_rejects_int_width() {
+fn test_error_extern_float_field_rejects_string_value() {
     expect_error(
-        "<?php extern class Bad { i32 $field; }",
-        "Extern class 'Bad' field $field uses an explicit C integer width",
+        "<?php extern class FRect { public f32 $x; } $r = ptr_cast<FRect>(ptr_null()); $r->x = \"wide\";",
+        "cannot assign Str to extern field FRect::x of type Float",
     );
 }
 
@@ -185,12 +433,54 @@ fn test_error_extern_rejects_more_than_eight_integer_arguments() {
     );
 }
 
+/// Verifies that `ptr_write_f32()` rejects a statically non-numeric value.
+#[test]
+fn test_error_ptr_write_f32_rejects_string_value() {
+    expect_error(
+        "<?php $x = 1; $p = ptr($x); ptr_write_f32($p, \"oops\");",
+        "ptr_write_f32() value must be float",
+    );
+}
+
+/// Verifies that `ptr_read_f64()` rejects a non-pointer argument.
+#[test]
+fn test_error_ptr_read_f64_rejects_int_argument() {
+    expect_error("<?php echo ptr_read_f64(42);", "ptr_read_f64()");
+}
+
+/// Verifies that an `int` cannot be stored into a one-byte extern `bool` field without a cast.
+#[test]
+fn test_error_extern_bool_field_rejects_int_value() {
+    expect_error(
+        "<?php extern class Key { public bool $down; } $k = ptr_cast<Key>(ptr_null()); $k->down = 1;",
+        "cannot assign Int to extern field Key::down of type Bool",
+    );
+}
+
+/// Verifies that a callable cannot be an extern class field: it has no C struct layout.
+#[test]
+fn test_error_extern_class_callable_field() {
+    expect_error(
+        "<?php extern class Bad { callable $field; }",
+        "Extern class 'Bad' field $field uses an unsupported type",
+    );
+}
+
+/// Verifies that a float width elephc does not know is rejected like any other unknown C type.
+#[test]
+fn test_error_extern_unknown_float_width() {
+    expect_error(
+        "<?php extern function foo(f16 $x): int;",
+        "Unknown C type: f16",
+    );
+}
+
 /// Verifies that explicit C integer widths are rejected on extern globals.
 #[test]
 fn test_error_extern_global_rejects_int_width() {
     expect_error(
         "<?php extern global u8 $flag;",
-        "Extern global $flag uses an explicit C integer width",
+        "Extern global $flag uses an explicit C width",
     );
 }
 
@@ -198,6 +488,26 @@ fn test_error_extern_global_rejects_int_width() {
 #[test]
 fn test_error_extern_block_empty() {
     expect_error("<?php extern \"lib\" { }", "Empty extern block");
+}
+
+/// Verifies a malformed extern inside a braced namespace keeps the extern-specific diagnostic
+/// and recovers far enough to collect the following malformed statement too.
+#[test]
+fn test_error_braced_namespace_extern_uses_extern_recovery() {
+    let tokens = tokenize("<?php namespace App { extern badkw; echo ; }").unwrap();
+    let errors = parse_with_recovery(&tokens).unwrap_err();
+    assert!(
+        errors.iter().any(|error| error.message.contains(
+            "Expected 'function', string literal, 'class', or 'global' after 'extern'"
+        )),
+        "expected extern-specific error, got {:?}",
+        errors,
+    );
+    assert!(
+        errors.len() >= 2,
+        "expected namespace recovery to collect both errors, got {:?}",
+        errors,
+    );
 }
 
 /// Verifies that calling an extern function with too few arguments is rejected.
@@ -242,6 +552,76 @@ fn test_error_extern_global_void_type() {
     expect_error(
         "<?php extern global void $bad;",
         "Extern global $bad uses an unsupported type",
+    );
+}
+
+/// Verifies `?` is accepted only before `string` in extern declarations, with a diagnostic that
+/// points at `ptr` for nullable pointers.
+#[test]
+fn test_error_extern_nullable_non_string_type() {
+    expect_error(
+        "<?php extern function f(?int $x): int;",
+        "Only ?string can be nullable in an extern declaration (a ptr already accepts null)",
+    );
+    expect_error(
+        "<?php extern function f(): ?ptr;",
+        "Only ?string can be nullable in an extern declaration",
+    );
+}
+
+/// Verifies `?string` is refused on extern class fields, whose `char*` loads and stores do not
+/// model NULL, instead of being laid out silently.
+#[test]
+fn test_error_extern_class_nullable_string_field() {
+    expect_error(
+        "<?php extern class Named { public ?string $label; }",
+        "Extern class 'Named' field $label cannot be ?string",
+    );
+}
+
+/// Verifies `?string` is refused on extern globals, which keep the plain `string` conversion.
+#[test]
+fn test_error_extern_global_nullable_string() {
+    expect_error(
+        "<?php extern global ?string $name;",
+        "Extern global $name cannot be ?string",
+    );
+}
+
+/// Verifies a `?string` extern parameter still rejects a non-string, non-null argument.
+#[test]
+fn test_error_extern_nullable_string_param_rejects_int() {
+    expect_error(
+        "<?php extern function f(?string $s): int; f(123);",
+        "Extern function 'f' parameter $s expects string|null, got int",
+    );
+}
+
+/// Verifies a `?string` extern return must be checked for null before it reaches a plain
+/// `string` extern parameter, which cannot pass NULL.
+#[test]
+fn test_error_extern_nullable_string_return_needs_null_check_for_string_param() {
+    expect_error(
+        "<?php extern function getenv(string $name): ?string; extern function strlen(string $s): u64; strlen(getenv(\"HOME\"));",
+        "Extern function 'strlen' parameter $s expects string, got string|null",
+    );
+}
+
+/// Verifies `?string` extern parameters accept strings, `null`, and `?string` values, and that a
+/// `?string` return becomes a `string` through `??` like any PHP `?string` value.
+#[test]
+fn test_extern_nullable_string_accepts_string_null_and_nullable_values() {
+    expect_no_error(
+        r#"<?php
+extern function f(?string $s): ?string;
+extern function strlen(string $s): u64;
+$a = f("x");
+$b = f(null);
+$c = f($a);
+$d = f($argc > 1 ? "y" : null);
+echo strlen($b ?? "");
+echo f($c) ?? "none";
+"#,
     );
 }
 
@@ -295,6 +675,36 @@ fn test_error_packed_int_field_rejects_static_string() {
         buffer_free($cells);
         ",
         "cannot assign string to packed field Cell::id of type int",
+    );
+}
+
+/// A packed `ptr` field takes no value whose type is only known at run time: a pointer boxes
+/// under the int tag, so the runtime narrowing scalar fields get could not tell an address from
+/// an arbitrary integer.
+#[test]
+fn test_error_packed_ptr_field_rejects_mixed() {
+    expect_error(
+        "<?php
+        packed class Node { public ptr $next; }
+        function load(mixed $v) { return $v; }
+        $nodes = buffer_new<Node>(1);
+        $nodes[0]->next = load(1);
+        ",
+        "cannot assign mixed to packed field Node::next of type ptr",
+    );
+}
+
+/// A statically known int into a packed `bool` field stays a compile error: only a value whose
+/// type is decided at run time reaches the strict bool narrowing.
+#[test]
+fn test_error_packed_bool_field_rejects_static_int() {
+    expect_error(
+        "<?php
+        packed class Cell { public bool $live; }
+        $cells = buffer_new<Cell>(1);
+        $cells[0]->live = 1;
+        ",
+        "cannot assign int to packed field Cell::live of type bool",
     );
 }
 
@@ -1270,4 +1680,65 @@ fn test_error_bare_template_name_does_not_accept_another_instantiation() {
          echo unwrap(new Box<int>(5));",
         "parameter $b expects Box<mixed>, got Box<int>",
     );
+}
+
+/// Verifies an array element bound to a `?ptr<T>` by-reference parameter is rejected: the callee
+/// writes a raw pointer word back, and the element lives in null or boxed element storage.
+#[test]
+fn test_error_nullable_pointer_by_ref_parameter_rejects_array_element() {
+    expect_error(
+        "<?php packed class Vec2 { public int $x; } function fill(?ptr<Vec2> &$p): void {} $a = [null]; fill($a[0]);",
+        "a pointer by-reference parameter writes a pointer word back through its argument, so pass a variable",
+    );
+}
+
+/// Rejects an unknown class nested inside a pointer declaration.
+#[test]
+fn test_error_nested_pointer_unknown_target() {
+    expect_error("<?php function f(ptr<ptr<Missing>> $p): void {}", "Unknown pointer target type: ptr<Missing>");
+}
+
+/// Preserves the diagnostic for sizeof targets that have no supported storage layout.
+#[test]
+fn test_error_pointer_sizeof_width_or_nested_target() {
+    expect_error("<?php echo ptr_sizeof(\"u8\");", "Unknown type for ptr_sizeof(): u8");
+    expect_error("<?php echo ptr_sizeof(\"ptr<u8>\");", "Unknown type for ptr_sizeof(): ptr<u8>");
+}
+
+/// A rooted width spelling names a class, not an unqualified C width.
+#[test]
+fn test_error_rooted_width_pointer_target() {
+    expect_error(r"<?php function f(ptr<\u8> $p): void {}", "Unknown pointer target type: u8");
+    expect_error(r"<?php function f(ptr<ptr<\u8>> $p): void {}", r"Unknown pointer target type: ptr<\u8>");
+}
+
+/// Generic binding preserves a rooted width spelling as a class name.
+#[test]
+fn test_error_generic_rooted_width_pointer_target() {
+    expect_error(r"<?php function id<T>(T $x): T { return $x; } $p = id<ptr<\u8>>(ptr_null());", "Unknown pointer target type: u8");
+}
+
+/// A width pointer cannot access a same-named global class's fields.
+#[test]
+fn test_error_width_pointer_does_not_alias_global_class() {
+    expect_error(r"<?php namespace { packed class u8 { public i32 $value; } } namespace App { function f(ptr<u8> $p): int { return $p->value; } }", "Property access requires an object or typed pointer");
+}
+
+/// Pointer width tags stay out of diagnostics for extern field writes and missing returns.
+#[test]
+fn test_error_pointer_width_tag_is_not_exposed() {
+    expect_error(r#"<?php extern class Blob { public ptr<u8> $data; } $b = ptr_cast<Blob>(ptr_null()); $b->data = "x";"#, "Pointer(Some(\"u8\"))");
+    expect_error("<?php function f(): ptr<u8> { return; }", "Pointer(Some(\"u8\"))");
+}
+
+/// A namespaced cast does not fall back to a same-named global class.
+#[test]
+fn test_error_ptr_cast_width_name_does_not_fallback_to_global_class() {
+    expect_error(r"<?php namespace { packed class u8 { public i32 $value; } } namespace App { function f(ptr $p): int { return ptr_cast<u8>($p)->value; } }", r"Unknown ptr_cast target type: App\u8");
+}
+
+/// Builtin diagnostics do not expose a pointer's internal width marker.
+#[test]
+fn test_error_pointer_width_tag_not_exposed_by_builtin() {
+    expect_error("<?php function f(ptr<u8> $p): void { pcntl_exec($p); }", "Pointer(Some(\"u8\"))");
 }

@@ -292,7 +292,33 @@ pub(super) fn eval_reflection_owner_object_with_members(
     if release_backing_value {
         values.release(backing_value_cell)?;
     }
+    if matches!(owner_kind, EVAL_REFLECTION_OWNER_FUNCTION | EVAL_REFLECTION_OWNER_METHOD) {
+        let identity = values.object_identity(object)?;
+        if let Some(target) = eval_reflection_function_method_target(identity, context, values)? {
+            let rendered = eval_reflection_function_method_to_string(&target);
+            let owner = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
+                "ReflectionMethod"
+            } else { "ReflectionFunction" };
+            if let Err(status) = eval_reflection_store_dump(object, owner, &rendered, context, values) {
+                let _ = eval_release_value(context, values, object);
+                return Err(status);
+            }
+        }
+    }
     Ok(object)
+}
+
+/// Stores a dump in the slot read by native casts, releasing the temporary on both paths.
+fn eval_reflection_store_dump(
+    object: RuntimeCellHandle, owner: &str, rendered: &str,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let text = values.string(rendered)?;
+    let result = eval_reflection_with_declaring_class_scope(owner, context, |_| {
+        values.property_set(object, "__string", text)
+    });
+    let released = values.release(text);
+    result.and(released)
 }
 
 /// Builds the `ReflectionClass|false` value stored in parent or declaring-class slots.
@@ -655,6 +681,13 @@ pub(super) fn eval_reflection_parameter_object_result(
     values.release(class_value)?;
     values.release(constructor)?;
     if let Err(status) = attach_parameter_default_factory(object, parameter, context, values) {
+        let _ = eval_release_value(context, values, object);
+        return Err(status);
+    }
+    let rendered = eval_reflection_function_method_parameter_to_string(parameter);
+    if let Err(status) = eval_reflection_store_dump(
+        object, "ReflectionParameter", &rendered, context, values,
+    ) {
         let _ = eval_release_value(context, values, object);
         return Err(status);
     }

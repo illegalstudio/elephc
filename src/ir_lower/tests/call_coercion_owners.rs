@@ -752,13 +752,32 @@ echo coercionCaller($argc);
             crate::codegen::platform::Target::parse(target).unwrap(),
         );
         let caller = module.functions.iter().find(|function| function.name == "coercionCaller").unwrap();
-        assert_eq!(caller.instructions.iter().filter(|inst| inst.op == Op::PushCallOperandOwner).count(),
+        let insertion = caller.instructions.iter().position(|inst| inst.op == Op::HashSet).unwrap();
+        let construction_end = caller.instructions.iter().enumerate().skip(insertion + 1)
+            .find(|(_, inst)| inst.op == Op::PopCallOperandOwner).unwrap().0;
+        let construction = &caller.instructions[..=construction_end];
+        let construction_pushes = construction.iter()
+            .filter(|inst| inst.op == Op::PushCallOperandOwner).collect::<Vec<_>>();
+        assert_eq!(construction_pushes.len(), 1, "{target}: source hash has one construction root");
+        assert_eq!(construction_pushes[0].immediate, caller.instructions[construction_end].immediate,
+            "{target}: construction retires its own published root before call evaluation");
+        let arguments = &caller.instructions[construction_end + 1..];
+        assert_eq!(arguments.iter().filter(|inst| inst.op == Op::PushCallOperandOwner).count(),
             3, "{target}: the earlier source array has an evaluation root and both have final roots");
-        assert_eq!(caller.instructions.iter().filter(|inst| inst.op == Op::PopCallOperandOwner).count(),
+        assert_eq!(arguments.iter().filter(|inst| inst.op == Op::PopCallOperandOwner).count(),
             3, "{target}: source evaluation and final roots must be detached");
+        let call_index = caller.instructions.iter().position(|inst| inst.op == Op::Call).unwrap();
+        let operands = &caller.instructions[call_index].operands;
+        assert_eq!(operands.len(), 2, "{target}: both source array operands reach the call");
+        let left = assert_final_operand_root_spans_call(caller, call_index, operands[0], target, "left array");
+        let right = assert_final_operand_root_spans_call(caller, call_index, operands[1], target, "right array");
+        assert_ne!(left, right, "{target}: each array has its own final root");
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         let body = asm.split_once("@fn name=coercionCaller ").unwrap().1
             .split_once("@endfn name=coercionCaller").unwrap().0;
+        let (construction, body) = body.split_once("op=hash_set").unwrap();
+        assert_eq!(construction.matches("publish temporary call operand owner").count(), 1,
+            "{target}: source hash construction is separate from argument roots");
         let invoke = body.lines().find(|line| {
             let line = line.trim_start();
             (line.starts_with("bl ") || line.starts_with("call ")) && line.contains("coercionTarget")

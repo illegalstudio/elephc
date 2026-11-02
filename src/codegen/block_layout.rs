@@ -1,5 +1,5 @@
 //! Purpose:
-//! Chooses the machine emission order of one function's EIR blocks and finds integer
+//! Chooses the machine emission order of one function's EIR blocks and finds scalar
 //! compares that can be fused into their block's conditional branch.
 //!
 //! Called from:
@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 
-use crate::ir::{BasicBlock, Function, InstId, Op, Terminator, ValueId};
+use crate::ir::{BasicBlock, CmpPredicate, Function, Immediate, InstId, Op, Terminator, ValueId};
 use crate::ir_passes::{successors, terminator_uses};
 
 /// Returns block-table indices in emission order: hot blocks first, cold blocks last.
@@ -70,12 +70,13 @@ pub(super) fn value_use_counts(function: &Function) -> HashMap<ValueId, usize> {
     counts
 }
 
-/// Returns the integer compare that `block`'s `cond_br` can consume as flags, if any.
+/// Returns the scalar compare that `block`'s `cond_br` can consume as flags, if any.
 ///
 /// The compare must be the block's last emitting instruction (only `nop`s may follow), and its
 /// boolean must have no use besides the branch condition (`use_counts` from
 /// [`value_use_counts`]), so skipping its materialization is unobservable and no instruction
-/// runs between the flag-setting compare and the branch.
+/// runs between the flag-setting compare and the branch. Float equality stays materialized
+/// because x86_64 needs both ZF and PF to distinguish equality from unordered NaN operands.
 pub(super) fn fusible_compare(
     function: &Function,
     block: &BasicBlock,
@@ -91,7 +92,24 @@ pub(super) fn fusible_compare(
         .copied()
         .find(|id| function.instruction(*id).is_some_and(|inst| inst.op != Op::Nop))?;
     let inst = function.instruction(compare)?;
-    if inst.op != Op::ICmp || inst.result != Some(*cond) {
+    let supported = match inst.op {
+        Op::ICmp => true,
+        Op::FCmp => matches!(
+            inst.immediate,
+            Some(Immediate::CmpPredicate(
+                CmpPredicate::Slt
+                    | CmpPredicate::Sle
+                    | CmpPredicate::Sgt
+                    | CmpPredicate::Sge
+                    | CmpPredicate::Olt
+                    | CmpPredicate::Ole
+                    | CmpPredicate::Ogt
+                    | CmpPredicate::Oge
+            ))
+        ),
+        _ => false,
+    };
+    if !supported || inst.result != Some(*cond) {
         return None;
     }
     (use_counts.get(cond) == Some(&1)).then_some(compare)
@@ -150,6 +168,41 @@ mod tests {
         function
     }
 
+    /// Builds a float comparison diamond for one predicate.
+    fn float_diamond(predicate: CmpPredicate) -> Function {
+        let mut function = Function::new("float_f".to_string(), IrType::F64, PhpType::Float);
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", Vec::new());
+        let then_block = builder.create_named_block("then", Vec::new());
+        let else_block = builder.create_named_block("else", Vec::new());
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let lhs = builder.emit_const_f64(1.0);
+        let rhs = builder.emit_const_f64(2.0);
+        let cond = builder
+            .emit(
+                Op::FCmp,
+                vec![lhs, rhs],
+                Some(Immediate::CmpPredicate(predicate)),
+                IrType::I64,
+                PhpType::Bool,
+                Ownership::NonHeap,
+            )
+            .expect("fcmp result");
+        builder.terminate(Terminator::CondBr {
+            cond,
+            then_target: then_block,
+            then_args: Vec::new(),
+            else_target: else_block,
+            else_args: Vec::new(),
+        });
+        builder.position_at_end(then_block);
+        builder.terminate(Terminator::Return { value: Some(lhs) });
+        builder.position_at_end(else_block);
+        builder.terminate(Terminator::Return { value: Some(rhs) });
+        function
+    }
+
     /// Verifies a loop-free diamond has no retreating edge.
     #[test]
     fn diamond_has_no_retreating_edge() {
@@ -184,5 +237,29 @@ mod tests {
         let function = diamond(true);
         let counts = value_use_counts(&function);
         assert!(fusible_compare(&function, &function.blocks[0], &counts).is_none());
+    }
+
+    /// Ordered relational float compares fuse, while equality keeps its NaN-aware materializer.
+    #[test]
+    fn only_relational_float_branch_compares_fuse() {
+        for predicate in [
+            CmpPredicate::Slt,
+            CmpPredicate::Sle,
+            CmpPredicate::Sgt,
+            CmpPredicate::Sge,
+            CmpPredicate::Olt,
+            CmpPredicate::Ole,
+            CmpPredicate::Ogt,
+            CmpPredicate::Oge,
+        ] {
+            let function = float_diamond(predicate);
+            let counts = value_use_counts(&function);
+            assert!(fusible_compare(&function, &function.blocks[0], &counts).is_some());
+        }
+        for predicate in [CmpPredicate::Eq, CmpPredicate::Ne] {
+            let function = float_diamond(predicate);
+            let counts = value_use_counts(&function);
+            assert!(fusible_compare(&function, &function.blocks[0], &counts).is_none());
+        }
     }
 }

@@ -31,6 +31,7 @@ mod parameter_lazy_defaults;
 mod parameter_metadata;
 mod property_access;
 mod property_helpers;
+mod public_mirror_writes;
 
 use super::*;
 use crate::context::{
@@ -60,6 +61,7 @@ use parameter_lazy_defaults::*;
 use parameter_metadata::*;
 use property_access::*;
 use property_helpers::*;
+pub(in crate::interpreter) use public_mirror_writes::validate_reflection_public_mirror_direct_write;
 
 const EVAL_REFLECTION_CLASS_FLAG_FINAL: u64 = 1;
 const EVAL_REFLECTION_CLASS_FLAG_ABSTRACT: u64 = 2;

@@ -47,7 +47,11 @@ pub(super) fn lower_generator_yield(ctx: &mut FunctionContext<'_>, inst: &Instru
     // -- materialize the key: explicit owned Mixed cell, or NULL for auto-key --
     match key_operand {
         Some(key) => {
-            emit_value_as_owned_mixed(ctx, key)?;
+            if yield_key_transfers_ownership(ctx, key)? {
+                ctx.load_value_to_result(key)?;
+            } else {
+                emit_value_as_owned_mixed(ctx, key)?;
+            }
             if key_arg != result_reg {
                 ctx.emitter
                     .instruction(&format!("mov {}, {}", key_arg, result_reg)); // move the boxed key into the first argument register
@@ -73,6 +77,14 @@ pub(super) fn lower_generator_yield(ctx: &mut FunctionContext<'_>, inst: &Instru
     // the result register — which is why the result register is what is saved.
     crate::codegen::frame::emit_instr_resume(ctx, &[result_reg]);
     store_call_result(ctx, inst, &PhpType::Mixed)
+}
+
+/// A fresh single-use Mixed key box transfers its one reference into the suspended generator.
+fn yield_key_transfers_ownership(ctx: &FunctionContext<'_>, key: ValueId) -> Result<bool> {
+    if ctx.value_php_type(key)?.codegen_repr() != PhpType::Mixed
+        || ctx.value_ownership(key)? != crate::ir::Ownership::Owned
+    { return Ok(false); }
+    Ok(ctx.function.value_use_counts().get(&key).copied() == Some(1))
 }
 
 /// Lowers `yield from <generator>` by delegating to the `__rt_gen_delegate`
@@ -124,7 +136,15 @@ pub(super) fn lower_generator_yield_from(ctx: &mut FunctionContext<'_>, inst: &I
 pub(super) fn emit_value_as_owned_mixed(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
     let ty = ctx.load_value_to_result(value)?;
     let repr = ty.codegen_repr();
-    emit_box_current_value_as_mixed(ctx.emitter, &ty);
+    let staged = if repr == PhpType::Str {
+        let (pointer_reg, length_reg) = abi::string_result_regs(ctx.emitter);
+        super::ownership::stage_string_byte_view(ctx, value, pointer_reg, length_reg)
+    } else {
+        false
+    };
+    // The declared type for a `?ptr<T>`, so address 0 is yielded as PHP null.
+    emit_box_current_value_as_mixed(ctx.emitter, &ctx.mixed_box_type(value)?);
+    super::ownership::release_string_byte_stage(ctx, staged);
     if matches!(repr, PhpType::Mixed | PhpType::Union(_)) {
         abi::emit_call_label(ctx.emitter, "__rt_incref"); // own the borrowed Mixed cell handed to the generator
     }

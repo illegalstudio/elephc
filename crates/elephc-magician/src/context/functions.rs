@@ -17,6 +17,8 @@ pub enum EvalNativeGlobalConstant {
     Int(i64),
     Float(f64),
     String(String),
+    /// Binary PHP string constant with a payload that is not valid UTF-8.
+    Bytes(Vec<u8>),
     Resource(i64),
 }
 
@@ -342,6 +344,15 @@ impl ElephcEvalContext {
         self.native_functions
             .get_mut(function_name)
             .is_some_and(|function| function.set_variadic_index(index))
+    }
+
+    /// Retains one attribute on an already registered native AOT function.
+    pub fn define_native_function_attribute(&mut self, function_name: &str, attribute: EvalAttribute) -> bool {
+        let key = function_name.trim_start_matches('\\').to_ascii_lowercase();
+        self.native_functions.get_mut(&key).is_some_and(|function| {
+            function.add_attribute(attribute);
+            true
+        })
     }
 
     /// Records that one native AOT callback is declared `function &name()`.

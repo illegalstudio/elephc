@@ -135,6 +135,11 @@ fn eval_method_exists_on_class(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
+    if elephc_builtin_contract::lookup_class(class_name)
+        .is_some_and(|class| !class.method_is_php_visible(method_name))
+    {
+        return Ok(false);
+    }
     if context.has_class(class_name) || context.has_enum(class_name) {
         if target_is_object {
             if context
@@ -261,6 +266,11 @@ fn eval_property_exists_on_class(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
+    if elephc_builtin_contract::lookup_class(class_name)
+        .is_some_and(|class| class.property_is_hidden(property_name))
+    {
+        return Ok(false);
+    }
     if context.has_class(class_name) || context.has_enum(class_name) {
         if context
             .class_property_names(class_name)

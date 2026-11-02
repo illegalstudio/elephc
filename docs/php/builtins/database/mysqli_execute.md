@@ -2,7 +2,7 @@
 title: "mysqli_execute()"
 description: "Alias of mysqli_stmt_execute()."
 sidebar:
-  order: 113
+  order: 116
 ---
 
 ## mysqli_execute()

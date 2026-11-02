@@ -58,6 +58,9 @@ pub(super) fn lower(
         RuntimeFnId::ArrayFind => Some({
             crate::codegen::lower_inst::builtins::arrays::lower_array_find(ctx, inst)
         }),
+        RuntimeFnId::ArrayFirst => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_first(ctx, inst)
+        }),
         RuntimeFnId::ArrayFlip => Some({
             crate::codegen::lower_inst::builtins::arrays::lower_array_flip(ctx, inst)
         }),
@@ -84,6 +87,9 @@ pub(super) fn lower(
         }),
         RuntimeFnId::ArrayKeys => Some({
             crate::codegen::lower_inst::builtins::arrays::lower_array_keys(ctx, inst)
+        }),
+        RuntimeFnId::ArrayLast => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_last(ctx, inst)
         }),
         RuntimeFnId::ArrayMap => Some({
             crate::codegen::lower_inst::builtins::arrays::lower_array_map(ctx, inst)

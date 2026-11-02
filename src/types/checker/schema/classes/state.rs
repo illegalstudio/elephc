@@ -243,6 +243,7 @@ impl ClassBuildState {
             abstract_static_methods: self.abstract_static_methods,
             static_vtable_methods: self.static_vtable_methods,
             static_vtable_slots: self.static_vtable_slots,
+            declared_interfaces: class.implements.clone(),
             interfaces: self.interfaces,
             constructor_param_to_prop,
         })

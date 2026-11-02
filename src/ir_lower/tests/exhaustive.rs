@@ -119,7 +119,7 @@ fn dummy_check_result() -> CheckResult {
     let mut packed_classes = HashMap::new();
     packed_classes.insert(
         "P".to_string(),
-        PackedClassInfo { fields: Vec::new(), total_size: 0 },
+        PackedClassInfo { fields: Vec::new(), total_size: 0, align: 1 },
     );
 
     CheckResult {
@@ -148,6 +148,8 @@ fn dummy_check_result() -> CheckResult {
         warnings: Vec::new(),
         throw_access_sites: HashMap::new(),
         builtin_call_types: HashMap::new(),
+        array_push_property_plans: HashMap::new(),
+        member_receiver_types: HashMap::new(),
         boxed_reference_promotion_sites: HashMap::new(),
         buffer_read_sites: Default::default(),
         first_class_builtin_call_types: HashMap::new(),
@@ -253,6 +255,7 @@ fn class_info(_class_name: &str) -> ClassInfo {
         abstract_static_methods: Default::default(),
         static_vtable_methods: Vec::new(),
         static_vtable_slots: HashMap::new(),
+        declared_interfaces: Vec::new(),
         interfaces: Vec::new(),
         constructor_param_to_prop: Vec::new(),
     }

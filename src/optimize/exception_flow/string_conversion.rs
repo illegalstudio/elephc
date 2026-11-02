@@ -144,6 +144,7 @@ impl ExceptionFlowAnalysis {
             | PhpType::Pointer(_) => ThrownTypes::unknown(),
             PhpType::Int
             | PhpType::Float
+            | PhpType::Narrow(_)
             | PhpType::Str
             | PhpType::Bool
             | PhpType::False

@@ -17,107 +17,13 @@ pub(super) fn lower_static_method_call(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
-    // `Closure::bind($closure, $newThis [, $scope])` — static form of bindTo.
+    // `Closure::bind($closure, $newThis [, $scope])` is the static form of bindTo.
     if let StaticReceiver::Named(name) = receiver {
         if name.trim_start_matches('\\') == "Closure"
             && php_symbol_key(method) == "bind"
             && !args.is_empty()
         {
-            let closure = lower_expr(ctx, &args[0]);
-            if let (Some(new_this), Some(scope)) = (args.get(1), args.get(2)) {
-                if let Some(plan) = plan_scoped_closure_bind(ctx, &args[0], scope) {
-                    return lower_planned_scoped_closure_bind(
-                        ctx, plan, closure, new_this, scope, expr,
-                    );
-                }
-            }
-            // A dynamic eval can replace the local with a Magician-owned Closure object. Its
-            // boxed payload is not an AOT closure descriptor, so feeding it to ClosureBind would
-            // make `__rt_closure_bind` interpret the object header as descriptor metadata. Route
-            // runtime-shaped bind targets through the eval bridge, which understands both eval
-            // Closure objects and native callable cells.
-            if ctx.has_eval_barrier()
-                && matches!(
-                    ctx.builder.value_php_type(closure.value).codegen_repr(),
-                    PhpType::Mixed | PhpType::Union(_)
-                )
-            {
-                let mut operands = vec![closure.value];
-                operands.extend(args.iter().skip(1).map(|arg| lower_expr(ctx, arg).value));
-                let data = ctx.intern_string("Closure::bind");
-                return ctx.emit_value(
-                    Op::EvalStaticMethodCall,
-                    operands,
-                    Some(Immediate::Data(data)),
-                    PhpType::Mixed,
-                    Op::EvalStaticMethodCall.default_effects(),
-                    Some(expr.span),
-                );
-            }
-            // Callable identity invalidation widens an escaped closure local to boxed Mixed
-            // storage. ClosureBind consumes the descriptor payload, not the Mixed-cell address,
-            // so normalize it at the same boundary as bindTo() before publishing operand roots.
-            let closure = if matches!(
-                ctx.builder.value_php_type(closure.value).codegen_repr(),
-                PhpType::Mixed | PhpType::Union(_)
-            ) {
-                unbox_callable_param_storage(ctx, closure, Some(args[0].span))
-            } else {
-                closure
-            };
-            let result_staging = prepublish_call_result(ctx, &PhpType::Callable, expr.span);
-            let (closure, closure_owner) = root_owned_call_operand(ctx, closure, args[0].span);
-            let new_this = match args.get(1) {
-                Some(arg) => lower_expr(ctx, arg),
-                None => lower_null(ctx, expr),
-            };
-            // A suspension or other opaque writer can widen a global receiver to Mixed even
-            // though the explicit scope still proves the object representation expected by
-            // `__rt_closure_bind`. Passing the Mixed-cell address as `$this` would box that cell
-            // as an object pointer, so detach its object payload before rooting the operand.
-            let new_this = match args.get(2).and_then(|scope| {
-                static_callable_class_name(ctx, scope).and_then(|requested| {
-                    lookup_folded_name(ctx.classes.keys(), requested.trim_start_matches('\\'))
-                })
-            }) {
-                Some(scope)
-                    if matches!(
-                        ctx.builder.value_php_type(new_this.value).codegen_repr(),
-                        PhpType::Mixed | PhpType::Union(_)
-                    ) =>
-                {
-                    let receiver_type = PhpType::Object(scope);
-                    let unboxed = ctx.emit_owned_value(
-                        Op::MixedUnbox,
-                        vec![new_this.value],
-                        None,
-                        receiver_type.clone(),
-                        Op::mixed_unbox_effects(&receiver_type),
-                        args.get(1).map(|arg| arg.span).or(Some(expr.span)),
-                    );
-                    release_coerced_source_if_owned(
-                        ctx,
-                        new_this,
-                        args.get(1).map(|arg| arg.span).or(Some(expr.span)),
-                    );
-                    unboxed
-                }
-                _ => new_this,
-            };
-            let (new_this, receiver_owner) = root_owned_call_operand(
-                ctx,
-                new_this,
-                args.get(1).map_or(expr.span, |arg| arg.span),
-            );
-            let bound = emit_closure_bind(ctx, closure.value, new_this.value, expr);
-            stage_call_result(ctx, result_staging.as_ref(), bound, expr.span);
-            if let Some(slot) = receiver_owner {
-                retire_owned_call_operand(ctx, slot, expr.span);
-            }
-            if let Some(slot) = closure_owner {
-                retire_owned_call_operand(ctx, slot, expr.span);
-            }
-            return take_prepublished_call_result(ctx, result_staging, bound, expr.span);
+            return lower_static_closure_bind(ctx, args, expr);
         }
     }
 
@@ -159,7 +65,7 @@ pub(super) fn lower_static_method_call(
     // be declared with the exact type the call is emitted with.
     let result_type = sig
         .as_ref()
-        .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
+        .map(|signature| normalize_value_php_type(crate::types::eir_value_php_type(&signature.return_type)))
         .unwrap_or_else(|| {
             if ctx.has_eval_barrier() && matches!(receiver, StaticReceiver::Named(_)) {
                 PhpType::Mixed
@@ -185,7 +91,19 @@ pub(super) fn lower_static_method_call(
         ctx, sig.as_ref(), &return_alias, &result_type, expr.span,
     );
     begin_call_argument_evaluation(ctx);
+    let ref_place_rewrite = sig.as_ref().and_then(|signature| {
+        ref_place_args::rewrite_typed_property_ref_args(ctx, signature, call_args)
+    });
+    let call_args = ref_place_rewrite
+        .as_ref()
+        .map_or(call_args, |rewrite| rewrite.args.as_slice());
+    let callee_description = static_receiver_class_name(ctx, receiver)
+        .unwrap_or_else(|| receiver_name(receiver).to_string());
+    let previous_description = ctx
+        .call_description
+        .replace(format!("{callee_description}::{dispatch_method}"));
     let operands = lower_args_with_signature(ctx, sig.as_ref(), call_args);
+    ctx.call_description = previous_description;
     let mut operands =
         coerce_int_backed_enum_string_argument(ctx, receiver, dispatch_method, operands, expr);
     let name = format!("{}::{}", receiver_name(receiver), dispatch_method);
@@ -222,6 +140,9 @@ pub(super) fn lower_static_method_call(
         expr.span,
     );
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
+    if let Some(rewrite) = ref_place_rewrite {
+        ref_place_args::finish_ref_place_rewrite(ctx, rewrite, expr.span);
+    }
     let call = take_prepublished_call_result(ctx, result_staging, call, expr.span);
     finish_reference_return_value(ctx, call, reference_staging, expr.span)
 }
@@ -370,7 +291,7 @@ pub(super) fn lower_static_method_descriptor_call(
         .map(crate::codegen::callable_dispatch::static_method_runtime_wrapper_sig);
     let result_type = sig
         .as_ref()
-        .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
+        .map(|signature| normalize_value_php_type(crate::types::eir_value_php_type(&signature.return_type)))
         .unwrap_or_else(|| fallback_expr_type(expr));
     let target = CallableTarget::StaticMethod {
         receiver: receiver.clone(),
@@ -407,7 +328,7 @@ pub(super) fn lower_static_method_descriptor_value_call(
     let sig = static_method_implementation_signature(ctx, receiver, method).cloned();
     let result_type = sig
         .as_ref()
-        .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
+        .map(|signature| normalize_value_php_type(crate::types::eir_value_php_type(&signature.return_type)))
         .unwrap_or_else(|| fallback_expr_type(expr));
     let target = CallableTarget::StaticMethod {
         receiver: receiver.clone(),
@@ -524,7 +445,7 @@ pub(in crate::ir_lower) fn static_method_call_expr_type_for_ir(
 ) -> Option<PhpType> {
     let nominal = static_method_implementation_signature(ctx, receiver, method)
         .or_else(|| lexical_instance_static_call_signature(ctx, receiver, method))
-        .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))?;
+        .map(|signature| normalize_value_php_type(crate::types::eir_value_php_type(&signature.return_type)))?;
     match (
         static_method_late_static_return_for_ir(ctx, receiver, method),
         static_late_binding_receiver_type_for_ir(ctx, receiver),

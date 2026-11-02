@@ -71,6 +71,14 @@ impl Fixture {
             }
         }
     }
+
+    /// Compiles once per optimizer mode with linear allocation and checks one execution.
+    fn assert_optimizer_modes(&self, expected: &str) {
+        for optimized in [false, true] {
+            self.compile(optimized, true, &[]);
+            assert_eq!(self.run(0), expected, "optimized={optimized}");
+        }
+    }
 }
 
 impl Drop for Fixture {
@@ -145,6 +153,89 @@ echo count_hits($argc - 2), "\n";
         let ne = range.filter(|i| *i != n).count();
         format!("lt={lt} le={le} gt={gt} ge={ge} eq={eq} ne={ne} down=5\n")
     });
+}
+
+/// Ordered float predicates keep PHP NaN semantics for direct and inverted flag branches.
+#[test]
+fn test_machine_peephole_fused_float_compare_branches_all_predicates() {
+    let source = r#"<?php
+function lt_then(float $a, float $b): string { if ($a < $b) { return '1'; } else { throw new Exception('0'); } }
+function lt_else(float $a, float $b): string { if ($a < $b) { throw new Exception('1'); } else { return '0'; } }
+function le_then(float $a, float $b): string { if ($a <= $b) { return '1'; } else { throw new Exception('0'); } }
+function le_else(float $a, float $b): string { if ($a <= $b) { throw new Exception('1'); } else { return '0'; } }
+function gt_then(float $a, float $b): string { if ($a > $b) { return '1'; } else { throw new Exception('0'); } }
+function gt_else(float $a, float $b): string { if ($a > $b) { throw new Exception('1'); } else { return '0'; } }
+function ge_then(float $a, float $b): string { if ($a >= $b) { return '1'; } else { throw new Exception('0'); } }
+function ge_else(float $a, float $b): string { if ($a >= $b) { throw new Exception('1'); } else { return '0'; } }
+function eq_then(float $a, float $b): string { if ($a == $b) { return '1'; } else { throw new Exception('0'); } }
+function eq_else(float $a, float $b): string { if ($a == $b) { throw new Exception('1'); } else { return '0'; } }
+function ne_then(float $a, float $b): string { if ($a != $b) { return '1'; } else { throw new Exception('0'); } }
+function ne_else(float $a, float $b): string { if ($a != $b) { throw new Exception('1'); } else { return '0'; } }
+
+function invoke(callable $probe, float $a, float $b): string {
+    try { return $probe($a, $b); }
+    catch (Throwable $error) { return $error->getMessage(); }
+}
+
+function row(callable $then_probe, callable $else_probe): string {
+    $out = '';
+    foreach ([[-1.0, 1.0], [1.0, -1.0], [1.0, 1.0], [NAN, 1.0], [1.0, NAN]] as $pair) {
+        $out .= invoke($then_probe, $pair[0], $pair[1]);
+        $out .= invoke($else_probe, $pair[0], $pair[1]);
+    }
+    return $out;
+}
+
+function while_hits(float $x, float $limit): int {
+    $hits = 0;
+    while ($x < $limit) { $x = $x + 0.5; $hits++; }
+    return $hits;
+}
+
+echo 'lt=', row(lt_then(...), lt_else(...)), "\n";
+echo 'le=', row(le_then(...), le_else(...)), "\n";
+echo 'gt=', row(gt_then(...), gt_else(...)), "\n";
+echo 'ge=', row(ge_then(...), ge_else(...)), "\n";
+echo 'eq=', row(eq_then(...), eq_else(...)), "\n";
+echo 'ne=', row(ne_then(...), ne_else(...)), "\n";
+echo 'while=', while_hits(-1.0, 1.0), while_hits(NAN, 1.0), while_hits(0.0, NAN), "\n";
+"#;
+    let fixture = Fixture::new(source);
+    fixture.assert_optimizer_modes(concat!(
+        "lt=1100000000\n",
+        "le=1100110000\n",
+        "gt=0011000000\n",
+        "ge=0011110000\n",
+        "eq=0000110000\n",
+        "ne=1111001111\n",
+        "while=400\n",
+    ));
+}
+
+/// Linux float loops branch directly on compare flags without materializing a boolean.
+#[test]
+fn test_machine_peephole_fused_float_compare_target_assembly() {
+    let fixture = Fixture::new(
+        r#"<?php
+function float_loop(float $x, float $limit): int {
+    $hits = 0;
+    while ($x < $limit) { $x = $x + 0.5; $hits++; }
+    return $hits;
+}
+echo float_loop($argc - 2.0, 3.0), "\n";
+"#,
+    );
+    let arm = fixture.assembly("linux-aarch64");
+    let arm_loop = function_text(&arm, "float_loop");
+    assert!(arm_loop.contains("fcmp d1, d0"), "{arm_loop}");
+    assert!(!arm_loop.contains("cset "), "{arm_loop}");
+
+    let x86 = fixture.assembly("linux-x86_64");
+    let x86_loop = function_text(&x86, "float_loop");
+    assert!(x86_loop.contains("ucomisd xmm0, xmm1"), "{x86_loop}");
+    for materializer in ["setb ", "seta ", "setnp ", "movzx rax, al"] {
+        assert!(!x86_loop.contains(materializer), "{materializer}: {x86_loop}");
+    }
 }
 
 /// Loop-carried scalars of every kind survive direct block-argument moves, including swaps.

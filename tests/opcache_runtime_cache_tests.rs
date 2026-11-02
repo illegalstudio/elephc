@@ -917,30 +917,54 @@ echo 'r=', (is_array(eval($code)) ? 'array' : 'false'), "\n";
     assert_eq!(field(&output, "r"), "array", "the computed spelling read the stale fallback:\n{output}");
 }
 
-/// A literal eval fragment can still choose its OPcache callable at runtime.
-/// Both computed and environment-provided names read the configured cache with either IR mode.
-#[test]
-fn literal_eval_with_runtime_callable_names_reads_the_configured_cache() {
-    let source = r#"<?php
+/// The probe for the literal-eval callable tests: one computed and one environment-provided
+/// OPcache callable name, each chosen at runtime inside a literal `eval()` fragment.
+const LITERAL_EVAL_RUNTIME_CALLABLE_PROBE: &str = r#"<?php
 $computed = eval('$f = "opcache_get" . "_status"; return $f(false);');
 echo 'computed=', is_array($computed) ? 'array' : 'false', "\n";
 $from_env = eval('$f = getenv("REVIEW_FUNCTION"); return $f(false);');
 echo 'from_env=', is_array($from_env) ? 'array' : 'false', "\n";
 "#;
-    for mode in ["--ir-opt=on", "--ir-opt=off"] {
-        for (ini, expected) in [
-            (&["opcache.enable_cli=1"][..], "array"),
-            (&[][..], "false"),
-        ] {
-            let dir = make_test_dir("opcache_rt_literal_callable");
-            write_dynamic_fixture(&dir, source);
-            let binary = compile_with_flags(&dir, ini, &["--php-version", "8.5", mode]);
-            let (output, stderr) =
-                run_binary_with_env(&binary, "REVIEW_FUNCTION", "opcache_get_status");
-            assert_eq!(field(&output, "computed"), expected, "{mode}: {output}\n{stderr}");
-            assert_eq!(field(&output, "from_env"), expected, "{mode}: {output}\n{stderr}");
-        }
-    }
+
+/// Compiles the literal-eval callable probe under one IR mode and `--ini` set, runs it with
+/// `REVIEW_FUNCTION=opcache_get_status`, and asserts both runtime-chosen names report
+/// `expected` (`array` for an enabled cache, `false` for the CLI default).
+///
+/// Each mode and configuration is its own test: every case is a full eval-linked compile, and
+/// the four of them in one test sat at the edge of the binary's timeout on macOS runners.
+fn assert_literal_eval_runtime_callable_names(mode: &str, ini: &[&str], expected: &str) {
+    let dir = make_test_dir("opcache_rt_literal_callable");
+    write_dynamic_fixture(&dir, LITERAL_EVAL_RUNTIME_CALLABLE_PROBE);
+    let binary = compile_with_flags(&dir, ini, &["--php-version", "8.5", mode]);
+    let (output, stderr) = run_binary_with_env(&binary, "REVIEW_FUNCTION", "opcache_get_status");
+    assert_eq!(field(&output, "computed"), expected, "{mode}: {output}\n{stderr}");
+    assert_eq!(field(&output, "from_env"), expected, "{mode}: {output}\n{stderr}");
+}
+
+/// A literal eval fragment can still choose its OPcache callable at runtime: with the cache
+/// enabled and IR optimization on, computed and environment-provided names read the live array.
+#[test]
+fn literal_eval_with_runtime_callable_names_reads_the_configured_cache_ir_on() {
+    assert_literal_eval_runtime_callable_names("--ir-opt=on", &["opcache.enable_cli=1"], "array");
+}
+
+/// The same runtime-chosen callables read the live array with IR optimization off.
+#[test]
+fn literal_eval_with_runtime_callable_names_reads_the_configured_cache_ir_off() {
+    assert_literal_eval_runtime_callable_names("--ir-opt=off", &["opcache.enable_cli=1"], "array");
+}
+
+/// With the CLI-default (disabled) cache and IR optimization on, both runtime-chosen
+/// callables answer `false`, so the enabled cases are not reading a constant.
+#[test]
+fn literal_eval_with_runtime_callable_names_reads_the_default_cache_ir_on() {
+    assert_literal_eval_runtime_callable_names("--ir-opt=on", &[], "false");
+}
+
+/// The disabled-cache control with IR optimization off.
+#[test]
+fn literal_eval_with_runtime_callable_names_reads_the_default_cache_ir_off() {
+    assert_literal_eval_runtime_callable_names("--ir-opt=off", &[], "false");
 }
 
 /// Every OPcache answer agrees inside a fully opaque `eval()` of a non-default binary.
@@ -1122,46 +1146,73 @@ echo 'second=', var_export(opcache_compile_file($p), true), "\n";
     assert_eq!(field(&output, "second"), "true", "and still served once deleted:\n{output}");
 }
 
+/// The native-surface empty-path probe: a literal `opcache_compile_file('')`, in a program
+/// that also links the eval bridge.
+const EMPTY_PATH_NATIVE_PROBE: &str = r#"<?php
+eval('$unrelated = 1;' . str_repeat(' ', count($argv) - 1));
+try { $r = var_export(opcache_compile_file(''), true); }
+catch (\ValueError $e) { $r = $e->getMessage(); }
+echo 'r=', $r, "\n";
+"#;
+
+/// The eval-surface empty-path probe: the callable name is computed, so the call is reached
+/// only through the eval bridge.
+const EMPTY_PATH_EVAL_PROBE: &str = r#"<?php
+$n = 'opcache_' . 'compile_file';
+try { $r = var_export(eval('return ' . $n . '("");'), true); }
+catch (\ValueError $e) { $r = $e->getMessage(); }
+echo 'r=', $r, "\n";
+"#;
+
+/// Compiles and runs one empty-path probe in its own directory with the given `--ini` set and
+/// returns the `r=` value it printed.
+fn empty_path_probe_result(name: &str, probe: &str, ini: &[&str]) -> String {
+    let dir = make_test_dir(name);
+    write_dynamic_fixture(&dir, probe);
+    let output = run_binary(&compile_with_flags(&dir, ini, &["--php-version", "8.5"]));
+    field(&output, "r").to_string()
+}
+
 /// `opcache_compile_file('')` throws `ValueError: Path must not be empty` once the cache is
-/// enabled, on both surfaces — and a disabled cache still answers with its notice.
+/// enabled, on the NATIVE surface.
 ///
 /// Reference raises the error from the open, after the "not properly started" notice. elephc
 /// answered `false`: its path normalization turned `''` into the working directory. MEASURED:
 /// enabled, reference throws; disabled, it notices and answers `false`. Found by Kimi.
 ///
 /// Separate programs for the two surfaces: a literal name injects the native wrapper, and
-/// every eval'd spelling in that program then resolves to it.
+/// every eval'd spelling in that program then resolves to it. Each program is its own test,
+/// because three eval-linked compiles in one test sat at the edge of the macOS timeout.
 #[test]
 fn compile_file_refuses_an_empty_path() {
-    let run = |name: &str, probe: &str, ini: &[&str]| -> String {
-        let dir = make_test_dir(name);
-        write_dynamic_fixture(&dir, probe);
-        run_binary(&compile_with_flags(&dir, ini, &["--php-version", "8.5"]))
-    };
-    let native = r#"<?php
-eval('$unrelated = 1;' . str_repeat(' ', count($argv) - 1));
-try { $r = var_export(opcache_compile_file(''), true); }
-catch (\ValueError $e) { $r = $e->getMessage(); }
-echo 'r=', $r, "\n";
-"#;
-    let eval = r#"<?php
-$n = 'opcache_' . 'compile_file';
-try { $r = var_export(eval('return ' . $n . '("");'), true); }
-catch (\ValueError $e) { $r = $e->getMessage(); }
-echo 'r=', $r, "\n";
-"#;
-    let enabled = ["opcache.enable_cli=1"];
+    assert_eq!(
+        empty_path_probe_result(
+            "opcache_rt_empty_native",
+            EMPTY_PATH_NATIVE_PROBE,
+            &["opcache.enable_cli=1"]
+        ),
+        "Path must not be empty"
+    );
+}
 
+/// The same `ValueError` reaches a computed `opcache_compile_file('')` inside `eval()`.
+#[test]
+fn compile_file_refuses_an_empty_path_inside_eval() {
     assert_eq!(
-        field(&run("opcache_rt_empty_native", native, &enabled), "r"),
+        empty_path_probe_result(
+            "opcache_rt_empty_eval",
+            EMPTY_PATH_EVAL_PROBE,
+            &["opcache.enable_cli=1"]
+        ),
         "Path must not be empty"
     );
+}
+
+/// A disabled cache answers `false` with its notice, before the empty path is looked at.
+#[test]
+fn compile_file_with_a_disabled_cache_answers_false_for_an_empty_path() {
     assert_eq!(
-        field(&run("opcache_rt_empty_eval", eval, &enabled), "r"),
-        "Path must not be empty"
-    );
-    assert_eq!(
-        field(&run("opcache_rt_empty_disabled", native, &[]), "r"),
+        empty_path_probe_result("opcache_rt_empty_disabled", EMPTY_PATH_NATIVE_PROBE, &[]),
         "false",
         "a disabled cache answers with its notice, before the path is looked at"
     );

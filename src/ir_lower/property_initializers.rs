@@ -76,6 +76,6 @@ fn lower_default_value(
             Op::HashNew.default_effects(), Some(default.span),
         );
     }
-    let value = super::expr::lower_expr(ctx, default);
+    let value = super::expr::lower_expr_for_destination(ctx, default, ty);
     super::stmt::contextualize_property_array_value(ctx, value, default, ty, default.span)
 }

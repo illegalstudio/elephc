@@ -9,18 +9,24 @@
 //! - Declaration names become canonical before type checking and codegen symbol collection.
 //! - Generic parameter names remain bare in their declaration and method scopes.
 //! - Generic bounds and defaults still use ordinary namespace/import resolution.
+//! - Extern declarations resolve the class each C `ptr<T>` type names (`resolve_ctype`), so a
+//!   namespaced C struct is found by its field accesses; extern global names stay C symbols.
 
 mod type_params;
 
 use crate::errors::CompileError;
+
+use super::expressions::with_constant_expression;
 use crate::names::{canonical_name_for_decl, php_symbol_key};
 use crate::parser::ast::{
-    Attribute, AttributeGroup, ClassConst, ClassMethod, ClassProperty, GenericDecl, Stmt, StmtKind,
-    TraitAdaptation, TraitUse, TypeParam,
+    Attribute, AttributeGroup, ClassConst, ClassMethod, ClassProperty, ExternField, ExternParam,
+    GenericDecl, Stmt, StmtKind, TraitAdaptation, TraitUse, TypeParam,
 };
 
 use super::expressions::resolve_expr;
-use super::names::{resolve_type_expr, resolve_type_expr_with_type_params, resolved_class_name};
+use super::names::{
+    resolve_ctype, resolve_type_expr, resolve_type_expr_with_type_params, resolved_class_name,
+};
 use super::statements::{resolve_params, resolve_stmt_list};
 use super::{resolved_name, Imports, Symbols};
 
@@ -170,7 +176,10 @@ pub(super) fn resolve_decl_stmt(
             methods,
             constants,
         } => {
-            let resolved_methods = resolve_methods(methods, namespace, imports, symbols)?;
+            let (resolved_properties, resolved_methods) = super::promoted_attributes::split(
+                resolve_properties(properties, namespace, imports, symbols),
+                resolve_methods(methods, namespace, imports, symbols)?,
+            );
             let trait_uses = trait_uses
                 .iter()
                 .map(|trait_use| resolve_trait_use(trait_use, namespace, imports, symbols))
@@ -192,7 +201,7 @@ pub(super) fn resolve_decl_stmt(
                     is_final: *is_final,
                     is_readonly_class: *is_readonly_class,
                     trait_uses,
-                    properties: resolve_properties(properties, namespace, imports, symbols),
+                    properties: resolved_properties,
                     methods: resolved_methods,
                     constants: resolve_class_consts(constants, namespace, imports, symbols),
                 },
@@ -228,7 +237,11 @@ pub(super) fn resolve_decl_stmt(
                     value: case
                         .value
                         .as_ref()
-                        .map(|expr| resolve_expr(expr, namespace, imports, symbols)),
+                        .map(|expr| {
+                            with_constant_expression(|| {
+                                resolve_expr(expr, namespace, imports, symbols)
+                            })
+                        }),
                     span: case.span,
                     attributes: resolve_attribute_groups(
                         &case.attributes,
@@ -323,7 +336,10 @@ pub(super) fn resolve_decl_stmt(
             methods,
             constants,
         } => {
-            let resolved_methods = resolve_methods(methods, namespace, imports, symbols)?;
+            let (resolved_properties, resolved_methods) = super::promoted_attributes::split(
+                resolve_properties(properties, namespace, imports, symbols),
+                resolve_methods(methods, namespace, imports, symbols)?,
+            );
             let trait_uses = trait_uses
                 .iter()
                 .map(|trait_use| resolve_trait_use(trait_use, namespace, imports, symbols))
@@ -333,7 +349,7 @@ pub(super) fn resolve_decl_stmt(
                     name: canonical_name_for_decl(namespace, name),
                     generics: resolve_generic_decl(generics, namespace, imports, symbols),
                     trait_uses,
-                    properties: resolve_properties(properties, namespace, imports, symbols),
+                    properties: resolved_properties,
                     methods: resolved_methods,
                     constants: resolve_class_consts(constants, namespace, imports, symbols),
                 },
@@ -356,8 +372,14 @@ pub(super) fn resolve_decl_stmt(
         } => Ok(Some(Stmt::with_attributes(
             StmtKind::ExternFunctionDecl {
                 name: canonical_name_for_decl(namespace, name),
-                params: params.clone(),
-                return_type: return_type.clone(),
+                params: params
+                    .iter()
+                    .map(|param| ExternParam {
+                        name: param.name.clone(),
+                        c_type: resolve_ctype(&param.c_type, namespace, imports, symbols),
+                    })
+                    .collect(),
+                return_type: resolve_ctype(return_type, namespace, imports, symbols),
                 library: library.clone(),
             },
             stmt.span,
@@ -374,7 +396,22 @@ pub(super) fn resolve_decl_stmt(
         StmtKind::ExternClassDecl { name, fields } => Ok(Some(Stmt::with_attributes(
             StmtKind::ExternClassDecl {
                 name: canonical_name_for_decl(namespace, name),
-                fields: fields.clone(),
+                fields: fields
+                    .iter()
+                    .map(|field| ExternField {
+                        name: field.name.clone(),
+                        c_type: resolve_ctype(&field.c_type, namespace, imports, symbols),
+                    })
+                    .collect(),
+            },
+            stmt.span,
+            stmt_attributes,
+        ))),
+        // An extern global keeps its C symbol name; only a `ptr<T>` type in it names a class.
+        StmtKind::ExternGlobalDecl { name, c_type } => Ok(Some(Stmt::with_attributes(
+            StmtKind::ExternGlobalDecl {
+                name: name.clone(),
+                c_type: resolve_ctype(c_type, namespace, imports, symbols),
             },
             stmt.span,
             stmt_attributes,
@@ -382,7 +419,9 @@ pub(super) fn resolve_decl_stmt(
         StmtKind::ConstDecl { name, value } => Ok(Some(Stmt::with_attributes(
             StmtKind::ConstDecl {
                 name: canonical_name_for_decl(namespace, name),
-                value: resolve_expr(value, namespace, imports, symbols),
+                value: with_constant_expression(|| {
+                    resolve_expr(value, namespace, imports, symbols)
+                }),
             },
             stmt.span,
             stmt_attributes,
@@ -415,7 +454,11 @@ fn resolve_attribute_groups(
                     args: attr
                         .args
                         .iter()
-                        .map(|arg| resolve_expr(arg, namespace, imports, symbols))
+                        .map(|arg| {
+                            with_constant_expression(|| {
+                                resolve_expr(arg, namespace, imports, symbols)
+                            })
+                        })
                         .collect(),
                     span: attr.span,
                 })
@@ -484,7 +527,9 @@ fn resolve_class_consts(
                 .type_expr
                 .as_ref()
                 .map(|ty| resolve_type_expr(ty, namespace, imports, symbols)),
-            value: resolve_expr(&constant.value, namespace, imports, symbols),
+            value: with_constant_expression(|| {
+                resolve_expr(&constant.value, namespace, imports, symbols)
+            }),
             attributes: resolve_attribute_groups(&constant.attributes, namespace, imports, symbols),
             ..constant.clone()
         })
@@ -506,10 +551,11 @@ fn resolve_properties(
                 .type_expr
                 .as_ref()
                 .map(|ty| resolve_type_expr(ty, namespace, imports, symbols)),
-            default: property
-                .default
-                .as_ref()
-                .map(|expr| resolve_expr(expr, namespace, imports, symbols)),
+            default: property.default.as_ref().map(|expr| {
+                with_constant_expression(|| {
+                    resolve_expr(expr, namespace, imports, symbols)
+                })
+            }),
             attributes: resolve_attribute_groups(&property.attributes, namespace, imports, symbols),
             ..property.clone()
         })

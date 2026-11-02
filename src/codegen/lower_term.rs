@@ -11,7 +11,7 @@
 //! - Generator suspension remains an explicit unsupported Phase 04 path.
 
 use crate::codegen::platform::Arch;
-use crate::ir::{BlockId, CmpPredicate, DataId, IrType, SwitchCase, Terminator, ValueId};
+use crate::ir::{BlockId, CmpPredicate, DataId, IrType, Op, SwitchCase, Terminator, ValueId};
 use crate::types::PhpType;
 
 use crate::codegen::abi;
@@ -111,9 +111,20 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
             else_args,
         } => {
             let condition = match ctx.machine_layout.fused_compare {
-                Some(compare) => BranchCondition::Flags(super::lower_inst::emit_fused_int_compare(
-                    ctx, compare,
-                )?),
+                Some(compare) => match ctx.function.instruction(compare).map(|inst| inst.op) {
+                    Some(Op::ICmp) => BranchCondition::IntegerFlags(
+                        super::lower_inst::emit_fused_int_compare(ctx, compare)?,
+                    ),
+                    Some(Op::FCmp) => BranchCondition::FloatFlags {
+                        predicate: super::lower_inst::emit_fused_float_compare(ctx, compare)?,
+                        inverted: false,
+                    },
+                    _ => {
+                        return Err(CodegenIrError::invalid_module(
+                            "fused compare must be an integer or float compare",
+                        ));
+                    }
+                },
                 None => {
                     ctx.load_value_to_result(*cond)?;
                     BranchCondition::ResultNonzero
@@ -261,7 +272,12 @@ enum BranchCondition {
     /// The materialized boolean in the integer result register is zero.
     ResultZero,
     /// The flags of a fused integer compare satisfy the predicate.
-    Flags(CmpPredicate),
+    IntegerFlags(CmpPredicate),
+    /// The flags of a fused float compare satisfy the predicate or its exact logical inverse.
+    FloatFlags {
+        predicate: CmpPredicate,
+        inverted: bool,
+    },
 }
 
 impl BranchCondition {
@@ -270,7 +286,12 @@ impl BranchCondition {
         match self {
             Self::ResultNonzero => Self::ResultZero,
             Self::ResultZero => Self::ResultNonzero,
-            Self::Flags(predicate) => Self::Flags(invert_int_predicate(predicate)),
+            Self::IntegerFlags(predicate) => {
+                Self::IntegerFlags(invert_int_predicate(predicate))
+            }
+            Self::FloatFlags { predicate, inverted } => {
+                Self::FloatFlags { predicate, inverted: !inverted }
+            }
         }
     }
 }
@@ -307,7 +328,7 @@ fn emit_conditional_jump(
     match condition {
         BranchCondition::ResultNonzero => abi::emit_branch_if_int_result_nonzero(ctx.emitter, label),
         BranchCondition::ResultZero => abi::emit_branch_if_int_result_zero(ctx.emitter, label),
-        BranchCondition::Flags(predicate) => {
+        BranchCondition::IntegerFlags(predicate) => {
             let arch = ctx.emitter.target.arch;
             match arch {
                 Arch::AArch64 => {
@@ -322,6 +343,30 @@ fn emit_conditional_jump(
                 Arch::X86_64 => {
                     let taken = super::lower_inst::int_condition_suffix(arch, predicate)?;
                     ctx.emitter.instruction(&format!("j{taken} {label}"));      // branch on the fused compare flags without a boolean
+                }
+            }
+        }
+        BranchCondition::FloatFlags { predicate, inverted } => {
+            let arch = ctx.emitter.target.arch;
+            ctx.emitter.comment("-- branch on fused float comparison --");
+            match arch {
+                Arch::AArch64 => {
+                    let skip = super::lower_inst::float_branch_condition_suffix(
+                        arch,
+                        predicate,
+                        !inverted,
+                    )?;
+                    ctx.emitter.instruction(&format!("b.{skip} 1f"));           // skip the far branch when the fused float condition fails
+                    ctx.emitter.instruction(&format!("b {label}"));             // take the edge selected by the fused float compare
+                    ctx.emitter.label("1");
+                }
+                Arch::X86_64 => {
+                    let taken = super::lower_inst::float_branch_condition_suffix(
+                        arch,
+                        predicate,
+                        inverted,
+                    )?;
+                    ctx.emitter.instruction(&format!("j{taken} {label}"));      // branch on float flags with unordered-aware polarity
                 }
             }
         }
@@ -530,7 +575,8 @@ fn pop_result_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
         | PhpType::Callable
         | PhpType::Object(_)
         | PhpType::Packed(_)
-        | PhpType::Pointer(_) => {
+        | PhpType::Pointer(_)
+        | PhpType::Narrow(_) => {
             abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         }
         PhpType::Float => {

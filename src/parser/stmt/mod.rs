@@ -47,24 +47,36 @@ pub(crate) use assign::{parse_destructuring_pattern_unpack, starts_destructuring
 pub(crate) use namespace_use::token_as_import_name;
 pub(crate) use recovery::recover_to_statement_boundary;
 
-/// Appends one parsed statement to a file- or namespace-scope statement list.
+/// Appends one parsed statement to a file or namespace statement list.
 ///
-/// `const A = 1, B = 2;` parses to one `Synthetic` holding a `ConstDecl` per name (see
-/// `simple::parse_const_decl`). At the two scopes where PHP allows `const`, that group is spliced
-/// into the enclosing list, so every later pass sees exactly what separate `const` statements
-/// produce: the passes that collect top-level declarations, namespace symbol collection among
-/// them, only look at that level. Every other statement is appended unchanged.
+/// Declaration groups must be exposed before function discovery, including
+/// groups produced by a declare body. Ordinary lowered groups keep their shape
+/// because the checker and source-map lowering consume their boundaries.
 pub(crate) fn push_parsed_stmt(stmts: &mut Vec<Stmt>, stmt: Stmt) {
-    let is_const_list = matches!(
-        &stmt.kind,
-        StmtKind::Synthetic(body)
-            if !body.is_empty()
-                && body.iter().all(|inner| matches!(inner.kind, StmtKind::ConstDecl { .. }))
-    );
-    match stmt.kind {
-        StmtKind::Synthetic(body) if is_const_list => stmts.extend(body),
-        kind => stmts.push(Stmt { kind, ..stmt }),
+    super::declaration_groups::append_root_statement(stmts, stmt);
+}
+
+/// Parses and appends one item allowed directly in a file or braced namespace.
+///
+/// Extern library blocks can expand to several declarations, while every ordinary statement
+/// produces one item that still passes through the shared const-list expansion.
+/// `allows_strict_types` is true only for a leading file-scope `declare`; braced namespace
+/// bodies always pass false.
+pub(crate) fn parse_file_or_namespace_scope_item(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    stmts: &mut Vec<Stmt>,
+    allows_strict_types: bool,
+) -> Result<(), CompileError> {
+    if tokens.get(*pos).is_some_and(|(token, _)| token == &Token::Extern) {
+        let mut extern_stmts = parse_extern_stmts(tokens, pos)?;
+        stmts.append(&mut extern_stmts);
+    } else {
+        let stmt =
+            crate::parser::declare_context::parse_top_level_stmt(tokens, pos, allows_strict_types)?;
+        push_parsed_stmt(stmts, stmt);
     }
+    Ok(())
 }
 
 /// Parses a single PHP statement, including optional PHP 8 attribute groups.
@@ -83,6 +95,8 @@ pub fn parse_stmt(tokens: &[SpannedToken], pos: &mut usize) -> Result<Stmt, Comp
     }
     let span = tokens[*pos].1.span;
 
+    // Counts statement nesting, so a namespace declaration can tell it is not at the top level.
+    let _nesting = crate::parser::enter_statement();
     let stmt = parse_stmt_dispatch(tokens, pos, span)?;
     attach_attributes_to_stmt(stmt, attributes, span)
 }
@@ -138,6 +152,10 @@ fn parse_stmt_dispatch(
     span: Span,
 ) -> Result<Stmt, CompileError> {
     match &tokens[*pos].0 {
+        Token::Semicolon => {
+            *pos += 1;
+            Ok(Stmt::new(StmtKind::Synthetic(Vec::new()), span))
+        }
         Token::Echo => simple::parse_echo(tokens, pos, span),
         Token::Print => simple::parse_expr_stmt(tokens, pos, span),
         // `clone $o;` and PHP 8.5's `clone($o, $overrides);` are ordinary expression statements
@@ -185,6 +203,10 @@ fn parse_stmt_dispatch(
         Token::Function => params::parse_function_decl(tokens, pos, span),
         // `fn (…) => …` is always an arrow-function expression; it has no declaration form.
         Token::Fn => simple::parse_expr_stmt(tokens, pos, span),
+        // `namespace\helper();` is a relative name leading an expression statement (#825).
+        Token::Namespace if crate::parser::relative_name_starts_at(tokens, *pos) => {
+            parse_expression_led_stmt(tokens, pos, span)
+        }
         Token::Namespace => namespace_use::parse_namespace_stmt(tokens, pos, span),
         Token::Use => namespace_use::parse_use_stmt(tokens, pos, span),
         Token::Declare => declare::parse_declare(tokens, pos, span),
@@ -249,32 +271,7 @@ fn parse_stmt_dispatch(
         | Token::New
         | Token::LParen
         | Token::LBracket
-        | Token::Match => {
-            if matches!(&tokens[*pos].0, Token::Identifier(name) if name.eq_ignore_ascii_case("list"))
-                && matches!(tokens.get(*pos + 1).map(|(token, _)| token), Some(Token::LParen))
-            {
-                return assign::parse_list_construct_unpack(tokens, pos, span);
-            }
-            if assign::looks_like_typed_assign(tokens, *pos) {
-                return assign::parse_typed_assign(tokens, pos, span);
-            }
-            if statement_lhs_contains_double_colon(tokens, *pos) {
-                if let Some(stmt) =
-                    assign::try_parse_scoped_property_assignment(tokens, pos, span)?
-                {
-                    return Ok(stmt);
-                }
-                if let Some(stmt) = assign::try_parse_scoped_postfix_incdec(tokens, pos, span)? {
-                    return Ok(stmt);
-                }
-            }
-            if let Some(stmt) = assign::try_parse_postfix_assignment(tokens, pos, span)? {
-                return Ok(stmt);
-            }
-            let expr = parse_expr(tokens, pos)?;
-            expect_semicolon(tokens, pos)?;
-            Ok(Stmt::new(StmtKind::ExprStmt(expr), span))
-        }
+        | Token::Match => parse_expression_led_stmt(tokens, pos, span),
         // Control flow — delegated to control.rs
         Token::Switch => control::parse_switch(tokens, pos, span),
         Token::If => control::parse_if(tokens, pos, span),
@@ -301,6 +298,38 @@ fn parse_stmt_dispatch(
             &format!("Unexpected token at statement position: {:?}", other),
         )),
     }
+}
+
+/// Parses a statement that starts with a name or an expression rather than a keyword:
+/// `list(...) = ...`, a typed local, a static property assignment or increment, a postfix
+/// assignment, or an expression statement ending in `;`.
+fn parse_expression_led_stmt(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    if matches!(&tokens[*pos].0, Token::Identifier(name) if name.eq_ignore_ascii_case("list"))
+        && matches!(tokens.get(*pos + 1).map(|(token, _)| token), Some(Token::LParen))
+    {
+        return assign::parse_list_construct_unpack(tokens, pos, span);
+    }
+    if assign::looks_like_typed_assign(tokens, *pos) {
+        return assign::parse_typed_assign(tokens, pos, span);
+    }
+    if statement_lhs_contains_double_colon(tokens, *pos) {
+        if let Some(stmt) = assign::try_parse_scoped_property_assignment(tokens, pos, span)? {
+            return Ok(stmt);
+        }
+        if let Some(stmt) = assign::try_parse_scoped_postfix_incdec(tokens, pos, span)? {
+            return Ok(stmt);
+        }
+    }
+    if let Some(stmt) = assign::try_parse_postfix_assignment(tokens, pos, span)? {
+        return Ok(stmt);
+    }
+    let expr = parse_expr(tokens, pos)?;
+    expect_semicolon(tokens, pos)?;
+    Ok(Stmt::new(StmtKind::ExprStmt(expr), span))
 }
 
 /// Distinguishes bracket destructuring from array expressions by the matching closing bracket.

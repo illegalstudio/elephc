@@ -14,6 +14,8 @@ pub mod checker;
 pub mod traits;
 /// Array key type inference, normalization, and PHP integer/string coercion rules.
 mod array_keys;
+/// Profile-aware normalization of statically keyed mixed array literals.
+mod array_literals;
 /// Whether an un-hinted declaration returns one of its untyped parameters; shared so the
 /// checker and EIR lowering cannot disagree about the recorded return type (issue #576).
 pub mod dynamic_params;
@@ -31,6 +33,8 @@ pub(crate) mod fibers;
 mod ffi;
 /// PHP parameter-binding rules: coercive scalar binding and callable-name strings.
 pub(crate) mod param_binding;
+/// PHP type spelling shared by parameter and property diagnostics.
+pub(crate) mod diagnostic_names;
 /// Target-aware `ext/pcntl` integer constants shared by checker and codegen.
 pub(crate) mod pcntl_constants;
 /// PHP type model and type environment for tracking variable types.
@@ -40,6 +44,8 @@ pub(crate) mod object_operators;
 mod return_alias;
 /// Type checker result types and the `check` entry point.
 mod result;
+/// Shared builtin Reflection ancestry for public metadata property write handlers.
+pub(crate) mod reflection_properties;
 /// Class, interface, enum, and FFI schema definitions.
 mod schema;
 /// Function signature representation and builtin signature helpers.
@@ -60,6 +66,7 @@ mod defined;
 /// Type checker diagnostics and warnings.
 mod warnings;
 
+pub(crate) use array_literals::{fold_spreadless_mixed_array_literal, php_float_array_key};
 pub(crate) use array_keys::{
     array_key_contiguity_is_unproven, array_key_type_from_value_type,
     empty_array_key_requires_hash_storage, is_php_integer_array_key,
@@ -69,9 +76,16 @@ pub(crate) use array_keys::{
 pub(crate) use array_cast::{array_cast_result_type, php_cast_result_type, ArrayCast};
 pub(crate) use array_storage::{array_storage_conversion, join_array_storage_conversion};
 pub use ffi::{
-    ctype_stack_size, ctype_to_abi_type, ctype_to_php_type, packed_type_size, ExternAbiType,
+    align_up, ctype_field_layout, ctype_to_abi_type, ctype_to_php_type, packed_type_layout,
+    packed_type_size, width_spelling_hint, width_type_from_type_expr,
+    ExternAbiType, ScalarWidth,
 };
 pub use model::{PhpType, TypeEnv};
+pub(crate) use model::{
+    eir_value_php_type, is_nullable_pointer_type, is_pointer_element_indexed_array,
+    merge_local_pointer_targets, merge_pointer_elements, mixed_box_php_type,
+    nullable_pointer_union_member, pointer_element_read_type, pointer_param_display,
+};
 pub(crate) use return_alias::{
     collect_return_alias_summaries, summarize_callable_return_alias, ReturnAliasSummaries,
     ReturnArgAlias,
@@ -82,7 +96,7 @@ pub use checker::CheckOptions;
 // production compile path; it stays public for tests that don't need `CheckOptions`.
 #[allow(unused_imports)]
 pub use result::{check_with_options_and_bounds, check_with_target, check_with_target_and_bounds};
-pub use result::{check_with_target_and_options, CheckResult, ThrowAccessInfo, ThrowAccessKind};
+pub use result::{check_with_target_and_options, ArrayPushPropertyPlan, CheckResult, ThrowAccessInfo, ThrowAccessKind};
 pub use schema::constructor_owner;
 pub use schema::{
     class_declares_private_property, class_inherits_from,
@@ -126,5 +140,14 @@ pub fn check_with_options(
 
 /// Returns the stable checker/EIR scope key for a closure nested at `span`.
 pub(crate) fn nested_loop_storage_scope(parent: &str, span: crate::span::Span) -> String {
-    format!("{}::closure@{}:{}", parent, span.line, span.col)
+    format!("{}{CLOSURE_SCOPE_SEPARATOR}{}:{}", parent, span.line, span.col)
+}
+
+/// Reserved boundary between a body scope and one of its lexical closure scopes.
+const CLOSURE_SCOPE_SEPARATOR: &str = "::closure@";
+
+/// Matches one body or its lexical closures without matching a similarly named body.
+pub(crate) fn loop_storage_scope_is_within(scope: &str, parent: &str) -> bool {
+    scope.strip_prefix(parent)
+        .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with(CLOSURE_SCOPE_SEPARATOR))
 }

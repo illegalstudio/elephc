@@ -10,17 +10,18 @@
 //! - Length-driven loops: any digest size works. A zero binary flag writes a
 //!   lowercase hex string (two chars per byte); a non-zero flag copies the raw
 //!   bytes verbatim.
-//! - Writes into the global `_concat_buf` and advances `_concat_off`, matching
-//!   the ownership contract of the other concat-backed string helpers.
+//! - Reserves its result through `__rt_concat_reserve` and publishes it with
+//!   `__rt_concat_publish`, like the other concat-backed string helpers: a nearly
+//!   full scratch hands back a heap block instead of letting the digest run past
+//!   the end of `_concat_buf` into the adjacent globals.
 
-use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
 /// Emits the shared `__rt_digest_to_string` runtime helper.
 ///
-/// Converts a raw digest into a `_concat_buf`-backed PHP string and advances
-/// `_concat_off`. When the binary flag is zero it writes a lowercase hex string
+/// Converts a raw digest into a concat-backed PHP string (scratch when it fits,
+/// a transient heap block otherwise). When the binary flag is zero it writes a lowercase hex string
 /// (two chars per byte); otherwise it copies the raw bytes verbatim. The loops
 /// are length-driven so any digest size works.
 ///
@@ -45,14 +46,18 @@ fn emit_digest_to_string_aarch64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: digest_to_string ---");
     emitter.label_global("__rt_digest_to_string");
 
-    // -- resolve the concat-buffer destination cursor --
-    abi::emit_symbol_address(emitter, "x6", "_concat_off");
-    emitter.instruction("ldr x8, [x6]");                                        // load the current concat-buffer write offset
-    abi::emit_symbol_address(emitter, "x7", "_concat_buf");
-    emitter.instruction("add x9, x7, x8");                                      // compute the destination pointer for the formatted digest
-    emitter.instruction("mov x10, x9");                                         // preserve the result start pointer across the write loop
-    emitter.instruction("mov x11, x0");                                         // source = raw digest bytes
-    emitter.instruction("mov x12, x1");                                         // remaining digest bytes to consume
+    // -- reserve two bytes per digest byte, enough for both the hex and raw forms --
+    emitter.instruction("sub sp, sp, #48");                                     // reserve spill slots for the digest arguments and linkage
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address across the reservation
+    emitter.instruction("add x29, sp, #32");                                    // establish the helper frame pointer
+    emitter.instruction("stp x0, x1, [sp]");                                    // keep the digest pointer and length across the reservation
+    emitter.instruction("str x2, [sp, #16]");                                   // keep the binary flag across the reservation
+    emitter.instruction("lsl x0, x1, #1");                                      // a hex digest needs two characters per byte
+    emitter.instruction("bl __rt_concat_reserve");                              // scratch when it fits, an owned heap block otherwise
+    emitter.instruction("mov x9, x0");                                          // destination cursor = the reservation
+    emitter.instruction("mov x10, x0");                                         // preserve the result start pointer across the write loop
+    emitter.instruction("ldp x11, x12, [sp]");                                  // source = raw digest bytes, remaining = its length
+    emitter.instruction("ldr x2, [sp, #16]");                                   // reload the binary flag
 
     // -- binary flag chooses raw copy vs lowercase hex --
     emitter.instruction("cbnz x2, __rt_digest_raw_loop");                       // a non-zero binary flag copies the raw bytes verbatim
@@ -96,9 +101,9 @@ fn emit_digest_to_string_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_digest_done");
     emitter.instruction("mov x1, x10");                                         // result pointer = formatted-digest start
     emitter.instruction("sub x2, x9, x10");                                     // result length = bytes written
-    emitter.instruction("ldr x8, [x6]");                                        // reload the concat-buffer write offset
-    emitter.instruction("add x8, x8, x2");                                      // advance it past the formatted digest
-    emitter.instruction("str x8, [x6]");                                        // persist the updated concat-buffer write offset
+    emitter.instruction("bl __rt_concat_publish");                              // advance _concat_off only for a scratch-backed result
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the PHP string ptr/len in x1/x2
 }
 
@@ -108,13 +113,20 @@ fn emit_digest_to_string_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: digest_to_string ---");
     emitter.label_global("__rt_digest_to_string");
 
-    // -- resolve the concat-buffer destination cursor --
-    abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // load the current concat-buffer write offset
-    abi::emit_symbol_address(emitter, "r10", "_concat_buf");
-    emitter.instruction("lea r11, [r10 + r8]");                                 // compute the destination pointer for the formatted digest
-    emitter.instruction("mov r8, r11");                                         // preserve the result start pointer across the write loop
-    emitter.instruction("mov rcx, rdi");                                        // source = raw digest bytes
-    emitter.instruction("mov r9, rsi");                                         // remaining digest bytes to consume
+    // -- reserve two bytes per digest byte, enough for both the hex and raw forms --
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the helper frame
+    emitter.instruction("sub rsp, 32");                                         // reserve aligned spill slots for the digest arguments
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // keep the digest pointer across the reservation
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // keep the digest length across the reservation
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // keep the binary flag across the reservation
+    emitter.instruction("lea rax, [rsi + rsi]");                                // a hex digest needs two characters per byte
+    emitter.instruction("call __rt_concat_reserve");                            // scratch when it fits, an owned heap block otherwise
+    emitter.instruction("mov r11, rax");                                        // destination cursor = the reservation
+    emitter.instruction("mov r8, rax");                                         // preserve the result start pointer across the write loop
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 8]");                        // source = raw digest bytes
+    emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // remaining digest bytes to consume
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload the binary flag
 
     // -- binary flag chooses raw copy vs lowercase hex --
     emitter.instruction("test rdx, rdx");                                       // is the binary flag set?
@@ -167,8 +179,8 @@ fn emit_digest_to_string_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, r8");                                         // result pointer = formatted-digest start
     emitter.instruction("mov rdx, r11");                                        // copy the final destination cursor before computing the length
     emitter.instruction("sub rdx, r8");                                         // result length = bytes written
-    abi::emit_load_symbol_to_reg(emitter, "rcx", "_concat_off", 0);             // reload the concat-buffer write offset
-    emitter.instruction("add rcx, rdx");                                        // advance it past the formatted digest
-    abi::emit_store_reg_to_symbol(emitter, "rcx", "_concat_off", 0);            // persist the updated concat-buffer write offset
+    emitter.instruction("call __rt_concat_publish");                            // advance _concat_off only for a scratch-backed result
+    emitter.instruction("mov rsp, rbp");                                        // release the helper frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the PHP string ptr/len in rax/rdx
 }

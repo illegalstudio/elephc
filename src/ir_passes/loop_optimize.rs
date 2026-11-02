@@ -3,6 +3,7 @@
 //!
 //! Called from:
 //! - The EIR fixed-point driver after scalar promotion and checked integer sinking.
+//! - Numeric storage trials for invariant scalar parameters before range analysis.
 //!
 //! Key details:
 //! - Coalesced pure recurrences must have identical overflow semantics; checked

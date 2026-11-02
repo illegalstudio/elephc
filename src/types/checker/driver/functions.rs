@@ -144,11 +144,18 @@ impl Checker {
                 );
             }
         }
+        self.collect_generic_function_variant_templates(errors);
     }
 
     /// Returns true if `name` resolves to any declared function: user declaration, variant group, or
     /// extern. Resolution is case-insensitive via PHP symbol key matching.
     pub(crate) fn has_function_decl_folded(&self, name: &str) -> bool {
+        if self.fn_decls.contains_key(name)
+            || self.function_variant_groups.contains_key(name)
+            || self.extern_functions.contains_key(name)
+        {
+            return true;
+        }
         let key = php_symbol_key(name);
         self.fn_decls
             .keys()
@@ -289,6 +296,10 @@ impl Checker {
     fn resolve_function_variant_groups(&mut self, errors: &mut Vec<CompileError>) {
         let names: Vec<String> = self.function_variant_groups.keys().cloned().collect();
         for name in names {
+            // A generic group has no runtime signature until a call binds its parameters.
+            if self.fn_decls.get(&name).is_some_and(|decl| !decl.type_params.is_empty()) {
+                continue;
+            }
             if let Err(error) =
                 self.ensure_function_variant_group_signature(&name, crate::span::Span::dummy())
             {
@@ -467,6 +478,11 @@ impl Checker {
 /// matching) key if one exists. Used to translate case-insensitive names to their actual declared
 /// spelling.
 fn folded_map_key<T>(map: &HashMap<String, T>, name: &str) -> Option<String> {
+    // A spelling that is itself a key is the canonical one: a case-insensitive symbol table
+    // never holds two spellings of one name, so the scan below could only find this same key.
+    if map.contains_key(name) {
+        return Some(name.to_string());
+    }
     let key = php_symbol_key(name);
     map.keys()
         .find(|existing| php_symbol_key(existing) == key)

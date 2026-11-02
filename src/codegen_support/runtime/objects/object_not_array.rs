@@ -9,6 +9,7 @@
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::objects::mixed_array_get`'s object paths.
+//! - The Mixed setter's callable rejection, through the class-name entry.
 //! - `__rt_serialize_object`, through a denied class's `_class_serialize_ptrs` entry, and
 //!   `__rt_serialize_value` for a Closure (runtime tag 10), through the `_name` entry.
 //! - `__rt_unser_refuse_class`, from the unserialize preflight.
@@ -60,7 +61,7 @@ struct ClassNamedThrow {
 
 const OBJECT_NOT_ARRAY: ClassNamedThrow = ClassNamedThrow {
     label: Some("__rt_throw_object_not_array"),
-    name_label: None,
+    name_label: Some("__rt_throw_object_not_array_name"),
     local: "__rt_object_not_array",
     prefix_symbol: "_object_not_array_prefix",
     prefix_len: OBJECT_NOT_ARRAY_PREFIX.len(),
@@ -106,7 +107,7 @@ const SERIALIZABLE_RESULT: ClassNamedThrow = ClassNamedThrow {
     what: "invalid Serializable result Exception",
 };
 
-/// Emits `__rt_throw_object_not_array`. Input: the unboxed object pointer (`x0` / `rdi`).
+/// Emits the object-pointer and class-name entries for a catchable non-ArrayAccess Error.
 pub fn emit_throw_object_not_array(emitter: &mut Emitter) {
     emit_class_named_throw(emitter, &OBJECT_NOT_ARRAY);
 }

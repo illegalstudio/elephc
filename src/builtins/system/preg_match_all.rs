@@ -44,5 +44,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     if cx.args.len() >= 4 {
         cx.checker.infer_type(&cx.args[3], cx.env)?;
     }
-    Ok(PhpType::Int)
+    Ok(PhpType::Mixed)
 }

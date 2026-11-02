@@ -34,6 +34,19 @@ echo labs(-5000000000);
     assert_eq!(out, "5000000000");
 }
 
+/// Verifies a libm `float` function declared `f32` returns the single-precision result widened to a PHP
+/// float (issue #1905): `sqrtf(2)` is the 32-bit square root, not the double one.
+#[test]
+fn test_ffi_extern_sqrtf_returns_single_precision() {
+    let out = compile_and_run(
+        r#"<?php
+extern function sqrtf(f32 $x): f32;
+var_dump(sqrtf(2.0));
+"#,
+    );
+    assert_eq!(out, "float(1.4142135381698608)\n");
+}
+
 /// Verifies FFI extern call to libc `atoi` with a string argument, returning integer 12345.
 #[test]
 fn test_ffi_extern_atoi() {

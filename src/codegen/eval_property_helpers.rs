@@ -248,7 +248,7 @@ fn property_visibility_supported(visibility: &Visibility) -> bool {
 /// they box as PHP null and report initialized, while writes fail in the store
 /// bodies because the slot has no value storage.
 fn property_type_supported(ty: &PhpType) -> bool {
-    matches!(
+    crate::types::is_nullable_pointer_type(ty) || matches!(
         ty.codegen_repr(),
         PhpType::Int
             | PhpType::Bool
@@ -1076,6 +1076,10 @@ fn emit_aarch64_box_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlot
             emitter.instruction("mov x0, #1");                                  // runtime tag 1 = string
             emitter.instruction("bl __rt_mixed_from_value");                    // persist and box the string property payload
         }
+        PhpType::Pointer(_) => {
+            emitter.instruction(&format!("ldr x0, [x9, #{}]", slot.offset));    // load the ?ptr property word
+            emit_box_current_value_as_mixed(emitter, &slot.ty);
+        }
         PhpType::TaggedScalar => {
             emitter.instruction(&format!("ldr x0, [x9, #{}]", slot.offset));    // load the nullable integer property payload
             emitter.instruction(&format!("ldr x1, [x9, #{}]", slot.offset + 8)); // load the nullable integer property tag
@@ -1141,6 +1145,12 @@ fn emit_x86_64_box_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlot)
             emitter.instruction("mov eax, 1");                                  // runtime tag 1 = string
             emitter.instruction("call __rt_mixed_from_value");                  // persist and box the string property payload
         }
+        PhpType::Pointer(_) => {
+            emitter.instruction(                                                // load the ?ptr property word
+                &format!("mov rax, QWORD PTR [r11 + {}]", slot.offset)
+            );
+            emit_box_current_value_as_mixed(emitter, &slot.ty);
+        }
         PhpType::TaggedScalar => {
             emitter.instruction(                                                // load the nullable integer property payload
                 &format!("mov rax, QWORD PTR [r11 + {}]", slot.offset)
@@ -1189,7 +1199,9 @@ fn emit_aarch64_store_property_slot(
         super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);
     }
     match slot.ty.codegen_repr() {
-        PhpType::Int => emit_aarch64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_int", "x0"),
+        PhpType::Int | PhpType::Pointer(_) => {
+            emit_aarch64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_int", "x0")
+        }
         PhpType::Bool => {
             emit_aarch64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_bool", "x0")
         }
@@ -1245,7 +1257,9 @@ fn emit_x86_64_store_property_slot(
         super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);
     }
     match slot.ty.codegen_repr() {
-        PhpType::Int => emit_x86_64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_int", "rax"),
+        PhpType::Int | PhpType::Pointer(_) => {
+            emit_x86_64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_int", "rax")
+        }
         PhpType::Bool => {
             emit_x86_64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_bool", "rax")
         }

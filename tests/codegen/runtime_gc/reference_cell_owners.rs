@@ -635,8 +635,8 @@ bindRepeatedLeases();
 
 /// A throwing old target destructor during alias rebinding cannot strand the staged lease.
 ///
-/// Retiring whatever `$alias` held happens after the cell was transferred but before the alias
-/// is published, which is exactly the window the staging record covers.
+/// The replacement is published before the old payload's last release. A catch therefore
+/// sees the new alias, and the returned payload survives until that alias leaves scope.
 #[test]
 fn test_core_reference_return_lease_survives_a_throwing_rebound_target() {
     let source = r#"<?php
@@ -654,16 +654,57 @@ function bindOverThrowingTarget(): void {
         $alias = &rebindLease();
         echo 'bound|';
     } catch (RuntimeException $error) {
-        echo 'caught';
+        echo 'caught:', count($alias);
     }
 }
 bindOverThrowingTarget();
 "#;
     let (out, asm) = compile_and_run_with_heap_debug_and_asm(source);
     assert!(out.success, "stdout={:?}\nstderr={}\n{asm}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "old|payload|caught", "{}\n{asm}", out.stderr);
+    assert_eq!(out.stdout, "old|caught:1payload|", "{}\n{asm}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\n{asm}", out.stderr);
-    assert_eq!(compile_and_run_tagged(source), "old|payload|caught");
+    assert_eq!(compile_and_run_tagged(source), "old|caught:1payload|");
+}
+
+/// The first binding in a loop can replace the previous iteration's owned reference cell.
+#[test]
+fn test_core_reference_return_loop_rebinding_publishes_before_throwing_destructor() {
+    let source = r#"<?php
+class LoopReferencePayload {
+    public function __construct(public int $value) {}
+    public function __destruct() {
+        echo 'D', $this->value, '|';
+        if ($this->value === 0) { throw new Exception('previous'); }
+    }
+}
+function &nextLoopReference(int $index): LoopReferencePayload {
+    $value = new LoopReferencePayload($index);
+    return $value;
+}
+function loopReferenceProbe(): void {
+    for ($index = 0; $index < 3; ++$index) {
+        try {
+            $alias = &nextLoopReference($index);
+            echo 'B', $alias->value, '|';
+        } catch (Exception $error) {
+            echo 'C', $alias->value, '|';
+        }
+    }
+    unset($alias);
+}
+loopReferenceProbe();
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "B0|D0|C1|D1|B2|D2|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert_eq!(compile_and_run_tagged(source), "B0|D0|C1|D1|B2|D2|");
+}
+
+/// Loop-carried binding publication is independent of EIR optimization.
+#[test]
+fn test_core_reference_return_loop_rebinding_publishes_before_throwing_destructor_no_ir_opt() {
+    without_ir_opt(test_core_reference_return_loop_rebinding_publishes_before_throwing_destructor);
 }
 
 /// An omitted by-reference default container is retired when a reference-returning callee throws.

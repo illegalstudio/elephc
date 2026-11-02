@@ -639,9 +639,26 @@ class GuardedPayload {
 $wire = serialize(new GuardedPayload());
 $value = unserialize($wire, ['allowed_classes' => false]);
 echo get_class($value), "\n";
+var_dump($value instanceof __PHP_Incomplete_Class);
+var_dump($value);
+echo print_r($value, true);
 "#,
     );
-    assert_eq!(out, "__PHP_Incomplete_Class\n");
+    assert_eq!(
+        out,
+        "__PHP_Incomplete_Class\nbool(true)\n\
+         object(__PHP_Incomplete_Class)#1 (2) {\n\
+         \x20 [\"__PHP_Incomplete_Class_Name\"]=>\n\
+         \x20 string(14) \"GuardedPayload\"\n\
+         \x20 [\"value\"]=>\n\
+         \x20 int(7)\n\
+         }\n\
+         __PHP_Incomplete_Class Object\n\
+         (\n\
+         \x20   [__PHP_Incomplete_Class_Name] => GuardedPayload\n\
+         \x20   [value] => 7\n\
+         )\n"
+    );
 }
 
 /// Verifies an `allowed_classes` allow-list hydrates and wakes only the named
@@ -1922,4 +1939,19 @@ fn live_blocks(stderr: &str) -> Option<u64> {
         .next()
         .and_then(|word| word.strip_prefix("live_blocks="))
         .and_then(|n| n.parse().ok())
+}
+
+/// Verifies malformed payload warnings name the failure cursor, not always offset zero.
+#[test]
+fn test_unserialize_warning_reports_the_failure_offset() {
+    let out = compile_and_run_capture(
+        r#"<?php
+var_dump(unserialize('s:5:"abcde"'));
+var_dump(unserialize('a:1:{i:0;i:1;'));
+var_dump(unserialize('x:1;'));
+"#,
+    );
+    assert!(out.stderr.contains("Error at offset 11 of 11 bytes"), "{}", out.stderr);
+    assert!(out.stderr.contains("Error at offset 13 of 13 bytes"), "{}", out.stderr);
+    assert!(out.stderr.contains("Error at offset 0 of 4 bytes"), "{}", out.stderr);
 }

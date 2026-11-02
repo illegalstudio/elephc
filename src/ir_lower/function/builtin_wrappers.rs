@@ -127,6 +127,19 @@ pub(super) fn lower_builtin_callable_body(
     );
     function.params = function_params(signature);
     function.signature = Some(signature.clone());
+    // Prefer the emitted signatures so a call into an injected prelude helper also sees the
+    // hidden `func_args` ABI slots `capture_all_frames` appended to it. Without this map the
+    // builtin lowering at the bottom of this wrapper cannot tell the helper needs a collector.
+    let function_signatures = module
+        .functions
+        .iter()
+        .filter_map(|function| {
+            function
+                .signature
+                .clone()
+                .map(|signature| (function.name.clone(), signature))
+        })
+        .collect::<std::collections::HashMap<_, _>>();
     let closures = lower_body_into_function(
         &mut function,
         None,
@@ -134,7 +147,7 @@ pub(super) fn lower_builtin_callable_body(
         &statements,
         env_from_signature(signature, false),
         TypeEnv::new(),
-        &Default::default(),
+        &function_signatures,
         &Default::default(),
         &module.extern_globals,
         &module.callable_param_sigs,
@@ -147,8 +160,11 @@ pub(super) fn lower_builtin_callable_body(
         &module.declared_trait_methods,
         &module.declared_trait_properties,
         &module.packed_class_infos,
-        &Default::default(),
-        &Default::default(),
+        &module.extern_class_infos,
+        &Default::default(), // throw access sites
+        &Default::default(), // builtin call types
+        &Default::default(), // array_push property plans
+        &Default::default(), // checked member receiver types are absent in synthesized bodies
         &Default::default(),
         &Default::default(),
         &Default::default(),

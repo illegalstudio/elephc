@@ -2,7 +2,7 @@
 title: "_gmagick_parse_color() - internals"
 description: "Compiler internals for _gmagick_parse_color(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1185
+  order: 1272
 ---
 
 ## `_gmagick_parse_color()` - internals

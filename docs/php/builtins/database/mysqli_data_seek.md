@@ -2,7 +2,7 @@
 title: "mysqli_data_seek()"
 description: "Moves a buffered result's row cursor to an offset."
 sidebar:
-  order: 108
+  order: 111
 ---
 
 ## mysqli_data_seek()

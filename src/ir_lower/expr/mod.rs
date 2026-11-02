@@ -33,18 +33,25 @@ use crate::types::{
 use std::collections::HashSet;
 
 mod constants;
+mod array_merge_values;
+use array_merge_values::lower_array_value_for_merge;
 mod nullsafe_chain;
 mod ref_place_args;
 mod boxed_user_sort;
 mod scalar_literals;
 mod numeric_binary;
+mod integer_destinations;
+pub(crate) use integer_destinations::coerce_integer_arithmetic;
+use integer_destinations::lower_expr_for_parameter;
 pub(crate) mod object_operators;
 mod string_concat;
 mod comparisons;
 mod unary_logic;
+mod branch_conditions;
 mod lazy_branches;
 mod pipe;
 mod assignments;
+mod string_offset_assign;
 mod assignment_rhs_capture;
 mod weak_map_places;
 mod static_property_updates;
@@ -55,14 +62,18 @@ mod lazy_isset;
 mod native_isset;
 mod callable_probes;
 mod descriptor_invoke;
-mod call_operand_owners;
+pub(crate) mod call_operand_owners;
+mod pending_owners;
 mod descriptor_args;
 mod descriptor_unpack;
 mod static_array_callbacks;
 mod callable_tracking;
 mod callable_resolution;
 mod unset;
+mod unset_collection;
 mod array_builtin_args;
+mod array_push_spread;
+mod borrowed_string_args;
 mod weak_string_unions;
 mod builtin_special_args;
 mod call_arg_coercion;
@@ -82,8 +93,11 @@ mod match_expr;
 mod append_updates;
 pub(crate) use append_updates::store_alias as store_append_update_cell;
 mod array_access;
+mod string_offset_owners;
 mod array_access_types;
 mod ternary_cast;
+mod missing_string;
+pub(crate) use missing_string::loop_region_missing_string_names;
 mod closures;
 mod closure_calls;
 mod descriptor_calls;
@@ -96,6 +110,13 @@ use reference_returns::{
 };
 mod property_fetch_for_write;
 mod method_calls;
+mod closure_binding;
+mod member_receivers;
+mod enum_interface_calls;
+mod enum_argument_guards;
+mod enum_method_args;
+mod enum_static_args;
+mod enum_ref_args;
 mod reflection_class_calls;
 mod reflection_method_calls;
 mod reflection_property_calls;
@@ -111,6 +132,7 @@ mod packed_builtin_args;
 mod method_metadata;
 mod static_method_calls;
 mod scoped_values;
+mod buffer_length;
 mod generators;
 mod instanceof_coercions;
 mod merge_temps;
@@ -126,6 +148,7 @@ use unary_logic::*;
 use lazy_branches::*;
 use pipe::*;
 use assignments::*;
+use string_offset_assign::*;
 use function_calls::*;
 use eval_barriers::*;
 use lazy_isset::*;
@@ -169,6 +192,9 @@ use object_construction::*;
 use property_access::*;
 use property_probes::*;
 use method_calls::*;
+use closure_binding::*;
+use member_receivers::{checked_member_receiver_type, lower_member_receiver, refine_member_receiver};
+pub(crate) use member_receivers::lower_member_receiver_at_span;
 use reflection_class_calls::*;
 use reflection_method_calls::*;
 use reflection_property_calls::*;
@@ -180,6 +206,7 @@ use core_introspection::*;
 use reflection_new_instance::*;
 use nullable_method_calls::*;
 use method_metadata::*;
+pub(in crate::ir_lower) use method_metadata::method_signature;
 use static_method_calls::*;
 use scoped_values::*;
 use generators::*;
@@ -189,12 +216,16 @@ use merge_temps::*;
 pub(crate) use callable_resolution::{
     is_bound_closure_assignment_shape, lower_bound_closure_for_assignment,
 };
+pub(crate) use pending_owners::lower_with_pending_owners;
+pub(crate) use branch_conditions::lower_condition;
 pub(crate) use call_operand_owners::{
     pin_in_flight_owners, register_owned_call_operand, retire_owned_call_operand,
     root_owned_call_operand, unpin_in_flight_owners, unregister_owned_call_operand,
     PinnedInFlightOwner,
 };
 pub(crate) use property_access::singular_object_class;
+pub(crate) use property_access::packed_receiver_class;
+pub(crate) use property_access::extern_receiver_class;
 pub(crate) use callable_tracking::{
     lower_callable_array_for_assignment, reflection_arg_array_binding_for_expr,
     reflection_class_binding_for_expr, reflection_function_binding_for_expr,
@@ -205,7 +236,8 @@ pub(crate) use callable_tracking::{
 pub(crate) use callable_tracking::LoweredCallableArrayAssignment;
 pub(crate) use closures::{body_contains_eval_call, lower_closure_for_assignment};
 pub(crate) use indexed_array_literals::{
-    array_literal_type_for_ir, lower_array_literal_with_expected_type,
+    array_literal_type_for_ir, is_pointer_array_destination, lower_array_literal_with_expected_type,
+    lower_expr_for_destination,
 };
 pub(crate) use array_access::{
     array_access_element_result_type, index_expr_key_type,
@@ -214,14 +246,16 @@ pub(crate) use array_access::{
 };
 pub(crate) use array_access_types::type_satisfies_array_access_for_ir;
 pub(crate) use assignments::lower_null_coalesce_update_stmt;
+pub(crate) use assignments::lower_null_coalesce_update_stmt_to;
 pub(crate) use weak_map_places::lower_weak_map_incdec_stmt;
 pub(crate) use weak_map_places::lower_weak_map_append;
 pub(crate) use weak_map_places::lower_weak_map_denied_append;
 use weak_map_places::lower_weak_map_incdec_expression;
 pub(crate) use instanceof_coercions::{
-    coerce_array_key_to_int_at_span, coerce_to_int_at_span,
+    coerce_array_key_to_int_at_span, coerce_to_int_at_span, coerce_to_string_at_span,
 };
 pub(crate) use merge_temps::emit_bool_literal;
+pub(in crate::ir_lower) use merge_temps::{store_value_into_temp, take_owned_temp};
 pub(crate) use property_access::{
     lower_owned_ref_assign_array_elem, lower_ref_assign_array_elem, lower_ref_assign_call,
     lower_ref_assign_property, lower_ref_assign_static_property,
@@ -233,7 +267,8 @@ pub(crate) use property_fetch_for_write::{
     by_ref_foreach_property_source_is_addressable, lower_by_ref_foreach_property_source,
     lower_nested_assignment_property_source,
 };
-pub(crate) use string_concat::string_op_uses_scratch_storage;
+pub(crate) use string_concat::string_value_needs_persistence;
+pub(crate) use string_concat::persist_pending_string;
 pub(super) use assoc_array_literals::{
     array_access_expr_value_type_for_ir, method_call_expr_type_for_ir,
     property_access_expr_type_for_ir,

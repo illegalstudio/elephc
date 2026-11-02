@@ -29,7 +29,7 @@ use crate::codegen_support::runtime::data::{
     SPRINTF_ARGCOUNT_MSG, SPRINTF_OVERFLOW_MSG, SPRINTF_UNKNOWN_SPEC_MSG, SPRINTF_WIDTH_MSG,
 };
 
-use super::sprintf::{CONCAT_BUF_CAP, CONV_SCRATCH_CAP};
+use super::sprintf::CONV_SCRATCH_CAP;
 
 /// Emits the `__rt_sprintf` runtime helper for Linux x86_64.
 ///
@@ -97,7 +97,8 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rbx, [rcx + r11]");                                // write cursor = buffer base + offset
     emitter.instruction("mov QWORD PTR [rbp - 48], rbx");                       // remember where this result starts
     emitter.instruction("mov QWORD PTR [rbp - 56], r10");                       // remember the concat-offset symbol address
-    emitter.instruction(&format!("lea rcx, [rcx + {}]", CONCAT_BUF_CAP));       // one-past-the-end address of the concat buffer
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "r11", emitter.concat_capacity as i64); // load the shared scratch capacity
+    emitter.instruction("add rcx, r11");                                        // one-past-the-end address of the concat buffer
     emitter.instruction("mov QWORD PTR [rbp - 120], rcx");                      // publish the hard write limit for every copy below
 
     // ================================================================

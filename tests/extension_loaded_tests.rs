@@ -84,6 +84,19 @@ fn run_binary(bin: &Path) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+/// `ext/random` is always compiled in, so both introspection APIs report it without any
+/// bridge flag or feature use.
+#[test]
+fn random_extension_is_always_loaded() {
+    let dir = make_test_dir("ext_random");
+    let src = "<?php \
+        var_dump(extension_loaded('random')); \
+        var_dump(in_array('random', get_loaded_extensions()));";
+    let bin = compile_with_flags(&dir, src, "app", &[]);
+    let out = run_binary(&bin);
+    assert_eq!(out, "bool(true)\nbool(true)\n");
+}
+
 /// Verifies a program compiled `--with-pdo` reports the PDO extension as loaded through
 /// both `extension_loaded('PDO')` and `get_loaded_extensions()`, while an always-present
 /// core extension (json) stays loaded and an unlinked bridge (curl) stays unloaded.

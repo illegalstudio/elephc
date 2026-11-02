@@ -19,6 +19,7 @@ fn test_core_symbols_serializable_user_return_contract() {
 #[test]
 fn test_core_symbols_enum_interface_misuse() {
     expect_error("<?php class Bad implements UnitEnum { public static function cases(): array { return []; } }", "Non-enum class Bad cannot implement interface UnitEnum");
+    expect_error("<?php interface Factory extends BackedEnum {} class Bad implements Factory {}", "Non-enum class Bad cannot implement interface UnitEnum");
     expect_error("<?php enum Bad implements UnitEnum { case One; }", "cannot explicitly implement");
 }
 
@@ -26,6 +27,16 @@ fn test_core_symbols_enum_interface_misuse() {
 #[test]
 fn test_core_symbols_attribute_target_errors() {
     expect_error("<?php #[SensitiveParameter] class Bad {}", "cannot target class");
+    expect_error(
+        "<?php class Bad { public function __construct(#[AllowDynamicProperties] public int $x) {} }",
+        "Attribute \"AllowDynamicProperties\" cannot target parameter",
+    );
+    // A child's plain parameter named like a parent's promoted property is not promoted.
+    expect_error(
+        "<?php class P { public function __construct(public int $x) {} }
+class C extends P { public function __construct(#[Override] int $x) { parent::__construct($x); } }",
+        "Attribute \"Override\" cannot target parameter",
+    );
     expect_error("<?php #[AllowDynamicProperties] function bad(): void {}", "cannot target function");
     expect_error("<?php #[NoDiscard] class Bad {}", "cannot target class");
     expect_error("<?php #[NoDiscard] #[NoDiscard] function bad(): int { return 1; }", "must not be repeated");

@@ -346,7 +346,9 @@ fn emit_static_exception(
     class_id_symbol: &str,
     message: &str,
 ) {
-    emit_static_exception_at(ctx, class_name, class_id_symbol, message, None);
+    // php locates an error raised inside an internal call (`intdiv(1, 0)`) at that call's line.
+    let location = ctx.current_source_location();
+    emit_static_exception_at(ctx, class_name, class_id_symbol, message, location);
 }
 
 /// Same, for an emitter that KNOWS the source location the throwable belongs to.
@@ -376,8 +378,12 @@ fn emit_static_exception_at(
         "\nFatal error: Uncaught {}: {}{}\n",
         class_name, message, suffix
     );
-    let (fatal_label, fatal_len) = ctx.data.add_string(fatal_message.as_bytes());
-    emit_uncaught_exception_fatal_if_no_handler(ctx, &fatal_label, fatal_len);
+    if ctx.backtrace_enabled {
+        emit_uncaught_profile_publish_if_no_handler(ctx);
+    } else {
+        let (fatal_label, fatal_len) = ctx.data.add_string(fatal_message.as_bytes());
+        emit_uncaught_exception_fatal_if_no_handler(ctx, &fatal_label, fatal_len);
+    }
 
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
@@ -429,7 +435,38 @@ fn emit_static_exception_at(
     }
 }
 
+/// Publishes an active exact profile when no catch handler is active, then falls through to the
+/// standard throw.
+///
+/// The frame-reader build sends an uncaught generated error to `__rt_report_uncaught_exception`,
+/// which exits without returning here; the short report this replaces published the profile in
+/// `emit_uncaught_exit`, so the publication moves ahead of the throw. Emits nothing unless the
+/// module is instrumented.
+fn emit_uncaught_profile_publish_if_no_handler(ctx: &mut FunctionContext<'_>) {
+    if !ctx.shared.instrument.is_on() {
+        return;
+    }
+    let throw_label = ctx.next_label("uncaught_profile_throw");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_exc_handler_top", 0);
+            ctx.emitter.instruction(&format!("cbnz x9, {}", throw_label));      // a catch handler may still receive the error: keep profiling
+        }
+        Arch::X86_64 => {
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_exc_handler_top", 0);
+            ctx.emitter.instruction("test r10, r10");                           // check whether a catch handler is active
+            ctx.emitter.instruction(&format!("jnz {}", throw_label));           // a catch handler may still receive the error: keep profiling
+        }
+    }
+    crate::codegen::frame::emit_instr_terminate(ctx);
+    ctx.emitter.label(&throw_label);
+}
+
 /// Writes the specific uncaught diagnostic and exits when no catch handler is active.
+///
+/// Only emitted when the module keeps no frame readers. With readers live, the standard unwinder
+/// reaches the full uncaught report, which prints PHP's `Stack trace:` through the user frames
+/// the error escaped; this short form cannot.
 fn emit_uncaught_exception_fatal_if_no_handler(
     ctx: &mut FunctionContext<'_>,
     fatal_label: &str,
@@ -482,6 +519,11 @@ fn emit_uncaught_dynamic_throwable_fatal_if_no_handler(
     ctx: &mut FunctionContext<'_>,
     class_name: &str,
 ) {
+    if ctx.backtrace_enabled {
+        // See `emit_uncaught_exception_fatal_if_no_handler`: the full report prints the trace.
+        emit_uncaught_profile_publish_if_no_handler(ctx);
+        return;
+    }
     let throw_label = ctx.next_label("dynamic_error_throw");
     let prefix = format!("\nFatal error: Uncaught {}: ", class_name);
     let (prefix_label, prefix_len) = ctx.data.add_string(prefix.as_bytes());

@@ -35,11 +35,22 @@ pub enum CompileErrorKind {
     AotLiteralRequired,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// Severity of a compiler diagnostic that does not stop compilation.
+pub enum WarningKind {
+    /// Ordinary compiler warning.
+    #[default]
+    Warning,
+    /// PHP deprecation notice raised while compiling a constant expression.
+    Deprecation,
+}
+
 #[derive(Debug, Clone)]
 /// Compile warning.
 pub struct CompileWarning {
     pub span: Span,
     pub message: String,
+    pub kind: WarningKind,
 }
 
 impl CompileError {
@@ -99,6 +110,16 @@ impl CompileWarning {
         Self {
             span,
             message: message.to_string(),
+            kind: WarningKind::Warning,
+        }
+    }
+
+    /// Creates a deprecation diagnostic with the given span and message.
+    pub fn deprecation(span: Span, message: &str) -> Self {
+        Self {
+            span,
+            message: message.to_string(),
+            kind: WarningKind::Deprecation,
         }
     }
 }

@@ -235,30 +235,55 @@ fn test_readonly_setter_review_reflection_eval() { verify_reflection(Some(false)
 #[test]
 fn test_readonly_setter_review_reflection_native_parent() { verify_reflection(Some(true)); }
 
-/// Reflected no-op writes add no owners beyond normally released reflector construction.
+/// Repeated reflected writes add no owners after constructing their metadata once.
 #[test]
 fn test_readonly_setter_review_reflection_owners() {
     let mut baseline = None;
     for iterations in [1, 8] {
-        let run = |function: &str| compile_and_run_with_heap_debug(&source(None, &format!(r#"
-function reflect(Grandchild $object): void {{
+        let runs = compile_and_run_with_heap_debug_per_argv(&source(None, &format!(r#"
+function reflect(Grandchild $object, ReflectionProperty $property): void {{
+    try {{ $property->setValue($object, str_repeat("b", 2)); }}
+    catch (TypeError $error) {{ echo "T"; unset($error); }}
+    $property->setValue($object, 4);
+    echo isset($object->x) ? "bad" : "U";
+}}
+function control(Grandchild $object, ReflectionProperty $property): void {{
+    if ($property->getName() !== "x") {{ echo "bad"; }}
+    try {{ $object->x = str_repeat("b", 2); }}
+    catch (TypeError $error) {{ echo "T"; unset($error); }}
+    $object->x = 4;
+    echo isset($object->x) ? "bad" : "U";
+}}
+function inlineReflect(Grandchild $object): void {{
     try {{ (new ReflectionProperty(Grandchild::class, "x"))->setValue($object, str_repeat("b", 2)); }}
     catch (TypeError $error) {{ echo "T"; unset($error); }}
     (new ReflectionProperty(Grandchild::class, "x"))->setValue($object, 4);
     echo (new ReflectionProperty(Grandchild::class, "x"))->isInitialized($object) ? "bad" : "U";
 }}
-function control(Grandchild $object): void {{
+function inlineControl(Grandchild $object): void {{
     new ReflectionProperty(Grandchild::class, "x");
+    try {{ $object->x = str_repeat("b", 2); }}
+    catch (TypeError $error) {{ echo "T"; unset($error); }}
     new ReflectionProperty(Grandchild::class, "x");
+    $object->x = 4;
     new ReflectionProperty(Grandchild::class, "x");
-    echo "TU";
+    echo isset($object->x) ? "bad" : "U";
 }}
-for ($i = 0; $i < {iterations}; $i++) {{ $object = new Grandchild(); {function}($object); unset($object); }}
-"#)));
-        let control = run("control");
-        let result = run("reflect");
+$object = new Grandchild();
+if ($argc > 1) {{ inlineReflect($object); }} else {{ inlineControl($object); }}
+unset($object);
+$property = new ReflectionProperty(Grandchild::class, "x");
+for ($i = 0; $i < {iterations}; $i++) {{
+    $object = new Grandchild();
+    if ($argc > 1) {{ reflect($object, $property); }} else {{ control($object, $property); }}
+    unset($object);
+}}
+unset($property);
+"#)), &[&[], &["reflect"]]);
+        let control = &runs[0];
+        let result = &runs[1];
         assert!(control.success && result.success, "control: {}\nresult: {}\n{}", control.stderr, result.stdout, result.stderr);
-        assert_eq!(control.stdout, "TU".repeat(iterations));
+        assert_eq!(control.stdout, "TU".repeat(iterations + 1));
         assert_eq!(result.stdout, control.stdout, "{}", result.stderr);
         let retained = |stderr: &str| ["live_blocks=", "live_bytes="].map(|metric| {
             stderr.lines().next().unwrap().split_whitespace()
@@ -271,10 +296,10 @@ for ($i = 0; $i < {iterations}; $i++) {{ $object = new Grandchild(); {function}(
             let growth = |current: [usize; 2], original: [usize; 2]| [current[0] - original[0], current[1] - original[1]];
             let result_growth = growth(result_retained, result_baseline);
             let control_growth = growth(control_retained, control_baseline);
-            assert_eq!(result_growth[0], control_growth[0]);
-            // Free-list reuse can change retained metadata block capacities across binaries.
-            assert!(result_growth[1] <= control_growth[1],
-                "argument owners must not add to the pre-existing metadata baseline: {result_growth:?} > {control_growth:?}");
+            // Metadata allocation precedes the writes, so allocator reuse cannot change
+            // its retained capacities. Every additional call must release all of its owners.
+            assert_eq!(control_growth, [0, 0], "direct setter owners: {control_growth:?}");
+            assert_eq!(result_growth, [0, 0], "reflected setter owners: {result_growth:?}");
         } else { baseline = Some((control_retained, result_retained)); }
     }
 }

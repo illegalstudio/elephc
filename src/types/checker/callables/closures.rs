@@ -96,7 +96,10 @@ impl Checker {
                 None if *is_ref => (PhpType::Mixed, PhpType::Mixed),
                 None => match contextual_param_types.get(idx) {
                     Some(hint) => (hint.clone(), hint.clone()),
-                    None => (PhpType::Int, PhpType::Mixed),
+                    // No context types it: PHP semantics are `mixed`. The body must be
+                    // checked against the same Mixed the signature publishes, never an
+                    // `int` placeholder that makes valid string uses fail.
+                    None => (PhpType::Mixed, PhpType::Mixed),
                 },
             };
 
@@ -213,7 +216,8 @@ impl Checker {
             if let Some(type_ann) = return_type {
                 let declared_ret =
                     self.resolve_declared_return_type_hint(type_ann, span, "Closure")?;
-                self.require_compatible_return_type(
+                self.require_compatible_return_hint(
+                    type_ann,
                     &declared_ret,
                     &generator_ty,
                     true,
@@ -239,13 +243,14 @@ impl Checker {
                     "Closure declared never must not return",
                 ));
             }
-            self.require_declared_return_coverage(&declared_ret, body, span, "Closure")?;
+            self.require_return_hint_coverage(type_ann, &declared_ret, body, span, "Closure")?;
             if all_return_infos.is_empty() {
                 return Ok((declared_ret, true));
             }
 
             for return_info in &all_return_infos {
-                self.require_compatible_return_type(
+                self.require_compatible_return_hint(
+                    type_ann,
                     &declared_ret,
                     &return_info.ty,
                     return_info.has_value,
@@ -277,7 +282,7 @@ impl Checker {
     /// Applies the caller-visible container rule to a closure whose body is `return <user call>;`.
     ///
     /// EIR lowering stamps exactly that body shape with the callee's
-    /// `crate::types::dynamic_params::caller_visible_return_type` (see
+    /// `crate::types::dynamic_params::caller_visible_checker_return_type` (see
     /// `crate::ir_lower::function::direct_closure_return_expr_type`), built from the two
     /// predicates applied here: a callee with an untyped by-value parameter receives it as a
     /// boxed Mixed cell, so an array it builds from it holds Mixed elements. The checker

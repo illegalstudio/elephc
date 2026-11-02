@@ -227,8 +227,18 @@ echo $static();            // 99  (static spelling)
 echo $read();              // 7   (original is unchanged)
 ```
 
-An optional third `$scope` argument is accepted for source compatibility and
-ignored (member visibility is resolved at compile time).
+An explicit scope may be a known user class name, `Class::class`, an object,
+`null` for global visibility, or `"static"` to preserve the closure's current
+scope. The same argument is the second parameter of `bindTo()`. An object
+supplies its concrete runtime class, including when it is passed through a
+base-class parameter.
+
+For standalone accessor closures, explicit scope also works when the closure
+is supplied as a callable parameter or selected after a warning handler changes
+a global. Binding selects a function compiled for the requested visibility;
+the original and earlier bound copies keep their own scopes. Runtime strings
+that select a scope are refused by native lowering; use an object or a literal
+class scope instead.
 
 `$closure->call($newThis, ...$args)` binds `$this` and invokes the closure in a
 single step, returning its result:
@@ -255,8 +265,10 @@ echo $read();   // 250 — bound access reaches the private property
 
 Rebinding supports closures that capture `$this` and nothing else (the typical
 accessor closure, whether created inside a method or standalone). Binding a
-closure that also has `use(...)` captures aborts with a fatal error rather than
-producing an incorrectly bound closure.
+closure that also has `use(...)` captures is refused rather than producing an
+incorrectly bound closure.
+Changing the class scope of an accessor originally compiled against a concrete
+object layout is also refused when that layout cannot be retargeted safely.
 
 ## Static closures
 
@@ -388,6 +400,38 @@ $b = 2;
 echo $a; // 2
 ```
 
+An **object property** can also be passed directly to a by-reference parameter of a user
+method or constructor when the parameter and the property are both object-typed:
+
+```php
+<?php
+class Value { public function __construct(public int $number) {} }
+class Box { public function __construct(public Value $value) {} }
+class Ops {
+    public function replace(Value &$value): void {
+        $value = new Value(9);
+    }
+}
+
+$box = new Box(new Value(1));
+(new Ops())->replace($box->value);
+echo $box->value->number; // 9
+```
+
+elephc lowers the call as `$temporary = $box->value; replace($temporary); $box->value = $temporary;`
+through a hidden reference cell, so the callee's replacement is visible on the property
+exactly as PHP's shared reference is. The same rewrite accepts scalar, string, array,
+`mixed`, union, and nullable properties, static properties, static methods, and free
+functions.
+
+The same property places also bind to by-reference **variadics**, except array properties:
+the variadic collector needs the container payload repacked, so `collect($box->items)` is
+rejected and asks for a local variable instead. Properties whose declared type needs a runtime
+type dispatch the rewrite does not implement (`iterable`, pointers, buffers) still report
+`must be passed a variable`. The write-back runs after the call
+returns; if the callee throws after mutating the reference, the property keeps its previous
+value (PHP would already have applied the mutation).
+
 ## References to array elements
 
 A local can alias an element of an **indexed array** (`$b =& $a[0]`). Writing through
@@ -515,6 +559,15 @@ The caller's reference is published before any of the caller's own post-call cle
 so a destructor that throws while the call's argument temporaries, an owning receiver, or
 the previous binding of the target are retired cannot lose the returned reference. A
 `catch` in the same function still sees the referenced value released exactly once.
+When retirement of the previous target throws, the replacement alias is already visible
+inside that `catch`. This also holds when a loop re-executes the same reference binding.
+
+An enum implementing a by-value interface method may add a by-reference return, as in
+PHP. When an interface call selects among native enums, a reference assignment preserves
+the selected method's actual reference; a by-value method instead supplies an independent
+cell containing its result. Copied results are widened to the interface's result layout
+before their cell is created. This does not make a class interface adapter that returns a
+copied value capable of transferring the original reference.
 
 ### Reference-return forms this compiler does not support yet
 
@@ -528,12 +581,17 @@ semantics:
 - Returning a place that is neither a variable nor a property, such as an array element
   read or the result of another call. PHP returns a reference to those places; this
   lowering has no cell to transfer for them.
-- Capturing a reference with `$x = &f()` from a call the compiler cannot resolve to a
-  by-reference return. A named function, a method, a static method, and a closure whose
+- Outside the native enum interface dispatch described above, capturing a reference with
+  `$x = &f()` from a call the compiler cannot resolve to a by-reference return. A named
+  function, a method, a static method, and a closure whose
   binding is known (including one produced by `Closure::bind`) are all resolved. A call
   made through a runtime-selected callable, such as a variable holding a function-name
   string, is not: that path is lowered through the dynamic descriptor invoker, which hands
   back a copied value rather than the callee's reference cell.
+- Binding a selected enum reference whose payload representation differs from the
+  interface's result representation. A compatible copied result can be widened, but an
+  existing reference cannot be reshaped behind its other aliases. Such declarations remain
+  valid; this reference-assignment form is rejected with `Unsupported reference assignment`.
 
 One case cannot be decided at compile time. A function that returns its own by-reference
 parameter has no way to know what the caller bound to it, so a caller that passed an alias

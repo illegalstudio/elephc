@@ -350,6 +350,10 @@ pub(crate) fn compile_expect_type_error(source: &str) -> String {
         &mut prelude_inventory,
     );
     let resolved = elephc::xml_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::core_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::fileinfo_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::tokenizer_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::testing_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
         elephc::autoload::run(resolved, &dir, &autoload_registry).expect("autoload failed");
@@ -357,6 +361,8 @@ pub(crate) fn compile_expect_type_error(source: &str) -> String {
         .expect("autoload DOM prelude injection failed");
     // Mirrors `pipeline::compile`: the object-cast prelude is injected AFTER autoloading, so a
     // `(object)` cast that only appears in an autoloaded class file is still detected.
+    let resolved = elephc::testing_prelude::inject_after_autoload(resolved, &mut prelude_inventory)
+        .expect("testing prelude post-autoload injection failed");
     let resolved = elephc::object_cast_prelude::inject_if_used(resolved, &mut prelude_inventory)
         .expect("object-cast prelude injection failed");
     // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
@@ -535,6 +541,8 @@ fn compile_and_run_files_with_defines_per_argv(
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let resolved = elephc::dom_html_prelude::inject_after_autoload(resolved, &mut prelude_inventory)
         .expect("autoload DOM prelude injection failed");
+    let resolved = elephc::testing_prelude::inject_after_autoload(resolved, &mut prelude_inventory)
+        .expect("testing prelude post-autoload injection failed");
     let resolved = elephc::object_cast_prelude::inject_if_used(resolved, &mut prelude_inventory)
         .expect("object-cast prelude injection failed");
     // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
@@ -586,9 +594,34 @@ fn compile_and_run_files_with_defines_per_argv(
     );
     let _ = fs::remove_dir_all(&dir);
     outputs.into_iter().zip(argvs).map(|(output, args)| {
-        assert!(output.success, "project binary failed for {args:?}: {}", output.stderr);
+        assert!(
+            output.success,
+            "project binary failed for {args:?}\nstatus: {}\nstdout: {}\nstderr: {}",
+            output.status, output.stdout, output.stderr,
+        );
         output.stdout
     }).collect()
+}
+
+/// Multi-file failures preserve the arguments, exit status and both output streams.
+#[test]
+fn test_multifile_failure_reports_status_stdout_stderr_and_argv() {
+    let failure = std::panic::catch_unwind(|| {
+        compile_and_run_files_per_argv(
+            &[("main.php", "<?php echo 'before failure'; fwrite(STDERR, 'failure detail'); exit(7);")],
+            "main.php",
+            &[&["diagnostic-argument"]],
+        );
+    }).expect_err("the fixture must fail with exit status 7");
+    let message = failure.downcast_ref::<String>().expect("expected an assertion message");
+    for detail in [
+        "[\"diagnostic-argument\"]",
+        "status: exit status: 7",
+        "stdout: before failure",
+        "stderr: failure detail",
+    ] {
+        assert!(message.contains(detail), "missing {detail:?} in {message}");
+    }
 }
 
 // Returns true if compilation of a multi-file PHP project fails (type-check or earlier).
@@ -764,6 +797,9 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
     let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &synthetic_main);
     let (resolved, included_files) =
         elephc::resolver::resolve_collecting_includes(ast, &dir).expect("resolve failed");
+    let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::default();
+    let resolved = elephc::core_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::fileinfo_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::autoload::collect_aliases(resolved).expect("alias collection failed");
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`

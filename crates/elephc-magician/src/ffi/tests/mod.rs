@@ -177,6 +177,11 @@ fn native_array_default_push_element(
             record.push(TEST_NATIVE_ARRAY_DEFAULT_KEY_STRING);
             native_member_attribute_push_string(record, value);
         }
+        Some(NativeCallableArrayDefaultKey::Bytes(value)) => {
+            record.push(TEST_NATIVE_ARRAY_DEFAULT_KEY_STRING);
+            record.extend_from_slice(&(value.len() as u32).to_le_bytes());
+            record.extend_from_slice(value);
+        }
         None => record.push(TEST_NATIVE_ARRAY_DEFAULT_KEY_AUTO),
     }
     native_object_default_push_arg_value(record, &element.value);
@@ -214,6 +219,11 @@ fn native_object_default_push_arg_value(record: &mut Vec<u8>, value: &NativeCall
         NativeCallableDefault::String(value) => {
             record.push(TEST_NATIVE_OBJECT_DEFAULT_ARG_STRING);
             native_member_attribute_push_string(record, value);
+        }
+        NativeCallableDefault::Bytes(value) => {
+            record.push(TEST_NATIVE_OBJECT_DEFAULT_ARG_STRING);
+            record.extend_from_slice(&(value.len() as u32).to_le_bytes());
+            record.extend_from_slice(value);
         }
         NativeCallableDefault::EmptyArray => {
             native_object_default_push_scalar(record, TEST_NATIVE_DEFAULT_EMPTY_ARRAY, 0)

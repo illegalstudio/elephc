@@ -100,6 +100,18 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // object pointer
     emitter.instruction("add r10, r8");                                         // address of the property slot
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // value box
+    emitter.instruction("mov QWORD PTR [rbp - 72], r9");                        // preserve the property tag across the previous-value release
+    emitter.instruction("mov QWORD PTR [rbp - 80], r10");                       // preserve the slot address across the previous-value release
+    emitter.instruction("sub rsp, 16");                                         // reserve an aligned spill for the property offset
+    emitter.instruction("mov QWORD PTR [rsp], r8");                             // preserve the property byte offset across the release
+    emitter.instruction("mov rdi, r10");                                        // pass the property slot to the previous-value release
+    emitter.instruction("mov rsi, r9");                                         // pass the compile-time property tag
+    emitter.instruction("call __rt_unser_release_prev_prop");                   // release the default value this hydration overwrites
+    emitter.instruction("mov r8, QWORD PTR [rsp]");                             // recover the property byte offset after the release
+    emitter.instruction("add rsp, 16");                                         // release the offset spill
+    emitter.instruction("mov r9, QWORD PTR [rbp - 72]");                        // recover the property tag
+    emitter.instruction("mov r10, QWORD PTR [rbp - 80]");                       // recover the slot address
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // recover the parsed value box
     emitter.instruction("cmp r9, 7");                                           // is this a Mixed/untyped slot?
     emitter.instruction("je __rt_obj_store_prop_mixed");                        // store the boxed cell directly
     emitter.instruction("cmp r9, 1");                                           // is this a string slot?
@@ -111,6 +123,8 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rcx + 8]");                        // typed scalar/object/hash: unbox the low word
     emitter.instruction("mov QWORD PTR [r10], rax");                            // store it inline in the slot
     emitter.instruction("mov QWORD PTR [r10 + 8], 0");                          // the high word marks the typed property initialized
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // hand the parsed box to the post-store finisher
+    emitter.instruction("call __rt_unser_finish_stored_prop");                  // release or retain the box after the slot took its value
     emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
     emitter.label("__rt_obj_store_prop_tagged");
     // Only an int or null reaches this arm; the declared-type check above already raised the
@@ -120,11 +134,15 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rcx + 8]");                        // unbox the integer payload
     emitter.instruction("mov QWORD PTR [r10], rax");                            // payload word of the tagged slot
     emitter.instruction(&format!("mov QWORD PTR [r10 + 8], {}", TAGGED_SCALAR_TAG_INT)); // tag word: a non-null tagged int
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // hand the parsed box to the post-store finisher
+    emitter.instruction("call __rt_unser_finish_stored_prop");                  // release the scalar box after the slot took its value
     emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
     emitter.label("__rt_obj_store_prop_tagged_null");
     crate::codegen_support::abi::emit_load_int_immediate(emitter, "rax", crate::codegen_support::NULL_SENTINEL);
     emitter.instruction("mov QWORD PTR [r10], rax");                            // canonical tagged-null payload word
     emitter.instruction(&format!("mov QWORD PTR [r10 + 8], {}", TAGGED_SCALAR_TAG_NULL)); // tag word: PHP null
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // hand the parsed box to the post-store finisher
+    emitter.instruction("call __rt_unser_finish_stored_prop");                  // release the scalar box after the slot took its value
     emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
     emitter.label("__rt_obj_store_prop_arr");
     emitter.instruction("mov QWORD PTR [rbp - 64], r8");                        // save the property byte offset across the call
@@ -134,17 +152,35 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("add r10, QWORD PTR [rbp - 64]");                       // slot = object + byte offset
     emitter.instruction("mov QWORD PTR [r10], rax");                            // store the indexed-array pointer
     emitter.instruction("mov QWORD PTR [r10 + 8], 0");                          // the high word marks the typed property initialized
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // hand the parsed box to the parse-owner release
+    emitter.instruction("call __rt_decref_mixed");                              // retire the source hash box now the slot owns the new array
     emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
     emitter.label("__rt_obj_store_prop_str");
     emitter.instruction("mov rax, QWORD PTR [rcx + 8]");                        // string pointer from the box
     emitter.instruction("mov QWORD PTR [r10], rax");                            // store the string pointer
     emitter.instruction("mov rax, QWORD PTR [rcx + 16]");                       // string length from the box
     emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // store the string length
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // hand the parsed box to the post-store finisher
+    emitter.instruction("call __rt_unser_finish_stored_prop");                  // transfer the string owner and free the box shell
     emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
     // A parsed null keeps its boxed tag-8 cell like every other value: the in-band
     // NULL_SENTINEL is not a Mixed cell pointer, and every reader of the slot
     // (`=== null`, var_dump, json_encode) dereferenced it.
     emitter.label("__rt_obj_store_prop_mixed");
+    emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // current property metadata word
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "r9", crate::codegen_support::sentinels::UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+    emitter.instruction("cmp r11, r9");                                         // is this Mixed property still uninitialized?
+    emitter.instruction("je __rt_obj_store_prop_mixed_new");                    // a fresh slot takes the parsed box directly
+    emitter.instruction("mov rdi, QWORD PTR [r10]");                            // existing Mixed value or in-band null sentinel
+    emitter.instruction("test rdi, rdi");                                       // does the slot already own a value?
+    emitter.instruction("jz __rt_obj_store_prop_mixed_new");                    // a zero slot takes the parsed box directly
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "r9", crate::codegen_support::sentinels::NULL_SENTINEL);
+    emitter.instruction("cmp rdi, r9");                                         // is the slot holding the canonical null sentinel?
+    emitter.instruction("je __rt_obj_store_prop_mixed_new");                    // sentinels have no box to reuse
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // parsed replacement box for the in-place reuse
+    emitter.instruction("call __rt_unser_reuse_box");                           // keep the earlier reference slot tied to the new value
+    emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored in the reused box
+    emitter.label("__rt_obj_store_prop_mixed_new");
     emitter.instruction("mov QWORD PTR [r10], rcx");                            // store the boxed Mixed cell pointer
     emitter.instruction("mov QWORD PTR [r10 + 8], 0");                          // the high word marks the typed property initialized
     emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
@@ -178,6 +214,8 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // persist the row index
     emitter.instruction("jmp __rt_obj_store_prop_loop");                        // continue scanning
     emitter.label("__rt_obj_store_prop_done");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // hand the ignored value box to the context owner
+    emitter.instruction("call __rt_unserialize_defer_data");                    // keep the unclaimed value alive until the decode completes
     emitter.label("__rt_obj_store_prop_ret");
     emitter.instruction("add rsp, 96");                                         // deallocate the store frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
@@ -332,5 +370,9 @@ mod tests {
         );
         // An accepted int into a float slot is widened, not reinterpreted.
         assert!(asm.contains("cvtsi2sd xmm0, r8"), "{asm}");
+        // The previous-value release can clobber r8, so the array-store path must
+        // preserve the property byte offset across that call.
+        assert!(asm.contains("mov QWORD PTR [rsp], r8"), "{asm}");
+        assert!(asm.contains("mov r8, QWORD PTR [rsp]"), "{asm}");
     }
 }

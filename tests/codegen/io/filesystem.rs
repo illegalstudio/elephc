@@ -404,3 +404,27 @@ echo file_get_contents($f);
     );
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// `file_put_contents()` into a directory that does not exist fails without writing the
+/// data anywhere. On macOS a failed raw `open` returns a POSITIVE errno with the carry flag
+/// set; the unchecked result (ENOENT = 2) was used as a descriptor, so the payload went to
+/// stderr and the call reported the full byte count. A literal and a runtime-built path are
+/// both covered, since they reach the same runtime helper.
+#[test]
+fn test_file_put_contents_into_a_missing_directory_fails_without_writing() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$literal = file_put_contents("elephc-missing-dir-xyz/out.txt", "SECRET-PAYLOAD-1");
+$dir = "elephc-missing-dir-" . strlen("xyz");
+$dynamic = file_put_contents($dir . "/out.txt", "SECRET-PAYLOAD-2");
+echo ($literal === strlen("SECRET-PAYLOAD-1") ? "wrote" : "failed"), "\n";
+echo ($dynamic === strlen("SECRET-PAYLOAD-2") ? "wrote" : "failed"), "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "failed\nfailed\n", "stderr: {}", out.stderr);
+    assert!(
+        !out.stderr.contains("SECRET-PAYLOAD"),
+        "the payload must not reach another descriptor: {}",
+        out.stderr
+    );
+}

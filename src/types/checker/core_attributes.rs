@@ -34,6 +34,13 @@ pub(super) fn validate(checker: &Checker) -> Result<(), CompileError> {
     }
     for class in checker.classes.values() {
         validate_names(&class.attribute_names, 1, Span::dummy())?;
+        // Parameters first: an attribute on a promoted parameter that matches neither the
+        // parameter nor the property target is kept on both, and php-src reports the parameter.
+        for signature in class.methods.values().chain(class.static_methods.values()) {
+            for attributes in &signature.param_attributes {
+                validate_names(&collect_attribute_names(attributes), 32, attribute_span(attributes))?;
+            }
+        }
         for names in class.property_attribute_names.values() { validate_names(names, 8, Span::dummy())?; }
         for names in class.constant_attribute_names.values() { validate_names(names, 16, Span::dummy())?; }
         for names in class.method_attribute_names.values() { validate_names(names, 4, Span::dummy())?; }
@@ -45,13 +52,13 @@ pub(super) fn validate(checker: &Checker) -> Result<(), CompileError> {
                 return Err(CompileError::new(method.span, "NoDiscard cannot apply to a void or never method"));
             }
         }
-        for signature in class.methods.values().chain(class.static_methods.values()) {
-            for attributes in &signature.param_attributes {
-                validate_names(&collect_attribute_names(attributes), 32, Span::dummy())?;
-            }
-        }
     }
     Ok(())
+}
+
+/// Returns the source span of a declaration's first attribute group, for a target diagnostic.
+fn attribute_span(groups: &[AttributeGroup]) -> Span {
+    groups.first().map_or(Span::dummy(), |group| group.span)
 }
 
 /// Applies immediate Core validation unless a declaration explicitly defers its targets.

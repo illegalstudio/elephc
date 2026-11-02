@@ -84,6 +84,8 @@ REGISTRY_AREA_DEFAULTS: Dict[str, Tuple[str, str]] = {
     # builtin `xml_parse_into_struct`; both PHP modules share one docs area and the
     # narrative page docs/php/xml.md.
     "xml": ("XML", "XML"),
+    # `ext/random` procedural functions declared by the random prelude.
+    "random": ("Math", "Random"),
 }
 
 
@@ -270,6 +272,7 @@ AREA_BY_NAME: Dict[str, Tuple[str, str]] = {
 REGISTRY_AREA_OVERRIDES: Dict[str, Tuple[str, str]] = {
     "buffer_free": ("Buffer", "Buffer"),
     "buffer_len": ("Buffer", "Buffer"),
+    "buffer_ptr": ("Buffer", "Buffer"),
     "call_user_func": ("Array", "Array"),
     "call_user_func_array": ("Array", "Array"),
     "class_attribute_args": ("Class", "Attributes"),
@@ -315,6 +318,11 @@ REGISTRY_AREA_OVERRIDES: Dict[str, Tuple[str, str]] = {
 #   - `None` — leave whatever the parser produced alone (skip refinement).
 ParamSpec = object  # str | Tuple[str, str] | None — kept loose for legibility
 PARAM_TYPES: Dict[str, List[Optional[ParamSpec]]] = {
+    'finfo_buffer': ['finfo', 'string', 'int', '?resource'],
+    'finfo_file': ['finfo', 'string', 'int', '?resource'],
+    'finfo_close': ['finfo'],
+    'finfo_set_flags': ['finfo', 'int'],
+    'mime_content_type': ['string|resource'],
     '__elephc_gmmktime_raw': ['int', 'int', 'int', 'int', 'int', 'int'],
     '__elephc_mktime_raw': ['int', 'int', 'int', 'int', 'int', 'int'],
     '__elephc_strtotime_raw': ['string', 'int'],
@@ -331,6 +339,7 @@ PARAM_TYPES: Dict[str, List[Optional[ParamSpec]]] = {
     'array_fill': ['int', 'int', 'mixed'],
     'array_fill_keys': ['array', 'mixed'],
     'array_filter': ['array', '?callable', 'int'],
+    'array_first': ['array'],
     'array_flip': ['array'],
     'array_intersect': ['array'],
     'array_intersect_assoc': ['array'],
@@ -339,6 +348,7 @@ PARAM_TYPES: Dict[str, List[Optional[ParamSpec]]] = {
     'array_key_first': ['array'],
     'array_key_last': ['array'],
     'array_keys': ['array'],
+    'array_last': ['array'],
     'array_map': ['?callable', 'array'],
     'array_multisort': ['array', 'array'],
     'array_pad': ['array', 'int', 'mixed'],
@@ -375,6 +385,7 @@ PARAM_TYPES: Dict[str, List[Optional[ParamSpec]]] = {
     'buffer_free': ['buffer'],
     'buffer_len': ['buffer'],
     'buffer_new': ['int'],
+    'buffer_ptr': ['buffer'],
     'call_user_func': ['callable'],
     'call_user_func_array': ['callable', 'array'],
     'ceil': ['float'],
@@ -847,6 +858,7 @@ def slug(name: str) -> str:
 # `check_builtin()` arms (which sometimes narrow to the wrong type, e.g.
 # `array_shift` returns `mixed`, not the array element type).
 RETURN_TYPE_OVERRIDES: Dict[str, str] = {
+    "finfo_open": "finfo|false",
     # Numeric aggregates preserve integer overflow and floating-point values.
     # Their neutral Mixed contract covers this union because TypeSpec has no union variant.
     "array_sum": "int|float",

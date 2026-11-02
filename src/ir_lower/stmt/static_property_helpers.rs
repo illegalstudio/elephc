@@ -84,7 +84,7 @@ pub(super) fn receiver_name(receiver: &StaticReceiver) -> String {
 }
 
 /// Resolves the declared PHP type of a static property for statement lowering.
-pub(super) fn static_property_type(
+pub(crate) fn static_property_type(
     ctx: &LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
     property: &str,
@@ -130,8 +130,16 @@ pub(super) fn object_property_type(
     object: crate::ir::ValueId,
     property: &str,
 ) -> Option<PhpType> {
-    let object_ty = ctx.builder.value_php_type(object);
-    let (class_name, _) = crate::ir_lower::expr::singular_object_class(&object_ty)?;
+    object_type_property_type(ctx, &ctx.builder.value_php_type(object), property)
+}
+
+/// Resolves the declared PHP type of a property on a receiver of the given static type.
+pub(super) fn object_type_property_type(
+    ctx: &LoweringContext<'_, '_>,
+    object_ty: &PhpType,
+    property: &str,
+) -> Option<PhpType> {
+    let (class_name, _) = crate::ir_lower::expr::singular_object_class(object_ty)?;
     ctx.classes
         .get(class_name.trim_start_matches('\\'))?
         .visible_property(property)

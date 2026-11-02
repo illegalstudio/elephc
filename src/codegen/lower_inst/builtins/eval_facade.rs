@@ -17,6 +17,19 @@ pub(in crate::codegen::lower_inst) fn append_eval_inventory(
     eval::append_eval_inventory(ctx, constants)
 }
 
+/// Emits the body of the shared eval status dispatch helper.
+pub(in crate::codegen) fn emit_eval_status_helper_body(ctx: &mut FunctionContext<'_>) {
+    eval::emit_eval_status_helper_body(ctx)
+}
+
+/// Registers the native catalog into the eval context passed in argument register 0.
+///
+/// This is the body of the module-level catalog helper; it reads the handle from
+/// the module-level parking symbol rather than from a caller frame slot.
+pub(in crate::codegen) fn register_eval_inventory(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    eval::register_eval_inventory(ctx)
+}
+
 /// Lowers a statically-known eval fragment through the current bridge fallback path.
 pub(in crate::codegen::lower_inst) fn lower_eval_literal_call(
     ctx: &mut FunctionContext<'_>,

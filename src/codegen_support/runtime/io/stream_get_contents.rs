@@ -16,7 +16,7 @@
 //! - The read-all loop uses `__rt_fread` so TLS sessions, filters, and wrapper
 //!   reads share one I/O dispatch path.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Initial accumulation capacity, in bytes. Two read chunks wide so the first `__rt_fread`
 /// never has to grow, and small enough that short streams still stay in concat scratch.
@@ -93,6 +93,7 @@ pub fn emit_stream_get_contents(emitter: &mut Emitter) {
     emitter.instruction("cbz x2, __rt_stream_get_contents_release_done");       // empty read stops the read-all loop
     emitter.instruction("str x1, [sp, #32]");                                   // save chunk pointer across the copy
     emitter.instruction("str x2, [sp, #40]");                                   // save chunk length across the copy
+    ensure_returned_chunk_capacity(emitter, false);
     emitter.instruction("ldr x11, [sp, #16]");                                  // accumulation buffer base pointer
     emitter.instruction("ldr x9, [sp, #24]");                                   // running result length before this chunk
     emitter.instruction("add x11, x11, x9");                                    // destination = accumulation base + total
@@ -214,7 +215,7 @@ fn emit_stream_get_contents_bounded_aarch64(emitter: &mut Emitter) {
     emitter.instruction("csel x1, x1, x11, lt");                                // request min(remaining, chunk size)
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd for __rt_fread
     emitter.instruction("bl __rt_fread");                                       // x1=chunk ptr, x2=chunk len
-    emitter.instruction("cbz x2, __rt_stream_get_contents_bounded_release_done"); // empty read stops the bounded loop
+    emitter.instruction("cbz x2, __rt_stream_get_contents_bounded_release_done");// empty read stops the bounded loop
     emitter.instruction("ldr x9, [sp, #32]");                                   // running result length
     emitter.instruction("ldr x10, [sp, #8]");                                   // requested byte cap
     emitter.instruction("sub x10, x10, x9");                                    // remaining bytes allowed
@@ -222,6 +223,7 @@ fn emit_stream_get_contents_bounded_aarch64(emitter: &mut Emitter) {
     emitter.instruction("csel x2, x2, x10, ls");                                // clamp the chunk to the remaining cap
     emitter.instruction("str x1, [sp, #40]");                                   // save chunk pointer across the copy
     emitter.instruction("str x2, [sp, #48]");                                   // save chunk length across the copy
+    ensure_returned_chunk_capacity(emitter, true);
     emitter.instruction("ldr x11, [sp, #24]");                                  // accumulation buffer base pointer
     emitter.instruction("add x11, x11, x9");                                    // destination = accumulation base + total
     emitter.instruction("mov x12, #0");                                         // byte-copy index
@@ -274,7 +276,7 @@ fn emit_stream_get_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the source file descriptor
 
     // -- reserve the accumulation buffer and claim its whole window --
-    emitter.instruction(&format!("mov QWORD PTR [rbp - 56], {}", INITIAL_CAPACITY)); // start from the initial accumulation capacity
+    emitter.instruction(&format!("mov QWORD PTR [rbp - 56], {}", INITIAL_CAPACITY));// start from the initial accumulation capacity
     emitter.instruction(&format!("mov rax, {}", INITIAL_CAPACITY));             // request the initial capacity from the reservation front end
     emitter.instruction("call __rt_concat_reserve");                            // reserve concat scratch or owned heap storage for the accumulated result
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the accumulation buffer pointer
@@ -319,6 +321,7 @@ fn emit_stream_get_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_stream_get_contents_release_done_x86");        // empty read stops the read-all loop
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save chunk pointer across the copy
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save chunk length across the copy
+    ensure_returned_chunk_capacity(emitter, false);
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // accumulation buffer base pointer
     emitter.instruction("add r10, QWORD PTR [rbp - 32]");                       // destination = accumulation base + total
     emitter.instruction("mov r11, rax");                                        // source chunk pointer
@@ -438,7 +441,7 @@ fn emit_stream_get_contents_bounded_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload fd for __rt_fread
     emitter.instruction("call __rt_fread");                                     // rax=chunk ptr, rdx=chunk len
     emitter.instruction("test rdx, rdx");                                       // empty chunk?
-    emitter.instruction("jz __rt_stream_get_contents_bounded_release_done_x86"); // empty read stops the bounded loop
+    emitter.instruction("jz __rt_stream_get_contents_bounded_release_done_x86");// empty read stops the bounded loop
     emitter.instruction("mov r8, QWORD PTR [rbp - 40]");                        // running result length
     emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // requested byte cap
     emitter.instruction("sub r9, r8");                                          // remaining bytes allowed
@@ -446,6 +449,7 @@ fn emit_stream_get_contents_bounded_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmova rdx, r9");                                       // clamp the chunk to the remaining cap
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save chunk pointer across the copy
     emitter.instruction("mov QWORD PTR [rbp - 56], rdx");                       // save chunk length across the copy
+    ensure_returned_chunk_capacity(emitter, true);
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // accumulation buffer base pointer
     emitter.instruction("add r10, r8");                                         // destination = accumulation base + total
     emitter.instruction("mov r11, QWORD PTR [rbp - 48]");                       // source chunk pointer
@@ -481,4 +485,53 @@ fn emit_stream_get_contents_bounded_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 80");                                         // release the helper locals
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the bounded string
+}
+
+/// Expanding filters can return more bytes than fread requested; grow before copying that chunk.
+/// The bounded path already clamps its actual chunk length to the caller's remaining limit.
+fn ensure_returned_chunk_capacity(emitter: &mut Emitter, bounded: bool) {
+    let arm = emitter.target.arch == Arch::AArch64;
+    let ready = format!("__rt_stream_actual_chunk_ready_{}", u8::from(bounded));
+    // -- compare the actual returned byte count with the accumulation window --
+    if arm {
+        let (buffer, used, capacity, chunk, length) = if bounded { (24, 32, 56, 40, 48) } else { (16, 24, 48, 32, 40) };
+        emitter.instruction(&format!("ldr x9, [sp, #{used}]"));                 // read the already accumulated byte count
+        emitter.instruction(&format!("ldr x10, [sp, #{length}]"));              // inspect the clamped actual chunk length
+        emitter.instruction("add x9, x9, x10");                                 // compute the space required before any byte is copied
+        emitter.instruction(&format!("ldr x10, [sp, #{capacity}]"));            // compare with the reserved accumulation capacity
+        emitter.instruction("cmp x9, x10");                                     // an expanding filter can exceed the requested read size
+        emitter.instruction(&format!("b.ls {ready}"));                          // retain the current window when it already fits
+        emitter.instruction(&format!("str x9, [sp, #{capacity}]"));             // grow to cover the actual bytes returned
+        emitter.instruction(&format!("ldr x1, [sp, #{buffer}]"));               // return the old concat scratch reservation
+        emitter.instruction("mov x2, #0");                                      // release the full scratch window before moving to heap storage
+        abi::emit_call_label(emitter, "__rt_concat_publish");
+        emitter.instruction(&format!("ldr x0, [sp, #{buffer}]"));               // preserve the existing accumulation bytes during growth
+        emitter.instruction(&format!("ldr x1, [sp, #{used}]"));                 // copy only the initialized prefix
+        emitter.instruction(&format!("ldr x2, [sp, #{capacity}]"));             // allocate room for the full actual chunk
+        abi::emit_call_label(emitter, "__rt_concat_grow");
+        emitter.instruction(&format!("str x0, [sp, #{buffer}]"));               // publish the grown accumulation buffer
+        emitter.label(&ready);
+        emitter.instruction(&format!("ldr x1, [sp, #{chunk}]"));                // restore the source pointer after growth clobbered result registers
+        emitter.instruction(&format!("ldr x2, [sp, #{length}]"));               // restore the actual chunk length for the copy loop
+        emitter.instruction(&format!("ldr x9, [sp, #{used}]"));                 // restore the destination prefix offset
+    } else {
+        let (buffer, used, capacity, chunk, length) = if bounded { (32, 40, 64, 48, 56) } else { (24, 32, 56, 40, 48) };
+        emitter.instruction(&format!("mov r8, QWORD PTR [rbp - {used}]"));      // read the already accumulated byte count
+        emitter.instruction(&format!("add r8, QWORD PTR [rbp - {length}]"));    // include the clamped actual chunk length
+        emitter.instruction(&format!("cmp r8, QWORD PTR [rbp - {capacity}]"));  // compare actual output with the reserved window
+        emitter.instruction(&format!("jbe {ready}"));                           // no allocation is needed when the chunk fits
+        emitter.instruction(&format!("mov QWORD PTR [rbp - {capacity}], r8"));  // grow to cover every returned byte
+        emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {buffer}]"));   // return the old concat scratch reservation
+        emitter.instruction("xor edx, edx");                                    // release the full scratch window before moving to heap storage
+        abi::emit_call_label(emitter, "__rt_concat_publish");
+        emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {buffer}]"));   // preserve the existing accumulation bytes during growth
+        emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {used}]"));     // copy only the initialized prefix
+        emitter.instruction(&format!("mov rsi, QWORD PTR [rbp - {capacity}]")); // allocate room for the full actual chunk
+        abi::emit_call_label(emitter, "__rt_concat_grow");
+        emitter.instruction(&format!("mov QWORD PTR [rbp - {buffer}], rax"));   // publish the grown accumulation buffer
+        emitter.label(&ready);
+        emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {chunk}]"));    // restore the source pointer after growth clobbered result registers
+        emitter.instruction(&format!("mov rdx, QWORD PTR [rbp - {length}]"));   // restore the actual chunk length for the copy loop
+        emitter.instruction(&format!("mov r8, QWORD PTR [rbp - {used}]"));      // restore the destination prefix offset
+    }
 }

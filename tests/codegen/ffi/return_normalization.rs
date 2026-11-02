@@ -9,6 +9,8 @@
 //!   what the SysV x86_64 and AAPCS64 ABIs let a callee leave above a narrow return value.
 //! - Narrow-argument observers take a full 32-bit register so they report exactly what the caller
 //!   left there, which is how the de-facto extension contract for 8 and 16-bit arguments is checked.
+//! - C `float` callees check that `f32` arguments are rounded to single precision before the call and
+//!   that `f32` returns are widened from the low half of the floating-point register.
 //! - The fixture is assembled into the test program itself, so no shared library or search path is needed.
 
 use super::*;
@@ -47,6 +49,14 @@ int32_t elephc_test_observe_i8(int32_t raw) { return raw; }
 uint32_t elephc_test_observe_u16(uint32_t raw) { return raw; }
 int32_t elephc_test_observe_i16(int32_t raw) { return raw; }
 uint32_t elephc_test_observe_u32(uint32_t raw) { return raw; }
+
+// Declared as `f32` in PHP: C float parameters and returns live in the low half of the FP register.
+float elephc_test_ret_f32(void) { return 1.5f; }
+float elephc_test_echo_f32(float value) { return value; }
+float elephc_test_sum_f32(float a, float b) { return a + b; }
+double elephc_test_echo_f64(double value) { return value; }
+// Mixed widths in one call: an int, a float, and a double each use their own ABI slot.
+double elephc_test_mix(int32_t i, float f, double d) { return i + f + d; }
 "#;
 
 /// Verifies a C `bool` return keeps only its low byte: an ABI-valid false with dirty upper bits reads as false
@@ -140,4 +150,31 @@ echo elephc_test_observe_u32($big), "\n";
         DIRTY_RETURN_FIXTURE,
     );
     assert_eq!(out, "44 255\n-56 -1\n4464 -25536\n1\n");
+}
+
+/// Verifies `f32` returns widen the C float to a PHP double and `f32` arguments round the PHP double to a
+/// single before the call: 0.1 survives the round trip only at single precision while `f64` keeps it, an
+/// int argument is converted, and mixed `i32`/`f32`/`double` parameters each land in their own ABI slot.
+#[test]
+fn test_ffi_extern_f32_arguments_and_returns_round_through_single_precision() {
+    let out = compile_and_run_with_c_fixture(
+        r#"<?php
+extern function elephc_test_ret_f32(): f32;
+extern function elephc_test_echo_f32(f32 $value): f32;
+extern function elephc_test_sum_f32(f32 $a, f32 $b): f32;
+extern function elephc_test_echo_f64(f64 $value): float;
+extern function elephc_test_mix(i32 $i, f32 $f, double $d): float;
+var_dump(elephc_test_ret_f32());
+var_dump(elephc_test_echo_f32(2.5));
+var_dump(elephc_test_echo_f32(0.1));
+var_dump(elephc_test_sum_f32(1.25, 2));
+var_dump(elephc_test_echo_f64(0.1));
+var_dump(elephc_test_mix(1, 0.5, 0.25));
+"#,
+        DIRTY_RETURN_FIXTURE,
+    );
+    assert_eq!(
+        out,
+        "float(1.5)\nfloat(2.5)\nfloat(0.10000000149011612)\nfloat(3.25)\nfloat(0.1)\nfloat(1.75)\n"
+    );
 }

@@ -16,6 +16,8 @@ mod property_default_selectors;
 mod interfaces;
 mod classes;
 mod enums;
+mod enum_traits;
+mod enum_factories;
 
 pub(crate) use attribute_refs::drop_unresolvable_attribute_arg_refs;
 pub(crate) use class_constants::validate_deferred_class_constants;
@@ -26,3 +28,4 @@ pub(crate) use classes::validate_trait_property_defaults;
 pub(crate) use interfaces::*;
 pub(crate) use classes::*;
 pub(crate) use enums::*;
+pub(crate) use enum_traits::validate_enum_trait_requirements;

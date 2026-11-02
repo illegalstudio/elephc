@@ -77,6 +77,11 @@ pub(super) fn int_unary_result_type(ir_type: IrType) -> PhpType {
 /// Lowers an integer unary operation.
 pub(super) fn lower_int_unary(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, op: Op, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
+    if op == Op::IBitNot {
+        if let Some(result) = object_operators::lower_object_bitnot(ctx, value, expr) {
+            return result;
+        }
+    }
     let result_ty = int_unary_result_type(value.ir_type);
     if value.ir_type == IrType::I64 {
         ctx.emit_value(op, vec![value.value], None, result_ty, op.default_effects(), Some(expr.span))

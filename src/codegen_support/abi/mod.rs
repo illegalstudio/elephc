@@ -25,7 +25,7 @@ mod values;
 pub use bootstrap::emit_copy_frame_pointer;
 pub use bootstrap::{
     emit_cdylib_exit_escape, emit_enable_heap_debug_flag, emit_enable_web_heap_guard_flag,
-    emit_exit, emit_exit_with_result_reg, emit_store_process_args_to_globals,
+    emit_exit, emit_exit_hook, emit_exit_with_result_reg, emit_store_process_args_to_globals,
 };
 pub use borrowed_numeric::emit_mixed_numeric_integer_rhs_call;
 pub use calls::{
@@ -73,6 +73,7 @@ pub use values::{
     emit_branch_if_equal_wide, emit_branch_if_int_result_nonzero, emit_branch_if_int_result_zero,
     emit_decref_if_refcounted,
     emit_decref_preserving_exception, emit_extend_int_result,
+    emit_float_result_double_to_single, emit_float_result_single_to_double,
     emit_float_result_to_int_result, emit_incref_if_refcounted, emit_int_result_to_float_result,
     emit_jump, emit_load, emit_load_int_immediate, emit_normalize_narrow_int_arg,
     emit_php_float_to_int,

@@ -9,7 +9,7 @@
 //! - Fixed symbols are cached across compilations, with target and PHP-profile inputs covered by the cache key.
 
 use super::{
-    ALLOC_OVERFLOW_MSG, ARRAY_ALLOC_SIZE_MSG, BUFFER_ALLOC_SIZE_MSG, RANGE_SIZE_MSG,
+    ALLOC_OVERFLOW_MSG, CONCAT_OVERFLOW_MSG, ARRAY_ALLOC_SIZE_MSG, BUFFER_ALLOC_SIZE_MSG, RANGE_SIZE_MSG,
     DIRNAME_LEVELS_MSG, HASH_COPY_FINALIZED_CTX_MSG, HASH_FINAL_FINALIZED_CTX_MSG,
     HASH_HMAC_UNKNOWN_ALGO_MSG, HASH_INIT_UNKNOWN_ALGO_MSG,
     HASH_UNKNOWN_ALGO_MSG, HASH_UPDATE_FINALIZED_CTX_MSG, ICONV_STRPOS_OFFSET_MSG,
@@ -30,7 +30,8 @@ use super::{
     STR_REPEAT_TIMES_MSG, UNSER_ALLOWED_CLASSES_ENTRY_PREFIX,
     UNSER_ALLOWED_CLASSES_POLICY_PREFIX, UNSER_OBJECT_STRING_ERROR_PREFIX,
     UNSER_OBJECT_STRING_ERROR_SUFFIX, UNSER_OPTIONS_TYPE_PREFIX, UNSER_PROPERTY_ASSIGN_PREFIX,
-    UNSER_TYPE_GIVEN_SUFFIX,
+    UNSER_TYPE_GIVEN_SUFFIX, UNSER_ERROR_PREFIX, UNSER_ERROR_OF, UNSER_ERROR_BYTES_IN,
+    UNSER_ERROR_ON_LINE, UNSER_ERROR_NEWLINE,
 };
 use super::super::system;
 use crate::codegen_support::data_section::comm_directive;
@@ -69,8 +70,25 @@ pub(crate) fn emit_runtime_data_fixed(
 ) -> String {
     let mut out = String::new();
     out.push_str(".data\n");
-    out.push_str(&comm_directive("_concat_buf", 65536, target));
+    out.push_str(&comm_directive("_concat_buf", heap_size.max(65_536), target));
     out.push_str(&comm_directive("_concat_off", 8, target));
+    out.push_str(&comm_directive(super::WEB_STREAM_CLOSE_SLOT, 8, target));
+    // User boundary code reads this value from its linked runtime, including cached objects.
+    out.push_str(&format!(".globl _concat_capacity\n_concat_capacity:\n    .quad {}\n",
+        super::super::concat_scratch_capacity(heap_size)));
+    out.push_str(&comm_directive(
+        "_itoa_spill_ring",
+        32 * crate::codegen_support::runtime::strings::itoa::ITOA_SPILL_SLOTS,
+        target,
+    ));
+    out.push_str(&comm_directive("_itoa_spill_index", 8, target));
+    out.push_str(&comm_directive(
+        "_float_spill_ring",
+        crate::codegen_support::runtime::strings::FLOAT_WINDOW_BYTES
+            * crate::codegen_support::runtime::strings::FLOAT_SPILL_SLOTS,
+        target,
+    ));
+    out.push_str(&comm_directive("_float_spill_index", 8, target));
     out.push_str(&comm_directive("_mbstring_catalog_array", 8, target));
     out.push_str(&comm_directive("_mbstring_deferred_capture_head", 8, target));
     out.push_str(&comm_directive("_mbstring_deferred_capture_tail", 8, target));
@@ -80,6 +98,17 @@ pub(crate) fn emit_runtime_data_fixed(
         ".globl _serialize_return_array_msg\n_serialize_return_array_msg:\n    .ascii \"{}\"\n",
         super::SERIALIZE_RETURN_ARRAY_MSG,
     ));
+    for (symbol, message) in [
+        ("_debuginfo_fatal_msg", super::DEBUGINFO_FATAL_MSG),
+        ("_debuginfo_warning_prefix", super::DEBUGINFO_WARNING_PREFIX),
+        ("_debuginfo_null_prefix", super::DEBUGINFO_NULL_PREFIX),
+        ("_debuginfo_null_suffix", super::DEBUGINFO_NULL_SUFFIX),
+    ] {
+        out.push_str(&format!(
+            ".globl {symbol}\n{symbol}:\n    .ascii \"{}\"\n",
+            message.replace('\n', "\\n"),
+        ));
+    }
     out.push_str(&comm_directive("_unser_depth", 8, target));
     for (symbol, message) in [
         ("_sleep_warning_prefix", super::SLEEP_WARNING_PREFIX),
@@ -147,6 +176,17 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&format!(
         ".globl _unser_type_given_suffix\n_unser_type_given_suffix:\n    .ascii {UNSER_TYPE_GIVEN_SUFFIX:?}\n"
     ));
+    for (label, message) in [
+        ("_unser_error_prefix", UNSER_ERROR_PREFIX),
+        ("_unser_error_of", UNSER_ERROR_OF),
+        ("_unser_error_bytes_in", UNSER_ERROR_BYTES_IN),
+        ("_unser_error_on_line", UNSER_ERROR_ON_LINE),
+        ("_unser_error_newline", UNSER_ERROR_NEWLINE),
+    ] {
+        out.push_str(&format!(
+            ".globl {label}\n{label}:\n    .ascii {message:?}\n"
+        ));
+    }
     for (label, name) in [
         ("_unser_type_int", "int"),
         ("_unser_type_string", "string"),
@@ -211,6 +251,9 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_print_r_mode", 8, target));
     out.push_str(&comm_directive("_print_r_off", 8, target));
     out.push_str(&comm_directive("_print_r_buf", 65536, target));
+    // _print_r_base / _print_r_cap: the grown capture block (0 = the static buffer above, capacity 65536).
+    out.push_str(&comm_directive("_print_r_base", 8, target));
+    out.push_str(&comm_directive("_print_r_cap", 8, target));
     // Output-buffering (ob_*) stack state. _ob_level is the active nesting depth
     // (0 = no buffering) consulted by __rt_stdout_write and __rt_pr_write before
     // the terminal write syscall; _ob_ptrs/_ob_lens/_ob_caps are 64-slot parallel
@@ -312,6 +355,11 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_ser_value_counter", 8, target));
     out.push_str(&comm_directive("_ser_legacy_active", 8, target));
     out.push_str(&comm_directive("_unser_legacy_active", 8, target));
+    out.push_str(&comm_directive("_unser_call_line", 8, target));
+    // The active serialize() output stream: a pointer to the `__rt_strbuf_*` descriptor in the
+    // frame of the innermost `__rt_serialize_call_value`, which saves and restores it around itself and
+    // every hook call that can re-enter serialize().
+    out.push_str(&comm_directive("_ser_stream", 8, target));
     out.push_str(&comm_directive("_ser_obj_count", 8, target));
     out.push_str(&comm_directive("_ser_obj_ptrs", 524288, target));
     out.push_str(&comm_directive("_ser_obj_idxs", 524288, target));
@@ -366,7 +414,7 @@ pub(crate) fn emit_runtime_data_fixed(
     // frame aliases. The owning walk boundary restores the saved head after unwinding.
     out.push_str(&comm_directive("_rt_unmanaged_ref_borrow_top", 8, target));
     out.push_str(&comm_directive("_php_backtrace_next_line", 8, target));
-    for symbol in ["_rt_diag_pending_ptr", "_rt_diag_pending_len", "_php_diagnostic_file", "_php_diagnostic_file_len", "_php_diagnostic_line"] {
+    for symbol in ["_rt_diag_pending_ptr", "_rt_diag_pending_len", "_rt_diag_warning_message_len", "_php_diagnostic_file", "_php_diagnostic_file_len", "_php_diagnostic_line"] {
         out.push_str(&comm_directive(symbol, 8, target));
     }
     for (symbol, value) in [("_rt_warning_prefix", "Warning: "), ("_rt_notice_prefix", "Notice: "), ("_rt_deprecated_prefix", "Deprecated: ")] {
@@ -391,6 +439,11 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_elephc_eval_dynamic_object_destruct_fn", 8, target));
     out.push_str(&comm_directive("_elephc_eval_closure_bind_fn", 8, target));
     out.push_str(&comm_directive("_elephc_eval_wrap_callback_fn", 8, target));
+    // _elephc_eval_inventory_context holds the eval context handle while the
+    // module-level inventory helper registers the AOT metadata into it. The
+    // helper's frame is the fixed one the shared-helper prologue builds, with
+    // no room for a local slot, so the handle is parked here instead.
+    out.push_str(&comm_directive("_elephc_eval_inventory_context", 8, target));
     out.push_str(&comm_directive("_elephc_eval_object_gc_child_fn", 8, target));
     out.push_str(&comm_directive("_elephc_eval_object_release_fn", 8, target));
     out.push_str(&comm_directive("_elephc_eval_array_reference_retire_fn", 8, target));
@@ -495,9 +548,28 @@ pub(crate) fn emit_runtime_data_fixed(
     // Heap headers and object-handle side-table indices use 16-byte granules.
     // Keep payload alignment stable when preceding runtime symbols change.
     out.push_str(&comm_directive_aligned("_heap_buf", heap_size, 16, target));
+    // One bit per 8-byte heap granule records live payload bases. String persistence uses this
+    // authoritative side table to reject forged headers in interior byte views in constant time.
+    out.push_str(&comm_directive(
+        "_heap_live_bases",
+        heap_size.div_ceil(64).max(1),
+        target,
+    ));
     out.push_str(&comm_directive("_heap_off", 8, target));
     out.push_str(&comm_directive("_heap_free_list", 8, target));
-    out.push_str(&comm_directive("_heap_small_bins", 32, target));
+    out.push_str(&comm_directive(
+        "_heap_small_bins",
+        super::super::arrays::HEAP_BIN_TABLE_BYTES as usize,
+        target,
+    ));
+    // One byte per heap granule: set while a guarded free parks the block in a bin.
+    out.push_str(&comm_directive(
+        "_heap_bin_marks",
+        super::super::arrays::heap_bin_mark_bytes(heap_size),
+        target,
+    ));
+    // `_gc_frees` at the end of the allocator's last consolidation pass (see `__rt_heap_alloc`).
+    out.push_str(&comm_directive("_heap_consolidated_frees", 8, target));
     out.push_str(&comm_directive("_heap_debug_enabled", 8, target));
     out.push_str(&comm_directive("_web_heap_guard_enabled", 8, target));
     // Generation-safe buffer descriptor registry. Public Buffer values are
@@ -563,6 +635,18 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_resource_inventory_head", 8, target));
     out.push_str(&comm_directive("_resource_inventory_tail", 8, target));
     out.push_str(".globl _gc_enabled\n_gc_enabled:\n    .quad 1\n");
+    for symbol in [
+        "_gc_candidates_enabled", "_gc_candidates_gathering", "_gc_candidates_visited",
+        "_gc_candidates_roots", "_gc_candidates_roots_count", "_gc_candidates_roots_capacity",
+        "_gc_candidates_nodes", "_gc_candidates_nodes_count", "_gc_candidates_nodes_capacity",
+        "_gc_candidates_anchors", "_gc_candidates_anchors_count", "_gc_candidates_anchors_capacity",
+        "_gc_candidate_root_scan_fn",
+        "_gc_proofs", "_gc_proofs_count", "_gc_proofs_capacity", "_gc_proofs_initialized",
+        "_gc_proof_parent", "_gc_proof_slot", "_gc_proofs_debt", "_gc_proofs_visited",
+        "_gc_proof_epoch", "_gc_proof_memos", "_gc_proof_memos_capacity", "_gc_proofs_cost",
+    ] {
+        out.push_str(&comm_directive(symbol, 8, target));
+    }
     out.push_str(&comm_directive("_gc_collecting", 8, target));
     out.push_str(&comm_directive("_gc_freeing_unreachable", 8, target));
     out.push_str(&comm_directive("_gc_pin_head", 8, target));
@@ -681,6 +765,10 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&format!(
         ".globl _alloc_overflow_msg\n_alloc_overflow_msg:\n    .ascii {:?}\n",
         ALLOC_OVERFLOW_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _concat_overflow_msg\n_concat_overflow_msg:\n    .ascii {:?}\n",
+        CONCAT_OVERFLOW_MSG
     ));
     out.push_str(&format!(
         ".globl _str_repeat_times_msg\n_str_repeat_times_msg:\n    .ascii {:?}\n",
@@ -818,6 +906,16 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _uncaught_exc_in\n_uncaught_exc_in:\n    .ascii \" in \"\n");
     out.push_str(".globl _uncaught_exc_colon\n_uncaught_exc_colon:\n    .ascii \":\"\n");
     out.push_str(".globl _uncaught_exc_nl\n_uncaught_exc_nl:\n    .ascii \"\\n\"\n");
+    for (symbol, text) in [
+        ("_uncaught_exc_stack_trace", "\\nStack trace:\\n"),
+        ("_uncaught_exc_next", "\\n\\nNext "),
+        ("_uncaught_exc_hash", "#"),
+        ("_uncaught_exc_main", " {main}"),
+        ("_uncaught_exc_thrown_in", "\\n  thrown in "),
+        ("_uncaught_exc_on_line", " on line "),
+    ] {
+        out.push_str(&format!(".globl {symbol}\n{symbol}:\n    .ascii \"{text}\"\n"));
+    }
     // Printed only when `__rt_exception_matches` walks into the "metadata never emitted"
     // sentinel, which no correct build should reach — see that helper for why it aborts there
     // instead of answering "no match".
@@ -845,6 +943,24 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _diag_undefined_array_key_suffix\n_diag_undefined_array_key_suffix:\n    .ascii \"\\n\"\n");
     out.push_str(".globl _diag_string_offset_prefix\n_diag_string_offset_prefix:\n    .ascii \"Warning: Uninitialized string offset \"\n");
     out.push_str(".globl _diag_string_offset_nl\n_diag_string_offset_nl:\n    .ascii \"\\n\"\n");
+    // -- string offset WRITE diagnostics, used by `__rt_str_offset_set` --
+    for (label, message) in [
+        ("_diag_illegal_string_offset_prefix", "Warning: Illegal string offset "),
+        (
+            "_diag_string_offset_first_byte_msg",
+            "Warning: Only the first byte will be assigned to the string offset\n",
+        ),
+        (
+            "_string_offset_empty_assign_msg",
+            "Cannot assign an empty string to a string offset",
+        ),
+        (
+            "_string_offset_type_error_msg",
+            "Cannot access offset of type string on string",
+        ),
+    ] {
+        out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
+    }
     for (label, message) in [
         ("_diag_float_key_precision_prefix", "Deprecated: Implicit conversion from float "),
         ("_diag_float_key_precision_suffix", " to int loses precision\n"),
@@ -904,6 +1020,8 @@ pub(crate) fn emit_runtime_data_fixed(
     {
         out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
     }
+    out.push_str(".globl _generator_msg_force_close\n_generator_msg_force_close:\n    .ascii \"Cannot yield from finally in a force-closed generator\"\n");
+    out.push_str(".globl _fiber_msg_force_close\n_fiber_msg_force_close:\n    .ascii \"Cannot suspend in a force-closed fiber\"\n");
     out.push_str(".globl _fiber_msg_already_started\n_fiber_msg_already_started:\n    .ascii \"Cannot start a fiber that has already been started\"\n");
     out.push_str(".globl _fiber_msg_not_suspended\n_fiber_msg_not_suspended:\n    .ascii \"Cannot resume a fiber that is not suspended\"\n");
     out.push_str(".globl _fiber_msg_throw_not_suspended\n_fiber_msg_throw_not_suspended:\n    .ascii \"Cannot resume a fiber that is not suspended\"\n");
@@ -920,6 +1038,14 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_gc_peak", 8, target));
     out.push_str(&comm_directive("_cstr_buf", 4096, target));
     out.push_str(&comm_directive("_cstr_buf2", 4096, target));
+    // C-string conversions need a NUL-terminated copy for libc. The 4 KiB inline
+    // buffers stay as the common case; these pointers let the helpers grow into an
+    // owned block when a path, pattern, or command is longer than that, instead of
+    // copying past the buffer into adjacent runtime state.
+    out.push_str(".p2align 3\n.globl _cstr_base\n_cstr_base:\n    .quad _cstr_buf\n");
+    out.push_str(".p2align 3\n.globl _cstr_cap\n_cstr_cap:\n    .quad 4096\n");
+    out.push_str(".p2align 3\n.globl _cstr2_base\n_cstr2_base:\n    .quad _cstr_buf2\n");
+    out.push_str(".p2align 3\n.globl _cstr2_cap\n_cstr2_cap:\n    .quad 4096\n");
     out.push_str(&comm_directive("_eof_flags", 256, target));
     out.push_str(&comm_directive("_popen_files", 2048, target));
     out.push_str(&comm_directive("_dir_handles", 2048, target));
@@ -993,6 +1119,12 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_elephc_tls_write_fn", 8, target));
     out.push_str(&comm_directive("_elephc_tls_read_fn", 8, target));
     out.push_str(&comm_directive("_elephc_tls_close_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_tls_last_error_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_tls_clear_error_fn", 8, target));
+    out.push_str(&comm_directive("_stream_error_code", 8, target));
+    out.push_str(&comm_directive("_stream_close_silent", 8, target));
+    out.push_str(&comm_directive("_stream_error_tls", 8, target));
+    out.push_str(&comm_directive("_stream_empty_error", 1, target));
     // _elephc_tls_attach_fd_fn: indirect pointer to elephc_tls_attach_fd,
     // used by stream_socket_enable_crypto to promote an existing TCP fd to
     // a TLS session without re-establishing the TCP connection. Same
@@ -1102,6 +1234,11 @@ pub(crate) fn emit_runtime_data_fixed(
     ] {
         out.push_str(&comm_directive(slot, 8, target));
     }
+    // _elephc_random_mt_uniform_fn: indirect pointer to elephc_random_mt_uniform, published
+    // only at array_rand()/shuffle() call sites so the shared __rt_mt_uniform trampoline can
+    // consume the global Mt19937 state without a program that never shuffles linking the
+    // random bridge.
+    out.push_str(&comm_directive("_elephc_random_mt_uniform_fn", 8, target));
     // _elephc_phar_extract_url_fn: indirect pointer to the elephc-phar bridge
     // reader. Dynamic phar:// paths publish it before calling the runtime
     // reader; literal phar:// paths are still decoded at compile time.
@@ -1491,6 +1628,22 @@ pub(crate) fn emit_runtime_data_fixed(
     // a lookup that reaches the cap reports recursion, which is what bounds the walk.
     out.push_str(&comm_directive("_vd_seen", 2048, target));
     out.push_str(&comm_directive("_vd_seen_n", 8, target));
+    // _debuginfo_guard: `_exc_handler_top | 1` while a run-time `__debugInfo()` call is in
+    // flight (0 otherwise); a throw that finds no newer handler is reported as PHP's fatal.
+    out.push_str(&comm_directive("_debuginfo_guard", 8, target));
+    // _php_exit_hook: the hosted-extension shutdown routine (RSHUTDOWN, then MSHUTDOWN), stored
+    // by `main`'s prologue in a program that hosts PHP extensions, 0 otherwise. The runtime's own
+    // exit paths (the uncaught-exception report) call it; they cannot name the engine directly.
+    out.push_str(&comm_directive("_php_exit_hook", 8, target));
+    // _uncaught_report_mode: 1 once an exception escaping `__debugInfo()` selected the
+    // `Warning: Uncaught` + fatal flavour of the uncaught report.
+    out.push_str(&comm_directive("_uncaught_report_mode", 8, target));
+    // _debuginfo_call_line: source line of the dump call (var_dump/print_r/...) that fetched the
+    // `__debugInfo()` result in flight; PHP names it in the `__debuginfo() must return an array` fatal.
+    out.push_str(&comm_directive("_debuginfo_call_line", 8, target));
+    // _debuginfo_pad: 1 while a var_dump render is fetching `__debugInfo()` (PHP has already
+    // printed the nested value's indent when the fatal fires), 0 for print_r.
+    out.push_str(&comm_directive("_debuginfo_pad", 8, target));
     // print_r body literals (rodata): PHP's `Array\n(\n` header, `)\n` footer,
     // `[`/`] => ` key delimiters (unquoted keys, unlike var_dump), a lone
     // newline, the `1` rendered for boolean true, and a 64-space pad used by
@@ -1568,6 +1721,8 @@ pub(crate) fn emit_runtime_data_fixed(
         ("_bt_arg_object_open", "Object("),
         ("_bt_arg_close", ")"),
         ("_bt_arg_quote", "'"),
+        ("_bt_arg_ellipsis", "..."),
+        ("_bt_arg_zero_frac", ".0"),
         ("_bt_arg_escape_slash", "\\\\"),
         ("_bt_arg_escape_n", "\\n"),
         ("_bt_arg_escape_t", "\\t"),

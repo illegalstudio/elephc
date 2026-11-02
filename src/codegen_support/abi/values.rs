@@ -27,7 +27,7 @@ use crate::codegen_support::sentinels::tagged_scalar_tag_reg;
 /// incrementing the refcount—the caller owns the result register value.
 pub fn emit_store(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     match ty {
-        PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Resource(_) => {
+        PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Resource(_) | PhpType::Narrow(_) => {
             store_at_offset(emitter, int_result_reg(emitter), offset); // store scalar integer-like value to stack
         }
         PhpType::Float => {
@@ -176,7 +176,7 @@ fn emit_local_ref_cell_cleanup(emitter: &mut Emitter, cell_reg: &str, value_ty: 
 /// sentinel. For compound types (array, object, callable, pointer, etc.), loads the heap pointer.
 pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     match ty {
-        PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Resource(_) => {
+        PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Resource(_) | PhpType::Narrow(_) => {
             load_at_offset(emitter, int_result_reg(emitter), offset); // load scalar integer-like value from stack
         }
         PhpType::Float => {
@@ -408,7 +408,7 @@ pub fn emit_write_stdout(emitter: &mut Emitter, ty: &PhpType) {
         PhpType::Str => {
             emit_write_current_string_stdout(emitter);
         }
-        PhpType::Bool | PhpType::False | PhpType::Int => {
+        PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Narrow(_) => {
             emit_call_label(emitter, "__rt_itoa");
             emit_write_current_string_stdout(emitter);
         }
@@ -551,5 +551,35 @@ pub fn emit_normalize_narrow_int_arg(emitter: &mut Emitter, bits: u8, signed: bo
             emitter.instruction("movzx eax, al");                               // truncate the argument to uint8 and zero-extend it to 32 bits for the callee
         }
         (_, other, _) => unreachable!("unsupported extern integer width {other}"),
+    }
+}
+
+/// Widens the IEEE 754 single in the low half of the float result register to the PHP double.
+///
+/// A C `float` return arrives in `s0` / the low 32 bits of `xmm0` with the upper bits unspecified;
+/// the conversion reads only the single.
+pub fn emit_float_result_single_to_double(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("fcvt d0, s0");                                 // widen the C float in s0 to the PHP double in d0
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cvtss2sd xmm0, xmm0");                         // widen the C float in the low half of xmm0 to the PHP double
+        }
+    }
+}
+
+/// Rounds the PHP double in the float result register to an IEEE 754 single in its low half.
+///
+/// A C `float` argument or store reads only the low 32 bits afterwards; rounding is IEEE
+/// round-to-nearest and values outside the single range become infinity, as in C.
+pub fn emit_float_result_double_to_single(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("fcvt s0, d0");                                 // round the PHP double in d0 to the C float in s0
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cvtsd2ss xmm0, xmm0");                         // round the PHP double to the C float in the low half of xmm0
+        }
     }
 }

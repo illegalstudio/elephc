@@ -114,7 +114,7 @@ fn contract_record_json(contract: &BuiltinContract) -> Value {
         "summary": contract.summary,
         "examples": contract.examples,
         "php_manual": contract.php_manual,
-        "deprecated": contract.deprecation,
+        "deprecated": contract.deprecation.map(|deprecation| deprecation.message),
         "eval_only": matches!(aot_support(contract), BackendSupport::Unsupported(_))
             && matches!(eval_support(contract), BackendSupport::Implemented(_)),
         "aot": aot_support_json(contract),
@@ -296,6 +296,7 @@ fn area_name(area: Area) -> &'static str {
         Area::Image => "image",
         Area::Opcache => "opcache",
         Area::Xml => "xml",
+        Area::Random => "random",
     }
 }
 
@@ -337,6 +338,7 @@ fn unsupported_reason_name(reason: UnsupportedReason) -> &'static str {
 fn aot_override_reason_name(reason: AotSignatureOverrideReason) -> &'static str {
     match reason {
         AotSignatureOverrideReason::PreludeSignatureSubset => "prelude-signature-subset",
+        AotSignatureOverrideReason::RuntimeArityValidation => "runtime-arity-validation",
     }
 }
 

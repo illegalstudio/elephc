@@ -47,6 +47,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     BaseConvert,
     /// Dispatches the PHP BCMath procedural surface.
     Bcmath,
+    /// Dispatches the `ext/gmp` procedural surface by forwarding to the compiled GMP prelude.
+    Gmp,
     /// Dispatches `base64_decode(...)`.
     Base64Decode,
     /// Dispatches `base64_encode(...)`.
@@ -170,6 +172,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     JsonLastErrorMsg,
     /// Dispatches `json_validate(...)`.
     JsonValidate,
+    /// Dispatches PHP tokenization and token-name lookup through the shared engine.
+    Tokenizer,
     /// Dispatches `log(...)`.
     Log,
     /// Dispatches `log2(...)`.
@@ -186,6 +190,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Pcntl,
     /// Dispatches the `xml_*` / `xmlwriter_*` family by forwarding to the compiled xml prelude.
     Xml,
+    /// Forwards fileinfo to the compiled host prelude.
+    Fileinfo,
     /// Dispatches `number_format(...)`.
     NumberFormat,
     /// Dispatches the bridge-backed OpenSSL cipher builtins.
@@ -228,6 +234,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     BufferLen,
     /// Dispatches `buffer_new(...)`.
     BufferNew,
+    /// Dispatches `buffer_ptr(...)`.
+    BufferPtr,
     /// Dispatches `ptr(...)`.
     Ptr,
     /// Dispatches `ptr_get(...)`.
@@ -244,6 +252,10 @@ pub(in crate::interpreter) enum EvalValuesHook {
     PtrRead16,
     /// Dispatches `ptr_read32(...)`.
     PtrRead32,
+    /// Dispatches `ptr_read_f32(...)`.
+    PtrReadF32,
+    /// Dispatches `ptr_read_f64(...)`.
+    PtrReadF64,
     /// Dispatches `ptr_read_string(...)`.
     PtrReadString,
     /// Dispatches `ptr_set(...)`.
@@ -256,6 +268,10 @@ pub(in crate::interpreter) enum EvalValuesHook {
     PtrWrite16,
     /// Dispatches `ptr_write32(...)`.
     PtrWrite32,
+    /// Dispatches `ptr_write_f32(...)`.
+    PtrWriteF32,
+    /// Dispatches `ptr_write_f64(...)`.
+    PtrWriteF64,
     /// Dispatches `ptr_write_string(...)`.
     PtrWriteString,
     /// Dispatches by-value `settype(...)` callable calls.
@@ -367,6 +383,7 @@ impl EvalValuesHook {
             Self::Atan2 => two_args(evaluated_args, values, eval_atan2_result),
             Self::BaseConvert => three_args(evaluated_args, values, eval_base_convert_result),
             Self::Bcmath => eval_bcmath_values_result(name, evaluated_args, context, values),
+            Self::Gmp => eval_gmp_values_result(name, evaluated_args, context, values),
             Self::Base64Decode => match evaluated_args {
                 [value] => eval_base64_decode_result(*value, false, values),
                 [value, strict] => {
@@ -514,6 +531,7 @@ impl EvalValuesHook {
                 eval_json_last_error_msg_result(context, values)
             }
             Self::JsonValidate => eval_json_validate_values_result(evaluated_args, context, values),
+            Self::Tokenizer => eval_tokenizer_values(name, evaluated_args, context, values),
             Self::Log => match evaluated_args {
                 [num] => eval_log_result(*num, None, values),
                 [num, base] => eval_log_result(*num, Some(*base), values),
@@ -528,6 +546,7 @@ impl EvalValuesHook {
                 eval_network_env_values_result(name, evaluated_args, context, values)
             }
             Self::Pcntl => eval_pcntl_values_result(name, evaluated_args, context, values),
+            Self::Fileinfo => eval_fileinfo_values_result(name, evaluated_args, context, values),
             Self::Xml => eval_xml_values_result(name, evaluated_args, context, values),
             Self::NumberFormat => {
                 eval_number_format_declared_values_result(evaluated_args, values)
@@ -562,7 +581,7 @@ impl EvalValuesHook {
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::PregMatch => eval_preg_match_values_result(evaluated_args, values),
-            Self::PregMatchAll => eval_preg_match_all_values_result(evaluated_args, values),
+            Self::PregMatchAll => eval_preg_match_all_values_result(evaluated_args, context, values),
             Self::PregReplace => eval_preg_replace_values_result(evaluated_args, values),
             Self::PregReplaceCallback => {
                 eval_preg_replace_callback_values_result(
@@ -576,6 +595,7 @@ impl EvalValuesHook {
             Self::BufferFree => eval_buffer_free_values_result(evaluated_args, values),
             Self::BufferLen => eval_buffer_len_values_result(evaluated_args, values),
             Self::BufferNew => eval_buffer_new_values_result(evaluated_args, values),
+            Self::BufferPtr => eval_buffer_ptr_values_result(evaluated_args, values),
             Self::Ptr => eval_ptr_values_result(evaluated_args),
             Self::PtrGet => eval_ptr_get_values_result(evaluated_args, values),
             Self::PtrIsNull => eval_ptr_is_null_values_result(evaluated_args, values),
@@ -584,12 +604,16 @@ impl EvalValuesHook {
             Self::PtrRead8 => eval_ptr_read8_values_result(evaluated_args, values),
             Self::PtrRead16 => eval_ptr_read16_values_result(evaluated_args, values),
             Self::PtrRead32 => eval_ptr_read32_values_result(evaluated_args, values),
+            Self::PtrReadF32 => eval_ptr_read_f32_values_result(evaluated_args, values),
+            Self::PtrReadF64 => eval_ptr_read_f64_values_result(evaluated_args, values),
             Self::PtrReadString => eval_ptr_read_string_values_result(evaluated_args, values),
             Self::PtrSet => eval_ptr_set_values_result(evaluated_args, values),
             Self::PtrSizeof => eval_ptr_sizeof_values_result(evaluated_args, context, values),
             Self::PtrWrite8 => eval_ptr_write8_values_result(evaluated_args, values),
             Self::PtrWrite16 => eval_ptr_write16_values_result(evaluated_args, values),
             Self::PtrWrite32 => eval_ptr_write32_values_result(evaluated_args, values),
+            Self::PtrWriteF32 => eval_ptr_write_f32_values_result(evaluated_args, values),
+            Self::PtrWriteF64 => eval_ptr_write_f64_values_result(evaluated_args, values),
             Self::PtrWriteString => eval_ptr_write_string_values_result(evaluated_args, values),
             Self::Settype => eval_settype_values_result(evaluated_args, values),
             Self::Sin => one_arg(evaluated_args, values, eval_sin_result),

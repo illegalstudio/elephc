@@ -47,13 +47,35 @@ impl CIntWidth {
     }
 }
 
+/// The C width type names (`i8`..`u64`, `f32`, `f64`) that extern declarations, packed class
+/// fields and `buffer<T>` elements spell their storage with, in the order the docs list them.
+const C_WIDTH_TYPE_NAMES: [&str; 10] =
+    ["i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64", "f32", "f64"];
+
+/// Returns the C width type names, for the tests that keep the parser's table and the type
+/// layer's width resolution in agreement.
+pub fn c_width_type_names() -> &'static [&'static str] {
+    &C_WIDTH_TYPE_NAMES
+}
+
+/// Returns whether `name` is one of the C width type names (`c_width_type_names()`).
+///
+/// The name resolver keeps such a name bare in a type position unless a class or `use` alias of
+/// that name is visible, so `packed class V { public i32 $x; }` and `buffer<u8>` inside a
+/// namespace still name the width, while a class a program really calls `u8` resolves as in PHP.
+pub fn is_c_width_type_name(name: &str) -> bool {
+    C_WIDTH_TYPE_NAMES.contains(&name)
+}
+
 /// C type annotation for extern declarations.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CType {
     Int,                    // int64_t / long, also spelled `i64`
     IntWidth(CIntWidth),    // explicit narrower or unsigned C integer (i8..u32, u64)
-    Float,
+    Float,                  // double, also spelled `f64`
+    F32,                    // C float; widened to a PHP double at the call boundary
     Str,        // char* (null-terminated)
+    NullableStr,            // `?string`: a char* that may be NULL, PHP `?string` on the PHP side
     Bool,
     Void,
     Ptr,                    // opaque void*

@@ -8,7 +8,8 @@
 //! Key details:
 //! - The lowering preserves PHP scalar semantics and keeps all target
 //!   register choices behind ABI helpers where shared helpers exist.
-//! - Only exact integer constants may use the nonescaping stack-cell RHS path.
+//! - Only exact integer constants may use the borrowed stack-cell RHS path.
+//! - Checked result cells use frame storage only after a complete nonescaping lifetime proof.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -24,6 +25,8 @@ use crate::codegen::{CodegenIrError, Result};
 #[cfg(test)]
 #[path = "arithmetic/borrowed_integer_rhs_tests.rs"]
 mod borrowed_integer_rhs_tests;
+
+pub(super) mod stack_cell;
 
 /// Lowers a two-operand integer arithmetic or bitwise instruction.
 pub(super) fn lower_int_binop(
@@ -87,6 +90,9 @@ pub(super) fn lower_int_checked_binop(
     inst: &Instruction,
     helper: &str,
 ) -> Result<()> {
+    if let Some(offset) = inst.result.and_then(|value| ctx.numeric_cell_offsets.get(&value).copied()) {
+        return stack_cell::lower(ctx, inst, offset);
+    }
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
     let lhs_reg = abi::int_result_reg(ctx.emitter);
@@ -373,6 +379,9 @@ pub(super) fn lower_mixed_numeric_binop(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
+    if let Some(offset) = inst.result.and_then(|value| ctx.numeric_cell_offsets.get(&value).copied()) {
+        return stack_cell::lower_mixed(ctx, inst, offset);
+    }
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
     let op = expect_mixed_numeric_op(inst)?;

@@ -787,7 +787,11 @@ pub(in crate::interpreter) fn eval_object_has_to_string(
             && method.params().is_empty());
     }
     let class_name = runtime_object_class_name(value, values)?;
-    if eval_runtime_object_has_interpreter_tostring(identity, &class_name, context) {
+    if eval_runtime_object_has_interpreter_tostring(identity, &class_name, context)
+        || context
+            .native_method_signature(&class_name, "__toString")
+            .is_some()
+    {
         return Ok(true);
     }
     Ok(
@@ -806,6 +810,33 @@ pub(in crate::interpreter) fn eval_string_context_value(
         return Ok(value);
     }
     eval_dynamic_object_string_context_value(value, context, values)
+}
+
+/// Applies an internal class scalar-cast adapter when the object's native hierarchy declares
+/// one (`__elephc_to_int`, `__elephc_to_float`, `__elephc_to_bool`).
+///
+/// Returns `None` for non-objects and ordinary objects, so callers keep PHP's generic scalar
+/// cast semantics. The adapter is what makes `(int) new GMP("42")` and `intval($gmp)` agree
+/// with compiled code instead of treating the object as `1`/`0`.
+pub(in crate::interpreter) fn eval_object_scalar_adapter(
+    value: RuntimeCellHandle,
+    adapter: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if values.type_tag(value)? != EVAL_TAG_OBJECT {
+        return Ok(None);
+    }
+    let class_name = runtime_object_class_name(value, values)?;
+    if context
+        .native_method_signature(&class_name, adapter)
+        .is_none()
+        && eval_aot_method_dispatch_metadata_in_hierarchy(&class_name, adapter, context, values)?
+            .is_none()
+    {
+        return Ok(None);
+    }
+    eval_method_call_result(value, adapter, Vec::new(), context, values).map(Some)
 }
 
 /// Invokes `__toString()` for eval-declared objects or throws PHP's missing-hook error.
@@ -851,6 +882,9 @@ fn eval_runtime_object_string_context_value(
     let identity = values.object_identity(value)?;
     let class_name = runtime_object_class_name(value, values)?;
     if !eval_runtime_object_has_interpreter_tostring(identity, &class_name, context)
+        && context
+            .native_method_signature(&class_name, "__toString")
+            .is_none()
         && eval_aot_method_dispatch_metadata_in_hierarchy(
             &class_name,
             "__toString",

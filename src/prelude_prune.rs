@@ -20,3 +20,4 @@
 //! - What remains here is the SCAN, which never removed anything on its own.
 
 pub(crate) mod usage;
+mod callable_names;

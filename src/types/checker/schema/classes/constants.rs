@@ -4,6 +4,7 @@
 //!
 //! Called from:
 //! - `crate::types::checker::schema::classes::state::ClassBuildState::into_class_info()`
+//! - `crate::types::checker::schema::enums::insert_enum_metadata()`.
 //! - `crate::types::checker::schema::classes::properties::apply_properties()`
 //!
 //! Key details:
@@ -50,9 +51,18 @@ pub(super) fn resolve_lexical_class_constant_value(
     value: &Expr,
     class: &FlattenedClass,
 ) -> Result<Expr, CompileError> {
-    rewrite_expr(value, &class.name, class.extends.as_deref().into()).map_err(|mut error| {
+    resolve_lexical_class_value(value, &class.name, class.extends.as_deref())
+}
+
+/// Binds a class-like constant's lexical receivers before storing it outside declaration scope.
+pub(in crate::types::checker::schema) fn resolve_lexical_class_value(
+    value: &Expr,
+    class_name: &str,
+    parent_name: Option<&str>,
+) -> Result<Expr, CompileError> {
+    rewrite_expr(value, class_name, parent_name.into()).map_err(|mut error| {
         if is_missing_parent_default_error(&error) {
-            error.message = format!("Class '{}' has no parent class", class.name);
+            error.message = format!("Class '{}' has no parent class", class_name);
         }
         error
     })
@@ -432,7 +442,7 @@ fn rewrite_expr(
             };
             let StaticReceiver::Named(name) = resolved
             else { unreachable!("constant receiver is bound to a class name") };
-            ExprKind::StringLiteral(name.as_str().trim_start_matches('\\').to_string())
+            ExprKind::StringLiteral(crate::names::class_name_literal(name.as_str()))
         }
         ExprKind::ObjectClassName { object } => ExprKind::ObjectClassName {
             object: Box::new(rewrite_expr(object, class_name, parent_name)?),

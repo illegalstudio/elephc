@@ -2,21 +2,22 @@
 title: "array_rand()"
 description: "Pick one or more random keys out of an array."
 sidebar:
-  order: 31
+  order: 33
 ---
 
 ## array_rand()
 
 ```php
-function array_rand(array $array): int
+function array_rand(array $array, int $num = 1): int|string|array
 ```
 
 Pick one or more random keys out of an array.
 
 **Parameters**:
 - `$array` (`array`)
+- `$num` (`int`), default `1`, optional
 
-**Returns**: `int`
+**Returns**: `int|string|array`
 
 ## Availability
 

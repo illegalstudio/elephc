@@ -7,6 +7,10 @@
 //!
 //! Key details:
 //! - Sort helpers mutate array payload order in place and must preserve PHP comparison behavior for supported value kinds.
+//! - The bubble sort stops after `length - 1` passes even if the last one still swapped. That
+//!   bound sorts any consistent comparator completely, and it is what makes an INCONSISTENT one
+//!   terminate: a comparator that answers "greater" both ways (PHP's `<=>` against `NAN`, or a
+//!   user callback that ignores its arguments) used to swap the same pair forever (#1353).
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -15,7 +19,8 @@ use crate::codegen_support::platform::Arch;
 /// Input: x0 = callback function address, x1 = array pointer, x2 = optional callback environment pointer
 /// Output: none (sorts in place)
 /// The callback receives (a, b) and returns negative/zero/positive for ordering.
-/// Uses bubble sort for simplicity.
+/// Uses a stable bubble sort bounded to `length - 1` passes, so it terminates whatever the
+/// comparator answers.
 pub fn emit_usort(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_usort_linux_x86_64(emitter);
@@ -40,6 +45,8 @@ pub fn emit_usort(emitter: &mut Emitter) {
     emitter.instruction("ldr x20, [x1]");                                       // x20 = array length
     emitter.instruction("cmp x20, #2");                                         // check if array has fewer than 2 elements
     emitter.instruction("b.lt __rt_usort_done");                                // if length < 2, already sorted
+    emitter.instruction("sub x9, x20, #1");                                     // at most length - 1 passes sort any consistent input
+    emitter.instruction("str x9, [sp, #24]");                                   // keep the remaining pass budget across comparator calls
 
     // -- outer loop: repeat until no swaps needed --
     emitter.label("__rt_usort_outer");
@@ -87,7 +94,11 @@ pub fn emit_usort(emitter: &mut Emitter) {
 
     // -- check if any swaps occurred --
     emitter.label("__rt_usort_check");
-    emitter.instruction("cbnz x21, __rt_usort_outer");                          // if swaps happened, repeat outer loop
+    emitter.instruction("cbz x21, __rt_usort_done");                            // no swap in this pass: the array is sorted
+    emitter.instruction("ldr x9, [sp, #24]");                                   // reload the remaining pass budget
+    emitter.instruction("subs x9, x9, #1");                                     // spend one pass
+    emitter.instruction("str x9, [sp, #24]");                                   // keep the remaining pass budget
+    emitter.instruction("b.gt __rt_usort_outer");                               // repeat while the budget lasts; an inconsistent comparator stops here
 
     // -- done --
     emitter.label("__rt_usort_done");
@@ -103,7 +114,8 @@ pub fn emit_usort(emitter: &mut Emitter) {
 /// x86_64 Linux implementation of the usort runtime helper.
 ///
 /// Inputs (cdecl): rdi = callback, rsi = array ptr, rdx = optional capture env
-/// Uses bubble sort; arrays with < 2 elements are already sorted.
+/// Uses a stable bubble sort bounded to `length - 1` passes; arrays with < 2 elements are already
+/// sorted.
 /// Emits `__rt_usort` as a global label.
 fn emit_usort_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
@@ -124,6 +136,8 @@ fn emit_usort_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r14, QWORD PTR [r13]");                            // load the indexed-array logical length once before the bubble-sort passes begin
     emitter.instruction("cmp r14, 2");                                          // does the indexed array contain fewer than two elements?
     emitter.instruction("jl __rt_usort_done_linux_x86_64");                     // arrays of length zero or one are already sorted
+    emitter.instruction("lea r10, [r14 - 1]");                                  // at most length - 1 passes sort any consistent input
+    emitter.instruction("mov QWORD PTR [rbp - 56], r10");                       // keep the remaining pass budget across comparator calls
 
     emitter.label("__rt_usort_outer_linux_x86_64");
     emitter.instruction("xor r15d, r15d");                                      // clear the swapped flag at the start of each bubble-sort outer pass
@@ -159,7 +173,9 @@ fn emit_usort_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_usort_check_linux_x86_64");
     emitter.instruction("test r15, r15");                                       // did the current bubble-sort pass perform any swaps?
-    emitter.instruction("jnz __rt_usort_outer_linux_x86_64");                   // repeat another bubble-sort pass while at least one adjacent pair was swapped
+    emitter.instruction("jz __rt_usort_done_linux_x86_64");                     // no swap in this pass: the array is sorted
+    emitter.instruction("sub QWORD PTR [rbp - 56], 1");                         // spend one pass
+    emitter.instruction("jg __rt_usort_outer_linux_x86_64");                    // repeat while the budget lasts; an inconsistent comparator stops here
 
     emitter.label("__rt_usort_done_linux_x86_64");
     emitter.instruction("add rsp, 16");                                         // release the comparator environment slot before restoring callee-saved registers

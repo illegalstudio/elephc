@@ -423,6 +423,9 @@ fn join_loop_flow_type(existing: PhpType, incoming: PhpType) -> PhpType {
     if existing == incoming {
         return existing;
     }
+    if let Some(pointer) = join_pointer_flow_types(&existing, &incoming) {
+        return pointer;
+    }
     if existing.is_php_array() || incoming.is_php_array() {
         // A boxed representation need not erase a proven packed-or-hash array contract.
         return if is_array_like(&existing) && is_array_like(&incoming) {
@@ -473,6 +476,42 @@ fn join_loop_flow_type(existing: PhpType, incoming: PhpType) -> PhpType {
         (left, right) if left.codegen_repr() == right.codegen_repr() => left,
         _ => PhpType::Mixed,
     }
+}
+
+/// Joins `null` and pointer values of one local into the pointer word they share.
+///
+/// A `?ptr<T>` is one pointer word where `null` is address 0, so `null`, pointers and `?ptr<T>`
+/// values join to that pointer (`?ptr<T>` when either side can be `null`) instead of boxed
+/// `mixed`. Two different targets, or a target and an untyped `ptr`, join to the untyped `ptr`,
+/// which nothing narrows again: the fixed point replays every assignment until the environment
+/// stops changing, so the join must only move up (`$p = $a; $p = $b; $p = $c;` over three
+/// targets would otherwise flip between `ptr` and the last target forever). Returns `None`
+/// unless both sides are one of these shapes and at least one of them holds a pointer.
+fn join_pointer_flow_types(existing: &PhpType, incoming: &PhpType) -> Option<PhpType> {
+    /// Splits a flow type into its pointer (none for `null`) and whether it can be `null`.
+    fn split(ty: &PhpType) -> Option<(Option<PhpType>, bool)> {
+        match ty {
+            PhpType::Pointer(_) => Some((Some(ty.clone()), false)),
+            PhpType::Void | PhpType::Never => Some((None, true)),
+            PhpType::Union(members) => {
+                crate::types::nullable_pointer_union_member(members).map(|p| (Some(p), true))
+            }
+            _ => None,
+        }
+    }
+    let (left, left_null) = split(existing)?;
+    let (right, right_null) = split(incoming)?;
+    let pointer = match (left, right) {
+        (Some(left), Some(right)) if left == right => left,
+        (Some(_), Some(_)) => PhpType::Pointer(None),
+        (Some(pointer), None) | (None, Some(pointer)) => pointer,
+        (None, None) => return None,
+    };
+    Some(if left_null || right_null {
+        PhpType::Union(vec![pointer, PhpType::Void])
+    } else {
+        pointer
+    })
 }
 
 /// Joins array payload types so every live element has one stable runtime representation.
@@ -552,12 +591,19 @@ fn is_array_like(ty: &PhpType) -> bool {
 /// and still sees null. `Mixed` is the one representation that holds both on every path, which
 /// is also what makes the `=== null` guard a real runtime tag test instead of a folded
 /// constant.
+///
+/// A local assigned only pointers (packed record addresses read from a buffer included) gets
+/// `?ptr<T>` instead: one pointer word holds both on every path, with `null` as address 0, so
+/// `=== null` tests the address and field reads reach the record rather than a boxed cell.
 fn null_entry_contract(entry_ty: &PhpType, fixed_ty: &PhpType) -> Option<PhpType> {
     if !matches!(entry_ty.codegen_repr(), PhpType::Void) {
         return None;
     }
     if matches!(fixed_ty.codegen_repr(), PhpType::Void) {
         return None;
+    }
+    if crate::types::is_nullable_pointer_type(fixed_ty) {
+        return Some(fixed_ty.clone());
     }
     Some(PhpType::Mixed)
 }
@@ -1264,8 +1310,11 @@ fn call_arg_value(argument: &Expr) -> &Expr {
 
 #[cfg(test)]
 mod tests {
-    use super::{infer_storage_value_type, join_loop_flow_type, representation_contract};
-    use crate::parser::ast::{CastType, Expr, ExprKind};
+    use super::{
+        infer_storage_value_type, join_loop_flow_type, loop_carried_storage_types,
+        representation_contract,
+    };
+    use crate::parser::ast::{CastType, Expr, ExprKind, Stmt, StmtKind};
     use crate::span::Span;
     use crate::types::{PhpType, TypeEnv};
 
@@ -1444,5 +1493,56 @@ mod tests {
                 PhpType::Mixed,
             );
         }
+    }
+
+    /// `null` and pointers join to one pointer word on the loop lattice, and the join only moves
+    /// up: different targets, or a target and an untyped `ptr`, stay the untyped `ptr`.
+    #[test]
+    fn null_and_pointer_loop_joins_keep_one_monotone_pointer_word() {
+        let typed = |name: &str| PhpType::Pointer(Some(name.to_string()));
+        let nullable = |pointer: PhpType| PhpType::Union(vec![pointer, PhpType::Void]);
+        assert_eq!(join_loop_flow_type(PhpType::Void, typed("A")), nullable(typed("A")));
+        assert_eq!(join_loop_flow_type(typed("A"), PhpType::Void), nullable(typed("A")));
+        assert_eq!(join_loop_flow_type(nullable(typed("A")), typed("A")), nullable(typed("A")));
+        assert_eq!(
+            join_loop_flow_type(nullable(typed("A")), typed("B")),
+            nullable(PhpType::Pointer(None)),
+        );
+        assert_eq!(
+            join_loop_flow_type(nullable(PhpType::Pointer(None)), typed("A")),
+            nullable(PhpType::Pointer(None)),
+        );
+        assert_eq!(join_loop_flow_type(typed("A"), PhpType::Int), PhpType::Mixed);
+    }
+
+    /// A local that enters a loop holding `null` and is assigned pointers to three different
+    /// targets reaches a fixed point (a join that narrowed `ptr` back to a typed target made the
+    /// analysis flip forever) and gets one untyped `?ptr` contract.
+    #[test]
+    fn null_entry_loop_over_three_pointer_targets_reaches_a_fixed_point() {
+        let assign = |source: &str| {
+            Stmt::new(
+                StmtKind::Assign {
+                    name: "p".to_string(),
+                    value: Expr::var(source),
+                },
+                Span::dummy(),
+            )
+        };
+        let body = vec![assign("a"), assign("b"), assign("c")];
+        let mut entry = TypeEnv::new();
+        entry.insert("p".to_string(), PhpType::Void);
+        entry.insert("a".to_string(), PhpType::Pointer(Some("A".to_string())));
+        entry.insert("b".to_string(), PhpType::Pointer(Some("B".to_string())));
+        entry.insert("c".to_string(), PhpType::Pointer(Some("C".to_string())));
+        let mut infer = |_expr: &Expr, _env: &TypeEnv| -> Option<PhpType> { None };
+        let contracts = loop_carried_storage_types(&body, None, &entry, None, &mut infer);
+        assert_eq!(
+            contracts,
+            vec![(
+                "p".to_string(),
+                PhpType::Union(vec![PhpType::Pointer(None), PhpType::Void]),
+            )],
+        );
     }
 }

@@ -9,9 +9,8 @@ foundations, and concrete product tracks without a major-version release gate.
 Current direction:
 
 - Finish the well-bounded PHP-visible compatibility gaps on the EIR backend.
-- Keep completed historical items in their original version sections; everything
-  delivered so far lives under v0.26.x and earlier, and the numbered sections from
-  v0.27.x on hold only work that has not shipped.
+- Keep completed historical items in their original version sections, including v0.27.x.
+  Keep unfinished work unchecked in the version where it is planned.
 - Close the EIR optimizer work behind benchmark evidence and real-world validation.
 - Treat the PHP extension bridge and WebAssembly as later 0.x product tracks; the
   web server, shared and static libraries, and the curl extension have shipped.
@@ -289,7 +288,7 @@ Proper type system for PHP compatibility.
 - [x] `--link` / `-l` and `--link-path` / `-L` CLI flags
 - [x] `--framework` flag for macOS frameworks
 - [x] Owned null-terminated string ↔ length-prefixed string conversion (`__rt_str_to_cstr`, `__rt_cstr_to_str`)
-- [x] `extern class` for C struct mapping (flat layout, available to `ptr_sizeof()` and typed pointer field access)
+- [x] `extern class` for C struct mapping (natural C layout with explicit field widths, available to `ptr_sizeof()` and typed pointer field access)
 - [x] `extern global` for accessing C global variables
 - [x] Callback support: pass elephc functions as C function pointers (`callable` params)
 - [x] C memory management via extern libc: `malloc()`, `free()`, `memcpy()`, `memset()`
@@ -1126,15 +1125,26 @@ real-world validation rather than by speculative pass work.
 - [x] Local-to-SSA promotion (`mem2reg`) for eligible non-aliased scalar PHP locals: replace repeated `load_local` / `store_local` traffic with SSA values and block parameters at CFG joins and loop back edges, while conservatively retaining address-taken, by-reference, global/static, refcounted, and otherwise volatile slots in memory. Re-run register allocation on the promoted graph so loop-carried values such as counters and accumulators can remain in registers across the whole loop.
 - [x] EIR integer range and induction-variable analysis: propagate intervals through constants, comparisons, loop bounds, masks, shifts, and checked `add` / `sub` / `mul`; prove when PHP integer overflow is impossible and rewrite only those operations to unchecked scalar forms. Keep overflow-to-float behavior on every unproven path and cover all supported targets with optimizer-on/off equivalence tests.
 
-### Planned
+### Delivered in v0.27.3
 
 - [x] Loop optimization on canonical EIR CFGs: build on natural-loop analysis, LICM, `mem2reg`, and control-flow normalization to recognize basic induction variables, hoist invariant bounds/materializations, simplify loop tests and updates, and keep hot back edges free of redundant intermediary blocks and jumps.
 - [x] Cost-aware constant rematerialization and immediate operands: materialize scalar constants at their uses instead of assigning spill slots or rebuilding them on every iteration; select target-legal immediate forms for arithmetic, masks, comparisons, and loop bounds on AArch64 and x86_64, falling back to registers only when required by the target encoding or live-range cost.
 - [x] Concat scratch-state optimization — remove or coalesce statement-boundary `concat_reset` operations when dataflow proves no scratch string can be live or consumed between resets, including arithmetic-only loop bodies, while preserving calls, output, exceptions, `eval`, and every path that can observe or reuse concat storage.
 - [x] Late target-aware instruction selection and machine peepholes — add strength reduction for profitable constant arithmetic (for example `x * 31` → `(x << 5) - x` when target costs justify it), direct compare-and-branch lowering without materializing temporary booleans, redundant move/jump cleanup, and block layout that keeps cold overflow paths out of hot loop fallthrough. Validate assembly shape and behavior on AArch64 and x86_64.
+
+### Delivered in v0.27.4
+
 - [x] Tail-call optimization: direct tail self- and mutual-recursion lowering on top of EIR (`Br` to function entry with parameter rebinding; conservative scalar-frame eligibility)
+- [x] Native test runtime as a compiler prelude: `Elephc\Testing\TestCase` with a PHPUnit-compatible assertion subset plus typed variants, `Elephc\Testing\Runner` with a stable report and exit code, and the `PHPUnit\Framework\TestCase` alias so plain-PHP suites compile unchanged
+- [x] `elephc test`: compile-time discovery of test classes and methods (`test*` and `#[Test]`, inherited ones included), a synthesized entry rooted for declaration reachability, Composer `autoload` and `autoload-dev` from the nearest project root, `--filter`, the suite's verdict as the exit code
+- [x] `elephc test` isolation: one forked child per test on the executable hosts, native fatals and signals reported as errors, per-test timeout, `--no-isolation`
+- [x] `elephc test` lifecycle: data providers, `expectException()`, skipped and incomplete tests, a fresh instance per test, `--junit` output
+- [x] `elephc test` differential runs against php-src PHPUnit in CI (`scripts/test-differential.py` on the example suite)
+
+### Planned
+
 - [ ] Performance within 2x of C -O0 on compute benchmarks
-- [ ] DOOM showcase performance gate after EIR optimizations — build and run a reproducible SDL benchmark for `showcases/doom`, track EIR FPS / generated assembly size / runtime helper counts, optionally compare against the last known legacy baseline when available, and require no large real-world regression before release
+- [ ] Standalone DOOM performance gate after EIR optimizations: build and run a reproducible SDL benchmark for [getelephc/doom](https://github.com/getelephc/doom), track EIR FPS / generated assembly size / runtime helper counts, optionally compare against the last known legacy baseline when available, and require no large real-world regression before release
 - [ ] Real-world CLI tools compiled as validation
 
 ## v0.28.x — Include-graph, library, and native-surface completion

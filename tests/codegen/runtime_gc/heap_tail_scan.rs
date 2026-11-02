@@ -116,6 +116,9 @@ fn test_heap_tail_scan_skips_non_tail_insertions_and_reclaims_exposed_tail() {
                 &format!("mov rax, QWORD PTR [rsp + {}]", index * 8));
             call(&mut asm, "__rt_heap_free");
         }
+        // Blocks up to 2048 bytes wait in their exact bins, so the exposed tail they form is
+        // returned to the bump region by the consolidation pass, not by the free itself.
+        call(&mut asm, "__rt_gc_mem_caches");
         expect(&mut asm, "_gc_frees", 6);
         expect(&mut asm, "_gc_live", 0);
         expect(&mut asm, "_heap_off", 0);
@@ -163,7 +166,9 @@ fn test_heap_tail_scan_cached_drain_preserves_coalescing_and_counters() {
             address(&mut asm, "x9", "r8", "_heap_tail_test_visits");
             instruction(&mut asm, "str xzr, [x9]", "mov QWORD PTR [r8], 0");
             call(&mut asm, "__rt_gc_mem_caches");
-            instruction(&mut asm, "cmp x0, #24", "cmp rax, 24");
+            // Every freed block up to 2048 bytes waits in its exact bin: two 80-byte and one
+            // 8-byte block, headers included, are drained.
+            instruction(&mut asm, "cmp x0, #216", "cmp rax, 216");
             instruction(&mut asm, "b.ne Lheap_tail_test_fail", "jne Lheap_tail_test_fail");
             expect(&mut asm, "_gc_allocs", 4);
             expect(&mut asm, "_gc_frees", if tail_live { 3 } else { 4 });
@@ -184,11 +189,15 @@ fn test_heap_tail_scan_cached_drain_preserves_coalescing_and_counters() {
             expect(&mut asm, "_heap_off", 0);
             expect(&mut asm, "_heap_free_list", 0);
             expect(&mut asm, "_heap_small_bins", 0);
-            address(&mut asm, "x9", "r8", "_heap_tail_test_visits");
-            instruction(&mut asm, "ldr x9, [x9]", "mov r8, QWORD PTR [r8]");
-            instruction(&mut asm, "cbz x9, Lheap_tail_test_fail", "test r8, r8");
-            if target().arch == Arch::X86_64 {
-                asm.push_str("    jz Lheap_tail_test_fail\n");
+            // With the tail already free, the consolidation pass returns it to the bump region
+            // without the free path's tail scan; a live tail freed last does take that scan.
+            if tail_live {
+                address(&mut asm, "x9", "r8", "_heap_tail_test_visits");
+                instruction(&mut asm, "ldr x9, [x9]", "mov r8, QWORD PTR [r8]");
+                instruction(&mut asm, "cbz x9, Lheap_tail_test_fail", "test r8, r8");
+                if target().arch == Arch::X86_64 {
+                    asm.push_str("    jz Lheap_tail_test_fail\n");
+                }
             }
             instruction(&mut asm, "mov x0, #1", "mov eax, 1");
             instruction(&mut asm, "b Lheap_tail_test_print", "jmp Lheap_tail_test_print");

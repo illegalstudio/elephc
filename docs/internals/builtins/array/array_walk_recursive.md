@@ -2,7 +2,7 @@
 title: "array_walk_recursive() - internals"
 description: "Compiler internals for array_walk_recursive(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 47
+  order: 49
 ---
 
 ## `array_walk_recursive()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_walk_recursive.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_walk_recursive.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function array_walk_recursive(array $array, callable $callback): void
+function array_walk_recursive(array $array, callable $callback): bool
 ```
 
 ## What the type checker enforces

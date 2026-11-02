@@ -160,6 +160,62 @@ fn test_parse_extern_block() {
     }
 }
 
+/// Parses extern functions, classes, globals, and an expanding library block inside braced
+/// namespaces while preserving each namespace body's declaration list.
+#[test]
+fn test_parse_extern_declarations_inside_braced_namespaces() {
+    let stmts = parse_source(
+        r#"<?php
+namespace App {
+    extern function abs(i32 $value): i32;
+    extern class Point { public int $x; }
+    extern global int $errno;
+    extern "c" { function labs(int $value): int; function llabs(int $value): int; }
+}
+namespace Other {
+    extern function getpid(): i32;
+}
+"#,
+    );
+    assert_eq!(stmts.len(), 2);
+
+    let StmtKind::NamespaceBlock { name, body } = &stmts[0].kind else {
+        panic!("expected first namespace block, got {:?}", stmts[0].kind);
+    };
+    assert_eq!(name.as_ref().map(Name::as_str), Some("App"));
+    assert_eq!(body.len(), 5);
+    assert!(matches!(
+        &body[0].kind,
+        StmtKind::ExternFunctionDecl { name, library, .. }
+            if name == "abs" && library.is_none()
+    ));
+    assert!(matches!(
+        &body[1].kind,
+        StmtKind::ExternClassDecl { name, .. } if name == "Point"
+    ));
+    assert!(matches!(
+        &body[2].kind,
+        StmtKind::ExternGlobalDecl { name, .. } if name == "errno"
+    ));
+    for stmt in &body[3..] {
+        assert!(matches!(
+            &stmt.kind,
+            StmtKind::ExternFunctionDecl { library, .. }
+                if library.as_deref() == Some("c")
+        ));
+    }
+
+    let StmtKind::NamespaceBlock { name, body } = &stmts[1].kind else {
+        panic!("expected second namespace block, got {:?}", stmts[1].kind);
+    };
+    assert_eq!(name.as_ref().map(Name::as_str), Some("Other"));
+    assert_eq!(body.len(), 1);
+    assert!(matches!(
+        &body[0].kind,
+        StmtKind::ExternFunctionDecl { name, .. } if name == "getpid"
+    ));
+}
+
 /// Parses `extern class Point { public int $x; public float $y; }` as an `ExternClassDecl`.
 /// Verifies name and field list (name, type-kind) are captured correctly.
 #[test]
@@ -171,6 +227,30 @@ fn test_parse_extern_class() {
             assert_eq!(fields.len(), 2);
             assert_eq!(fields[0].name, "x");
             assert_eq!(fields[1].name, "y");
+        }
+        _ => panic!("Expected ExternClassDecl"),
+    }
+}
+
+/// Parses an extern class whose fields use explicit C widths, keeping each field's C type.
+#[test]
+fn test_parse_extern_class_with_c_widths() {
+    use elephc::parser::ast::{CIntWidth, CType};
+    let stmts = parse_source(
+        "<?php extern class Event { public u32 $type; public u16 $mod; public bool $down; public f32 $x; }",
+    );
+    match &stmts[0].kind {
+        StmtKind::ExternClassDecl { fields, .. } => {
+            let types: Vec<&CType> = fields.iter().map(|field| &field.c_type).collect();
+            assert_eq!(
+                types,
+                vec![
+                    &CType::IntWidth(CIntWidth::U32),
+                    &CType::IntWidth(CIntWidth::U16),
+                    &CType::Bool,
+                    &CType::F32,
+                ]
+            );
         }
         _ => panic!("Expected ExternClassDecl"),
     }
@@ -218,6 +298,64 @@ fn test_parse_extern_int_widths() {
         }
         _ => panic!("Expected ExternFunctionDecl"),
     }
+}
+
+/// Parses the C `float` width: `f32` is its own C type while `f64` and `double` fold to `float`.
+#[test]
+fn test_parse_extern_float_widths() {
+    use elephc::parser::ast::CType;
+    let stmts = parse_source("<?php extern function fw(f32 $a, f64 $b, double $c): f32;");
+    match &stmts[0].kind {
+        StmtKind::ExternFunctionDecl { params, return_type, .. } => {
+            let types: Vec<&CType> = params.iter().map(|param| &param.c_type).collect();
+            assert_eq!(types, vec![&CType::F32, &CType::Float, &CType::Float]);
+            assert_eq!(return_type, &CType::F32);
+        }
+        _ => panic!("Expected ExternFunctionDecl"),
+    }
+}
+
+/// Parses `?string` on extern parameters and returns as `CType::NullableStr`, in a library
+/// block as SDL3 declares it, while the neighbouring `ptr` and plain `string` stay unchanged.
+#[test]
+fn test_parse_extern_nullable_string_param_and_return() {
+    use elephc::parser::ast::CType;
+    let stmts = parse_source(
+        r#"<?php extern "SDL3" { function SDL_CreateRenderer(ptr $window, ?string $name): ptr; function SDL_GetError(): ?string; function SDL_SetHint(string $name, ?string $value): bool; }"#,
+    );
+    assert_eq!(stmts.len(), 3);
+    match &stmts[0].kind {
+        StmtKind::ExternFunctionDecl { params, return_type, .. } => {
+            let types: Vec<&CType> = params.iter().map(|param| &param.c_type).collect();
+            assert_eq!(types, vec![&CType::Ptr, &CType::NullableStr]);
+            assert_eq!(return_type, &CType::Ptr);
+        }
+        _ => panic!("Expected ExternFunctionDecl"),
+    }
+    match &stmts[1].kind {
+        StmtKind::ExternFunctionDecl { params, return_type, .. } => {
+            assert!(params.is_empty());
+            assert_eq!(return_type, &CType::NullableStr);
+        }
+        _ => panic!("Expected ExternFunctionDecl"),
+    }
+    match &stmts[2].kind {
+        StmtKind::ExternFunctionDecl { params, .. } => {
+            let types: Vec<&CType> = params.iter().map(|param| &param.c_type).collect();
+            assert_eq!(types, vec![&CType::Str, &CType::NullableStr]);
+        }
+        _ => panic!("Expected ExternFunctionDecl"),
+    }
+}
+
+/// Rejects `?` before any extern type other than `string`, and a dangling `?`, because only a
+/// `char*` gains a NULL mapping (a `ptr` already carries NULL as the address 0).
+#[test]
+fn test_parse_extern_nullable_rejects_non_string_types() {
+    assert!(parse_fails("<?php extern function f(?int $x): int;"));
+    assert!(parse_fails("<?php extern function f(?ptr $x): int;"));
+    assert!(parse_fails("<?php extern function f(): ?ptr<Point>;"));
+    assert!(parse_fails("<?php extern function f(? $x): int;"));
 }
 
 /// Parses `extern "m" function sin(float $x): float;` as an `ExternFunctionDecl` with library `"m"`.
@@ -769,4 +907,42 @@ fn test_parses_word_variance_markers() {
 #[test]
 fn test_out_is_still_a_usable_type_parameter_name() {
     assert!(!parse_fails("<?php class Holder<out> { public function get(): out { return $this->v; } }"));
+}
+
+/// Preserves the pointer target through ordinary, buffer and extern type syntax.
+#[test]
+fn test_parse_nested_pointer_type_shapes() {
+    let stmts = parse_source("<?php ptr<ptr<u8>> $p = ptr_null(); buffer<ptr<u8>> $b = buffer_new<ptr<u8>>(1); extern function f(ptr<ptr<u8>> $out): void;");
+    match &stmts[0].kind {
+        StmtKind::TypedAssign { type_expr, .. } => assert_eq!(type_expr, &TypeExpr::Ptr(Some(Name::unqualified("ptr<u8>")))),
+        other => panic!("expected typed assignment, got {:?}", other),
+    }
+    match &stmts[1].kind {
+        StmtKind::TypedAssign { type_expr, .. } => assert_eq!(type_expr, &TypeExpr::Buffer(Box::new(TypeExpr::Ptr(Some(Name::unqualified("u8")))))),
+        other => panic!("expected typed assignment, got {:?}", other),
+    }
+    match &stmts[2].kind {
+        StmtKind::ExternFunctionDecl { params, .. } => assert_eq!(params[0].c_type, elephc::parser::ast::CType::TypedPtr("ptr<u8>".into())),
+        other => panic!("expected extern declaration, got {:?}", other),
+    }
+    parse_source("<?php function f(pointer<pointer<u8>> $p): void {} function g(ptr<pointer<u8>> $p): void {}");
+}
+
+/// Parses pointer elements when consecutive type argument closers form a shift token.
+#[test]
+fn test_buffer_pointer_type_closers() {
+    parse_source("<?php function f(buffer<ptr<u8>> $b, ptr<ptr<u8>> $p): buffer<ptr<u8>> { return buffer_new<ptr<u8>>(1); }");
+}
+
+/// Parses pointer-to-pointer parameters in native declarations.
+#[test]
+fn test_extern_nested_pointer_type() {
+    parse_source("<?php extern \"SDL3\" { function SDL_LoadWAV(string $path, ptr $spec, ptr<ptr<u8>> $data, ptr<u32> $length): bool; }");
+}
+
+/// Rejects an unmatched closing angle in a native pointer type.
+#[test]
+fn test_extern_nested_pointer_unbalanced_close() {
+    assert!(parse_fails("<?php extern function f(ptr<ptr<u8>>> $p): void;"));
+    assert!(parse_fails("<?php extern function f(ptr<ptr<u8> $p): void;"));
 }

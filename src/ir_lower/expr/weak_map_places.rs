@@ -38,11 +38,44 @@ pub(crate) fn lower_weak_map_incdec_stmt(
     value: &Expr,
     span: Span,
 ) -> bool {
-    let ExprKind::BinaryOp { left, op, right } = &value.kind else { return false; };
-    if !implicit_increment_one(op, right, value.span) { return false; }
+    let (left, increment, captures) = match &value.kind {
+        ExprKind::BinaryOp { left, op, right } if implicit_increment_one(op, right, value.span) => {
+            (left.as_ref(), matches!(op, BinOp::Add), None)
+        }
+        ExprKind::Assignment { target, prelude, .. } => {
+            let Some(Stmt { kind: StmtKind::Assign { name: old, value: read }, .. }) = prelude.first()
+                else { return false; };
+            let Some(crate::ir_lower::stmt::ElementUpdate::IncDec { increment }) =
+                crate::ir_lower::stmt::desugared_element_update(value, span, |target| target == read)
+                else { return false; };
+            let ExprKind::Variable(new) = &target.kind else { return false; };
+            (read, increment, Some((old.as_str(), new.as_str())))
+        }
+        _ => return false,
+    };
     let Some(variable) = begin_entry_update(ctx, left, span) else { return false; };
     let ExprKind::Variable(name) = &variable.kind else { unreachable!("entry alias is a local"); };
-    let result = lower_inc_dec(ctx, name, matches!(op, BinOp::Add), false, value);
+    if let Some((old, _)) = captures {
+        let current = ctx.load_local(name, Some(span));
+        let ty = ctx.builder.value_php_type(current.value);
+        let borrowed = ctx.emit_value(
+            Op::Borrow,
+            vec![current.value],
+            None,
+            ty.clone(),
+            Op::Borrow.default_effects(),
+            Some(span),
+        );
+        ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+        let captured = crate::ir_lower::ownership::copy_assignment_value(ctx, borrowed, Some(span));
+        ctx.store_call_argument_local(old, captured, ty, Some(span));
+    }
+    let result = lower_inc_dec(ctx, name, increment, false, value);
+    if let Some((_, new)) = captures {
+        let captured = crate::ir_lower::ownership::acquire_if_refcounted(ctx, result, Some(span));
+        let ty = ctx.builder.value_php_type(captured.value);
+        ctx.store_call_argument_local(new, captured, ty, Some(span));
+    }
     if ctx.value_needs_release_after_use(result) {
         crate::ir_lower::ownership::release_if_owned(ctx, result, Some(span));
     }
@@ -67,6 +100,27 @@ pub(super) fn lower_weak_map_incdec_expression(
     let split = prelude.len() - 2;
     let StmtKind::Assign { name: old, value: read } = &prelude[split].kind else { return None; };
     let StmtKind::Assign { name: new, value: next } = &prelude[split + 1].kind else { return None; };
+    if read == target && crate::names::is_generated_local_name(old)
+        && crate::names::is_generated_local_name(new)
+        && matches!(&value.kind, ExprKind::Variable(name) if name == old)
+        && result_target.is_some_and(|result|
+            matches!(&result.kind, ExprKind::Variable(name) if name == new))
+    {
+        let (increment, post, local) = match &next.kind {
+            ExprKind::PreIncrement(local) => (true, false, local),
+            ExprKind::PostIncrement(local) => (true, true, local),
+            ExprKind::PreDecrement(local) => (false, false, local),
+            ExprKind::PostDecrement(local) => (false, true, local),
+            _ => return None,
+        };
+        if local != old { return None; }
+        for stmt in &prelude[..split] { crate::ir_lower::stmt::lower_stmt(ctx, stmt); }
+        let variable = begin_entry_update(ctx, target, expr.span)?;
+        let ExprKind::Variable(name) = variable.kind else { unreachable!("entry alias is a local"); };
+        let result = lower_inc_dec(ctx, &name, increment, post, expr);
+        finish_entry_update(ctx);
+        return Some(result);
+    }
     let ExprKind::BinaryOp { left, op, right } = &next.kind else { return None; };
     if read != target || !crate::names::is_generated_local_name(old)
         || !crate::names::is_generated_local_name(new)
@@ -181,8 +235,20 @@ mod tests {
                 for stmt in body { collect_update_origins(stmt, origins); }
             }
             StmtKind::ArrayAssign { value, .. } => {
-                let ExprKind::BinaryOp { op, right, .. } = &value.kind else { panic!("expected update"); };
-                origins.push(implicit_increment_one(op, right, value.span));
+                origins.push(match &value.kind {
+                    ExprKind::BinaryOp { op, right, .. } => {
+                        implicit_increment_one(op, right, value.span)
+                    }
+                    ExprKind::Assignment { .. } => matches!(
+                        crate::ir_lower::stmt::desugared_element_update(
+                            value,
+                            value.span,
+                            |_| true,
+                        ),
+                        Some(crate::ir_lower::stmt::ElementUpdate::IncDec { .. })
+                    ),
+                    _ => panic!("expected update"),
+                });
             }
             _ => {}
         }

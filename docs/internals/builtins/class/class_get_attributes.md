@@ -2,7 +2,7 @@
 title: "class_get_attributes() - internals"
 description: "Compiler internals for class_get_attributes(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 78
+  order: 81
 ---
 
 ## `class_get_attributes()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/class_get_attributes.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/class_get_attributes.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -141,13 +141,50 @@ pub(crate) fn lower_ref_assign_call(
         ctx.promote_local_ref_cell(target, Some(span));
         return;
     }
-    // Publishing the alias retains the cell in the target's own owner, so the staging lease can
-    // retire. The record is detached first, exactly as `retire_owned_call_operand` does for a
-    // value root: `release_ref_cell_owner` clears the slot before releasing, so a throwing
-    // payload destructor cannot be retried by a later walk of the chain.
+    // Publish the new alias before the old payload's last release can throw. The extra old
+    // owner delays that destructor without changing the existing rebinding/owner primitives.
+    let previous_owner = super::reference_returns::root_previous_reference_binding(ctx, target, span);
     ctx.alias_local_ref_cell(target, &staged, Some(span));
+    if let Some(previous_owner) = previous_owner {
+        super::reference_returns::retire_previous_reference_binding(ctx, previous_owner, span);
+    }
+    // The target now owns the returned cell, including when old-payload retirement threw.
     unregister_owned_call_operand(ctx, owner, span);
     ctx.release_ref_cell_owner(&staged, Some(span));
+    // `function &grab(&$x) { return $x; }` transfers the parameter's storage. When that
+    // parameter was an object property, the call lowered through a hidden temp, so the
+    // returned cell aliases the temp rather than the property. Rebind the target to the
+    // property place itself so later writes through `$target` reach `$obj->prop`.
+    if let Some(property) = aliased_property_argument(ctx, source) {
+        lower_ref_assign_property(ctx, target, &property, span);
+    }
+}
+
+/// Returns a property argument whose by-reference storage the callee provably returns.
+fn aliased_property_argument(
+    ctx: &LoweringContext<'_, '_>,
+    source: &Expr,
+) -> Option<Expr> {
+    let ExprKind::FunctionCall { name, args } = &source.kind else {
+        return None;
+    };
+    let signature = ctx.functions.get(name.as_str())?;
+    if !signature.by_ref_return {
+        return None;
+    }
+    let alias = ctx.return_alias_summaries.function(name.as_str())?;
+    for (index, arg) in args.iter().enumerate() {
+        let place = match &arg.kind {
+            ExprKind::NamedArg { value, .. } => value.as_ref(),
+            _ => arg,
+        };
+        if matches!(place.kind, ExprKind::PropertyAccess { .. })
+            && alias.proven_aliases_parameter(index)
+        {
+            return Some(place.clone());
+        }
+    }
+    None
 }
 
 /// Lowers `$target =& $arr[idx]` using the ownership represented by the container.
@@ -354,6 +391,7 @@ pub(super) fn lower_property_get_from_value(
     op: Op,
     expr: &Expr,
 ) -> LoweredValue {
+    let object = refine_member_receiver(ctx, object, expr);
     if op == Op::NullsafePropGet && value_is_definitely_null(ctx, object.value) {
         return lower_boxed_null(ctx, expr);
     }
@@ -374,6 +412,9 @@ pub(super) fn lower_property_get_from_value(
     }
     let data = ctx.intern_string(property);
     let result_type = property_get_result_type(ctx, object.value, property, op, expr);
+    let reads_extern_cstr = op == Op::PropGet
+        && result_type == PhpType::Str
+        && extern_receiver_class(ctx, &ctx.builder.value_php_type(object.value)).is_some();
     let result = ctx.emit_value(
         op,
         vec![object.value],
@@ -382,6 +423,18 @@ pub(super) fn lower_property_get_from_value(
         op.default_effects(),
         Some(expr.span),
     );
+    if reads_extern_cstr {
+        // A C `char*` field reads as a borrowed view of C memory the program may free or
+        // rewrite at any time, so the value PHP keeps is an owned copy taken right here.
+        return ctx.emit_owned_value(
+            Op::StrPersist,
+            vec![result.value],
+            None,
+            PhpType::Str,
+            Op::StrPersist.default_effects(),
+            Some(expr.span),
+        );
+    }
     stabilize_borrowed_result_and_release_receiver(ctx, object, result, expr.span)
 }
 
@@ -447,7 +500,19 @@ fn property_result_type(
         if matches!(object_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
             return PhpType::Mixed;
         }
-        if let PhpType::Packed(class_name) = object_ty.codegen_repr() {
+        if let Some(class_name) = extern_receiver_class(ctx, &object_ty) {
+            // A C struct field reads as whatever its declared C type widens to: `int` for every
+            // integer width, `float` for both float widths.
+            let Some(field) = ctx
+                .extern_classes
+                .get(&class_name)
+                .and_then(|info| info.fields.iter().find(|field| field.name == property))
+            else {
+                return fallback_expr_type(expr);
+            };
+            return normalize_value_php_type(field.php_type.clone());
+        }
+        if let Some(class_name) = packed_receiver_class(ctx, &object_ty) {
             let normalized = class_name.trim_start_matches('\\');
             let Some(class_info) = ctx.packed_classes.get(normalized) else {
                 return fallback_expr_type(expr);
@@ -470,6 +535,12 @@ fn property_result_type(
         };
     }
     let Some(class_info) = ctx.classes.get(normalized) else {
+        // An interface has no properties, so a read the checker accepted on one went through a
+        // narrowing (`if ($answer instanceof Shape)`). Codegen dispatches it on the runtime
+        // class, which hands back a boxed result, as for an untyped receiver.
+        if ctx.interfaces.contains_key(normalized) {
+            return PhpType::Mixed;
+        }
         return fallback_expr_type(expr);
     };
     if let Some(property_ty) = runtime_property_type_override(ctx, normalized, property) {
@@ -510,6 +581,16 @@ fn property_result_type(
                 PhpType::Mixed
             };
         }
+        // No slot, accessor or hash answers the name on the static class, so the checker
+        // narrowed the receiver to a subclass that declares it, and codegen reads it from the
+        // runtime class into a boxed result.
+        if class_info.properties.iter().all(|(name, _)| name != property) {
+            return if nullable {
+                nullable_result_type(PhpType::Mixed)
+            } else {
+                PhpType::Mixed
+            };
+        }
         return fallback_expr_type(expr);
     };
     let property_ty = normalize_value_php_type(property_ty.clone());
@@ -518,6 +599,47 @@ fn property_result_type(
     } else {
         property_ty
     }
+}
+
+/// Returns the packed class a property receiver addresses, or `None` for any other receiver.
+///
+/// A packed record is reached either as a `packed` value (a buffer element or a nested record
+/// field, both of which are the record's address) or through a `ptr<T>` typed pointer whose
+/// target is a packed class. Both carry the same raw address, so field reads and writes use the
+/// packed layout for either.
+pub(crate) fn packed_receiver_class(
+    ctx: &LoweringContext<'_, '_>,
+    object_ty: &PhpType,
+) -> Option<String> {
+    match object_ty.codegen_repr() {
+        PhpType::Packed(class_name) => Some(class_name),
+        PhpType::Pointer(Some(class_name))
+            if ctx
+                .packed_classes
+                .contains_key(class_name.trim_start_matches('\\')) =>
+        {
+            Some(class_name)
+        }
+        _ => None,
+    }
+}
+
+/// Returns the extern class a `ptr<T>` receiver addresses, or `None` for any other receiver.
+///
+/// The sibling of `packed_receiver_class` for C structs declared with `extern class`: the
+/// receiver is the struct's raw address, and each field is read and written at its natural C
+/// offset with its declared width.
+pub(crate) fn extern_receiver_class(
+    ctx: &LoweringContext<'_, '_>,
+    object_ty: &PhpType,
+) -> Option<String> {
+    let PhpType::Pointer(Some(class_name)) = object_ty.codegen_repr() else {
+        return None;
+    };
+    let normalized = class_name.trim_start_matches('\\');
+    ctx.extern_classes
+        .contains_key(normalized)
+        .then(|| normalized.to_string())
 }
 
 /// Returns whether a container read can carry PHP null in a statically non-null pointer type.
@@ -816,7 +938,25 @@ pub(super) fn lower_dynamic_property_fetch_from_value(
     mode: PropertyFetchMode,
     expr: &Expr,
 ) -> LoweredValue {
+    let object = refine_member_receiver(ctx, object, expr);
+    // A literal name on a C struct receiver is the named field read (`$r->{'y'}` is `$r->y`): it
+    // keeps the width-aware load and the owned copy of a `char*` field the named read takes. That
+    // holds in probe mode too: the checker only admits declared fields, which always exist, so
+    // `isset($r->{'y'})`, `empty(...)` and `?? ...` read the field exactly like their named forms.
+    if let ExprKind::StringLiteral(name) = &property.kind {
+        if extern_receiver_class(ctx, &ctx.builder.value_php_type(object.value)).is_some() {
+            return lower_property_get_from_value(ctx, object, name, Op::PropGet, expr);
+        }
+    }
     let result_type = dynamic_property_get_result_type(ctx, object.value, property, expr);
+    // A silent fetch can answer null for a typed slot that has not been initialized. Buffer
+    // handles keep their element type and use the raw missing-value sentinel, like buffer
+    // element probes: boxing a buffer loses the descriptor's element layout at a later merge.
+    let result_type = if mode.is_read() || matches!(result_type, PhpType::Buffer(_)) {
+        result_type
+    } else {
+        nullable_result_type(result_type)
+    };
     let property = lower_expr(ctx, property);
     let property = coerce_runtime_property_name(ctx, property, expr.span);
     lower_dynamic_property_fetch_from_operands(ctx, object, property, result_type, mode, expr)
@@ -839,6 +979,11 @@ pub(super) fn lower_dynamic_property_fetch_from_operands(
         Op::DynamicPropGet.default_effects(),
         Some(expr.span),
     );
+    // A name computed for this read (`$o->{(string) $mixed}`) is a temporary the
+    // lookup only reads; the result borrows from the object, never from it.
+    if ctx.value_is_owning_temporary(property) {
+        crate::ir_lower::ownership::release_if_owned(ctx, property, Some(expr.span));
+    }
     stabilize_borrowed_result_and_release_receiver(ctx, object, result, expr.span)
 }
 
@@ -855,6 +1000,7 @@ pub(super) fn lower_property_probe_from_value(
     property: &str,
     expr: &Expr,
 ) -> LoweredValue {
+    let object = refine_member_receiver(ctx, object, expr);
     // Runtime-name probes must suppress typed uninitialized reads just like coalesce.
     // In particular, isset() on the C|false receiver after a rejected readonly fallback
     // must answer false rather than take DynamicPropGet's ordinary typed-slot guard.
@@ -864,6 +1010,39 @@ pub(super) fn lower_property_probe_from_value(
     }
     let name = Expr::new(ExprKind::StringLiteral(property.to_string()), expr.span);
     lower_dynamic_property_fetch_from_value(ctx, object, &name, PropertyFetchMode::Probe, expr)
+}
+
+/// Like `lower_property_probe_from_value`, for `empty()`: a receiver with `__get` but no
+/// `__isset` reports the name absent without calling `__get` (`PropertyFetchMode::Empty`).
+pub(super) fn lower_property_empty_probe_from_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: &str,
+    expr: &Expr,
+) -> LoweredValue {
+    if property_can_be_uninitialized(ctx, object.value, property)
+        || union_hook_probe_class(ctx, object.value, property).is_some() {
+        return lower_initialized_property_value(ctx, object, property, expr);
+    }
+    let name = Expr::new(ExprKind::StringLiteral(property.to_string()), expr.span);
+    lower_dynamic_property_fetch_from_value(ctx, object, &name, PropertyFetchMode::Empty, expr)
+}
+
+/// Like `lower_property_probe_from_value`, for `isset()`: only the answer's nullness is used,
+/// so a receiver answering through magic is asked `__isset` alone (`PropertyFetchMode::Isset`).
+pub(super) fn lower_property_isset_probe_from_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: &str,
+    expr: &Expr,
+) -> LoweredValue {
+    // As for `??`: a typed slot that may still be uninitialized is probed, never read.
+    if property_can_be_uninitialized(ctx, object.value, property)
+        || union_hook_probe_class(ctx, object.value, property).is_some() {
+        return lower_initialized_property_value(ctx, object, property, expr);
+    }
+    let name = Expr::new(ExprKind::StringLiteral(property.to_string()), expr.span);
+    lower_dynamic_property_fetch_from_value(ctx, object, &name, PropertyFetchMode::Isset, expr)
 }
 
 /// Returns whether `$object->name` must be probed through the runtime-name form.
@@ -1087,7 +1266,24 @@ pub(crate) fn static_property_result_type(
     }) {
         property_ty.clone()
     } else {
-        property_ty.codegen_repr()
+        crate::types::eir_value_php_type(property_ty)
     };
     normalize_value_php_type(result_type)
+}
+
+/// Returns the slot type of a static property that holds one raw word: a `buffer<T>` handle,
+/// a `ptr` or `ptr<T>` address, or a `?ptr<T>` word where null is address 0.
+///
+/// Merge temps and literal element stamps are predicted before the read is lowered, and the
+/// syntactic fallback types every static read `int`, which cast a buffer handle or pointer
+/// into an integer slot (a ternary of two static buffers then indexed an `int`). Other static
+/// reads answer `None` and keep the typing their callers already had.
+pub(crate) fn static_property_word_type(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    property: &str,
+    expr: &Expr,
+) -> Option<PhpType> {
+    let loaded = static_property_result_type(ctx, receiver, property, expr);
+    matches!(loaded.codegen_repr(), PhpType::Buffer(_) | PhpType::Pointer(_)).then_some(loaded)
 }

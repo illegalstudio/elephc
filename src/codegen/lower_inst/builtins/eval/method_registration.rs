@@ -21,10 +21,10 @@ use super::*;
 /// Emits one native method signature registration call into the eval context.
 pub(super) fn register_eval_native_method(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     registration: &EvalNativeMethodRegistration,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     let method_key = format!("{}::{}", registration.class_name, registration.method_name);
     let (method_key_label, method_key_len) = ctx.data.add_string(method_key.as_bytes());
     abi::emit_symbol_address(
@@ -54,7 +54,7 @@ pub(super) fn register_eval_native_method(
     abi::emit_call_label(ctx.emitter, &symbol);
     register_eval_native_method_bridge_support(
         ctx,
-        context_offset,
+        context_source,
         &method_key_label,
         method_key_len,
         registration.is_static,
@@ -64,7 +64,7 @@ pub(super) fn register_eval_native_method(
     // observe a signature whose visible/hidden partition is still being inferred.
     register_eval_native_method_shape(
         ctx,
-        context_offset,
+        context_source,
         &method_key_label,
         method_key_len,
         registration.is_static,
@@ -76,7 +76,7 @@ pub(super) fn register_eval_native_method(
         let visible = visible_indexes.contains(&index);
         register_eval_native_method_param(
             ctx,
-            context_offset,
+            context_source,
             &method_key_label,
             method_key_len,
             registration.is_static,
@@ -87,7 +87,7 @@ pub(super) fn register_eval_native_method(
         );
         register_eval_native_method_param_flags(
             ctx,
-            context_offset,
+            context_source,
             &method_key_label,
             method_key_len,
             registration.is_static,
@@ -108,7 +108,7 @@ pub(super) fn register_eval_native_method(
         if let Some(type_spec) = param_type_specs.get(index).and_then(Option::as_deref) {
             register_eval_native_method_param_type(
                 ctx,
-                context_offset,
+                context_source,
                 &method_key_label,
                 method_key_len,
                 registration.is_static,
@@ -144,7 +144,7 @@ pub(super) fn register_eval_native_method(
         let error_symbol = if registration.is_static {
             "__elephc_eval_register_native_static_method_param_default_error"
         } else { "__elephc_eval_register_native_method_param_default_error" };
-        if register_eval_native_param_default_error(ctx, context_offset,
+        if register_eval_native_param_default_error(ctx, context_source,
             (&method_key_label, method_key_len), index, default.as_ref(), &default_context, error_symbol) { continue; }
         if let Some(default) = default
             .as_ref()
@@ -152,7 +152,7 @@ pub(super) fn register_eval_native_method(
         {
             register_eval_native_method_param_default(
                 ctx,
-                context_offset,
+                context_source,
                 &method_key_label,
                 method_key_len,
                 registration.is_static,
@@ -175,7 +175,7 @@ pub(super) fn register_eval_native_method(
         {
             register_eval_native_method_compiled_default(
                 ctx,
-                context_offset,
+                context_source,
                 &method_key_label,
                 method_key_len,
                 registration.is_static,
@@ -187,7 +187,7 @@ pub(super) fn register_eval_native_method(
     if let Some(type_spec) = eval_native_callable_return_type_spec(&registration.signature) {
         register_eval_native_method_return_type(
             ctx,
-            context_offset,
+            context_source,
             &method_key_label,
             method_key_len,
             registration.is_static,
@@ -199,14 +199,14 @@ pub(super) fn register_eval_native_method(
 /// Registers a compiled Mixed-returning helper for a default outside compact eval metadata.
 fn register_eval_native_method_compiled_default(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     method_key_label: &str,
     method_key_len: usize,
     is_static: bool,
     param_index: usize,
     helper_name: &str,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     abi::emit_symbol_address(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 1),
@@ -247,13 +247,13 @@ fn register_eval_native_method_compiled_default(
 /// Emits one native method bridge-support registration call.
 pub(super) fn register_eval_native_method_bridge_support(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     method_key_label: &str,
     method_key_len: usize,
     is_static: bool,
     bridge_supported: bool,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     abi::emit_symbol_address(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 1),
@@ -284,14 +284,14 @@ pub(super) fn register_eval_native_method_bridge_support(
 /// Emits one native method parameter-name registration call.
 pub(super) fn register_eval_native_method_param(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     method_key_label: &str,
     method_key_len: usize,
     is_static: bool,
     param_index: usize,
     param_name: &str,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     abi::emit_symbol_address(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 1),
@@ -333,7 +333,7 @@ pub(super) fn register_eval_native_method_param(
 /// Emits one native method parameter-flags registration call.
 pub(super) fn register_eval_native_method_param_flags(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     method_key_label: &str,
     method_key_len: usize,
     is_static: bool,
@@ -341,7 +341,7 @@ pub(super) fn register_eval_native_method_param_flags(
     is_by_ref: bool,
     is_variadic: bool,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     abi::emit_symbol_address(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 1),
@@ -382,14 +382,14 @@ pub(super) fn register_eval_native_method_param_flags(
 /// Emits one native method parameter-type registration call.
 pub(super) fn register_eval_native_method_param_type(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     method_key_label: &str,
     method_key_len: usize,
     is_static: bool,
     param_index: usize,
     type_spec: &str,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     abi::emit_symbol_address(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 1),
@@ -431,13 +431,13 @@ pub(super) fn register_eval_native_method_param_type(
 /// Emits one native method return-type registration call.
 pub(super) fn register_eval_native_method_return_type(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     method_key_label: &str,
     method_key_len: usize,
     is_static: bool,
     type_spec: &str,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     abi::emit_symbol_address(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 1),
@@ -474,14 +474,14 @@ pub(super) fn register_eval_native_method_return_type(
 /// Emits one native method parameter-default registration call.
 pub(super) fn register_eval_native_method_param_default(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     method_key_label: &str,
     method_key_len: usize,
     is_static: bool,
     param_index: usize,
     default: &EvalNativeCallableDefault,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     abi::emit_symbol_address(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 1),
@@ -520,7 +520,8 @@ pub(super) fn register_eval_native_method_param_default(
             }
         }
         EvalNativeCallableDefault::String(value) => {
-            let (default_label, default_len) = ctx.data.add_string(value.as_bytes());
+            let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
+            let (default_label, default_len) = ctx.data.add_string(&bytes);
             abi::emit_symbol_address(
                 ctx.emitter,
                 abi::int_arg_reg_name(ctx.emitter.target, 4),
@@ -597,13 +598,13 @@ pub(super) fn register_eval_native_method_param_default(
 /// method registration emitter, and both take the same six target-aware ABI words.
 pub(super) fn register_eval_native_method_shape(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     method_key_label: &str,
     method_key_len: usize,
     is_static: bool,
     shape: &EvalNativeSignatureShape,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     abi::emit_symbol_address(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 1),
