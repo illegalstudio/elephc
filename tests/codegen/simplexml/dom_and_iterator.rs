@@ -554,7 +554,7 @@ echo '|', $xml->getName();
 #[test]
 fn test_simplexml_native_dom_text_setters_update_live_views() {
     if skip_without_xml_native("test_simplexml_native_dom_text_setters_update_live_views") { return; }
-    let out = compile_and_run_with_heap_debug(r#"<?php
+    let source = r#"<?php
 $document = new DOMDocument();
 $document->loadXML('<r>a<b>c</b><?work data?></r>');
 $root = $document->documentElement;
@@ -566,8 +566,12 @@ if ($instruction instanceof DOMProcessingInstruction) {
 $root->nodeValue = 'A&amp;B'; echo $root->textContent, ':', $document->saveXML($root), '|';
 $root->textContent = 'A&amp;B'; echo $root->textContent, ':', $document->saveXML($root), '|';
 unset($instruction, $root, $document);
-"#);
+"#;
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(source);
+    let expected = "changed|<?work again?>|A&B:<r>A&amp;B</r>|A&amp;B:<r>A&amp;amp;B</r>|";
+    preserve_stdout_mismatches(source, &assembly, std::slice::from_ref(&out), &[expected]);
+    drop(assembly);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "changed|<?work again?>|A&B:<r>A&amp;B</r>|A&amp;B:<r>A&amp;amp;B</r>|");
+    assert_eq!(out.stdout, expected);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

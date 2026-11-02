@@ -56,6 +56,7 @@ pub(crate) use runner::*;
 pub(crate) use bundle::*;
 pub(crate) use c_fixture::*;
 pub(crate) use compiler::*;
+pub(crate) use diagnostics::preserve_stdout_mismatches;
 pub(crate) use assembly::*;
 pub(crate) use phase::*;
 pub(crate) use curl_native::*;

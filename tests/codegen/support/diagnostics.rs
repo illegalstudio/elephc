@@ -13,6 +13,20 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static DIAGNOSTIC_ID: AtomicU64 = AtomicU64::new(0);
 
+/// Saves source and assembly when a heap-clean execution produces incorrect PHP output.
+pub(crate) fn preserve_stdout_mismatches(
+    source: &str, assembly: &str, outputs: &[ProgramOutput], expected: &[&str],
+) {
+    let mut report = String::new();
+    for (index, (output, expected)) in outputs.iter().zip(expected).enumerate() {
+        if output.stdout != *expected {
+            report.push_str(&format!("mode={index}\nstdout:\n{}\nexpected:\n{}\nstderr:\n{}\n",
+                output.stdout, expected, output.stderr));
+        }
+    }
+    if !report.is_empty() { save_failure("stdout", Some(source), assembly, &report); }
+}
+
 /// Preserves failing heap-debug executions before their temporary source directory disappears.
 pub(super) fn preserve_heap_failure(source: &str, assembly: &str, output: &ProgramOutput) {
     if heap_execution_failed(output) {

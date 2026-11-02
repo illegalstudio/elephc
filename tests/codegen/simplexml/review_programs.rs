@@ -15,12 +15,16 @@ fn run_review_program(fixture: &str, expected: &[&str], opaque: bool) {
     let (declarations, body) = fixture.split_once("// REVIEW_BODY\n").unwrap();
     let source = if opaque {
         let body = body.replace('\\', "\\\\").replace('\'', "\\'");
-        format!("{declarations}\n$source = $argc > 0 ? '{body}' : ''; eval($source);")
+        // Opaque source needs an explicit native declaration to retain the XML capability.
+        format!("{declarations}\nclass ReviewProgramXmlCapability extends SimpleXMLElement {{}}\n\
+            $source = $argc > 0 ? '{body}' : ''; eval($source);")
     } else { format!("{declarations}{body}") };
     let args: Vec<Vec<&str>> = if expected.len() == 2 { vec![vec![], vec!["constructor"]] }
         else { vec![vec![]] };
     let argvs: Vec<_> = args.iter().map(Vec::as_slice).collect();
-    let runs = compile_and_run_with_heap_debug_per_argv(&source, &argvs);
+    let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(&source, &argvs);
+    preserve_stdout_mismatches(&source, &assembly, &runs, expected);
+    drop(assembly);
     assert_eq!(runs.len(), expected.len());
     for (mode, (output, expected)) in runs.iter().zip(expected).enumerate() {
         assert!(output.success, "mode={mode} stdout={:?} stderr={}", output.stdout, output.stderr);
