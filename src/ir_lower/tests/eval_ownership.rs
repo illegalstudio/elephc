@@ -80,6 +80,7 @@ class EscapedNativeReferenceImplementation implements EscapedEvalReferenceContra
 function acceptEscapedEvalReference(EscapedEvalReferenceContract &$value): string {
     return $value->label();
 }
+function callEscapedEvalMixed(mixed $value): string { return $value->label(); }
 function inspectEscapedEvalRelations(mixed $value, string $target): string {
     return ($value instanceof EscapedEvalReferenceContract ? 'i' : 'n')
         . (is_a($value, EscapedEvalReferenceContract::class) ? 'a' : 'n')
@@ -93,7 +94,11 @@ $source = $argc > 0
        }
        $value = new EscapedEvalReferenceImplementation();
        acceptEscapedEvalReference($value);
-       inspectEscapedEvalRelations($value, "EscapedEvalReferenceContract");'
+       inspectEscapedEvalRelations($value, "EscapedEvalReferenceContract");
+       class EscapedEvalNativeChild extends EscapedNativeReferenceImplementation {
+           public function label(): string { return "eval-child"; }
+       }
+       callEscapedEvalMixed(new EscapedEvalNativeChild());'
     : '';
 eval($source);
 "#;
@@ -114,6 +119,17 @@ eval($source);
     let symbol = crate::names::function_symbol("inspectEscapedEvalRelations");
     let body = assembly.split_once(&format!("{symbol}:\n")).unwrap().1;
     let body = body.split("\n.globl ").next().unwrap();
+    let mixed = module.functions.iter().find(|function| function.name == "callEscapedEvalMixed").unwrap();
+    assert!(!mixed.locals.iter().any(|local| local.kind == LocalKind::EvalContext), "{name}");
+    let mixed_symbol = crate::names::function_symbol("callEscapedEvalMixed");
+    let mixed_body = assembly.split_once(&format!("{mixed_symbol}:\n")).unwrap().1;
+    let mixed_body = mixed_body.split("\n.globl ").next().unwrap();
+    let owner_probe = mixed_body.find(&target.extern_symbol("__elephc_eval_object_context"))
+        .expect("Mixed calls must recover eval ownership before checking the backing class id");
+    let eval_call = mixed_body.find(&target.extern_symbol("__elephc_eval_method_call")).unwrap();
+    let native_dispatch = mixed_body.find("load the receiver class id for Mixed method dispatch").unwrap();
+    assert!(owner_probe < eval_call && eval_call < native_dispatch,
+        "{name}: an eval override must precede its native backing method");
     let named_call = format!("{}\n", target.extern_symbol("__elephc_eval_object_is_a"));
     let dynamic_call = format!("{}\n", target.extern_symbol("__elephc_eval_object_is_a_dynamic"));
     assert!(body.matches(&named_call).count() >= 4, "{name}");
