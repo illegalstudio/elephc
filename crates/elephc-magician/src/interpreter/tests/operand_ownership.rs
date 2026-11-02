@@ -1027,3 +1027,34 @@ fn dynamic_callable_binding_failure_releases_prepared_defaults() {
     assert_eq!(defaults.len(), 1);
     assert_eq!(values.cell_owners.get(&defaults[0]), Some(&0));
 }
+
+/// Extracting a native reference marker retires its read owner for positional and named dispatch.
+#[test]
+fn call_array_reference_markers_balance_extraction_on_return_and_error() {
+    for named in [false, true] {
+        for fail_dispatch in [false, true] {
+            let mut values = FakeOps::default();
+            let mut context = ElephcEvalContext::new();
+            let original = values.string("value").unwrap();
+            let mut slot = Box::new(original.as_ptr());
+            let marker = values.invoker_ref_cell(slot.as_mut()).unwrap();
+            let array = if named { values.assoc_new(1).unwrap() } else { values.array_new(1).unwrap() };
+            let key = if named { values.string("value").unwrap() } else { values.int(0).unwrap() };
+            let array = values.array_set(array, key, marker).unwrap();
+            values.release(key).unwrap();
+            values.release(marker).unwrap();
+            let result = with_eval_array_call_arguments(array, &mut context, &mut values,
+                |arguments, _, _| {
+                    assert_eq!(arguments[0].name.as_deref(), named.then_some("value"));
+                    assert!(matches!(arguments[0].ref_target, Some(EvalReferenceTarget::InvokerSlot { .. })));
+                    if fail_dispatch { Err(EvalStatus::RuntimeFatal) } else { Ok(arguments[0].value) }
+                });
+            assert_eq!(result.is_err(), fail_dispatch);
+            if let Ok(result) = result { values.release(result).unwrap(); }
+            assert_eq!(values.cell_owners[&(marker.as_ptr() as usize)], 1, "only the array owns the marker");
+            values.release(array).unwrap();
+            assert_eq!(values.cell_owners[&(marker.as_ptr() as usize)], 0);
+            values.release(original).unwrap();
+        }
+    }
+}

@@ -464,7 +464,7 @@ fn append_ordered_call_arg_values(
                     }
                 };
                 let (value, ref_target) =
-                    eval_invoker_ref_arg_value_and_target(value, ref_target, values)?;
+                    eval_invoker_ref_arg_value_and_target(value, ref_target, context, values)?;
                 EvaluatedCallArg {
                     name: None,
                     value,
@@ -489,7 +489,7 @@ fn append_ordered_call_arg_values(
                     }
                 };
                 let (value, ref_target) =
-                    eval_invoker_ref_arg_value_and_target(value, ref_target, values)?;
+                    eval_invoker_ref_arg_value_and_target(value, ref_target, context, values)?;
                 EvaluatedCallArg {
                     name: Some(name),
                     value,
@@ -511,16 +511,19 @@ fn append_ordered_call_arg_values(
 fn eval_invoker_ref_arg_value_and_target(
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
     if values.type_tag(value)? != EVAL_TAG_INVOKER_REF_CELL {
         return Ok((value, ref_target));
     }
-    let slot = values.raw_value_word(value)? as usize;
-    let source_tag = values.raw_value_high_word(value)?;
-    let value = eval_invoker_slot_ref_target_value(slot, source_tag, values)?;
-    Ok((
-        value,
-        ref_target.or(Some(EvalReferenceTarget::InvokerSlot { slot, source_tag })),
-    ))
+    let result = (|| {
+        let slot = values.raw_value_word(value)? as usize;
+        let source_tag = values.raw_value_high_word(value)?;
+        let current = eval_invoker_slot_ref_target_value(slot, source_tag, values)?;
+        Ok((current, ref_target.or(Some(EvalReferenceTarget::InvokerSlot { slot, source_tag }))))
+    })();
+    // Array extraction owns the marker as well as the independently acquired slot value.
+    // Only the current value enters the argument ledger, so retire the marker here.
+    argument_owners::finish_argument_reference_owners(result, vec![value], context, values)
 }
