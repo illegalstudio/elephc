@@ -606,13 +606,19 @@ fn call_string_args_are_stable(host: &Function, call_inst: &Instruction, callee:
         if param.ir_type != IrType::Str {
             continue;
         }
-        let stable = host
-            .value(*operand)
-            .and_then(|value| match value.def {
+        let mut source = *operand;
+        let stable = loop {
+            let Some(def) = host.value(source).and_then(|value| match value.def {
                 ValueDef::Instruction { inst, .. } => host.instruction(inst),
                 _ => None,
-            })
-            .is_some_and(|def| matches!(def.op, Op::ConstStr | Op::LoadLocal));
+            }) else { break false; };
+            match def.op {
+                Op::ConstStr | Op::LoadLocal => break true,
+                // Argument lifetime pins preserve the same stable storage source.
+                Op::Acquire | Op::Borrow if def.operands.len() == 1 => source = def.operands[0],
+                _ => break false,
+            }
+        };
         if !stable {
             return false;
         }
@@ -1535,6 +1541,10 @@ fn callee_has_by_value_container_param(callee: &Function) -> bool {
         crate::types::FunctionSig::parameter_needs_owned_shadow(&param.php_type, param.by_ref)
     })
 }
+
+#[cfg(test)]
+#[path = "tests/inline_string_stability_test.rs"]
+mod string_stability_tests;
 
 #[cfg(test)]
 mod tests {
