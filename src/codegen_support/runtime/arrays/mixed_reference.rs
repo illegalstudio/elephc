@@ -144,6 +144,12 @@ fn emit_array_reference_copy(emitter: &mut Emitter) {
         emitter.instruction("cmp x9, #1");                                      // recognize a PHP reference wrapper
         emitter.instruction("b.ne __rt_reference_array_copy_retain");           // retain ordinary nested Mixed values
         emitter.instruction("ldr w9, [x0, #-12]");                              // count the original reference owners before copying the array
+        emitter.instruction("ldr x10, [x0, #-8]");                              // exclude the collector's temporary root
+        emitter.instruction("ubfx x10, x10, #18, #1");                          // isolate the artificial collector owner
+        emitter.instruction("sub w9, w9, w10");                                 // preserve PHP sharing independently of collection
+        super::super::reference_cells::subtract_validation_pins(
+            emitter, "x0", "x9", "x10", "x11", "__rt_reference_array_copy",
+        );
         emitter.instruction("cmp w9, #1");                                      // does only the original array slot own this reference?
         emitter.instruction("b.ne __rt_reference_array_copy_retain");           // keep references shared with another live owner
         emitter.label("__rt_reference_array_copy_clone");
@@ -159,7 +165,15 @@ fn emit_array_reference_copy(emitter: &mut Emitter) {
         emitter.instruction("jne __rt_incref");                                 // retain ordinary boxed slots
         emitter.instruction("cmp QWORD PTR [rax + 16], 1");                     // recognize the persistent reference marker
         emitter.instruction("jne __rt_incref");                                 // retain ordinary nested Mixed values
-        emitter.instruction("cmp DWORD PTR [rax - 12], 1");                     // does only the original array slot own this reference?
+        emitter.instruction("mov ecx, DWORD PTR [rax - 12]");                   // count the original reference owners before copying the array
+        emitter.instruction("mov r10, QWORD PTR [rax - 8]");                    // exclude the collector's temporary root
+        emitter.instruction("shr r10, 18");                                     // position the artificial collector owner
+        emitter.instruction("and r10d, 1");                                     // isolate the artificial collector owner
+        emitter.instruction("sub ecx, r10d");                                   // preserve PHP sharing independently of collection
+        super::super::reference_cells::subtract_validation_pins(
+            emitter, "rax", "rcx", "r10", "r11", "__rt_reference_array_copy",
+        );
+        emitter.instruction("cmp ecx, 1");                                      // does only the original array slot own this reference?
         emitter.instruction("je __rt_mixed_clone");                             // detach an orphan reference into an ordinary PHP value
         emitter.instruction("jmp __rt_incref");                                 // preserve references shared with another live owner
     }

@@ -77,10 +77,11 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     emitter.label_global("__rt_web_reset");
     abi::emit_frame_prologue(emitter, RESET_FRAME_SIZE);
 
-    // A request cannot legitimately finish inside a boxed array callback. Clear the
-    // stack-backed borrow chain before any reset cleanup can run user destructors, so a
-    // failed request never leaves them scanning an address in its retired native stack.
+    // A request cannot legitimately finish inside a boxed-array callback or reference validation.
+    // Clear both stack-backed registries before reset cleanup can run user destructors, so a
+    // failed request never leaves readers scanning its retired native stack.
     abi::emit_store_zero_to_symbol(emitter, "_rt_unmanaged_ref_borrow_top", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_rt_reference_validation_pins_top", 0);
     // A normal or throwing `__set` call unlinks its stack-backed recursion node locally. The web
     // reset is the final backstop for non-Throwable request escapes, before the retired request
     // stack can be reused and before any reset destructor performs another property write.
@@ -486,6 +487,7 @@ mod handler_reset_tests {
             emit_web_reset(&mut emitter, &Module::new(target), &DataSection::new());
             let asm = emitter.output();
             let borrowed_refs = asm.find("_rt_unmanaged_ref_borrow_top").unwrap();
+            let validation_pins = asm.find("_rt_reference_validation_pins_top").unwrap();
             let magic_set_guards = asm.find("_magic_set_guard_head").unwrap();
             let saved_magic_set_guards = asm.find("_fiber_main_saved_magic_set_guard").unwrap();
             let output_level = asm.find("_ob_level").unwrap();
@@ -506,6 +508,7 @@ mod handler_reset_tests {
                 assert!(asm.find(symbol).unwrap() < inventory, "{target:?}: {symbol}");
             }
             assert!(borrowed_refs < inventory, "{target:?}: stale borrow state must clear first");
+            assert!(validation_pins < inventory, "{target:?}: stale validation records must clear first");
             assert!(
                 magic_set_guards < inventory,
                 "{target:?}: stale magic-set guard state must clear first"

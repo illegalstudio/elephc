@@ -275,6 +275,9 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x1, #-8]");                                  // exclude collector-only wrapper ownership
     emitter.instruction("ubfx x10, x10, #18, #1");                              // isolate the wrapper's artificial destructor pin
     emitter.instruction("sub w9, w9, w10");                                     // count only PHP-visible wrapper owners
+    super::super::reference_cells::subtract_validation_pins(
+        emitter, "x1", "x9", "x10", "x11", "__rt_object_to_hash_wrapper",
+    );
     emitter.instruction("cmp w9, #1");                                          // singleton references project as ordinary copied values
     emitter.instruction("b.ls __rt_object_to_hash_copy_value");                 // avoid creating an alias after its last external owner disappeared
     emitter.label("__rt_object_to_hash_shared_reference");
@@ -567,6 +570,9 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("shr r11, 18");                                         // position the wrapper's artificial destructor pin
     emitter.instruction("and r11d, 1");                                         // isolate the artificial destructor pin
     emitter.instruction("sub r9d, r11d");                                       // count only PHP-visible wrapper owners
+    super::super::reference_cells::subtract_validation_pins(
+        emitter, "rdi", "r9", "r10", "r11", "__rt_object_to_hash_wrapper",
+    );
     emitter.instruction("cmp r9d, 1");                                          // singleton references project as ordinary copied values
     emitter.instruction("jbe __rt_object_to_hash_copy_value_x");                // avoid creating an alias after its last external owner disappeared
     emitter.label("__rt_object_to_hash_shared_reference_x");

@@ -22,6 +22,8 @@ mod mixed_payload;
 mod mixed_symbol;
 mod property_payload;
 mod canonical;
+mod validation_pins;
+pub(crate) use validation_pins::subtract as subtract_validation_pins;
 pub(crate) use canonical::resolve_scalar_property;
 pub(crate) use property_unset::emit_owned_property_unset;
 pub(crate) use mixed_payload::follow_mixed_reference_slot;
@@ -62,6 +64,7 @@ pub(super) fn emit_reference_cells(emitter: &mut Emitter) {
     emit_clone(emitter);
     mixed_payload::emit_promote_mixed(emitter);
     mixed_payload::emit_retain_mixed(emitter);
+    validation_pins::emit(emitter);
     property_unset::emit_property_unset(emitter);
     emit_owner_lookup(emitter);
     canonical::emit(emitter);
@@ -278,6 +281,7 @@ fn emit_singleton_mixed_clone_branch(emitter: &mut Emitter) {
             emitter.instruction("ldr x11, [x0, #-8]");                          // inspect the wrapper's collector-only ownership
             emitter.instruction("ubfx x11, x11, #18, #1");                      // isolate the artificial destructor pin
             emitter.instruction("sub w10, w10, w11");                           // only PHP-visible wrapper aliases preserve sharing
+            subtract_validation_pins(emitter, "x0", "x10", "x11", "x12", "__rt_reference_cell_clone_wrapper");
             emitter.instruction("cmp w10, #1");                                 // a singleton wrapper can separate like an ordinary value
             emitter.instruction("b.hi __rt_reference_cell_clone_retain");       // preserve references shared outside the native cell
         }
@@ -295,6 +299,7 @@ fn emit_singleton_mixed_clone_branch(emitter: &mut Emitter) {
             emitter.instruction("shr r10, 18");                                 // position the artificial destructor pin
             emitter.instruction("and r10d, 1");                                 // isolate collector-only ownership
             emitter.instruction("sub ecx, r10d");                               // only PHP-visible wrapper aliases preserve sharing
+            subtract_validation_pins(emitter, "rax", "rcx", "r10", "r11", "__rt_reference_cell_clone_wrapper");
             emitter.instruction("cmp ecx, 1");                                  // singleton references separate despite a collector snapshot
             emitter.instruction("ja __rt_reference_cell_clone_retain");         // preserve references shared outside the native cell
         }

@@ -418,6 +418,8 @@ pub(crate) fn emit_runtime_data_fixed(
     // escape boundaries to reject only that unmanaged reference instead of ordinary
     // frame aliases. The owning walk boundary restores the saved head after unwinding.
     out.push_str(&comm_directive("_rt_unmanaged_ref_borrow_top", 8, target));
+    // Active boxed-value validation roots are excluded from PHP-visible sharing counts.
+    out.push_str(&comm_directive("_rt_reference_validation_pins_top", 8, target));
     out.push_str(&comm_directive("_php_backtrace_next_line", 8, target));
     for symbol in ["_rt_diag_pending_ptr", "_rt_diag_pending_len", "_rt_diag_warning_message_len", "_php_diagnostic_file", "_php_diagnostic_file_len", "_php_diagnostic_line"] {
         out.push_str(&comm_directive(symbol, 8, target));
