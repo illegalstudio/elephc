@@ -603,7 +603,7 @@ impl Checker {
                 // A boxed array read can carry any runtime callable shape.
                 // The callee is only known at runtime, but PHP rejects
                 // unpacking after named arguments while compiling the call.
-                self.require_no_spread_after_named_args(args, &format!("callable ${}", var))?;
+                self.require_valid_unresolved_call_argument_order(args, &format!("callable ${}", var))?;
                 self.record_unresolved_callee_argument_aliases(args);
                 for arg in args {
                     self.infer_descriptor_call_arg_type(arg, env)?;
@@ -709,7 +709,7 @@ impl Checker {
         }
         // No signature is known for this callable, so the planner never runs;
         // still apply PHP's syntactic unpack-after-named rule.
-        self.require_no_spread_after_named_args(args, &format!("callable ${}", var))?;
+        self.require_valid_unresolved_call_argument_order(args, &format!("callable ${}", var))?;
         self.record_unresolved_callee_argument_aliases(args);
         for arg in args {
             self.infer_descriptor_call_arg_type(arg, env)?;
@@ -802,7 +802,7 @@ impl Checker {
                 ExprKind::Variable(var_name) => format!("callable ${}", var_name),
                 _ => "callable expression".to_string(),
             };
-            self.require_no_spread_after_named_args(args, &callee_desc)?;
+            self.require_valid_unresolved_call_argument_order(args, &callee_desc)?;
             self.record_unresolved_callee_argument_aliases(args);
             for arg in args {
                 self.infer_descriptor_call_arg_type(arg, env)?;

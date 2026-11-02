@@ -136,29 +136,29 @@ fn is_assoc_spread_source(expr: &Expr, env: &TypeEnv) -> bool {
 }
 
 impl Checker {
-    /// Enforces PHP's syntactic "no argument unpacking after named arguments"
-    /// rule on a call surface whose callee is not resolvable at compile time
+    /// Enforces PHP's syntactic argument ordering on a callee not resolvable at compile time
     /// (string callables, `new $class(...)`), where no signature is available to
     /// run the shared planner against.
     ///
     /// The rule itself stays in `crate::types::call_args`; this only maps its
     /// error onto the same diagnostic the planner-backed surfaces produce.
-    pub(crate) fn require_no_spread_after_named_args(
+    pub(crate) fn require_valid_unresolved_call_argument_order(
         &self,
         args: &[Expr],
         callee_desc: &str,
     ) -> Result<(), CompileError> {
-        call_args::validate_no_spread_after_named(args).map_err(|err| match err {
+        call_args::validate_unresolved_call_argument_order(args).map_err(|err| match err {
             CallArgPlanError::SpreadAfterNamed { span } => {
                 spread_after_named_error(span, callee_desc)
             }
-            // The rule only reports `SpreadAfterNamed`; the remaining variants
-            // need a signature to plan against and cannot originate here. Keep
+            CallArgPlanError::PositionalAfterNamed { span } => CompileError::new(span,
+                &format!("{} cannot use positional arguments after named arguments", callee_desc)),
+            CallArgPlanError::PositionalAfterSpread { span } => CompileError::new(span,
+                &format!("{} cannot use positional arguments after spread arguments", callee_desc)),
+            // The remaining variants need a signature and cannot originate here. Keep
             // the match exhaustive so a future rule still reports a real span.
             CallArgPlanError::UnknownNamed { span, .. }
             | CallArgPlanError::Duplicate { span, .. }
-            | CallArgPlanError::PositionalAfterNamed { span }
-            | CallArgPlanError::PositionalAfterSpread { span }
             | CallArgPlanError::PositionalAfterNamedUnpack { span }
             | CallArgPlanError::MissingRequired { span, .. } => {
                 CompileError::new(span, &format!("{} has invalid arguments", callee_desc))

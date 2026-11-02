@@ -455,6 +455,30 @@ fn test_error_boxed_direct_callable_spread_after_named_argument() {
     }
 }
 
+/// Unresolved callees obey PHP's positional ordering before runtime signature lookup.
+#[test]
+fn test_error_unresolved_call_positional_argument_order() {
+    for call in ["$callback(...[], 1);", "$callback(value: 1, 2);"] {
+        let detail = if call.contains("...") { "spread" } else { "named" };
+        for parameter_type in ["mixed", "string", "callable"] {
+            expect_error(&format!("<?php function invoke({parameter_type} $callback): void {{ {call} }}"),
+                &format!("cannot use positional arguments after {detail} arguments"));
+        }
+    }
+    expect_error("<?php function invoke(array $callbacks): void { ($callbacks[0])(...[], 1); }",
+        "cannot use positional arguments after spread arguments");
+    expect_error("<?php function construct(string $class): void { new $class(...[], 1); }",
+        "cannot use positional arguments after spread arguments");
+}
+
+/// Named arguments after unpacking remain legal when the selected signature is unknown.
+#[test]
+fn test_unresolved_call_named_argument_after_spread_is_allowed() {
+    for parameter_type in ["mixed", "string", "callable"] {
+        expect_no_error(&format!("<?php function invoke({parameter_type} $callback): void {{ $callback(...[], value: 1); }}"));
+    }
+}
+
 /// Verifies that error call user func ref param requires variable.
 #[test]
 fn test_error_call_user_func_ref_param_requires_variable() {

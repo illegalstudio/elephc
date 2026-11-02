@@ -259,7 +259,7 @@ impl Checker {
                 // return Mixed.
                 // The unpack-after-named shape is syntactic in
                 // PHP, so it is still rejected without a known constructor.
-                self.require_no_spread_after_named_args(args, "Dynamic constructor")?;
+                self.require_valid_unresolved_call_argument_order(args, "Dynamic constructor")?;
                 for arg in args {
                     let value = match &arg.kind {
                         ExprKind::NamedArg { value, .. } => value.as_ref(),
