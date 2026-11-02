@@ -86,6 +86,33 @@ mod tests {
                 "{name}: native shape misses must discover and probe the callback's real owner");
     }
 
-    supported_target_cases!(callable_argument_normalizer_discovers_eval_callback_owner,
-        verify_callable_argument_normalizer_discovers_eval_callback_owner);
+    /// Verifies eval owner discovery on macOS ARM64.
+    #[test]
+    fn callable_argument_normalizer_eval_owner_macos_aarch64() {
+        verify_callable_argument_normalizer_discovers_eval_callback_owner("macos-aarch64");
+    }
+
+    /// Verifies eval owner discovery on iOS devices.
+    #[test]
+    fn callable_argument_normalizer_eval_owner_ios_arm64() {
+        verify_callable_argument_normalizer_discovers_eval_callback_owner("ios-arm64");
+    }
+
+    /// Verifies eval owner discovery on the iOS simulator.
+    #[test]
+    fn callable_argument_normalizer_eval_owner_ios_sim_arm64() {
+        verify_callable_argument_normalizer_discovers_eval_callback_owner("ios-sim-arm64");
+    }
+
+    /// Verifies eval owner discovery on Linux ARM64.
+    #[test]
+    fn callable_argument_normalizer_eval_owner_linux_aarch64() {
+        verify_callable_argument_normalizer_discovers_eval_callback_owner("linux-aarch64");
+    }
+
+    /// Verifies eval owner discovery on Linux x86_64.
+    #[test]
+    fn callable_argument_normalizer_eval_owner_linux_x86_64() {
+        verify_callable_argument_normalizer_discovers_eval_callback_owner("linux-x86_64");
+    }
 }
