@@ -100,9 +100,28 @@ pub(super) fn lower_nested_array_assign(
     } else { lower_nested_array_assign_inner(ctx, target, value, span, static_update); }
 }
 
+/// Records a runtime property receiver classification already proved by the caller.
+#[derive(Clone, Copy)]
+pub(super) enum CapturedPropertyReceiver {
+    /// The receiver still needs XML-versus-ordinary dispatch.
+    Dispatch,
+    /// The captured receiver passed the XML class guard.
+    Native,
+    /// The captured receiver failed the XML guard or has a concrete ordinary class.
+    Ordinary,
+}
+
 /// Uses the established attached parent and native incdec kernels after inputs are captured.
 pub(super) fn lower_captured_update(
     ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: &Expr, span: Span,
+) {
+    lower_captured_update_for_receiver(ctx, target, value, span, CapturedPropertyReceiver::Dispatch);
+}
+
+/// Reuses a captured receiver class proof while retaining key snapshots and receiver leases.
+pub(super) fn lower_captured_update_for_receiver(
+    ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: &Expr, span: Span,
+    receiver: CapturedPropertyReceiver,
 ) {
     let update = desugared_element_update(value, span, |read| read == target)
         .expect("captured update retains its canonical self-read");
@@ -112,7 +131,7 @@ pub(super) fn lower_captured_update(
         && runtime_property_root(target).is_some()
         && matches!(update, ElementUpdate::IncDec { .. })
     {
-        lower_runtime_property_native_incdec(ctx, &read, &write, update, value, span);
+        lower_runtime_property_native_incdec(ctx, &read, &write, update, value, span, receiver);
     } else if let Some((read, write)) = bind_concrete_static_update_root(ctx, &read, &write) {
         lower_boxed_static_nested_update(ctx, &read, &write, update, value, value.span);
     } else if nested_static_root_is_boxed(ctx, target)
@@ -135,10 +154,23 @@ fn lower_runtime_property_native_incdec(
     update: ElementUpdate<'_>,
     source_value: &Expr,
     span: Span,
+    receiver: CapturedPropertyReceiver,
 ) {
     let (object, _) = runtime_property_root(read).expect("captured runtime property root");
     let object = lower_expr(ctx, object);
     let (object, owner) = root_static_update_receiver(ctx, object, span);
+    match receiver {
+        CapturedPropertyReceiver::Native | CapturedPropertyReceiver::Ordinary => {
+            if matches!(receiver, CapturedPropertyReceiver::Native) {
+                lower_selected_runtime_property_native_incdec(ctx, read, write, update, source_value, span);
+            } else {
+                lower_boxed_static_nested_update(ctx, read, write, update, source_value, span);
+            }
+            if let Some(owner) = owner { crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span); }
+            return;
+        }
+        CapturedPropertyReceiver::Dispatch => {}
+    }
     let class = ctx.intern_class_name("SimpleXMLElement");
     let native = ctx.emit_value(Op::InstanceOf, vec![object.value], Some(Immediate::Data(class)),
         PhpType::Bool, Op::InstanceOf.default_effects(), Some(span));
@@ -180,7 +212,14 @@ fn lower_selected_runtime_property_native_incdec(
     let ExprKind::ArrayAccess { array, index } = &read.kind else {
         unreachable!("a runtime property dimension update retains its leaf index")
     };
-    let parent = lower_nested_assign_parent_with_diagnosed_key(ctx, array, span, true);
+    let parent = if let ExprKind::DynamicPropertyAccess { object, property } = &array.kind {
+        // This kernel is reached only after the captured root passed its XML class guard.
+        let object = lower_expr(ctx, object);
+        let name = lower_expr(ctx, property);
+        crate::ir_lower::expr::lower_dynamic_property_fetch_from_operands(
+            ctx, object, name, PhpType::Mixed, crate::ir::PropertyFetchMode::Read, true, array,
+        )
+    } else { lower_nested_assign_parent_with_diagnosed_key(ctx, array, span, true) };
     let parent = if ctx.builder.value_php_type(parent.value).codegen_repr() == PhpType::Mixed {
         let resolved = ctx.emit_owned_value(
             Op::RuntimeCall,

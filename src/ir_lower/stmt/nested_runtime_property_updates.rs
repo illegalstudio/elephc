@@ -10,6 +10,7 @@
 //! - Captured operands are borrowed across the name ladder and evaluated only once.
 
 use super::*;
+use super::nested_array_writes::CapturedPropertyReceiver;
 
 /// Reuses named property writers when the captured runtime name identifies a declared slot.
 pub(super) fn lower(
@@ -44,7 +45,8 @@ pub(super) fn lower(
     let done = ctx.builder.create_named_block("property.update.name.done", Vec::new());
     let initial = ctx.initialized_slots_snapshot();
     let mut merged: Option<HashSet<LocalSlotId>> = None;
-    if bound.is_none() && ctx.classes.contains_key("SimpleXMLElement") {
+    let guarded_native = bound.is_none() && ctx.classes.contains_key("SimpleXMLElement");
+    if guarded_native {
         // Native properties are XML names, including spellings shared with ordinary slots.
         let receiver = lower_expr(ctx, object);
         let class = ctx.intern_class_name("SimpleXMLElement");
@@ -55,7 +57,9 @@ pub(super) fn lower(
         ctx.builder.terminate(Terminator::CondBr { cond: native.value,
             then_target: xml, then_args: Vec::new(), else_target: ordinary, else_args: Vec::new() });
         ctx.builder.position_at_end(xml);
-        super::nested_array_writes::lower_captured_update(ctx, target, value, span);
+        super::nested_array_writes::lower_captured_update_for_receiver(
+            ctx, target, value, span, CapturedPropertyReceiver::Native,
+        );
         join(ctx, done, &mut merged);
         ctx.builder.position_at_end(ordinary);
         ctx.restore_initialized_slots(initial.clone());
@@ -85,7 +89,9 @@ pub(super) fn lower(
         ctx.builder.position_at_end(next);
         ctx.restore_initialized_slots(initial.clone());
     }
-    super::nested_array_writes::lower_captured_update(ctx, target, value, span);
+    let receiver = if guarded_native || bound.is_some() { CapturedPropertyReceiver::Ordinary }
+        else { CapturedPropertyReceiver::Dispatch };
+    super::nested_array_writes::lower_captured_update_for_receiver(ctx, target, value, span, receiver);
     join(ctx, done, &mut merged);
     ctx.builder.position_at_end(done);
     ctx.restore_initialized_slots(merged.unwrap_or(initial));

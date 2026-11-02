@@ -1139,7 +1139,7 @@ pub(super) fn dynamic_property_fetch_result_type(
 ///
 /// `known_native` records a non-null native class fact from the source variable when its global
 /// storage is physically boxed and the lowered value can no longer carry that fact itself.
-pub(super) fn lower_dynamic_property_fetch_from_operands(
+pub(crate) fn lower_dynamic_property_fetch_from_operands(
     ctx: &mut LoweringContext<'_, '_>,
     object: LoweredValue,
     property: LoweredValue,
