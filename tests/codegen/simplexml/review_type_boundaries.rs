@@ -10,6 +10,55 @@
 
 use crate::support::*;
 
+/// Opaque receivers select collectors without changing eval overrides or reference arguments.
+#[test]
+fn test_simplexml_selected_variadic_method_signature_after_eval_bundle() {
+    if skip_without_xml_native("test_simplexml_selected_variadic_method_signature_after_eval_bundle") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class SourceVariadicXml extends SimpleXMLElement {
+    public function collect(self ...$nodes): void { echo 'collect:', count($nodes), '|'; }
+    public function prefix(int $first, self ...$nodes): void { echo $first, ':', count($nodes), '|'; }
+    public function change(mixed &...$values): void { $values[0] += 1; }
+}
+class SourceVariadicInherited extends SourceVariadicXml {}
+function sourceVariadicMake(): mixed { return new SourceVariadicInherited('<r/>'); }
+$node = sourceVariadicMake();
+$present = $node;
+$code = $argc > 0 ? '
+class EvalVariadicOverride extends SourceVariadicXml {
+    public function collect(?SourceVariadicXml ...$nodes): void { echo "eval-child:", count($nodes), "|"; }
+}
+class EvalVariadicFixed {
+    public function collect(int $first, int $second = 2): void { echo "eval-fixed:", $first + $second, "|"; }
+}
+$evalChild = new EvalVariadicOverride("<r/>"); $other = new EvalVariadicFixed();
+' : '';
+eval($code);
+$missing = $node->missing->child;
+try { $node->collect($missing); }
+catch (TypeError $error) { echo explode(', called in ', $error->getMessage())[0], '|'; }
+$node->collect($present);
+$node->collect();
+$node->collect($present, $present);
+$node->collect(first: $present, second: $present);
+$node->collect(...[$present, $present]);
+$node->prefix(7, $present, $present);
+try { $node->prefix(); } catch (ArgumentCountError $error) {
+    echo str_contains($error->getMessage(), 'exactly 1 expected') ? 'arity|' : 'wrong-arity|';
+}
+$number = 1; $node->change($number); echo $number, '|';
+$evalChild->collect($missing);
+$other->collect(1);
+$nullable = $argc > 0 ? null : $node;
+$nullable?->collect(print('unexpected|'));
+echo 'done';
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "SourceVariadicXml::collect(): Argument #1 must be of type SourceVariadicXml, null given|collect:1|collect:0|collect:2|collect:2|collect:2|7:2|arity|2|eval-child:1|eval-fixed:3|done");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
+}
+
 /// Caller-side nullable guards retain closure and first-class function diagnostic names.
 #[test]
 fn test_simplexml_callable_argument_guards_keep_source_labels() {

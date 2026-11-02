@@ -122,6 +122,8 @@ mod method_calls;
 mod closure_binding;
 mod member_receivers;
 mod enum_interface_calls;
+mod selected_method_arguments;
+mod source_variadic_calls;
 pub(crate) mod enum_argument_guards;
 mod enum_method_args;
 mod enum_static_args;

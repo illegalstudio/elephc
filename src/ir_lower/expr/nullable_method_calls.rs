@@ -136,6 +136,9 @@ pub(super) fn lower_method_call_with_receiver(
     if let Some(call) = enum_interface_calls::lower_enum_interface_call(ctx, object, method, args, op, expr) {
         return call;
     }
+    if let Some(call) = source_variadic_calls::lower(ctx, object, method, args, op, expr) {
+        return call;
+    }
     lower_method_call_with_receiver_direct(ctx, object, method, args, op, expr)
 }
 

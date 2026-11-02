@@ -150,6 +150,11 @@ pub(super) fn lower_method_call(
     if let Some(call) = enum_interface_calls::lower_enum_interface_call(ctx, object, method, args, op, expr) {
         return call;
     }
+    if method_call_argument_signature(ctx, object_expr, object.value, method).is_none() {
+        if let Some(call) = source_variadic_calls::lower(ctx, object, method, args, op, expr) {
+            return call;
+        }
+    }
     let magic_args;
     let (dispatch_method, args) = if let Some(args) =
         magic_call_dispatch_args(ctx, object.value, method, args, object_expr.span)
