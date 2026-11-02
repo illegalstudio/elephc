@@ -78,6 +78,7 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
         .private_prop("conn", TypeExpr::Int, Some(e_neg(e_int(1))))
         .private_prop("link", t_nullable(t_class("mysqli")), Some(e_null()))
         .private_prop("closed", TypeExpr::Bool, Some(e_bool(false)))
+        .private_prop("queryText", TypeExpr::Str, Some(e_str("")))
         .private_prop("bindTypes", TypeExpr::Str, Some(e_str("")))
         .private_prop("paramReader", t_nullable(t_class("Closure")), Some(e_null()))
         .private_prop("resultWriter", t_nullable(t_class("Closure")), Some(e_null()))
@@ -191,6 +192,7 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                         None,
                     ),
                     s_prop_assign(e_this(), "stmt", e_var("_handle")),
+                    s_prop_assign(e_this(), "queryText", e_var("query")),
                     s_prop_assign(e_this(), "param_count", e_call("elephc_pdo_mysql_param_count", vec![e_var("_handle")])),
                     s_assign("_head", e_call("strtoupper", vec![e_call("ltrim", vec![e_var("query")])])),
                     s_prop_assign(e_this(), "field_count", e_ternary(e_call("str_starts_with", vec![e_var("_head"), e_str("CALL")]), e_int(0), e_call("elephc_pdo_column_count", vec![e_var("_handle")]))),
@@ -461,6 +463,7 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                             s_expr(e_method_call(e_this(), "refreshLink", vec![])),
                             s_expr(e_call("elephc_pdo_reset", vec![e_this_prop("stmt")])),
                             s_expr(e_method_call(e_this(), "clearError", vec![])),
+                            s_expr(e_method_call(e_this(), "reportIndex", vec![])),
                             s_return(e_bool(true)),
                         ],
                         vec![],
@@ -471,7 +474,24 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                     s_prop_assign(e_this(), "num_rows", e_int(0)),
                     s_expr(e_method_call(e_this(), "refreshLink", vec![])),
                     s_expr(e_method_call(e_this(), "clearError", vec![])),
+                    s_expr(e_method_call(e_this(), "reportIndex", vec![])),
                     s_return(e_bool(true)),
+                ]),
+        )
+        .method(
+            method("reportIndex")
+                .private()
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_assign("_link", e_this_prop("link")),
+                    s_if(
+                        e_binop(e_var("_link"), BinOp::StrictNotEq, e_null()),
+                        vec![
+                            s_expr(e_method_call(e_var("_link"), "__elephcReportIndex", vec![e_this_prop("queryText")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
                 ]),
         )
         .method(

@@ -2567,6 +2567,55 @@ impl MyConn {
         }
     }
 
+    /// Returns the server status flags of the last OK/EOF packet (mysqli's
+    /// `MYSQLI_REPORT_INDEX` reads `SERVER_QUERY_NO_[GOOD_]INDEX_USED` from them); `0` while a
+    /// worker owns the client.
+    pub fn server_status(&self) -> i64 {
+        self.conn
+            .0
+            .as_ref()
+            .map(|c| i64::from(c.status_flags().bits()))
+            .unwrap_or(0)
+    }
+
+    /// Sends `COM_REFRESH` with the `REFRESH_*` bitmask, backing `mysqli::refresh()`.
+    /// `1` on success, `-1` with the error recorded.
+    pub fn refresh(&mut self, options: i64) -> i64 {
+        if !self.ensure_not_busy() {
+            return -1;
+        }
+        match self.conn.refresh(options as u8) {
+            Ok(()) => {
+                self.errcode = 0;
+                self.sqlstate = "00000".to_string();
+                1
+            }
+            Err(error) => {
+                self.record_mysql_error(&error);
+                -1
+            }
+        }
+    }
+
+    /// Sends `COM_DEBUG`, backing `mysqli::dump_debug_info()`. `1` on success, `-1` with the
+    /// error recorded (the server requires the SUPER privilege).
+    pub fn dump_debug_info(&mut self) -> i64 {
+        if !self.ensure_not_busy() {
+            return -1;
+        }
+        match self.conn.dump_debug_info() {
+            Ok(()) => {
+                self.errcode = 0;
+                self.sqlstate = "00000".to_string();
+                1
+            }
+            Err(error) => {
+                self.record_mysql_error(&error);
+                -1
+            }
+        }
+    }
+
     /// Returns the info string of the last OK packet ("Records: 3  Duplicates: 0
     /// Warnings: 0", "Rows matched: …"), backing `mysqli::$info` / `mysqli_info()`.
     /// Empty when the server sent none or the client is owned by a stream worker.

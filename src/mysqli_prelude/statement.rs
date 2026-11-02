@@ -45,6 +45,8 @@ class mysqli_stmt {
     private int $conn = -1;
     private ?mysqli $link = null;
     private bool $closed = false;
+    // The prepared SQL, named by MYSQLI_REPORT_INDEX diagnostics.
+    private string $queryText = "";
 
     // bind_param(): the type string and a closure that reads the bound
     // variables' CURRENT values (captured by reference), so each execute()
@@ -129,6 +131,7 @@ class mysqli_stmt {
             return false;
         }
         $this->stmt = $_handle;
+        $this->queryText = $query;
         $this->param_count = elephc_pdo_mysql_param_count($_handle);
         // Native prepares know their columns before execution, except CALL,
         // whose result shape exists only once the procedure runs.
@@ -295,6 +298,7 @@ class mysqli_stmt {
             // Rewind now so the statement is immediately re-executable.
             elephc_pdo_reset($this->stmt);
             $this->clearError();
+            $this->reportIndex();
             return true;
         }
         // A result set exists: the first step's verdict (1 = row, 0 = empty)
@@ -304,7 +308,17 @@ class mysqli_stmt {
         $this->num_rows = 0;
         $this->refreshLink();
         $this->clearError();
+        $this->reportIndex();
         return true;
+    }
+
+    // MYSQLI_REPORT_INDEX for this statement's last execution (php names the
+    // prepared SQL in the "No index used …" diagnostic).
+    private function reportIndex(): void {
+        $_link = $this->link;
+        if ($_link !== null) {
+            $_link->__elephcReportIndex($this->queryText);
+        }
     }
 
     public function fetch(): ?bool {

@@ -275,11 +275,10 @@ the connection, so a later `real_connect()` on the same object starts clean.
   back, temporary tables and session variables are dropped).
 - `kill($process_id)` kills a server thread (`ValueError` for a non-positive
   id); killing the connection's own `thread_id` succeeds like mysqlnd.
-- `refresh($flags)` runs the SQL equivalents of `COM_REFRESH`:
-  `MYSQLI_REFRESH_GRANT` → `FLUSH PRIVILEGES`, `LOG` → `FLUSH LOGS`, `TABLES`,
-  `HOSTS`, `STATUS` → `FLUSH …`, `SLAVE`/`REPLICA` → `RESET SLAVE`,
-  `MASTER` → `RESET MASTER`; `THREADS` and `BACKUP_LOG` have no SQL spelling
-  and are accepted as no-ops.
+- `refresh($flags)` sends a real `COM_REFRESH` with the `MYSQLI_REFRESH_*`
+  bitmask, and `dump_debug_info()` a real `COM_DEBUG` (the server writes its
+  debug information to its error log). Like php, both report a failure through
+  their `false` return and `errno` / `error`, never through `mysqli_report`.
 - `stat()` returns MySQL's "Uptime: … Questions: …" status line.
 - `get_warnings()` (and `mysqli_stmt::get_warnings()`) return a
   `mysqli_warning` chain built from `SHOW WARNINGS` — `$message`, `$sqlstate`,
@@ -290,9 +289,8 @@ the connection, so a later `real_connect()` on the same object starts clean.
   php reports (values as numeric strings). The counters elephc can observe are
   tracked (connections, closes, `COM_*` commands sent, result-set and
   buffered-row counts); byte- and packet-level counters stay `"0"`.
-- `debug()` returns `true` and `dump_debug_info()` validates the connection and
-  returns `true`: mysqlnd's debug tracing is compiled out
-  (`MYSQLI_DEBUG_TRACE_ENABLED` is `0`), and the bridge exposes no `COM_DEBUG`.
+- `debug()` returns `true`: mysqlnd's client-side debug tracing is compiled out
+  of release builds (`MYSQLI_DEBUG_TRACE_ENABLED` is `0`), where php does the same.
 
 ## mysqli_driver
 
@@ -312,6 +310,12 @@ default is `MYSQLI_REPORT_OFF`).
 | `MYSQLI_REPORT_STRICT` set | throw `mysqli_sql_exception` (extends `RuntimeException`) |
 | `MYSQLI_REPORT_ERROR` only | write the message to STDERR, return `false` |
 | `MYSQLI_REPORT_OFF` | silent `false` |
+
+`MYSQLI_REPORT_INDEX` (part of `MYSQLI_REPORT_ALL`) reads the server status
+flags of each statement's final OK/EOF packet: a query or prepared statement
+the server ran without a (good) index raises php's "No index used in
+query/prepared statement …" / "Bad index used …" — a `mysqli_sql_exception`
+(code 0, SQLSTATE `00000`) under `STRICT`, a STDERR warning otherwise.
 
 After a failure, `errno`, `error`, `sqlstate`, and `error_list` are populated
 on the connection (and on the statement). `mysqli_sql_exception` is `final`,
@@ -382,9 +386,7 @@ they keep working (elephc raises no runtime `E_DEPRECATED`).
   write-barriered; assigning to them is not rejected.
 - **`MYSQLI_REPORT_ERROR` (without STRICT) writes to STDERR**, not a real
   `E_WARNING`: php raises an `E_WARNING` visible to `set_error_handler()`,
-  `error_get_last()`, and log routing. `MYSQLI_REPORT_INDEX` (no-index-used
-  reporting) is accepted but never fires: the bridge does not expose the
-  server-status bits it reads. `STRICT` (the default) is unaffected.
+  `error_get_last()`, and log routing. `STRICT` (the default) is unaffected.
 - **`query()` rejects multi-statement strings client-side** (errno 1064 with
   an elephc-worded message) instead of php-src's server-side rejection: the
   bridge keeps multi-statements enabled for the whole connection, so without
@@ -409,7 +411,6 @@ they keep working (elephc raises no runtime `E_DEPRECATED`).
 - **`get_charset()` reports only the charset name.** The returned object's
   `charset` field is exact; `collation`, `number`, `state`, `dir`,
   `min_length`, `max_length`, and `comment` are `0` / `""`.
-- **`refresh()`** uses SQL statements instead of `COM_REFRESH` (see above).
 - **`mysqli` / `mysqli_stmt` declare a `__destruct()`** (php frees them in C),
   so `method_exists($db, '__destruct')` is `true`.
 

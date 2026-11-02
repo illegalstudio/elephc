@@ -1301,3 +1301,54 @@ echo "|after=", $db->query("SELECT 5")->fetch_row()[0];
     ));
     assert_eq!(out, "sent-fast=y|early=0|tags=first,second|overlapped=y|busy=2014|after=5");
 }
+
+/// MYSQLI_REPORT_INDEX reads the OK/EOF packet's server status flags: a full table scan
+/// raises php's "No index used in query/prepared statement …" (an exception under STRICT),
+/// an indexed lookup does not; `refresh()` and `dump_debug_info()` send real COM_REFRESH /
+/// COM_DEBUG commands, reporting failures through `false` + errno only.
+#[test]
+#[ignore]
+fn test_mysqli_report_index_and_raw_protocol_commands() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("DROP TABLE IF EXISTS msx");
+$db->query("CREATE TABLE msx (id INT PRIMARY KEY, v INT)");
+$db->query("INSERT INTO msx VALUES (1, 10), (2, 20)");
+mysqli_report(MYSQLI_REPORT_ALL);
+$indexed = $db->query("SELECT v FROM msx WHERE id = 1");
+echo "indexed=", $indexed->fetch_row()[0];
+try {
+    $db->query("SELECT v FROM msx WHERE v = 20");
+    echo "|scan=quiet";
+} catch (mysqli_sql_exception $e) {
+    echo "|scan=", $e->getMessage(), "|code=", $e->getCode(), "|state=", $e->getSqlState();
+}
+$stmt = $db->prepare("SELECT v FROM msx WHERE v > ?");
+$min = 0;
+$stmt->bind_param("i", $min);
+try {
+    $stmt->execute();
+    echo "|stmt=quiet";
+} catch (mysqli_sql_exception $e) {
+    echo "|stmt=", str_starts_with($e->getMessage(), "No index used in query/prepared statement SELECT v FROM msx") ? "reported" : $e->getMessage();
+}
+mysqli_report(MYSQLI_REPORT_OFF);
+$refreshed = $db->refresh(MYSQLI_REFRESH_TABLES);
+echo "|refresh=", $refreshed ? "ok" : ($db->errno == 1227 ? "denied" : "err" . $db->errno);
+$dumped = $db->dump_debug_info();
+echo "|debug=", $dumped ? "ok" : ($db->errno == 1227 ? "denied" : "err" . $db->errno);
+$db->query("DROP TABLE msx");
+"#,
+    ));
+    let (head, tail) = out.split_once("|refresh=").expect("refresh marker");
+    assert_eq!(
+        head,
+        "indexed=10|scan=No index used in query/prepared statement SELECT v FROM msx WHERE v = 20|code=0|state=00000|stmt=reported"
+    );
+    // The test user may or may not hold RELOAD / SUPER: either the command ran or the
+    // server's own 1227 came back — never a client-side substitute.
+    assert!(
+        ["ok|debug=ok", "ok|debug=denied", "denied|debug=ok", "denied|debug=denied"].contains(&tail),
+        "unexpected tail: {tail}"
+    );
+}

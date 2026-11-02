@@ -590,3 +590,28 @@ echo $ok, "/", count($ids), "|", $db->options(9999, 1) ? "T" : "F";
     );
     assert_eq!(out, "10/10|F");
 }
+
+/// The raw protocol commands still guard the link like php: `refresh()` and
+/// `dump_debug_info()` on an unconnected object raise the not-fully-initialized
+/// `Error` before any COM_REFRESH / COM_DEBUG is sent, and `MYSQLI_REPORT_INDEX`
+/// stays part of `MYSQLI_REPORT_ALL`.
+#[test]
+fn test_mysqli_raw_protocol_commands_need_a_connection() {
+    let out = compile_and_run(
+        r#"<?php
+mysqli_report(MYSQLI_REPORT_OFF);
+$db = mysqli_init();
+$probe = function(callable $fn): string {
+    try { $fn(); return "no-err"; }
+    catch (Error $e) {
+        return $e->getMessage() === "mysqli object is not fully initialized" ? "err" : "err?";
+    }
+};
+echo $probe(fn() => $db->refresh(MYSQLI_REFRESH_TABLES));
+echo "|", $probe(fn() => $db->dump_debug_info());
+echo "|", $probe(fn() => mysqli_refresh($db, MYSQLI_REFRESH_GRANT));
+echo "|", (MYSQLI_REPORT_ALL & MYSQLI_REPORT_INDEX) === MYSQLI_REPORT_INDEX ? "all" : "?";
+"#,
+    );
+    assert_eq!(out, "err|err|err|all");
+}

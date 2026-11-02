@@ -666,74 +666,15 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         None,
                     ),
                     s_expr(e_method_call(e_this(), "bump", vec![e_str("com_refresh")])),
-                    s_assign("_sql", e_array(vec![])),
                     s_if(
-                        e_binop(e_binop(e_var("flags"), BinOp::BitAnd, e_int(1)), BinOp::NotEq, e_int(0)),
+                        e_binop(e_call("elephc_pdo_mysql_refresh", vec![e_this_prop("conn"), e_var("flags")]), BinOp::Lt, e_int(0)),
                         vec![
-                            s_array_push("_sql", e_str("FLUSH PRIVILEGES")),
+                            s_expr(e_method_call(e_this(), "__elephcAdoptBridgeError", vec![])),
+                            s_return(e_bool(false)),
                         ],
                         vec![],
                         None,
                     ),
-                    s_if(
-                        e_binop(e_binop(e_var("flags"), BinOp::BitAnd, e_int(2)), BinOp::NotEq, e_int(0)),
-                        vec![
-                            s_array_push("_sql", e_str("FLUSH LOGS")),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_if(
-                        e_binop(e_binop(e_var("flags"), BinOp::BitAnd, e_int(4)), BinOp::NotEq, e_int(0)),
-                        vec![
-                            s_array_push("_sql", e_str("FLUSH TABLES")),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_if(
-                        e_binop(e_binop(e_var("flags"), BinOp::BitAnd, e_int(8)), BinOp::NotEq, e_int(0)),
-                        vec![
-                            s_array_push("_sql", e_str("FLUSH HOSTS")),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_if(
-                        e_binop(e_binop(e_var("flags"), BinOp::BitAnd, e_int(16)), BinOp::NotEq, e_int(0)),
-                        vec![
-                            s_array_push("_sql", e_str("FLUSH STATUS")),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_if(
-                        e_binop(e_binop(e_var("flags"), BinOp::BitAnd, e_int(64)), BinOp::NotEq, e_int(0)),
-                        vec![
-                            s_array_push("_sql", e_str("RESET SLAVE")),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_if(
-                        e_binop(e_binop(e_var("flags"), BinOp::BitAnd, e_int(128)), BinOp::NotEq, e_int(0)),
-                        vec![
-                            s_array_push("_sql", e_str("RESET MASTER")),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_assign("_n", e_call("count", vec![e_var("_sql")])),
-                    s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_var("_n"))), Some(s_expr(e_post_inc("_i"))), vec![
-                        s_if(
-                            e_binop(e_call("elephc_pdo_exec", vec![e_this_prop("conn"), e_cast(CastType::String, e_index(e_var("_sql"), e_var("_i")))]), BinOp::Lt, e_int(0)),
-                            vec![
-                                s_return(e_method_call(e_this(), "opFailed", vec![])),
-                            ],
-                            vec![],
-                            None,
-                        ),
-                    ]),
                     s_expr(e_method_call(e_this(), "clearError", vec![])),
                     s_return(e_bool(true)),
                 ]),
@@ -770,6 +711,17 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                 .returns(TypeExpr::Bool)
                 .body(vec![
                     s_expr(e_method_call(e_this(), "requireInitialized", vec![])),
+                    s_expr(e_method_call(e_this(), "bump", vec![e_str("com_debug")])),
+                    s_if(
+                        e_binop(e_call("elephc_pdo_mysql_dump_debug_info", vec![e_this_prop("conn")]), BinOp::Lt, e_int(0)),
+                        vec![
+                            s_expr(e_method_call(e_this(), "__elephcAdoptBridgeError", vec![])),
+                            s_return(e_bool(false)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_expr(e_method_call(e_this(), "clearError", vec![])),
                     s_return(e_bool(true)),
                 ]),
         )
@@ -1348,6 +1300,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     s_if(
                         e_binop(e_var("_code"), BinOp::Eq, e_int(1)),
                         vec![
+                            s_expr(e_method_call(e_this(), "__elephcReportIndex", vec![e_var("query")])),
                             s_return(e_bool(true)),
                         ],
                         vec![],
@@ -1362,6 +1315,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         vec![],
                         None,
                     ),
+                    s_expr(e_method_call(e_this(), "__elephcReportIndex", vec![e_var("query")])),
                     s_return(e_var("_result")),
                 ]),
         )
@@ -1665,7 +1619,16 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                 .param("query", TypeExpr::Str)
                 .returns(TypeExpr::Bool)
                 .body(vec![
-                    s_return(e_binop(e_method_call(e_this(), "runQuery", vec![e_var("query"), e_bool(true)]), BinOp::NotEq, e_int(0))),
+                    s_assign("_code", e_method_call(e_this(), "runQuery", vec![e_var("query"), e_bool(true)])),
+                    s_if(
+                        e_binop(e_var("_code"), BinOp::Eq, e_int(1)),
+                        vec![
+                            s_expr(e_method_call(e_this(), "__elephcReportIndex", vec![e_var("query")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_binop(e_var("_code"), BinOp::NotEq, e_int(0))),
                 ]),
         )
         .method(
@@ -1777,6 +1740,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         vec![],
                         None,
                     ),
+                    s_expr(e_method_call(e_this(), "__elephcReportIndex", vec![e_str("from previous query")])),
                     s_return(e_var("_result")),
                 ]),
         )
@@ -1906,6 +1870,48 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         None,
                     ),
                     s_return(e_var("message")),
+                ]),
+        )
+        .method(
+            method("__elephcReportIndex")
+                .private()
+                .param("query", TypeExpr::Str)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_if(
+                        e_binop(e_binop(e_binop(e_static_prop("mysqli", "reportMode"), BinOp::BitAnd, e_int(4)), BinOp::Eq, e_int(0)), BinOp::Or, e_binop(e_this_prop("conn"), BinOp::Lt, e_int(0))),
+                        vec![
+                            s_return_void(),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_assign("_status", e_call("elephc_pdo_mysql_server_status", vec![e_this_prop("conn")])),
+                    s_assign("_index", e_str("")),
+                    s_if(
+                        e_binop(e_binop(e_var("_status"), BinOp::BitAnd, e_int(16)), BinOp::NotEq, e_int(0)),
+                        vec![
+                            s_assign("_index", e_str("Bad index")),
+                        ],
+                        vec![
+                        (e_binop(e_binop(e_var("_status"), BinOp::BitAnd, e_int(32)), BinOp::NotEq, e_int(0)), vec![
+                            s_assign("_index", e_str("No index")),
+                        ]),
+                    ],
+                        Some(vec![
+                        s_return_void(),
+                    ]),
+                    ),
+                    s_assign("_message", e_binop(e_binop(e_var("_index"), BinOp::Concat, e_str(" used in query/prepared statement ")), BinOp::Concat, e_var("query"))),
+                    s_if(
+                        e_binop(e_binop(e_static_prop("mysqli", "reportMode"), BinOp::BitAnd, e_int(2)), BinOp::NotEq, e_int(0)),
+                        vec![
+                            s_throw(e_static_call("mysqli_sql_exception", "__elephcCreate", vec![e_var("_message"), e_int(0), e_str("00000")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_expr(e_call("fwrite", vec![e_const("STDERR"), e_binop(e_binop(e_str("mysqli warning: (00000/0): "), BinOp::Concat, e_var("_message")), BinOp::Concat, e_str("\n"))])),
                 ]),
         )
         .method(

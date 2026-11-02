@@ -439,37 +439,11 @@ class mysqli {
             return false;
         }
         $this->bump("com_refresh");
-        // COM_REFRESH as its SQL equivalents (the bridge exposes no COM_REFRESH):
-        // GRANT -> FLUSH PRIVILEGES, LOG -> FLUSH LOGS, TABLES, HOSTS, STATUS,
-        // SLAVE/REPLICA -> RESET SLAVE, MASTER -> RESET MASTER. THREADS and
-        // BACKUP_LOG have no SQL spelling and are accepted as no-ops.
-        $_sql = [];
-        if (($flags & 1) != 0) {
-            $_sql[] = "FLUSH PRIVILEGES";
-        }
-        if (($flags & 2) != 0) {
-            $_sql[] = "FLUSH LOGS";
-        }
-        if (($flags & 4) != 0) {
-            $_sql[] = "FLUSH TABLES";
-        }
-        if (($flags & 8) != 0) {
-            $_sql[] = "FLUSH HOSTS";
-        }
-        if (($flags & 16) != 0) {
-            $_sql[] = "FLUSH STATUS";
-        }
-        if (($flags & 64) != 0) {
-            $_sql[] = "RESET SLAVE";
-        }
-        if (($flags & 128) != 0) {
-            $_sql[] = "RESET MASTER";
-        }
-        $_n = count($_sql);
-        for ($_i = 0; $_i < $_n; $_i++) {
-            if (elephc_pdo_exec($this->conn, (string) $_sql[$_i]) < 0) {
-                return $this->opFailed();
-            }
+        // A real COM_REFRESH with the REFRESH_* bitmask. Like php, a failure is
+        // recorded (errno / error) and returns false without mysqli_report.
+        if (elephc_pdo_mysql_refresh($this->conn, $flags) < 0) {
+            $this->__elephcAdoptBridgeError();
+            return false;
         }
         $this->clearError();
         return true;
@@ -496,10 +470,16 @@ class mysqli {
     }
 
     public function dump_debug_info(): bool {
-        // COM_DEBUG asks the server to write debug information to its own error
-        // log; nothing is returned to the client. The bridge exposes no COM_DEBUG,
-        // so this only validates the connection (documented).
+        // A real COM_DEBUG: the server writes debug information to its own error
+        // log (it needs the SUPER privilege). Like php, a failure returns false
+        // with the error recorded and no mysqli_report dispatch.
         $this->requireInitialized();
+        $this->bump("com_debug");
+        if (elephc_pdo_mysql_dump_debug_info($this->conn) < 0) {
+            $this->__elephcAdoptBridgeError();
+            return false;
+        }
+        $this->clearError();
         return true;
     }
 
@@ -807,12 +787,14 @@ class mysqli {
             return false;
         }
         if ($_code == 1) {
+            $this->__elephcReportIndex($query);
             return true;
         }
         $_result = $_unbuffered ? $this->claimStream() : $this->claimStored();
         if ($_result === null) {
             return false;
         }
+        $this->__elephcReportIndex($query);
         return $_result;
     }
 
@@ -990,7 +972,11 @@ class mysqli {
     public function real_query(string $query): bool {
         // A produced result set stays on the server until store_result() buffers
         // it or use_result() streams it (mysqlnd's two-step protocol).
-        return $this->runQuery($query, true) != 0;
+        $_code = $this->runQuery($query, true);
+        if ($_code == 1) {
+            $this->__elephcReportIndex($query);
+        }
+        return $_code != 0;
     }
 
     public function multi_query(string $query): bool {
@@ -1056,6 +1042,7 @@ class mysqli {
         if ($_result === null) {
             return false;
         }
+        $this->__elephcReportIndex("from previous query");
         return $_result;
     }
 
@@ -1131,6 +1118,29 @@ class mysqli {
             }
         }
         return $message;
+    }
+
+    // MYSQLI_REPORT_INDEX: when the last statement's server status says it used
+    // no (good) index, php reports "No index used in query/prepared statement …"
+    // (an exception under STRICT, a warning otherwise — elephc writes STDERR).
+    private function __elephcReportIndex(string $query): void {
+        if ((mysqli::$reportMode & 4) == 0 || $this->conn < 0) {
+            return;
+        }
+        $_status = elephc_pdo_mysql_server_status($this->conn);
+        $_index = "";
+        if (($_status & 16) != 0) {
+            $_index = "Bad index";
+        } elseif (($_status & 32) != 0) {
+            $_index = "No index";
+        } else {
+            return;
+        }
+        $_message = $_index . " used in query/prepared statement " . $query;
+        if ((mysqli::$reportMode & 2) != 0) {
+            throw mysqli_sql_exception::__elephcCreate($_message, 0, "00000");
+        }
+        fwrite(STDERR, "mysqli warning: (00000/0): " . $_message . "\n");
     }
 
     // Increments one per-connection statistic and its process-wide twin.

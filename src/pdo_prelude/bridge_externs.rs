@@ -293,6 +293,11 @@ extern "elephc_pdo" {
     function elephc_pdo_mysql_async_send(int $conn, string $sql): int;
     function elephc_pdo_mysql_async_wait(int $conn, int $timeout_us): int;
     function elephc_pdo_mysql_async_reap(int $conn): int;
+    // v62: raw protocol commands and the OK-packet server status flags (patched mysql
+    // crate, see third_party/mysql-28.0.4/ELEPHC_PATCH.md).
+    function elephc_pdo_mysql_server_status(int $conn): int;
+    function elephc_pdo_mysql_refresh(int $conn, int $options): int;
+    function elephc_pdo_mysql_dump_debug_info(int $conn): int;
     // v22: a live transaction-state read backing PDO::inTransaction() /
     // beginTransaction()'s already-active guard (P1-g). SQLite reads native
     // autocommit; PostgreSQL/MySQL use bridge-maintained state updated after every

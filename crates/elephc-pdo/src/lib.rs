@@ -3002,6 +3002,46 @@ pub extern "C" fn elephc_pdo_mysql_async_reap(conn_id: i64) -> i64 {
     })
 }
 
+/// Returns the server status flags of the MySQL connection's last OK/EOF packet, backing
+/// mysqli's `MYSQLI_REPORT_INDEX`. `0` for a non-MySQL or unknown handle.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_server_status(conn_id: i64) -> i64 {
+    ffi_guard(0, || {
+        let guard = lock_recover(conns());
+        match guard.get(&conn_id) {
+            Some(Conn::Mysql(c)) => c.server_status(),
+            _ => 0,
+        }
+    })
+}
+
+/// Sends `COM_REFRESH` with the `REFRESH_*` bitmask on a MySQL connection, backing
+/// `mysqli::refresh()`. `1` on success, `-1` (error recorded) on failure or for a
+/// non-MySQL / unknown handle.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_refresh(conn_id: i64, options: i64) -> i64 {
+    ffi_guard(-1, || {
+        let mut guard = lock_recover(conns());
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Mysql(c)) => c.refresh(options),
+            _ => -1,
+        }
+    })
+}
+
+/// Sends `COM_DEBUG` on a MySQL connection, backing `mysqli::dump_debug_info()`. `1` on
+/// success, `-1` (error recorded) on failure or for a non-MySQL / unknown handle.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_dump_debug_info(conn_id: i64) -> i64 {
+    ffi_guard(-1, || {
+        let mut guard = lock_recover(conns());
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Mysql(c)) => c.dump_debug_info(),
+            _ => -1,
+        }
+    })
+}
+
 /// Returns the server-side id of a natively prepared MySQL statement, backing
 /// `mysqli_stmt::$id`. `0` for an emulated statement, `-1` for a non-MySQL or
 /// unknown statement handle.
