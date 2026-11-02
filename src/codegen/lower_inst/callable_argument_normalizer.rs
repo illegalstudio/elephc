@@ -71,7 +71,9 @@ mod tests {
         let source = "<?php function acceptOwnedEvalCallback(callable $callback): mixed { return $callback(); } \
             class NativeNormalizerInvoke { public function __invoke(): int { return 2; } } \
             function makeNativeNormalizerInvoke(): mixed { return new NativeNormalizerInvoke(); } \
-            acceptOwnedEvalCallback(makeNativeNormalizerInvoke()); \
+            $callback = makeNativeNormalizerInvoke(); \
+            if (!is_callable($callback)) { throw new TypeError('expected an invokable object'); } \
+            acceptOwnedEvalCallback($callback); \
             $code = $argc > 0 ? 'acceptOwnedEvalCallback(function (): int { return 1; });' : ''; eval($code);";
             let target = Target::parse(name).unwrap();
             let module = crate::ir_lower::tests::lower_source_at_for_target(
