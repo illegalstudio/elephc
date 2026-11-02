@@ -15,7 +15,7 @@ use std::ops::Bound::{Excluded, Unbounded};
 
 /// Borrowed native addresses copied across the C ABI without inspecting their payloads.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NativeReferenceTypeSource {
     pub token: u64,
     pub binding: usize,
@@ -144,6 +144,15 @@ impl NativeReferenceTypeSources {
 thread_local! {
     /// Source metadata follows the native worker; no runtime address crosses workers here.
     static SOURCES: RefCell<NativeReferenceTypeSources> = RefCell::new(NativeReferenceTypeSources::default());
+}
+
+/// Copies the indexed source set before a protected native coercion can re-enter PHP.
+pub(super) fn snapshot_reference_sources(reference: usize) -> Vec<NativeReferenceTypeSource> {
+    SOURCES.with(|sources| {
+        let sources = sources.borrow();
+        sources.references.get(&reference).into_iter().flatten()
+            .filter_map(|token| sources.sources.get(token).copied()).collect()
+    })
 }
 
 /// Registers or replaces one property binding and returns its nonzero source token, or zero on failure.

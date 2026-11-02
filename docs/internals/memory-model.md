@@ -612,6 +612,20 @@ can be reused by their still-live source token.
 An unchanged metadata epoch does not prove that a native cell stayed raw across
 PHP re-entry; callers must recheck physical shape and previously unmatched cells.
 
+The versioned native validation coordinator prepares property candidates without
+publishing a destination. Every source receives the same detached original RHS,
+and each matched source generation coerces once. A contained PHP callback restarts
+source discovery; retired and physically detached sources do not constrain the
+result. Live candidates must agree before one owned result transfers to the
+publisher. Failure and conflict retire every candidate. Unchanged type acceptance
+retains the original cell so accepted `NaN` and recursive arrays do not require a
+non-reflexive or recursive value comparison. Native callbacks must contain throws
+before returning through Rust, keep probes/comparison free of PHP re-entry, and
+consume discarded candidates without starting a collection safe point. The caller
+keeps the original RHS and reference alive throughout validation. The generated
+publishers, protected callbacks, invisible keepalive pins and binding lifecycle
+still need integration before typed canonical references can be enabled.
+
 Native function parameter flags carry physical boxed-reference storage separately
 from declared PHP types and tagged nullable integers. Normal function object
 references use the normalized Mixed ABI. A closure descriptor can instead expose
