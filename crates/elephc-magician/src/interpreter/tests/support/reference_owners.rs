@@ -13,7 +13,7 @@ use std::collections::HashSet;
 
 impl FakeOps {
     /// Counts explicit owners plus stored edges reachable from live fake activation owners.
-    pub(super) fn reference_owner_count(&self, reference: RuntimeCellHandle) -> usize {
+    pub(in crate::interpreter::tests) fn reference_owner_count(&self, reference: RuntimeCellHandle) -> usize {
         let sought = reference.as_ptr() as usize;
         let mut count = self.cell_owners.get(&sought).copied().unwrap_or(0);
         let mut pending = self.cell_owners.iter().filter_map(|(id, count)| (*count > 0).then_some(*id)).collect::<Vec<_>>();
