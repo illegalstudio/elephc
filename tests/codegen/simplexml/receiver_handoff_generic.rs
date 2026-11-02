@@ -12,8 +12,7 @@
 use crate::support::*;
 
 /// Generic field types and dynamic entries hand off actual XML children in AOT and opaque eval.
-#[test]
-fn test_simplexml_generic_property_handoff_bundle() {
+fn assert_generic_property_handoff(eval_mode: bool) {
     if skip_without_xml_native("test_simplexml_generic_property_handoff_bundle") { return; }
     let source = r#"<?php
 interface GenericXmlHolderMarker {}
@@ -222,17 +221,26 @@ try { $visPrivate->items[] = 'S'; } catch (Throwable $visError) { echo $visError
 echo 'append-hidden:', count($visHidden->item), ':', $visHidden->item[0], '|';
 "#;
     let expected = "mixed:1:1|mixed:1:1|mixed:1:1|object:1:1|object:1:1|object:1:1|countable:1:1|countable:1:1|countable:1:1|iterable:1:1|iterable:1:1|iterable:1:1|union:1:1|union:1:1|union:1:1|untyped:1:1|untyped:1:1|untyped:1:1|readonly:1:1|readonly:1:1|readonly:1:1|private-set:1:1|private-set:1:1|private-set:1:1|dynamic:1:1|dynamic:1:1|dynamic:1:1|getter:1:1|getter:1:1|getter:1:1|mixed:1:1|object:1:1|countable:1:1|final:S|array:1|shared:2|array:2|readonly:1:1|Cannot indirectly modify readonly property GenericXmlReadonly::$items|borrowed:2|readonly:2:1|hook-get|hook-drop|hook-known:S|hook-get|hook-drop|hook-erased:S|hook-get|hook-drop|Indirect modification of GenericXmlHook::$items is not allowed|hook-get|hook-drop|Indirect modification of GenericXmlHook::$items is not allowed|key-drop|key:A:S:1|key-drop|compound-key:A:BS:1|compound-final:DS|hook-get|hook-drop|hook-key-known:D:S:1|hook-get|hook-drop|hook-key-erased:D:S:1|Cannot access protected property GenericXmlVisProtected::$items|Cannot access protected property GenericXmlVisProtected::$items|Cannot access private property GenericXmlVisPrivate::$items|Cannot access private property GenericXmlVisPrivate::$items|hidden:H|magic-get|magic:H:S|magic-get|magic-literal:H:T|private-get|magic-private:H:P|private-get|magic-private-literal:H:Q|Cannot access protected property GenericXmlVisProtected::$items|Cannot access private property GenericXmlVisPrivate::$items|append-hidden:1:H|";
-    let renamed = source.replace("GenericXml", "EvalGenericXml");
-    let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
-    let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
-    let eval_expected = expected.replace("GenericXml", "EvalGenericXml");
-    assert_bundle_with(&[
-        BundleCase { name: "generic_xml_handoff_native", source, expected },
-        BundleCase { name: "generic_xml_handoff_eval", source: &eval, expected: &eval_expected },
-    ], |source| {
-        let out = compile_and_run_with_heap_debug(source);
-        assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
-        out.stdout
-    });
+    let (source, expected) = if eval_mode {
+        let renamed = source.replace("GenericXml", "EvalGenericXml");
+        let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
+        (format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);"),
+            expected.replace("GenericXml", "EvalGenericXml"))
+    } else { (source.to_string(), expected.to_string()) };
+    let out = compile_and_run_with_heap_debug(&source);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, expected);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Native handoff cases compile without importing opaque eval's complete class catalog.
+#[test]
+fn test_simplexml_generic_property_handoff_native_bundle() {
+    assert_generic_property_handoff(false);
+}
+
+/// Opaque eval retains every handoff case without duplicating its classes as native declarations.
+#[test]
+fn test_simplexml_generic_property_handoff_eval_bundle() {
+    assert_generic_property_handoff(true);
 }

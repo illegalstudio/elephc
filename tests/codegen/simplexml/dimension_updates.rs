@@ -12,8 +12,7 @@ use crate::support::*;
 
 /// Computed XML indexed incdec keeps native no-writeback with one name conversion per update.
 /// Opaque eval calls compiled incdec helpers and interprets supported indexed compound writes.
-#[test]
-fn test_simplexml_computed_indexed_incdec_bundle() {
+fn assert_computed_indexed_incdec(eval_mode: bool) {
     if skip_without_xml_native("test_simplexml_computed_indexed_incdec_bundle") { return; }
     let mut source = String::from(r#"<?php
 class ComputedXmlChild extends SimpleXMLElement {}
@@ -66,15 +65,23 @@ for ($kind = 0; $kind < 2; $kind++) {
     let eval = format!("{setup}\n$code = $argc > 0 ? '{body}' : ''; eval($code);");
     let expected = ["g|f|5|g|f|5|g|f|7|".repeat(3),
         "g|f|s|d|5|g|f|s|d|5|g|f|s|d|7|".repeat(3)].concat();
-    assert_bundle_with(&[
-        BundleCase { name: "computed_xml_incdec_aot", source: &source, expected: &expected },
-        BundleCase { name: "computed_xml_incdec_eval", source: &eval, expected: &expected },
-    ], |source| {
-        let output = compile_and_run_with_heap_debug(source);
-        assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
-        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
-        output.stdout
-    });
+    let source = if eval_mode { &eval } else { &source };
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, expected);
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Native indexed updates keep every typed, erased and subclass case in their own program.
+#[test]
+fn test_simplexml_computed_indexed_incdec_native_bundle() {
+    assert_computed_indexed_incdec(false);
+}
+
+/// Eval still invokes compiled incdec helpers and performs its own compound writes.
+#[test]
+fn test_simplexml_computed_indexed_incdec_eval_bundle() {
+    assert_computed_indexed_incdec(true);
 }
 
 /// Local, static and array-held XML incdec selects without writing its numeric result back.
