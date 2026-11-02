@@ -592,6 +592,16 @@ child address must never be used as a cell header. Shared canonical scalars then
 retain the wrapper, while singleton wrappers copy their PHP value. Raw scalar
 projection never creates a wrapper through this path.
 
+The native type-source metadata ABI identifies each physical property binding
+with a distinct generation token. Clone bindings remain separate even when they
+name the same cell and validator. Rebinding, unset and arena reset invalidate old
+tokens. Native iteration copies records and checks their liveness after PHP
+callbacks, rather than keeping an iterator across re-entry. Records own and
+dereference no receiver, cell, value or validator address. Binding hooks must
+remove each source after the receiver destructor and before releasing its cell;
+ordinary reference parameters add no property source. Publisher and lifecycle
+wiring is required before this registry can enforce typed canonical references.
+
 Resolved reference-returning callees produce two distinct things at the `return`,
 and keeping them apart is what makes the boundary correct. `AcquireRefCell`
 materializes the returned cell address ONCE and publishes it as a typed `Pointer`
