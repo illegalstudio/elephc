@@ -24,6 +24,7 @@ mod dimension_owners;
 mod receiver_handoff;
 mod receiver_handoff_generic;
 mod dimension_updates;
+mod dimension_update_owners;
 mod diagnostics;
 mod dom_and_iterator;
 mod dom_activation;
