@@ -2193,7 +2193,7 @@ fn audit_expr(expr: &Expr, out: &mut Vec<String>) {
 /// here as several `extern_fn` calls sharing a library.
 pub struct ExternFnBuilder {
     name: String,
-    library: String,
+    library: Option<String>,
     params: Vec<ExternParam>,
     return_type: CType,
 }
@@ -2202,7 +2202,19 @@ pub struct ExternFnBuilder {
 pub fn extern_fn(name: &str, library: &str) -> ExternFnBuilder {
     ExternFnBuilder {
         name: name.to_string(),
-        library: library.to_string(),
+        library: Some(library.to_string()),
+        params: Vec::new(),
+        return_type: CType::Void,
+    }
+}
+
+/// Starts an extern function bound to no library: its symbol comes from an
+/// archive the link plan already carries (a hosted PHP extension's, for one),
+/// so naming a library would add a spurious `-l` flag.
+pub fn extern_fn_unbound(name: &str) -> ExternFnBuilder {
+    ExternFnBuilder {
+        name: name.to_string(),
+        library: None,
         params: Vec::new(),
         return_type: CType::Void,
     }
@@ -2231,7 +2243,7 @@ impl ExternFnBuilder {
                 name: self.name,
                 params: self.params,
                 return_type: self.return_type,
-                library: Some(self.library),
+                library: self.library,
             },
             Span::dummy(),
         )
@@ -2246,6 +2258,7 @@ impl ExternFnBuilder {
 pub struct ClassBuilder {
     name: String,
     is_final: bool,
+    is_abstract: bool,
     extends: Option<Name>,
     implements: Vec<Name>,
     constants: Vec<ClassConst>,
@@ -2258,6 +2271,7 @@ pub fn class(name: &str) -> ClassBuilder {
     ClassBuilder {
         name: name.to_string(),
         is_final: false,
+        is_abstract: false,
         extends: None,
         implements: Vec::new(),
         constants: Vec::new(),
@@ -2267,6 +2281,12 @@ pub fn class(name: &str) -> ClassBuilder {
 }
 
 impl ClassBuilder {
+    /// Makes the class `abstract`.
+    pub fn abstract_(mut self) -> Self {
+        self.is_abstract = true;
+        self
+    }
+
     /// Makes the class `final`.
     pub fn final_(mut self) -> Self {
         self.is_final = true;
@@ -2460,6 +2480,12 @@ impl ClassBuilder {
         self
     }
 
+    /// Adds several methods, in order.
+    pub fn methods(mut self, builders: impl IntoIterator<Item = MethodBuilder>) -> Self {
+        self.methods.extend(builders.into_iter().map(MethodBuilder::build));
+        self
+    }
+
     /// Emits the class declaration statement.
     pub fn build(self) -> Stmt {
         Stmt::new(
@@ -2468,7 +2494,7 @@ impl ClassBuilder {
             name: self.name,
                 extends: self.extends,
                 implements: self.implements,
-                is_abstract: false,
+                is_abstract: self.is_abstract,
                 is_final: self.is_final,
                 is_readonly_class: false,
                 trait_uses: Vec::new(),

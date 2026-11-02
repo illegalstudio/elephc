@@ -97,6 +97,72 @@ fn positional_string(value: &str) -> ConstDefaultObjectArg {
     }
 }
 
+/// Lazy Errors remain typed invoker defaults, not absent or silently null defaults.
+#[test]
+fn deferred_error_default_keeps_its_message() {
+    let module = Module::new(Target::parse("linux-x86_64").unwrap());
+    let message = "Cannot access \"parent\" when current class scope has no parent";
+    let span = Span::dummy();
+    let exception = Expr::new(ExprKind::NewObject {
+        class_name: crate::names::Name::unqualified("Error"),
+        args: vec![Expr::new(ExprKind::StringLiteral(message.to_string()), span)],
+    }, span);
+    let default = Expr::new(ExprKind::Throw(Box::new(exception)), span);
+    let sig = signature(
+        vec![("value".to_string(), PhpType::Int)], vec![Some(default)], vec![true], None,
+    );
+    let resolved = resolve_invoker_defaults(&module, Some("Consumer"), &sig);
+    assert!(matches!(&resolved[0], Some(InvokerDefaultValue::DeferredError(value)) if value == message));
+}
+
+/// Complex normalized defaults select their EIR helper without depending on the eval bridge.
+#[test]
+fn nested_deferred_default_resolves_to_native_helper() {
+    let mut module = Module::new(Target::parse("linux-x86_64").unwrap());
+    let exception = Expr::new(ExprKind::NewObject {
+        class_name: crate::names::Name::unqualified("Error"),
+        args: vec![Expr::new(ExprKind::StringLiteral("lazy".into()), Span::dummy())],
+    }, Span::dummy());
+    let default = Expr::new(ExprKind::ArrayLiteral(vec![
+        Expr::new(ExprKind::Throw(Box::new(exception)), Span::dummy()),
+    ]), Span::dummy());
+    let mut helper = crate::ir::Function::new("native_default".into(), crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed), PhpType::Mixed);
+    helper.callable_default = Some(default.clone());
+    module.add_closure(helper);
+    let sig = signature(vec![("items".into(), PhpType::php_array())], vec![Some(default)], vec![true], None);
+    assert!(matches!(&resolve_invoker_defaults(&module, None, &sig)[0],
+        Some(InvokerDefaultValue::EirHelper(name)) if name == "native_default"));
+    assert!(!module.required_runtime_features.eval_bridge);
+}
+
+/// A lazy default uses the normal Error class and owner-cleaning unwind path on one target.
+fn deferred_error_default_on_target(target: &str) {
+    let asm = emit_default_asm(target, &InvokerDefaultValue::DeferredError("lazy".to_string()));
+    assert!(asm.contains("_spl_error_class_id"), "{target}");
+    assert!(asm.contains("__rt_object_handle_acquire"), "{target}");
+    assert!(asm.contains("__rt_throw_current"), "{target}");
+    assert!(!asm.contains("invoker_unsupported_default"), "{target}");
+    assert!(!asm.contains("_spl_argument_count_error_class_id"), "{target}");
+    let native = emit_default_asm(target, &InvokerDefaultValue::EirHelper("native_default".into()));
+    assert!(native.contains(&crate::names::function_symbol("native_default")), "{target}");
+    assert!(!native.contains("__elephc_eval"), "{target}");
+}
+
+/// Keeps each target's emitter validation inside the ordinary CI per-test budget.
+macro_rules! deferred_error_target_case {
+    ($name:ident, $target:literal) => {
+        /// Checks lazy default Error emission for one supported target.
+        #[test]
+        fn $name() { deferred_error_default_on_target($target); }
+    };
+}
+
+deferred_error_target_case!(deferred_error_default_macos, "macos-aarch64");
+deferred_error_target_case!(deferred_error_default_ios, "ios-arm64");
+deferred_error_target_case!(deferred_error_default_ios_sim, "ios-sim-arm64");
+deferred_error_target_case!(deferred_error_default_linux_arm64, "linux-aarch64");
+deferred_error_target_case!(deferred_error_default_linux_x86_64, "linux-x86_64");
+
 /// Nine source variadic arguments become one physical array slot on every supported target.
 #[test]
 fn a_large_source_variadic_object_default_uses_one_physical_array_slot() {

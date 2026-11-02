@@ -30,8 +30,8 @@ pub(super) enum PropertyReadMissingResult<'a> {
 
 /// Guards one fixed-slot read against both typed-uninitialized and untyped-removed states.
 ///
-/// Typed slots retain their catchable `Error`. A removed untyped slot reports PHP's undefined
-/// property warning for a value read, stays silent for a probe, and materializes boxed null. The
+/// Typed value reads retain their catchable `Error`; probes yield null for an uninitialized slot.
+/// A removed untyped slot warns for a value read, stays silent for a probe, and yields null. The
 /// returned label must be emitted after the caller's initialized-value materialization so both
 /// branches converge with the same `Mixed` result shape.
 pub(super) fn emit_property_read_state_guard(
@@ -41,7 +41,7 @@ pub(super) fn emit_property_read_state_guard(
     mode: PropertyFetchMode,
     missing_result: PropertyReadMissingResult<'_>,
 ) -> Result<Option<String>> {
-    if slot.is_declared {
+    if slot.is_declared && mode.is_read() {
         if slot.is_reference {
             let cell_reg = reference_pointer_reg(ctx, object_reg);
             abi::emit_load_from_address(ctx.emitter, cell_reg, object_reg, slot.offset);
@@ -51,15 +51,21 @@ pub(super) fn emit_property_read_state_guard(
         }
         return Ok(None);
     }
-    if !slot_supports_untyped_unset_marker(slot) {
+    if !slot.is_declared && !slot_supports_untyped_unset_marker(slot) {
         return Ok(None);
     }
 
-    let initialized_label = ctx.next_label("untyped_prop_present");
-    let done_label = ctx.next_label("untyped_prop_read_done");
+    let initialized_label = ctx.next_label("property_present");
+    let done_label = ctx.next_label("property_read_done");
     let marker_reg = abi::secondary_scratch_reg(ctx.emitter);
     let sentinel_reg = abi::tertiary_scratch_reg(ctx.emitter);
-    abi::emit_load_from_address(ctx.emitter, marker_reg, object_reg, slot.offset + 8);
+    if slot.is_reference {
+        let cell_reg = reference_pointer_reg(ctx, object_reg);
+        abi::emit_load_from_address(ctx.emitter, cell_reg, object_reg, slot.offset);
+        abi::emit_load_from_address(ctx.emitter, marker_reg, cell_reg, 0);
+    } else {
+        abi::emit_load_from_address(ctx.emitter, marker_reg, object_reg, slot.offset + 8);
+    }
     abi::emit_load_int_immediate(
         ctx.emitter,
         sentinel_reg,
@@ -67,16 +73,20 @@ pub(super) fn emit_property_read_state_guard(
     );
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter
-                .instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // compare the untyped property marker with the removed-state sentinel
-            ctx.emitter
-                .instruction(&format!("b.ne {}", initialized_label)); // read the fixed slot only while the property remains present
+            ctx.emitter.instruction(                                            // compare the property marker with the uninitialized sentinel
+                &format!("cmp {}, {}", marker_reg, sentinel_reg)
+            );
+            ctx.emitter.instruction(                                            // read the fixed slot only while the property remains initialized
+                &format!("b.ne {}", initialized_label)
+            );
         }
         Arch::X86_64 => {
-            ctx.emitter
-                .instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // compare the untyped property marker with the removed-state sentinel
-            ctx.emitter
-                .instruction(&format!("jne {}", initialized_label)); // read the fixed slot only while the property remains present
+            ctx.emitter.instruction(                                            // compare the property marker with the uninitialized sentinel
+                &format!("cmp {}, {}", marker_reg, sentinel_reg)
+            );
+            ctx.emitter.instruction(                                            // read the fixed slot only while the property remains initialized
+                &format!("jne {}", initialized_label)
+            );
         }
     }
     if mode.is_read() {

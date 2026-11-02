@@ -406,7 +406,8 @@ impl Checker {
 
         match (existing, new_ty) {
             (PhpType::Object(left), PhpType::Object(right)) => self.common_object_type(left, right),
-            _ => None,
+            // Pointers and `null` share the pointer word (`?ptr<T>` elements).
+            _ => crate::types::merge_pointer_elements(existing, new_ty),
         }
     }
 

@@ -7,6 +7,10 @@
 //!
 //! Key details:
 //! - Helpers return a boxed Mixed cell so callers can observe either integer or double at runtime.
+//! - Input cells are read-only and do not escape. The integer RHS may be a headerless
+//!   caller-stack cell supplied by `abi::emit_mixed_numeric_integer_rhs_call`.
+//! - Only the fresh numeric result is owned; an input cell must never be returned,
+//!   retained, released or published through another callback or heap object.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::{

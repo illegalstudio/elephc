@@ -10,6 +10,7 @@
 //!   payload out only once the caller's own cleanup can no longer throw.
 //! - That copy DETACHES a `Mixed` pointee instead of retaining the callee's mutable box, so a
 //!   later write through the same reference cannot be observed by the by-value result.
+//! - A replaced binding stays rooted until its new alias is visible, including loop back-edges.
 
 use super::*;
 
@@ -24,6 +25,56 @@ pub(super) struct ReferenceReturnValueStaging {
     staged: String,
     /// Owner slot published in the unwind chain before the source arguments were lowered.
     owner: crate::ir::LocalSlotId,
+}
+
+/// A previous raw payload or nullable cell lease held through reference rebinding.
+pub(super) enum PreviousReferenceBindingOwner {
+    /// A definitely initialized local lends a payload that can be retained directly.
+    Payload(crate::ir::LocalSlotId),
+    /// A loop back-edge can own a cell even at the first syntactic binding.
+    Cell { staged: String, owner: crate::ir::LocalSlotId },
+}
+
+/// Defers an old target's last payload release until its replacement alias is published.
+pub(super) fn root_previous_reference_binding(
+    ctx: &mut LoweringContext<'_, '_>, target: &str, span: Span,
+) -> Option<PreviousReferenceBindingOwner> {
+    let initialized = ctx.local_slots.get(target).copied()
+        .is_some_and(|slot| ctx.slot_is_initialized(slot));
+    if !initialized {
+        // Owner slots start at zero, but the same syntactic assignment can
+        // encounter a managed cell on its next execution through a loop.
+        let source = ctx.declare_ref_cell_owner(target, ctx.local_type(target));
+        let (staged, owner) = ctx.predeclare_returned_ref_cell_staging();
+        ctx.emit_void(Op::RetainLocalRefCell, Vec::new(),
+            Some(Immediate::LocalSlotPair { first: source, second: owner }),
+            Op::RetainLocalRefCell.default_effects(), Some(span));
+        register_owned_call_operand(ctx, owner, span);
+        return Some(PreviousReferenceBindingOwner::Cell { staged, owner });
+    }
+    if !Ownership::php_type_needs_lifetime_tracking(&ctx.local_type(target)) { return None; }
+    let previous = ctx.load_local(target, Some(span));
+    let retained = crate::ir_lower::ownership::acquire_if_refcounted(ctx, previous, Some(span));
+    // This record nests inside the returned lease, so a throwing old destructor
+    // retires the old payload first while the replacement remains staged and aliased.
+    let owner = root_owned_call_operand(ctx, retained, span).1;
+    // Later rebinding can widen the raw slot to Mixed. Its earlier concrete
+    // load then owns an unboxed payload independently of the explicit retain.
+    crate::ir_lower::ownership::release_if_owned(ctx, previous, Some(span));
+    owner.map(PreviousReferenceBindingOwner::Payload)
+}
+
+/// Retires the previous binding only after the target already names its replacement.
+pub(super) fn retire_previous_reference_binding(
+    ctx: &mut LoweringContext<'_, '_>, owner: PreviousReferenceBindingOwner, span: Span,
+) {
+    match owner {
+        PreviousReferenceBindingOwner::Payload(owner) => retire_owned_call_operand(ctx, owner, span),
+        PreviousReferenceBindingOwner::Cell { staged, owner } => {
+            unregister_owned_call_operand(ctx, owner, span);
+            ctx.release_ref_cell_owner(&staged, Some(span));
+        }
+    }
 }
 
 /// Publishes the lease slot an ordinary by-value reference return will adopt into.

@@ -9,6 +9,27 @@
 
 use super::*;
 
+/// Reports source-located storage incompatibility when boxed parameters reach a typed hash push.
+pub(super) fn validate_typed_array_push_operands(
+    ctx: &LoweringContext<'_, '_>, def: &crate::builtins::registry::BuiltinDef,
+    operands: &[crate::ir::ValueId], span: Span,
+) {
+    if !matches!(def.spec.semantics.lowering,
+        crate::builtins::semantics::BuiltinLowering::Runtime(
+            crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::ArrayPush)))
+    { return; }
+    let Some(receiver) = operands.first() else { return; };
+    let PhpType::AssocArray { value, .. } = ctx.builder.value_php_type(*receiver).codegen_repr()
+        else { return; };
+    if matches!(value.codegen_repr(), PhpType::Mixed | PhpType::Iterable) { return; }
+    if operands.iter().skip(1).any(|value|
+        ctx.builder.value_php_type(*value).codegen_repr() == PhpType::Mixed)
+    {
+        crate::ir_lower::diagnostics::refuse(span,
+            "array_push() values must match the associative receiver entry type; use mixed entries for boxed values");
+    }
+}
+
 /// Lowers `array_push($local, $value…)` as direct indexed-array mutations.
 ///
 /// The fast path for the common receiver: a plain local already typed as an indexed array, where
@@ -46,46 +67,8 @@ pub(super) fn lower_static_array_push(
     // Interleaving the two loops was invisible while the arity was pinned at one value.
     let values: Vec<LoweredValue> = args[1..].iter().map(|arg| lower_expr(ctx, arg)).collect();
     for value in values {
-        // Re-read the local for every append: an earlier one may have replaced the slot's
-        // pointer, and appending into the stale one would write to freed storage.
-        let array_value = ctx.load_local(array_name, Some(args[0].span));
-        let (array_value, updated_ty, needs_storeback) =
-            if crate::ir_lower::stmt::ref_bound_mixed_indexed_array_write(ctx, array_name, value) {
-                (array_value, Some(ctx.local_type(array_name)), true)
-            } else {
-                crate::ir_lower::stmt::prepare_indexed_array_local_write(
-                    ctx,
-                    array_value,
-                    value,
-                    expr.span,
-                )
-            };
-        ctx.emit_void(
-            Op::ArrayPush,
-            vec![array_value.value, value.value],
-            None,
-            Op::ArrayPush.default_effects(),
-            Some(expr.span),
-        );
-        let elem_ty = crate::ir_lower::stmt::indexed_array_write_element_type(
-            ctx,
-            array_value,
-            updated_ty.as_ref(),
-        );
-        crate::ir_lower::stmt::finish_indexed_array_local_write(
-            ctx,
-            array_name,
-            array_value,
-            updated_ty,
-            needs_storeback,
-            expr.span,
-        );
-        crate::ir_lower::stmt::release_indexed_array_write_operand(
-            ctx,
-            elem_ty.as_ref(),
-            value,
-            expr.span,
-        );
+        let appended = try_append_indexed_array_local_value(ctx, array_name, value, expr.span);
+        debug_assert!(appended, "static array_push receiver stopped being an indexed array");
     }
     // PHP returns the new element count. Reading it from the final array rather than tracking it
     // across the appends also gives the value-less form its answer for free.
@@ -100,6 +83,70 @@ pub(super) fn lower_static_array_push(
     ))
 }
 
+/// Appends one value to an indexed local while preserving its evolving storage type.
+///
+/// A heterogeneous append converts typed storage to Mixed before the write, republishes a
+/// relocated pointer, updates the local type fact, and releases only an operand the write owned.
+/// Returning `false` leaves non-indexed or boxed receivers for their ordinary builtin path.
+pub(super) fn try_append_indexed_array_local_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    array_name: &str,
+    value: LoweredValue,
+    span: Span,
+) -> bool {
+    if !matches!(ctx.local_type(array_name).codegen_repr(), PhpType::Array(_)) {
+        return false;
+    }
+    // Re-read the local for every append: an earlier one may have replaced the slot's pointer,
+    // and appending into the stale one would write to freed storage.
+    let array_value = ctx.load_local(array_name, Some(span));
+    if array_value.ir_type != IrType::Heap(IrHeapKind::Array) {
+        return false;
+    }
+    // A packed record address or `null` appended to pointers is the pointer word, as in the
+    // `$a[] = ...` statement.
+    let array_ty = ctx.builder.value_php_type(array_value.value);
+    let value = ctx.retype_value_for_container_element(&array_ty, value, Some(span));
+    let (array_value, updated_ty, needs_storeback) =
+        if crate::ir_lower::stmt::ref_bound_mixed_indexed_array_write(ctx, array_name, value) {
+            (array_value, Some(ctx.local_type(array_name)), true)
+        } else {
+            crate::ir_lower::stmt::prepare_indexed_array_local_write(
+                ctx,
+                array_value,
+                value,
+                span,
+            )
+        };
+    ctx.emit_void(
+        Op::ArrayPush,
+        vec![array_value.value, value.value],
+        None,
+        Op::ArrayPush.default_effects(),
+        Some(span),
+    );
+    let elem_ty = crate::ir_lower::stmt::indexed_array_write_element_type(
+        ctx,
+        array_value,
+        updated_ty.as_ref(),
+    );
+    crate::ir_lower::stmt::finish_indexed_array_local_write(
+        ctx,
+        array_name,
+        array_value,
+        updated_ty,
+        needs_storeback,
+        span,
+    );
+    crate::ir_lower::stmt::release_indexed_array_write_operand(
+        ctx,
+        elem_ty.as_ref(),
+        value,
+        span,
+    );
+    true
+}
+
 /// Lowers builtin call operands, applying builtin-specific preservation where source order matters.
 pub(super) fn lower_builtin_call_args(
     ctx: &mut LoweringContext<'_, '_>,
@@ -109,13 +156,17 @@ pub(super) fn lower_builtin_call_args(
 ) -> Vec<crate::ir::ValueId> {
     let rewritten = builtin_string_callbacks_as_first_class(sig, args);
     let args = rewritten.as_deref().unwrap_or(args);
-    let operands = lower_planned_builtin_call_args(ctx, name, sig, args);
+    let operands = borrowed_string_args::try_lower(ctx, name, sig, args)
+        .unwrap_or_else(|| lower_planned_builtin_call_args(ctx, name, sig, args));
     let canonical = php_symbol_key(name.trim_start_matches('\\'));
     let lowering = crate::builtins::registry::lookup(&canonical)
         .map(|def| def.spec.semantics.argument_lowering);
     match lowering {
         Some(crate::builtins::semantics::BuiltinArgumentLowering::BareArrayValues { arg, sole }) => {
             lower_bare_array_values_operand(ctx, sig, args, operands, arg, sole)
+        }
+        Some(crate::builtins::semantics::BuiltinArgumentLowering::WeakStringUnion { arg }) => {
+            lower_weak_string_union_operand(ctx, args, operands, arg)
         }
         _ => operands,
     }
@@ -260,6 +311,10 @@ fn lower_planned_builtin_call_args(
     sig: Option<&FunctionSig>,
     args: &[Expr],
 ) -> Vec<crate::ir::ValueId> {
+    // The checker uses this shared projection for literal positional unpacks. Builtins consume
+    // individual values, so a projected tail must not be packed as a user-function variadic array.
+    let expanded = crate::types::call_args::expand_planned_positional_spreads(args);
+    let args = expanded.as_deref().unwrap_or(args);
     if is_empty_static_indexed_spread_arg(args) && zero_arity_call_signature(name, sig) {
         return Vec::new();
     }
@@ -277,11 +332,14 @@ fn lower_planned_builtin_call_args(
         crate::builtins::semantics::BuiltinArgumentLowering::Standard
         | crate::builtins::semantics::BuiltinArgumentLowering::MaterializeDefaults
         | crate::builtins::semantics::BuiltinArgumentLowering::PreserveValues
+        | crate::builtins::semantics::BuiltinArgumentLowering::PreserveUncoerced
         | crate::builtins::semantics::BuiltinArgumentLowering::BareArrayValues { .. }
+        | crate::builtins::semantics::BuiltinArgumentLowering::WeakStringUnion { .. }
     ) {
         if let Some(sig) = sig {
             if let Some(operands) = dynamic_spreads::lower_boxed_spread_args(ctx, sig, args, name,
-                argument_lowering == crate::builtins::semantics::BuiltinArgumentLowering::PreserveValues) {
+                matches!(argument_lowering, crate::builtins::semantics::BuiltinArgumentLowering::PreserveValues
+                    | crate::builtins::semantics::BuiltinArgumentLowering::PreserveUncoerced)) {
                 return operands;
             }
         }
@@ -290,7 +348,8 @@ fn lower_planned_builtin_call_args(
         && !capture_regex_output
         && !matches!(argument_lowering,
             crate::builtins::semantics::BuiltinArgumentLowering::PcntlPreserveOmitted
-            | crate::builtins::semantics::BuiltinArgumentLowering::PreserveValues)
+            | crate::builtins::semantics::BuiltinArgumentLowering::PreserveValues
+            | crate::builtins::semantics::BuiltinArgumentLowering::PreserveUncoerced)
     {
         if let Some(sig) = sig {
             if let Some(operands) = lower_positional_spread_args_with_signature(
@@ -304,6 +363,13 @@ fn lower_planned_builtin_call_args(
         }
     }
     let lowered = match argument_lowering {
+        crate::builtins::semantics::BuiltinArgumentLowering::PreserveUncoerced => {
+            let storage = sig.cloned().map(|mut sig| {
+                sig.declared_params.fill(false);
+                sig
+            });
+            lower_args_with_signature_options(ctx, storage.as_ref(), args, true, false)
+        }
         crate::builtins::semantics::BuiltinArgumentLowering::PreserveValues => {
             lower_builtin_args_preserving_values(ctx, &canonical, sig, args)
         }
@@ -316,8 +382,8 @@ fn lower_planned_builtin_call_args(
         crate::builtins::semantics::BuiltinArgumentLowering::Date => {
             lower_date_args(ctx, sig, args)
         }
-        crate::builtins::semantics::BuiltinArgumentLowering::JsonDecode => {
-            lower_json_decode_args(ctx, sig, args)
+        crate::builtins::semantics::BuiltinArgumentLowering::JsonSource => {
+            lower_json_source_args(ctx, sig, args)
         }
         crate::builtins::semantics::BuiltinArgumentLowering::Getenv => {
             lower_getenv_args(ctx, sig, args)
@@ -398,6 +464,9 @@ fn lower_planned_builtin_call_args(
             && !args.iter().any(is_spread_arg) =>
         {
             lower_positional_builtin_args_with_signature(ctx, sig, args)
+        }
+        _ if !args.iter().any(is_spread_arg) => {
+            lower_named_builtin_args_with_signature(ctx, sig, args)
         }
         _ => lower_args_with_signature(ctx, sig, args),
     };

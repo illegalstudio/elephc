@@ -38,6 +38,8 @@ pub(in crate::interpreter) enum EvalArea {
     Filesystem,
     /// Formatting and display-oriented numeric builtins.
     Formatting,
+    /// `ext/gmp` procedural builtins, forwarded to the compiled GMP prelude helpers.
+    Gmp,
     /// JSON encoding, decoding, validation, and error-state builtins.
     Json,
     /// Numeric and mathematical builtins.
@@ -72,6 +74,7 @@ impl EvalArea {
             EvalArea::Curl => "curl",
             EvalArea::Filesystem => "filesystem",
             EvalArea::Formatting => "formatting",
+            EvalArea::Gmp => "gmp",
             EvalArea::Json => "json",
             EvalArea::Math => "math",
             EvalArea::NetworkEnv => "network_env",

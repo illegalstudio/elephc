@@ -10,7 +10,7 @@
 
 use crate::errors::CompileError;
 use crate::names::{php_symbol_key, property_hook_get_method, property_hook_set_method};
-use crate::parser::ast::Expr;
+use crate::parser::ast::{is_compound_property_assignment_self_read, Expr};
 use crate::span::Span;
 use crate::types::{
     merge_array_key_types, normalized_array_key_type, static_array_key_forces_hash_storage,
@@ -32,18 +32,21 @@ pub(super) fn check_property_assign(
     value: &Expr,
     span: Span,
     env: &mut TypeEnv,
+    compound_property_update: bool,
 ) -> Result<(), CompileError> {
     let obj_ty = checker.infer_type_with_assignment_effects(object, env)?;
+    // Capture the checked receiver view before RHS inference can invalidate property guards.
+    checker.record_member_receiver_type(span, &obj_ty);
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     if let PhpType::Object(class_name) = &obj_ty {
-        check_object_property_write(checker, object, class_name, property, value, &val_ty, span)?;
+        check_object_property_write(checker, object, class_name, property, value, &val_ty, span, compound_property_update)?;
         refine_object_property_type(checker, class_name, property, &val_ty);
     } else if let Some(class_name) = checker.union_single_object_class(&obj_ty) {
         // A factory-style `Object|false` receiver still targets the one object
         // class when the runtime value is an object. Validate writes against that
         // class so readonly/visibility/type rules are not silently bypassed merely
         // because the success value has not yet been narrowed with instanceof.
-        check_object_property_write(checker, object, &class_name, property, value, &val_ty, span)?;
+        check_object_property_write(checker, object, &class_name, property, value, &val_ty, span, compound_property_update)?;
         refine_object_property_type(checker, &class_name, property, &val_ty);
     }
     // A boxed `Mixed` receiver names no class, so the reservation is recorded for every class
@@ -53,7 +56,7 @@ pub(super) fn check_property_assign(
     if matches!(obj_ty.codegen_repr(), PhpType::Mixed) {
         scope_dynamic_storage::record_scope_dynamic_mixed_receiver_mutation(checker, property);
     }
-    if let PhpType::Pointer(Some(class_name)) = &obj_ty {
+    if let PhpType::Pointer(Some(class_name)) | PhpType::Packed(class_name) = &obj_ty {
         check_pointer_property_write(checker, class_name, property, &val_ty, span)?;
     }
     Ok(())
@@ -195,9 +198,9 @@ fn refuse_scope_dynamic_element_write(
 /// Type-checks an indexed property array assignment (`$obj->prop[$index] = value`).
 ///
 /// Infers object, index, and value types. Validates array key types and property mutability.
-/// For `PhpType::Object`, handles both `Array` and `AssocArray` storage, merging element types
-/// when the property lacks a declared type. For `PhpType::Pointer`, requires integer indexing
-/// and that the field is an array type.
+/// For `PhpType::Object`, handles array storage and buffer element validation, merging array
+/// element types when the property lacks a declared type. For `PhpType::Pointer`, requires
+/// integer indexing and that the field is an array type.
 pub(super) fn check_property_array_assign(
     checker: &mut Checker,
     object: &Expr,
@@ -226,10 +229,20 @@ pub(super) fn check_property_array_assign(
             refuse_scope_dynamic_element_write(checker, class_name, property, span)?;
             let (prop_ty, property_has_declared_type) =
                 resolve_object_array_property(checker, class_name, property, span)?;
+            if prop_ty == PhpType::Str {
+                return Err(CompileError::new(
+                    span,
+                    super::arrays::STRING_OFFSET_ON_PROPERTY_UNSUPPORTED,
+                ));
+            }
             if let PhpType::Object(prop_class_name) = &prop_ty {
                 if checker.object_type_implements_interface(prop_class_name, "ArrayAccess") {
                     return Ok(());
                 }
+            }
+            if let PhpType::Buffer(elem_ty) = &prop_ty {
+                super::arrays::validate_buffer_element_write(elem_ty, &idx_ty, &val_ty, span)?;
+                return Ok(());
             }
             if !is_php_array_key_type(&normalized_idx_ty) {
                 return Err(CompileError::new(span, "Array index must be integer"));
@@ -300,6 +313,7 @@ fn check_object_property_write(
     value: &Expr,
     val_ty: &PhpType,
     span: Span,
+    compound_property_update: bool,
 ) -> Result<(), CompileError> {
     if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
         return Ok(());
@@ -387,6 +401,22 @@ fn check_object_property_write(
         validate_object_property_access(
             checker, class_name, property, !(readonly_null_coalesce || readonly_write_guard), span,
         )?;
+        if reflection_public_mirror_property(checker, class_name, property)
+            && !compound_property_update
+            && !is_compound_property_assignment_self_read(value, object, property, span, &[])
+        {
+            crate::types::checker::record_throw_access_site(
+                &mut checker.throw_access_sites,
+                span,
+                crate::types::ThrowAccessInfo {
+                    span,
+                    kind: crate::types::ThrowAccessKind::ReflectionReadOnlyProperty {
+                        property: property.to_string(),
+                    },
+                },
+            );
+            return Ok(());
+        }
         if readonly_write_guard {
             let setter = class_info.property_set_visibilities.get(property)
                 .or_else(|| class_info.property_visibilities.get(property))
@@ -464,6 +494,22 @@ fn check_object_property_write(
         }
     }
     Ok(())
+}
+
+/// Returns whether a declared property is one of PHP Reflection's direct-write-only mirrors.
+///
+/// These properties are not ordinary language-level `readonly` properties: PHP permits
+/// `unset()`, reference binding, and compound mutation, but a direct assignment raises
+/// `ReflectionException`. PHP applies the rule from the runtime object's Reflection ancestry,
+/// even when a user subclass redeclares `name` or `class` itself.
+fn reflection_public_mirror_property(
+    checker: &Checker,
+    class_name: &str,
+    property: &str,
+) -> bool {
+    crate::types::reflection_properties::class_has_public_mirror_write_handler(
+        &checker.classes, class_name, property,
+    )
 }
 
 /// Validates that the current context can access a named property, checking visibility and class scope.
@@ -732,6 +778,54 @@ fn merge_associative_property_slot_type(
     }
 }
 
+/// Returns whether a value of `val_ty` can be stored into an extern class field of `field_ty`.
+///
+/// Integer fields of every width take an `int` (narrow widths keep its low bits, as C would);
+/// float fields of either width take a `float` and also an `int`, converted like PHP's
+/// int-to-float coercion; `bool` fields take a bool. Each of them also takes a value whose type
+/// is only known at run time, which lowering narrows with the strict runtime check a packed
+/// field of the same type gets (`fixed_layout_field_accepts_runtime_value`). Pointer fields
+/// take any pointer or `null`; `string` fields take a string, copied into a fresh
+/// null-terminated buffer the struct then owns.
+fn extern_field_accepts(field_ty: &PhpType, val_ty: &PhpType) -> bool {
+    if fixed_layout_field_accepts_runtime_value(field_ty, val_ty) {
+        return true;
+    }
+    match field_ty {
+        PhpType::Int => matches!(val_ty, PhpType::Int),
+        PhpType::Float => matches!(val_ty, PhpType::Float | PhpType::Int),
+        PhpType::Bool => matches!(val_ty, PhpType::Bool | PhpType::False),
+        PhpType::Pointer(_) => matches!(val_ty, PhpType::Pointer(_) | PhpType::Void),
+        PhpType::Str => matches!(val_ty, PhpType::Str),
+        _ => false,
+    }
+}
+
+/// Returns whether a fixed-layout scalar field of `field_ty` (a packed field, or an extern
+/// struct field) admits a value of `val_ty` whose concrete type is only decided at run time.
+///
+/// Lowering narrows such a value strictly before the store (`Op::PackedFieldMixedToInt`,
+/// `Op::PackedFieldMixedToFloat`, `Op::PackedFieldMixedToBool`): the field's own type passes,
+/// an int widens into a float field, and anything else throws a catchable `TypeError`, so the
+/// field never receives a box pointer or a silently coerced value. That is what lets arithmetic
+/// with an open result type feed these fields without a false compile error: integer
+/// arithmetic is `mixed` or `int|float` for its overflow-to-float promotion, and float
+/// arithmetic over a loop counter is `mixed` as well. `int|float` is the precise spelling of
+/// the same open result, so refusing it would make the narrower type the stricter one
+/// (`$i = 0; $i++; $thing->id = $i;` refused where `$i = $i + 1` is accepted). A `bool` field
+/// takes `mixed` but not `int|float`, which never holds a bool. A pointer field takes no
+/// runtime value: a pointer boxes under the int tag, so no runtime check could tell an address
+/// from an arbitrary integer.
+fn fixed_layout_field_accepts_runtime_value(field_ty: &PhpType, val_ty: &PhpType) -> bool {
+    match field_ty {
+        PhpType::Int | PhpType::Float => {
+            matches!(val_ty, PhpType::Mixed) || val_ty.is_int_float_union()
+        }
+        PhpType::Bool => matches!(val_ty, PhpType::Mixed),
+        _ => false,
+    }
+}
+
 /// Validates a write to a property of a typed pointer (extern or packed class).
 ///
 /// Checks that the field exists in `extern_field_type` or `packed_field_type` and that the
@@ -744,7 +838,7 @@ fn check_pointer_property_write(
     span: Span,
 ) -> Result<(), CompileError> {
     if let Some(field_ty) = checker.extern_field_type(class_name, property) {
-        if field_ty == PhpType::Int && val_ty != &PhpType::Int {
+        if !extern_field_accepts(&field_ty, val_ty) {
             return Err(CompileError::new(
                 span,
                 &format!(
@@ -753,21 +847,31 @@ fn check_pointer_property_write(
                 ),
             ));
         }
+    } else if let Some(PhpType::Packed(inner)) = checker.packed_field_type(class_name, property) {
+        // A nested record field is assigned as a whole by copying the source record's bytes,
+        // so the value must be the address of a record of the SAME packed class: a buffer
+        // element, another nested field, or a `ptr<Inner>`.
+        let same_record = matches!(
+            val_ty,
+            PhpType::Pointer(Some(source)) | PhpType::Packed(source)
+                if source.trim_start_matches('\\').eq_ignore_ascii_case(inner.trim_start_matches('\\'))
+        );
+        if !same_record {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Type error: cannot assign {} to packed field {}::{} of type {}; a nested packed field takes a {} record",
+                    val_ty, class_name, property, inner, inner
+                ),
+            ));
+        }
     } else if let Some(field_ty) = checker.packed_field_type(class_name, property) {
-        // A Mixed value is admitted into an `int` field because lowering emits a strict
-        // runtime narrowing there (int tag → raw payload, anything else → TypeError). This
-        // is what lets int arithmetic — typed Mixed for its overflow-to-float promotion —
-        // feed packed fields without either a false compile error or a silent truncation.
-        // `int|float` is admitted by the same reasoning and the same lowering: it IS "int
-        // arithmetic typed for its overflow-to-float promotion", now that the checker says so
-        // precisely instead of saying `mixed`. Leaving it out made the narrower type the
-        // stricter one — `$i = 0; $i++; $thing->id = $i;` was refused where `$i = $i + 1` was
-        // accepted, for two spellings of one value.
-        let guarded_mixed_int = field_ty == PhpType::Int
-            && (matches!(val_ty, PhpType::Mixed) || val_ty.is_int_float_union());
+        // A value whose type is only known at run time is admitted into a scalar field because
+        // lowering narrows it strictly before the store (see
+        // `fixed_layout_field_accepts_runtime_value`).
         if &field_ty != val_ty
             && !matches!((&field_ty, val_ty), (PhpType::Bool, PhpType::False))
-            && !guarded_mixed_int
+            && !fixed_layout_field_accepts_runtime_value(&field_ty, val_ty)
         {
             return Err(CompileError::new(
                 span,

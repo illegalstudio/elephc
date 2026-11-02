@@ -627,6 +627,19 @@ fn test_static_access_on_a_generic_class_type() {
     assert_eq!(out, "7|box|Box<int>");
 }
 
+/// Generic constant types and lexical magic initializers survive the same member traversal.
+#[test]
+fn test_generic_typed_constant_keeps_lexical_magic_initializer() {
+    let out = compile_and_run(r#"<?php
+class Holder<T> {
+    public const T NUMBER = 7;
+    public const int LINE = __LINE__;
+}
+echo Holder<int>::NUMBER, ":", Holder<int>::LINE;
+"#);
+    assert_eq!(out, "7:4");
+}
+
 /// A generic class returning ITSELF at its own parameter: `Box<T>` inside `Box<T>`'s body is
 /// concrete only once the class is instantiated, and the copy carries `Box<int>`.
 #[test]
@@ -3294,4 +3307,29 @@ $c->v = true;
         compile_and_run(source),
         "false ok: bool(false)\ntrue TypeError\nzero TypeError\nbool(false)\n"
     );
+}
+
+/// Regression test for a generic class whose `buffer<T>` member is instantiated with a packed
+/// class: `Store<Vec2>` used to fail with "Unknown type: Vec2" while `Store<float>` worked.
+#[test]
+fn test_generic_class_buffer_member_accepts_packed_type_argument() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public float $x; public float $y; }
+
+final class Store<T> {
+    public function __construct(public buffer<T> $data) {}
+
+    public function size(): int {
+        return buffer_len($this->data);
+    }
+}
+
+$vectors = new Store<Vec2>(buffer_new<Vec2>(4));
+$vectors->data[3]->y = 1.25;
+$floats = new Store<float>(buffer_new<float>(2));
+echo $vectors->size(), "|", $vectors->data[3]->y, "|", $floats->size();
+"#,
+    );
+    assert_eq!(out, "4|1.25|2");
 }

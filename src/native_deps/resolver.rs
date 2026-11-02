@@ -29,6 +29,8 @@ pub struct ResolvedNativePackage {
     pub artifact_root: PathBuf,
     pub archives: Vec<PathBuf>,
     pub system_libraries: Vec<String>,
+    /// Directories searched for `system_libraries`, beyond the toolchain defaults.
+    pub library_paths: Vec<PathBuf>,
     pub frameworks: Vec<String>,
 }
 
@@ -46,6 +48,7 @@ pub fn resolve_for_compilation(
     let cache = CacheLayout::from_environment(&cwd).map_err(|error| {
         let search_root = source
             .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
             .and_then(|parent| std::fs::canonicalize(parent).ok())
             .unwrap_or_else(|| cwd.clone());
         match discover_for_source(source).ok().flatten() {
@@ -221,7 +224,7 @@ pub(crate) fn resolve_for_compilation_with(
         }
         resolved.push(ResolvedNativePackage {
             package: name.clone(), artifact_root: root, archives,
-            system_libraries: target_plan.system_libraries.clone(), frameworks: target_plan.frameworks.clone(),
+            system_libraries: target_plan.system_libraries.clone(), library_paths: Vec::new(), frameworks: target_plan.frameworks.clone(),
         });
         for (offset, dependency) in locked.dependencies.iter().enumerate() {
             queue.insert(cursor + offset, dependency.clone());

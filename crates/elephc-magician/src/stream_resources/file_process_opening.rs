@@ -56,7 +56,9 @@ impl EvalStreamResources {
             'w' => false,
             _ => return None,
         };
-        let mut child = Command::new("/bin/sh")
+        let mut child = {
+            let _signals = elephc_process_context::SpawnPermit::new();
+            Command::new("/bin/sh")
             .arg("-c")
             .arg(command)
             .stdin(if read_mode {
@@ -70,7 +72,8 @@ impl EvalStreamResources {
                 Stdio::null()
             })
             .spawn()
-            .ok()?;
+            .ok()?
+        };
         let file = if read_mode {
             let stdout = child.stdout.take()?;
             unsafe {

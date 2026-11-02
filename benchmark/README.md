@@ -150,6 +150,13 @@ Magician history explains each case's intended path.
 
 ## Internal measurements
 
+For an isolated numeric accumulator, compile `benchmark/diagnostics/numeric_local.php`
+and pass the iteration count at runtime. Run the same source and arguments with
+`php -n`, with CLI OPcache and JIT disabled. Output is `checksum|body_ns`; argument
+parsing and process startup precede the body clock. Measure several iteration
+counts with alternating compiler/PHP executions and report dispersion. Collect
+`--gc-stats` in separate diagnostic binaries so timings use ordinary code generation.
+
 For controlled revision comparisons of the mixed workload, select each compiler
 explicitly and supply its source revision. This diagnostic runner is separate
 from the historical process-only suites:
@@ -190,6 +197,17 @@ measurement start/end timestamps are saved. Neither this guard nor the noise
 gate can detect all systematic contention or make different architectures comparable. These samples are not
 appended to the historical dashboard. Startup-sensitive whole-process ratios and
 body ratios must be reported separately, and isolated speedups must not be multiplied.
+
+To separate JSON decode from explicit value release, compile
+`benchmark/diagnostics/json_lifecycle.php` and pass `INPUT_JSON REPEATS DRAIN_CACHES`.
+The last argument is `0` or `1`. Run the same source with `php -n` and the same
+arguments. Its output is `outer_count_sum|decode_ns:release_ns:drain_ns`; input
+loading is outside all three clocks. With cache draining disabled, the last
+clock only measures stopwatch overhead. `unset` includes any collector work
+triggered by the normal lowering. Repeat counts and explicit cache draining
+change allocation reuse, so report them alongside the heap size and keep them
+identical across compiler revisions. Cache-drain timings are separate from the
+mixed fixture, which does not call `gc_mem_caches()`.
 
 Rust stopwatches that require private compiler/interpreter APIs retain their
 owning test modules, with commands exposed through the same entry point:

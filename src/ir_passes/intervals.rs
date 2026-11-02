@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use crate::ir::{BlockId, Function, InstId, IrType, ValueDef, ValueId};
 use crate::ir_passes::cfg::reverse_postorder;
 use crate::ir_passes::clobber::{
-    edge_materialization_may_call, op_is_volatile_safe, terminator_is_volatile_safe,
+    edge_materialization_may_call, instruction_is_volatile_safe, terminator_is_volatile_safe,
 };
 use crate::ir_passes::liveness::{terminator_uses, LivenessInfo};
 
@@ -141,7 +141,7 @@ pub fn build_intervals(func: &Function, liveness: &LivenessInfo) -> Vec<LiveInte
                 extend(*operand, position, &mut ends);
                 *weights.entry(*operand).or_insert(0) += 1;
             }
-            if !op_is_volatile_safe(inst.op) {
+            if !instruction_is_volatile_safe(func, inst) {
                 clobbers.push(position);
             }
         }

@@ -29,6 +29,7 @@ mod fold;
 /// Keeps a declaration PHP calls a generator recognizable as one through the AST passes.
 mod generator_bodies;
 mod namespace_fallbacks;
+mod output;
 mod propagate;
 mod target_guards;
 pub mod reachability;
@@ -44,6 +45,7 @@ use fold::*;
 use propagate::*;
 
 pub use reachability::prune_unreachable_declarations;
+pub use output::with_hosted_output;
 
 #[cfg(test)]
 mod tests;

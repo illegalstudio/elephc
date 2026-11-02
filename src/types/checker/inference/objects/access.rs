@@ -32,10 +32,21 @@ impl Checker {
         // `branch_guard_narrowing`). Consult it first so a guarded branch sees the narrowed type.
         if let Some(key) = Self::narrowed_property_env_key(object, property) {
             if let Some(narrowed) = env.get(&key) {
+                if let Ok(obj_ty) = self.infer_type(object, env) {
+                    self.record_member_receiver_type(expr.span, &obj_ty);
+                }
                 return Ok(narrowed.clone());
             }
         }
         let obj_ty = self.infer_type(object, env)?;
+        self.record_member_receiver_type(expr.span, &obj_ty);
+        // A `?ptr<T>` reaches its fields like `ptr<T>`: the value is the bare address, and a
+        // null one faults with the null-pointer dereference fatal a null `ptr<T>` raises.
+        let nullable_pointer = match &obj_ty {
+            PhpType::Union(members) => crate::types::nullable_pointer_union_member(members),
+            _ => None,
+        };
+        let obj_ty = nullable_pointer.unwrap_or(obj_ty);
         if let PhpType::Object(class_name) = &obj_ty {
             let inferred = self.infer_property_on_class_type(class_name, property, expr);
             if inferred.is_err()
@@ -85,12 +96,22 @@ impl Checker {
             // No object class at all: surface the strict diagnostic.
             self.nullsafe_object_receiver(&obj_ty, expr, "property access")?;
         }
+        // A nested packed field is an embedded record: reading it yields the record's ADDRESS,
+        // typed exactly like a packed buffer element, so `$b[0]->pos->x` resolves the inner
+        // field from the outer one's compile-time offset.
+        let obj_ty = match obj_ty {
+            PhpType::Packed(class_name) => PhpType::Pointer(Some(class_name)),
+            other => other,
+        };
         if let PhpType::Pointer(Some(class_name)) = &obj_ty {
             if let Some(field_ty) = self.extern_field_type(class_name, property) {
                 return Ok(field_ty);
             }
             if let Some(field_ty) = self.packed_field_type(class_name, property) {
-                return Ok(field_ty);
+                return Ok(match field_ty {
+                    PhpType::Packed(inner) => PhpType::Pointer(Some(inner)),
+                    other => other,
+                });
             }
             if self.extern_classes.contains_key(class_name) {
                 return Err(CompileError::new(
@@ -141,6 +162,7 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
+        self.record_member_receiver_type(expr.span, &obj_ty);
         if matches!(obj_ty, PhpType::Mixed) {
             return Ok(PhpType::Mixed);
         }
@@ -172,6 +194,7 @@ impl Checker {
         nullsafe: bool,
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
+        self.record_member_receiver_type(expr.span, &obj_ty);
         if nullsafe && matches!(obj_ty, PhpType::Void) {
             return Ok(PhpType::Void);
         }

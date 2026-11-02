@@ -1,0 +1,24 @@
+namespace App\Tests;
+
+use Elephc\Testing\TestCase;
+
+// A tagless .lfc test class: elephc-only, so it can use the typed assertions
+// that avoid boxing, and buffers, packed classes or extern code under test.
+final class StringsTest extends TestCase
+{
+    public function testHaystacks(): void
+    {
+        $this->assertStringContainsString('eph', 'elephc');
+        $this->assertStringStartsWith('ele', 'elephc');
+        $this->assertCount(2, explode(' ', 'compiled php'));
+        $this->assertEqualsWithDelta(0.3, 0.1 + 0.2, 1e-9);
+    }
+
+    #[Test]
+    public function typedAssertionsDoNotBox(): void
+    {
+        $this->assertSameInt(6, strlen('elephc'));
+        $this->assertSameString('ELEPHC', strtoupper('elephc'));
+        $this->assertSameBool(true, str_contains('elephc', 'ph'));
+    }
+}

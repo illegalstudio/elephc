@@ -10,6 +10,62 @@
 use super::super::super::*;
 use super::super::support::*;
 
+/// Registered native errors are raised before omitted slots and result allocations are skipped.
+#[test]
+fn reflected_class_registered_default_error_keeps_no_temporary_owners() {
+    let mut context = ElephcEvalContext::new();
+    assert!(context.define_class(EvalClass::new("Probe", vec![
+        EvalClassProperty::new("good", Some(EvalExpr::Const(EvalConst::String("ok".into())))),
+        EvalClassProperty::new("bad", None),
+    ], Vec::new())));
+    assert!(context.define_native_property_default_error("Probe", "bad", "missing lexical parent".into()));
+    context.register_eval_reflection_class(7, "Probe");
+    let mut values = FakeOps::default();
+    for _ in 0..8 {
+        assert_eq!(eval_reflection_class_get_default_properties_result(
+            7, "getDefaultProperties", Vec::new(), &mut context, &mut values,
+        ), Err(EvalStatus::UncaughtThrowable));
+        let error = context.take_pending_throw().expect("owned default Error");
+        assert!(!error.is_borrowed());
+        eval_release_value(&mut context, &mut values, error).unwrap();
+        assert_eq!(values.cell_owners.values().sum::<usize>(), 0);
+    }
+}
+
+/// Failed map insertion retires the partial default map, the current value, and its key.
+#[test]
+fn reflected_class_partial_default_map_keeps_no_temporary_owners() {
+    let mut context = ElephcEvalContext::new();
+    assert!(context.define_class(EvalClass::new("Probe", vec![
+        EvalClassProperty::new("good", Some(EvalExpr::Const(EvalConst::String("ok".into())))),
+        EvalClassProperty::new("second", Some(EvalExpr::Const(EvalConst::Int(7)))),
+    ], Vec::new())));
+    context.register_eval_reflection_class(7, "Probe");
+    let mut values = FakeOps::default();
+    for _ in 0..8 {
+        values.fail_array_set_call = Some(values.array_set_calls + 1);
+        assert_eq!(eval_reflection_class_get_default_properties_result(
+            7, "getDefaultProperties", Vec::new(), &mut context, &mut values,
+        ), Err(EvalStatus::UnsupportedConstruct));
+        assert_eq!(values.cell_owners.values().sum::<usize>(), 0);
+    }
+}
+
+/// Native reflected defaults preserve their pending Error instead of becoming values or fatals.
+#[test]
+fn reflected_native_deferred_default_raises_an_owned_error() {
+    let expression = EvalExpr::DeferredDefaultError("missing lexical parent".into());
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    assert_eq!(eval_owned_expr(&expression, &mut context, &mut scope, &mut values),
+        Err(EvalStatus::UncaughtThrowable));
+    let error = context.take_pending_throw().expect("owned pending Error");
+    assert!(!error.is_borrowed());
+    eval_release_value(&mut context, &mut values, error).unwrap();
+    assert_eq!(values.cell_owners.values().sum::<usize>(), 0);
+}
+
 /// Verifies ReflectionParameter reports eval constant-default metadata.
 #[test]
 fn execute_program_reflection_parameter_reports_default_constant_metadata() {

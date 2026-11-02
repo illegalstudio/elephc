@@ -206,8 +206,10 @@ fn eval_runtime_class_interface_names(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<String>, EvalStatus> {
     let names_array = values.reflection_class_interface_names(class_name)?;
-    let names = eval_string_array_to_vec(names_array, values)?;
-    values.release(names_array)?;
+    let names = eval_string_array_to_vec(names_array, values);
+    let released = values.release(names_array);
+    let names = names?;
+    released?;
     Ok(names)
 }
 
@@ -220,8 +222,14 @@ fn eval_string_array_to_vec(
     let mut result = Vec::with_capacity(len);
     for position in 0..len {
         let key = values.int(position as i64)?;
-        let value = values.array_get(array, key)?;
-        let bytes = values.string_bytes(value)?;
+        let value = values.array_get(array, key);
+        let released_key = values.release(key);
+        let value = value?;
+        let bytes = values.string_bytes(value);
+        let released_value = values.release(value);
+        released_key?;
+        let bytes = bytes?;
+        released_value?;
         result.push(String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)?);
     }
     Ok(result)

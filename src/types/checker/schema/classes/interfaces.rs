@@ -39,8 +39,9 @@ pub(super) fn collect_interfaces(
     let mut seen_interfaces: HashSet<String> = state.interfaces.iter().cloned().collect();
     let mut queue = Vec::new();
     for interface_name in class.implements.iter().rev() {
-        if php_symbol_key(interface_name) == "unitenum"
-            || checker.interface_extends_interface(interface_name, "UnitEnum")
+        if !checker.enums.contains_key(&class.name)
+            && (php_symbol_key(interface_name) == "unitenum"
+                || checker.interface_extends_interface(interface_name, "UnitEnum"))
         {
             return Err(CompileError::new(
                 class.span,
@@ -304,6 +305,7 @@ fn validate_static_interface_method(
                     || declaration_is_source(checker, interface_name),
                     |owner| declaration_is_source(checker, owner),
                 ),
+        checker.enums.contains_key(&class.name),
     )?;
     if required_sig.declared_return && !actual_sig.declared_return {
         return Err(CompileError::new(
@@ -545,6 +547,7 @@ fn validate_interface_method(
                     || declaration_is_source(checker, interface_name),
                     |owner| declaration_is_source(checker, owner),
                 ),
+        checker.enums.contains_key(&class.name),
     )?;
     if required_sig.declared_return && !actual_sig.declared_return && !tentative_return {
         return Err(CompileError::new(

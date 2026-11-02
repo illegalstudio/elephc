@@ -8,6 +8,9 @@
 //!
 //! Key details:
 //! - Output must match PHP-compatible text for the supported concrete types.
+//! - A string payload whose pointer is the missing-entry sentinel dumps as `NULL`.
+//!   A real empty string, including one produced by `(string)` of that sentinel,
+//!   still dumps as `string(0) ""`.
 //! - Mixed dispatch follows the runtime tag/payload contract from `__rt_mixed_unbox`.
 //! - `var_dump` emits only the top-level `array(N) {` / `}` frame here; the body
 //!   (and every nested container) comes from `codegen_support::runtime::io::
@@ -75,8 +78,10 @@ pub(crate) fn lower_print_r(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         PhpType::Bool => {
             ctx.emitter.blank();
             ctx.emitter.comment("print_r()");
+            emit_print_r_deferred_begin(ctx);
             let ty = loaded_php_semantic_type(ctx, value)?;
             emit_print_r_loaded_value(ctx, &ty)?;
+            emit_print_r_deferred_end(ctx);
             // PHP `print_r` echo mode always returns true, regardless of the bytes
             // written. The rendering above leaves the syscall/byte-count in the
             // integer result register, so materialize a literal 1 before storing.
@@ -128,15 +133,28 @@ fn lower_print_r_runtime_flag(
         None => abi::emit_load_int_immediate(ctx.emitter, result_reg, 0),
     }
     abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, "_print_r_mode", 0);
+    // -- echo mode in a program with run-time __debugInfo(): render into the capture buffer first --
+    let skip_defer_label = ctx.next_label("print_r_runtime_no_defer");
+    abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, "_print_r_mode", 0);
+    emit_compare_reg_zero(ctx, result_reg);
+    emit_branch_if_nonzero(ctx, &skip_defer_label);
+    emit_print_r_deferred_begin(ctx);
+    ctx.emitter.label(&skip_defer_label);
     // -- render the value; the write indirection consults the mode per write --
     let ty = loaded_php_semantic_type(ctx, value)?;
     emit_print_r_loaded_value(ctx, &ty)?;
     // -- branch on the stored mode: finalize the capture or materialize `true` --
     let echo_label = ctx.next_label("print_r_runtime_echo");
     let done_label = ctx.next_label("print_r_runtime_done");
+    let finish_label = ctx.next_label("print_r_runtime_finish");
     abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, "_print_r_mode", 0);
     emit_compare_reg_zero(ctx, result_reg);
     emit_branch_if_eq(ctx, &echo_label);
+    emit_compare_reg_imm(ctx, result_reg, 2);
+    emit_branch_if_ne(ctx, &finish_label);
+    abi::emit_call_label(ctx.emitter, "__rt_pr_flush_deferred");
+    abi::emit_jump(ctx.emitter, &echo_label);
+    ctx.emitter.label(&finish_label);
     abi::emit_call_label(ctx.emitter, "__rt_pr_finish");
     // `__rt_pr_finish` hands back a freshly allocated heap string, and the string arm of
     // `__rt_mixed_from_value` persists (copies) that payload into the box's own storage rather
@@ -536,8 +554,18 @@ fn emit_var_dump_float(ctx: &mut FunctionContext<'_>) -> Result<()> {
 }
 
 /// Emits `var_dump` output for a string payload in the string result register pair.
+///
+/// The missing-entry sentinel is a string-shaped null. It dumps as `NULL`. Any
+/// other pointer, including the canonical empty string, dumps as a string.
 fn emit_var_dump_string(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    let scratch = abi::secondary_scratch_reg(ctx.emitter);
+    let null_label = ctx.next_label("var_dump_null_string");
+    let done_label = ctx.next_label("var_dump_string_done");
+    abi::emit_load_int_immediate(ctx.emitter, scratch, crate::codegen::sentinels::NULL_SENTINEL);
+    ctx.emitter
+        .instruction(&format!("cmp {}, {}", ptr_reg, scratch));               // is this the in-band missing-string marker?
+    abi::emit_branch_if_equal_wide(ctx.emitter, &null_label);                   // missing typed array entries dump as NULL
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
     emit_write_literal(ctx, b"string(");
     match ctx.emitter.target.arch {
@@ -554,6 +582,10 @@ fn emit_var_dump_string(ctx: &mut FunctionContext<'_>) -> Result<()> {
     abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
     emit_write_current_string(ctx);
     emit_write_literal(ctx, b"\"\n");
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&null_label);
+    emit_var_dump_null(ctx);
+    ctx.emitter.label(&done_label);
     Ok(())
 }
 
@@ -858,6 +890,49 @@ fn emit_compare_regs(ctx: &mut FunctionContext<'_>, lhs: &str, rhs: &str) {
             ctx.emitter.instruction(&format!("cmp {}, {}", lhs, rhs));          // compare two integer-like register payloads
         }
     }
+}
+
+/// Emits a comparison between a general-purpose register and a small immediate.
+fn emit_compare_reg_imm(ctx: &mut FunctionContext<'_>, reg: &str, value: i64) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {}, #{}", reg, value));       // compare the integer-like register payload against the immediate
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {}, {}", reg, value));        // compare the integer-like register payload against the immediate
+        }
+    }
+}
+
+/// Starts a DEFERRED echo-mode `print_r` when the program has a run-time `__debugInfo()` class.
+///
+/// PHP builds the whole `print_r` text in a buffer before writing it, so a fatal raised while the
+/// walk calls `__debugInfo()` leaves nothing of that call on stdout. elephc's walkers write as they
+/// go, so in such programs the echo walk renders into the return-mode capture buffer (mode 2) and
+/// `emit_print_r_deferred_end` writes it out once the walk finished. Programs without a run-time
+/// `__debugInfo()` class (`_debuginfo_any` is 0) keep streaming and pay one load and branch.
+fn emit_print_r_deferred_begin(ctx: &mut FunctionContext<'_>) {
+    let skip = ctx.next_label("print_r_stream");
+    let reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_symbol_to_reg(ctx.emitter, reg, "_debuginfo_any", 0);
+    emit_compare_reg_zero(ctx, reg);
+    emit_branch_if_eq(ctx, &skip);
+    abi::emit_load_int_immediate(ctx.emitter, reg, 0);
+    abi::emit_store_reg_to_symbol(ctx.emitter, reg, "_print_r_off", 0);
+    abi::emit_load_int_immediate(ctx.emitter, reg, 2);
+    abi::emit_store_reg_to_symbol(ctx.emitter, reg, "_print_r_mode", 0);
+    ctx.emitter.label(&skip);
+}
+
+/// Writes out the buffer of a deferred echo-mode `print_r` (see `emit_print_r_deferred_begin`).
+fn emit_print_r_deferred_end(ctx: &mut FunctionContext<'_>) {
+    let skip = ctx.next_label("print_r_streamed");
+    let reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_symbol_to_reg(ctx.emitter, reg, "_debuginfo_any", 0);
+    emit_compare_reg_zero(ctx, reg);
+    emit_branch_if_eq(ctx, &skip);
+    abi::emit_call_label(ctx.emitter, "__rt_pr_flush_deferred");
+    ctx.emitter.label(&skip);
 }
 
 /// Emits a comparison between a general-purpose register and zero.

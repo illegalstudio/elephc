@@ -306,6 +306,7 @@ pub(super) fn eval_stmt_list_uses_this_property(stmts: &[EvalStmt], property_nam
 /// Returns whether one expression touches `$this->{$property_name}` directly.
 pub(super) fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str) -> bool {
     match expr {
+        EvalExpr::DeferredDefaultError(_) => false,
         EvalExpr::Array(elements) => elements.iter().any(|element| match element {
             EvalArrayElement::Value(value) => eval_expr_uses_this_property(value, property_name),
             EvalArrayElement::Reference(value) => {
@@ -324,6 +325,7 @@ pub(super) fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str)
             eval_expr_uses_this_property(array, property_name)
                 || eval_expr_uses_this_property(index, property_name)
         }
+        EvalExpr::Assign { value, .. } => eval_expr_uses_this_property(value, property_name),
         EvalExpr::Call { args, .. }
         | EvalExpr::NamespacedCall { args, .. }
         | EvalExpr::NewObject { args, .. }

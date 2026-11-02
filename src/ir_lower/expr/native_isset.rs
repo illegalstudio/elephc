@@ -57,6 +57,10 @@ pub(super) fn lower_nullable_native_isset_offset_probe(
     });
 
     ctx.builder.position_at_end(null_block);
+    // A concrete container projected from a widened Mixed local owns the lease created by that
+    // projection. The probe arm retires it after `ArrayIsset` / `HashIsset`; the null arm skips
+    // the probe, so it must retire the same receiver here instead of leaking one lease.
+    release_owning_receiver_temporary(ctx, array_value, expr.span);
     let false_value = emit_bool_literal(ctx, false, Some(expr.span));
     store_value_into_temp(ctx, &temp_name, PhpType::Bool, false_value, expr.span);
     branch_to(ctx, merge);
@@ -81,7 +85,7 @@ pub(super) fn lower_native_isset_offset_probe_from_value(
         IrType::Heap(IrHeapKind::Array) => {
             let mut index_value = lower_expr(ctx, index);
             let index_ty = isset_index_expr_key_type(ctx, index, index_value.value);
-            if index_ty == PhpType::Int {
+            let result = if index_ty == PhpType::Int {
                 index_value = coerce_array_key_to_int_at_span(ctx, index_value, Some(index.span), false);
                 ctx.emit_value(
                     Op::ArrayIsset,
@@ -130,18 +134,25 @@ pub(super) fn lower_native_isset_offset_probe_from_value(
                     Op::ICmp.default_effects(),
                     Some(expr.span),
                 )
-            }
+            };
+            // Ordinary array reads stabilize their result and retire an owning receiver. Native
+            // `isset` returns only a bool, so no stabilization is needed, but the receiver still
+            // has to be released when it was projected from widened Mixed frame storage.
+            release_owning_receiver_temporary(ctx, array_value, expr.span);
+            result
         }
         IrType::Heap(IrHeapKind::Hash) => {
             let index_value = lower_expr(ctx, index);
-            ctx.emit_value(
+            let result = ctx.emit_value(
                 Op::HashIsset,
                 vec![array_value.value, index_value.value],
                 None,
                 PhpType::Bool,
                 Op::HashIsset.default_effects(),
                 Some(expr.span),
-            )
+            );
+            release_owning_receiver_temporary(ctx, array_value, expr.span);
+            result
         }
         _ => {
             let read_value = lower_array_access_from_value(ctx, array_value, index, expr, false);
@@ -187,18 +198,18 @@ pub(super) fn lower_lazy_property_isset_operand(
     property: &str,
     arg: &Expr,
 ) -> Option<LoweredValue> {
-    match property_isset_action(ctx, object, property)? {
+    match property_isset_action(ctx, object, property, arg)? {
         IssetPropertyAction::Fallback => None,
         IssetPropertyAction::Magic => {
-            let object = lower_expr(ctx, object);
+            let object = lower_member_receiver(ctx, object, arg);
             Some(lower_magic_property_isset(ctx, object, property, arg))
         }
         IssetPropertyAction::AlwaysFalse => {
-            lower_expr(ctx, object);
+            lower_member_receiver(ctx, object, arg);
             Some(emit_bool_literal(ctx, false, Some(arg.span)))
         }
         IssetPropertyAction::Initialized => {
-            let object = lower_expr(ctx, object);
+            let object = lower_member_receiver(ctx, object, arg);
             Some(lower_initialized_property_isset(ctx, object, property, arg))
         }
     }
@@ -219,8 +230,9 @@ pub(super) fn property_isset_action(
     ctx: &LoweringContext<'_, '_>,
     object: &Expr,
     property: &str,
+    member: &Expr,
 ) -> Option<IssetPropertyAction> {
-    let (class_name, _) = isset_object_expr_class(ctx, object)?;
+    let (class_name, _) = checked_object_expr_class(ctx, object, member)?;
     if is_builtin_stdclass_name(&class_name) {
         return Some(IssetPropertyAction::Fallback);
     }
@@ -248,12 +260,37 @@ pub(super) fn property_isset_action(
 
 /// Returns the single receiver class and whether that receiver may be null.
 pub(super) fn isset_object_expr_class(ctx: &LoweringContext<'_, '_>, object: &Expr) -> Option<(String, bool)> {
-    let ty = match &object.kind {
+    let ty = isset_object_expr_type(ctx, object)?;
+    let (class_name, nullable) = singular_object_class(&ty)?;
+    normalized_class_name(class_name).map(|name| (name, nullable))
+}
+
+/// Resolves a silent mutation/probe's receiver class before selecting its storage behavior.
+pub(super) fn checked_object_expr_class(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    member: &Expr,
+) -> Option<(String, bool)> {
+    let ty = isset_object_expr_type(ctx, object)?;
+    let ty = checked_member_receiver_type(ctx, &ty, member).unwrap_or(ty);
+    let (class_name, nullable) = singular_object_class(&ty)?;
+    normalized_class_name(class_name).map(|name| (name, nullable))
+}
+
+/// Resolves the receiver type without evaluating a property probe's source expression.
+fn isset_object_expr_type(ctx: &LoweringContext<'_, '_>, object: &Expr) -> Option<PhpType> {
+    Some(match &object.kind {
         ExprKind::Variable(name) => ctx.local_type(name),
         ExprKind::This => PhpType::Object(ctx.current_class.clone()?),
         ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.to_string()),
         ExprKind::NewDynamicObject { fallback_class, .. } => {
             PhpType::Object(fallback_class.to_string())
+        }
+        ExprKind::PropertyAccess { object, property } => {
+            property_access_expr_type_for_ir(ctx, object, property)?
+        }
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            static_property_result_type(ctx, receiver, property, object)
         }
         ExprKind::FunctionCall { name, .. } => ctx
             .functions
@@ -261,9 +298,7 @@ pub(super) fn isset_object_expr_class(ctx: &LoweringContext<'_, '_>, object: &Ex
             .map(|sig| sig.return_type.clone())
             .unwrap_or_else(|| infer_expr_type_syntactic(object)),
         _ => infer_expr_type_syntactic(object),
-    };
-    let (class_name, nullable) = singular_object_class(&ty)?;
-    normalized_class_name(class_name).map(|name| (name, nullable))
+    })
 }
 
 /// Returns whether a named property can use normal `isset()` value probing.

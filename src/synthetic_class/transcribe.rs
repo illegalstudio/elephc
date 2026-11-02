@@ -182,11 +182,13 @@ fn decl(stmt: &Stmt, depth: usize) -> String {
             is_readonly_class,
         } => {
             assert!(trait_uses.is_empty(), "trait uses are not modelled");
-            assert!(!is_abstract, "abstract classes are not modelled");
             assert!(!is_readonly_class, "readonly classes are not modelled");
             let mut out = format!("{}class({})", pad(depth), lit(name));
             if *is_final {
                 out.push_str(&format!("\n{}.final_()", pad(depth + 1)));
+            }
+            if *is_abstract {
+                out.push_str(&format!("\n{}.abstract_()", pad(depth + 1)));
             }
             if let Some(parent) = extends {
                 out.push_str(&format!(

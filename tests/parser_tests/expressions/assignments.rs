@@ -258,7 +258,7 @@ fn test_parse_array_compound_assignment() {
     }
 }
 
-/// Verifies that array-element post-increment lowers to an `ArrayAssign` read-modify-write.
+/// Array-element post-increment reads once and applies PHP incdec, not numeric addition.
 #[test]
 fn test_parse_array_element_post_increment_assignment() {
     let stmts = parse_source("<?php $items[0]++;");
@@ -271,10 +271,17 @@ fn test_parse_array_element_post_increment_assignment() {
             assert_eq!(array, "items");
             assert!(matches!(index.kind, ExprKind::IntLiteral(0)));
             match &value.kind {
-                ExprKind::BinaryOp { left, op, right } => {
-                    assert_eq!(op, &BinOp::Add);
-                    assert!(matches!(right.kind, ExprKind::IntLiteral(1)));
-                    match &left.kind {
+                ExprKind::Assignment { target, value, prelude, .. } => {
+                    let ExprKind::PreIncrement(old_name) = &value.kind else {
+                        panic!("Expected PHP pre-increment, got {:?}", value.kind);
+                    };
+                    assert!(matches!(&target.kind, ExprKind::Variable(name) if name != old_name));
+                    assert_eq!(prelude.len(), 1);
+                    let StmtKind::Assign { name, value } = &prelude[0].kind else {
+                        panic!("Expected captured array element, got {:?}", prelude[0].kind);
+                    };
+                    assert_eq!(name, old_name);
+                    match &value.kind {
                         ExprKind::ArrayAccess { array, index } => {
                             assert!(matches!(array.kind, ExprKind::Variable(ref name) if name == "items"));
                             assert!(matches!(index.kind, ExprKind::IntLiteral(0)));
@@ -282,7 +289,7 @@ fn test_parse_array_element_post_increment_assignment() {
                         other => panic!("Expected ArrayAccess lhs, got {:?}", other),
                     }
                 }
-                other => panic!("Expected BinaryOp value, got {:?}", other),
+                other => panic!("Expected captured incdec value, got {:?}", other),
             }
         }
         other => panic!("Expected ArrayAssign, got {:?}", other),

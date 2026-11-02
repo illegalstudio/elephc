@@ -9,7 +9,20 @@
 
 use super::*;
 
-/// Loads the persistent eval context local into the selected integer argument register.
+/// Where the eval context handle lives while the native inventory is registered.
+///
+/// The handle is needed by every registration call, and each of those calls
+/// clobbers the register the handle arrived in. It is parked in a module-level
+/// symbol: the module-level inventory helper has the fixed 32-byte frame the
+/// shared-helper prologue builds, with no room for a local slot, and a local
+/// addressed relative to the frame pointer would land in the caller's stack.
+#[derive(Clone, Copy)]
+pub(super) enum EvalContextSource {
+    /// The handle is in this module-level symbol.
+    Symbol(&'static str),
+}
+
+/// Loads the persistent eval context handle from the caller's frame slot.
 pub(super) fn load_eval_context_local_to_arg(
     ctx: &mut FunctionContext<'_>,
     context_offset: usize,
@@ -17,6 +30,20 @@ pub(super) fn load_eval_context_local_to_arg(
 ) {
     let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, arg_index);
     abi::load_at_offset(ctx.emitter, arg_reg, context_offset);
+}
+
+/// Loads the eval context handle from the given source into the first argument register.
+pub(super) fn load_eval_context_source_to_arg(
+    ctx: &mut FunctionContext<'_>,
+    source: EvalContextSource,
+    arg_index: usize,
+) {
+    match source {
+        EvalContextSource::Symbol(symbol) => {
+            let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, arg_index);
+            abi::emit_load_symbol_to_reg(ctx.emitter, arg_reg, symbol, 0);
+        }
+    }
 }
 
 /// Loads the current eval context handle into the selected integer argument register.

@@ -111,7 +111,7 @@ macro_rules! xml_contract {
             requirements: &[],
         }
     };
-    (@deprecation $text:literal) => { Some($text) };
+    (@deprecation $text:literal) => { Some(crate::BuiltinDeprecation::always($text)) };
     (@deprecation) => { None };
 }
 

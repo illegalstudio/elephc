@@ -517,3 +517,131 @@ echo $n, "\n";
         out.stderr
     );
 }
+
+/// Which magic accessors each probe calls, measured on php 8.5: `isset()` and `empty()` on a
+/// class with `__get` but no `__isset` report the name absent WITHOUT calling `__get`, while `??`
+/// does call it; with `__isset`, every probe asks it first and only `??`/`empty()` go on to
+/// `__get`. The ladder for a `mixed` receiver used to call `__get` for `isset()` and `empty()`,
+/// and `??` on a known class skipped `__isset`.
+#[test]
+fn test_probes_call_the_magic_accessors_php_calls() {
+    let out = compile_and_run(
+        r#"<?php
+class M { public function __get($n) { echo "get($n)\n"; return 1; } }
+class N {
+    public function __get($n) { echo "nget($n)\n"; return 0; }
+    public function __isset($n) { echo "nisset($n)\n"; return true; }
+}
+$o = new M();
+var_dump(isset($o->missing));
+var_dump($o->missing ?? "dflt");
+var_dump(empty($o->missing));
+$n = new N();
+var_dump(isset($n->missing));
+var_dump($n->missing ?? "dflt");
+var_dump(empty($n->missing));
+$m = $argc > 0 ? new M() : 5;
+var_dump(isset($m->missing));
+var_dump($m->missing ?? "dflt");
+var_dump(empty($m->missing));
+$k = $argc > 0 ? new N() : 5;
+var_dump(isset($k->missing));
+var_dump($k->missing ?? "dflt");
+var_dump(empty($k->missing));
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nget(missing)\nint(1)\nbool(true)\n\
+         nisset(missing)\nbool(true)\nnisset(missing)\nnget(missing)\nint(0)\nnisset(missing)\nnget(missing)\nbool(true)\n\
+         bool(false)\nget(missing)\nint(1)\nbool(true)\n\
+         nisset(missing)\nbool(true)\nnisset(missing)\nnget(missing)\nint(0)\nnisset(missing)\nnget(missing)\nbool(true)\n"
+    );
+}
+
+/// A borrowed string parameter forwarded to a user function ahead of another argument is pinned
+/// while that argument is evaluated. The pin used to be handed to the call as an owned operand,
+/// and a callee returning `mixed` (a conservative return-alias summary) then never released it:
+/// every `__get` relaying its `$name` leaked one string.
+#[test]
+fn test_forwarded_borrowed_string_before_another_argument_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function relay(string $name, int $op): mixed { return strlen($name) + $op; }
+class W {
+    public function __get(string $name): mixed { return relay($name, 0); }
+}
+function cycle(int $n): int {
+    $sum = 0;
+    for ($i = 0; $i < $n; $i++) { $c = new W(); $sum += $c->label; }
+    return $sum;
+}
+echo cycle(10), "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "50\n", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies `??` on an overloaded property evaluates its receiver once, before `__isset()` and
+/// `__get()`, and releases it: `makeBag()->here ?? $d` calls `makeBag()` once, as PHP does.
+#[test]
+fn test_coalesce_magic_property_evaluates_its_receiver_once() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Bag {
+    public function __isset(string $name): bool { echo "isset;"; return $name === "here"; }
+    public function __get(string $name): mixed { echo "get;"; return "v" . strlen($name); }
+}
+function makeBag(): Bag { echo "make;"; return new Bag(); }
+echo makeBag()->here ?? "fallback", "\n";
+echo makeBag()->gone ?? "fallback", "\n";
+$bags = [new Bag()];
+echo $bags[0]->here ?? "fallback", "\n";
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        "make;isset;get;v4\nmake;isset;fallback\nisset;get;v4\n",
+        "stderr: {}",
+        out.stderr
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A `mixed` receiver reads through `__get` whatever its declared result: a `string`, `array` or
+/// object result moves into the boxed answer with its owner. `isset()` on a class with `__isset`
+/// but no `__get` takes `__isset`'s answer. Both used to fall through to the stdClass helper,
+/// which warned "Undefined property" and answered null, or reported the name unset.
+#[test]
+fn test_mixed_receiver_reads_typed_get_results_and_get_less_isset() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C { public function __get(string $k): string { return "hi-$k"; } }
+class D {
+    public function __isset(string $k): bool { return true; }
+    public function __get(string $k): array { return [$k]; }
+}
+class E { public function __isset(string $k): bool { return $k === "x"; } }
+class F { public function __get(string $k): C { return new C(); } }
+function f(mixed $o) { return $o->cfg; }
+function g(mixed $o) { return isset($o->x); }
+function h(mixed $o) { return isset($o->y); }
+var_dump(f(new C));
+var_dump(f(new D));
+var_dump(f(new F) instanceof C);
+var_dump(g(new D), g(new E), h(new E), g(new C));
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "string(6) \"hi-cfg\"\narray(1) {\n  [0]=>\n  string(3) \"cfg\"\n}\nbool(true)\n\
+         bool(true)\nbool(true)\nbool(false)\nbool(false)\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

@@ -7,8 +7,8 @@
 //! Key details:
 //! - Native commands own materialization; compilation resolution is read-only and never falls back to system libraries.
 
-mod archive;
-mod cache;
+pub(crate) mod archive;
+pub(crate) mod cache;
 mod catalog;
 mod cli;
 mod doctor;
@@ -19,14 +19,15 @@ mod manifest;
 mod materialize;
 mod orchestration;
 mod prune;
-mod project;
+pub(crate) mod project;
 mod receipt;
 mod recipe;
 mod recipes;
 mod requirements;
 mod resolver;
-mod toolchain;
+pub(crate) mod toolchain;
 mod util;
+pub(crate) use util::atomic_write;
 
 use std::path::Path;
 
@@ -37,6 +38,11 @@ pub use orchestration::NativeRunOutput;
 pub use project::{discover_for_source, ProjectPaths};
 pub use requirements::NativeRequirement;
 pub use resolver::{resolve_for_compilation, resolve_for_compilation_in_cache, ResolvedNativePackage};
+pub use toolchain::NativeToolchain;
+/// Shared with `php_ext`, which compiles hosted extensions with the same target
+/// toolchain. Re-exported rather than reimplemented so both paths keep the same
+/// environment hygiene and exit-code checking.
+pub(crate) use toolchain::run_checked;
 
 /// Executes a native command with the production HTTPS, curated recipe, and system toolchain services.
 pub fn run_native_command(command: &NativeCommand, cwd: &Path) -> Result<NativeRunOutput, NativeError> {

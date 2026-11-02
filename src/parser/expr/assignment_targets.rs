@@ -134,9 +134,9 @@ pub(super) fn desugar_lvalue_incdec(
         return None;
     }
     let mut prelude = lowerer.finish();
-    // One dimension of a local, property, or static-property array is read once into `old`,
-    // and the write stores `old ± 1`, so the element is fetched and its key converted a single
-    // time, as in PHP. Deeper places keep the statement write below.
+    // Capture one-dimensional elements once, including the expression result, so neither
+    // prefix nor postfix needs another key diagnosis. Static elements use the PHP local
+    // incdec kernel; local and instance-property numeric lowering stays unchanged below.
     if let ExprKind::ArrayAccess { array, .. } = &target.kind {
         if matches!(
             &array.kind,
@@ -155,6 +155,23 @@ pub(super) fn desugar_lvalue_incdec(
                 name: old_name.clone(),
                 value: target.clone(),
             }, span));
+            if matches!(array.kind, ExprKind::StaticPropertyAccess { .. }) {
+                let operation = match (increment, prefix) {
+                    (true, true) => ExprKind::PreIncrement(old_name.clone()),
+                    (true, false) => ExprKind::PostIncrement(old_name.clone()),
+                    (false, true) => ExprKind::PreDecrement(old_name.clone()),
+                    (false, false) => ExprKind::PostDecrement(old_name.clone()),
+                };
+                prelude.push(Stmt::new(StmtKind::Assign {
+                    name: new_name.clone(), value: Expr::new(operation, span),
+                }, span));
+                return Some(Expr::new(ExprKind::Assignment {
+                    target: Box::new(target),
+                    value: Box::new(Expr::new(ExprKind::Variable(old_name), span)),
+                    result_target: Some(Box::new(Expr::new(ExprKind::Variable(new_name), span))),
+                    prelude, conditional_value_temp: None,
+                }, span));
+            }
             let old_value = Expr::new(ExprKind::Variable(old_name.clone()), span);
             let next_value = Expr::new(ExprKind::BinaryOp {
                 left: Box::new(old_value),
@@ -175,11 +192,17 @@ pub(super) fn desugar_lvalue_incdec(
             }, span));
         }
     }
-    let write = lower_postfix_incdec_assignment(target.clone(), increment, span).ok()?;
+    let mut write = lower_postfix_incdec_assignment(target.clone(), increment, span).ok()?;
     let value = if prefix {
-        // `++$p` evaluates to the NEW value, which re-reading the target after the write gives.
+        // Nested static incdec already captures its new value. Re-reading the place
+        // would diagnose converted keys twice and could observe a handler's replacement.
+        let captured = nested_incdec_result(&mut write, true);
         prelude.push(write);
-        target
+        captured.unwrap_or(target)
+    } else if let Some(captured) = nested_incdec_result(&mut write, false) {
+        // The write-context lookup creates missing parents and diagnoses each key once.
+        prelude.push(write);
+        captured
     } else {
         // `$p++` evaluates to the OLD value, so it has to be captured before the write.
         let temp = crate::names::generated_local_name(&format!(
@@ -210,6 +233,32 @@ pub(super) fn desugar_lvalue_incdec(
         },
         span,
     ))
+}
+
+/// Selects a nested update's capture without re-reading the place or mutating its old result.
+fn nested_incdec_result(write: &mut Stmt, prefix: bool) -> Option<Expr> {
+    let value = match &mut write.kind {
+        StmtKind::NestedArrayAssign { value, .. } => value,
+        StmtKind::Synthetic(statements) => return nested_incdec_result(statements.last_mut()?, prefix),
+        _ => return None,
+    };
+    let ExprKind::Assignment { target, value: operation, prelude, .. } = &mut value.kind else { return None; };
+    if prefix { return Some(target.as_ref().clone()); }
+    let StmtKind::Assign { name, .. } = &prelude.first()?.kind else { return None; };
+    let old = name.clone();
+    let working = crate::names::generated_local_name(&format!(
+        "__elephc_incdec_work_{}_{}", value.span.line, value.span.col));
+    let local = match &mut operation.kind {
+        ExprKind::PreIncrement(local) | ExprKind::PreDecrement(local) if *local == old => local,
+        _ => return None,
+    };
+    // Generic property roots execute this AST prelude, unlike specialized array roots.
+    // Mutating a separate working local preserves the postfix result on both paths.
+    *local = working.clone();
+    prelude.push(Stmt::new(StmtKind::Assign {
+        name: working, value: Expr::new(ExprKind::Variable(old.clone()), value.span),
+    }, value.span));
+    Some(Expr::new(ExprKind::Variable(old), value.span))
 }
 
 /// Returns true if the expression is a non-local assignment target (array-access,

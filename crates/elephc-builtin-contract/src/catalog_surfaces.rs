@@ -72,6 +72,81 @@ macro_rules! surface {
 }
 
 pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
+    BuiltinContract {
+        id: BuiltinId::from_canonical_name("finfo_open"), name: "finfo_open", area: Area::Io,
+        module: PhpModule::Fileinfo, since: None, kind: BuiltinKind::PreludeProvided,
+        params: &[
+            ParamSpec { name: "flags", ty: TypeSpec::Int, default: Some(DefaultSpec::Int(0)), by_ref: false },
+            ParamSpec { name: "magic_database", ty: TypeSpec::Nullable(&TypeSpec::Str), default: Some(DefaultSpec::Null), by_ref: false }
+        ],
+        variadic: None, variadic_by_ref: false, min_args: None, max_args: None,
+        arity_error: None, returns: TypeSpec::Mixed, by_ref_return: false,
+        summary: "Creates a finfo instance using the embedded or a custom magic database.", examples: &[], php_manual: None, deprecation: None,
+        extension: false, internal: false, requirements: &[],
+    },
+    BuiltinContract {
+        id: BuiltinId::from_canonical_name("finfo_close"), name: "finfo_close", area: Area::Io,
+        module: PhpModule::Fileinfo, since: None, kind: BuiltinKind::PreludeProvided,
+        params: &[
+            ParamSpec { name: "finfo", ty: TypeSpec::Mixed, default: None, by_ref: false }
+        ],
+        variadic: None, variadic_by_ref: false, min_args: None, max_args: None,
+        arity_error: None, returns: TypeSpec::Bool, by_ref_return: false,
+        summary: "Returns true; PHP 8 finfo instances are freed automatically. Deprecated since PHP 8.5.", examples: &[], php_manual: None,
+        deprecation: Some(crate::BuiltinDeprecation::since(crate::PhpVersion::Php85, "as finfo objects are freed automatically")),
+        extension: false, internal: false, requirements: &[],
+    },
+    BuiltinContract {
+        id: BuiltinId::from_canonical_name("finfo_set_flags"), name: "finfo_set_flags", area: Area::Io,
+        module: PhpModule::Fileinfo, since: None, kind: BuiltinKind::PreludeProvided,
+        params: &[
+            ParamSpec { name: "finfo", ty: TypeSpec::Mixed, default: None, by_ref: false },
+            ParamSpec { name: "flags", ty: TypeSpec::Int, default: None, by_ref: false }
+        ],
+        variadic: None, variadic_by_ref: false, min_args: None, max_args: None,
+        arity_error: None, returns: TypeSpec::Bool, by_ref_return: false,
+        summary: "Changes the persistent fileinfo configuration flags.", examples: &[], php_manual: None, deprecation: None,
+        extension: false, internal: false, requirements: &[],
+    },
+    BuiltinContract {
+        id: BuiltinId::from_canonical_name("finfo_buffer"), name: "finfo_buffer", area: Area::Io,
+        module: PhpModule::Fileinfo, since: None, kind: BuiltinKind::PreludeProvided,
+        params: &[
+            ParamSpec { name: "finfo", ty: TypeSpec::Mixed, default: None, by_ref: false },
+            ParamSpec { name: "string", ty: TypeSpec::Str, default: None, by_ref: false },
+            ParamSpec { name: "flags", ty: TypeSpec::Int, default: Some(DefaultSpec::Int(0)), by_ref: false },
+            ParamSpec { name: "context", ty: TypeSpec::Mixed, default: Some(DefaultSpec::Null), by_ref: false }
+        ],
+        variadic: None, variadic_by_ref: false, min_args: None, max_args: None,
+        arity_error: None, returns: TypeSpec::Union(&[TypeSpec::Str, TypeSpec::False]), by_ref_return: false,
+        summary: "Identifies the type and encoding of binary string contents.", examples: &[], php_manual: None, deprecation: None,
+        extension: false, internal: false, requirements: &[],
+    },
+    BuiltinContract {
+        id: BuiltinId::from_canonical_name("finfo_file"), name: "finfo_file", area: Area::Io,
+        module: PhpModule::Fileinfo, since: None, kind: BuiltinKind::PreludeProvided,
+        params: &[
+            ParamSpec { name: "finfo", ty: TypeSpec::Mixed, default: None, by_ref: false },
+            ParamSpec { name: "filename", ty: TypeSpec::Str, default: None, by_ref: false },
+            ParamSpec { name: "flags", ty: TypeSpec::Int, default: Some(DefaultSpec::Int(0)), by_ref: false },
+            ParamSpec { name: "context", ty: TypeSpec::Mixed, default: Some(DefaultSpec::Null), by_ref: false }
+        ],
+        variadic: None, variadic_by_ref: false, min_args: None, max_args: None,
+        arity_error: None, returns: TypeSpec::Union(&[TypeSpec::Str, TypeSpec::False]), by_ref_return: false,
+        summary: "Identifies the type and encoding of a file or stream URL.", examples: &[], php_manual: None, deprecation: None,
+        extension: false, internal: false, requirements: &[],
+    },
+    BuiltinContract {
+        id: BuiltinId::from_canonical_name("mime_content_type"), name: "mime_content_type", area: Area::Io,
+        module: PhpModule::Fileinfo, since: None, kind: BuiltinKind::PreludeProvided,
+        params: &[
+            ParamSpec { name: "filename", ty: TypeSpec::Mixed, default: None, by_ref: false }
+        ],
+        variadic: None, variadic_by_ref: false, min_args: None, max_args: None,
+        arity_error: None, returns: TypeSpec::Union(&[TypeSpec::Str, TypeSpec::False]), by_ref_return: false,
+        summary: "Detects a file or stream resource MIME content type.", examples: &[], php_manual: None, deprecation: None,
+        extension: false, internal: false, requirements: &[],
+    },
     surface!(
         "buffer_new",
         Pointers,

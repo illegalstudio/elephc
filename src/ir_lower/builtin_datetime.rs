@@ -19,6 +19,7 @@
 //!   exposes, because object allocation requires the full interface vtable symbol
 //!   set (`DateTimeInterface`, and `Iterator` for `DatePeriod`).
 
+use super::program::instruction_uses_eval;
 use std::collections::HashSet;
 
 use crate::ir::{Function, Immediate, Module, Op};
@@ -275,45 +276,60 @@ const DATE_TIMEZONE_ALIAS_METHOD_NAMES: &[&str] = &[
 ///
 /// The surface above exists because `eval` resolves names at runtime: `eval('date_create()')`
 /// reaches `DateTime::__construct` through a string, so every alias target has to be lowered in
-/// advance. A fragment the AOT planner can compile does not do that — it becomes an ordinary EIR
+/// advance. A fragment the AOT planner can compile does not do that: it becomes an ordinary EIR
 /// function, lowered before this pass runs, so the reachability fixpoint below sees its calls the
-/// way it sees any others.
+/// way it sees any others. Only the fragments that still need the bridge count here, and
+/// `eval_demand` asks `eval_literal_call_requires_bridge`, the same authority `runtime_features`
+/// uses, to find them.
 ///
-/// So the question is not what the fragment NAMES but whether it still needs the bridge, and
-/// `eval_literal_call_requires_bridge` is already the authority on that — the same predicate
-/// `runtime_features` uses to decide whether to link the bridge at all. Asking it instead of
-/// re-deriving an answer is what makes this correct for the cases a name scan cannot see: a
-/// fragment doing `include "d.php"` names nothing, and the included file's `date_create()` is not
-/// in the source this pass can read. The planner classifies that as bridge-only, and the surface
-/// is emitted.
-///
-/// What it saves is not marginal. `createFromFormat` is 369 lines of PHP lowered twice, and on a
-/// four-line program one `eval('echo 1;')` took the emitted assembly from 94 KB to 6.5 MB.
+/// For those fragments the answer is what the SOURCE NAMES. A literal fragment that names a
+/// date class or a date-shaped function (`date_create`, `strtotime`, `DateTime::createFromFormat`)
+/// lowers the surface; `eval('echo 1;')` needs the bridge and leaves the 10 MB of DateTime
+/// assembly out, which `test_literal_eval_leaves_unnamed_builtin_surfaces_out_of_the_binary` pins.
+/// A fragment can also call a date method on an object the OUTER program built (`$d = new
+/// DateTime(...)` inline, `$d->setDate(...)` in the fragment): the receiver's class is invisible
+/// to the fragment scan, so an alias method name called on a receiver of unknown class counts
+/// too, while the same name on a class the fragment spells does not (`names_wildcard_method`).
+/// A runtime-sourced eval, an unparsable literal, or a dynamic hazard inside a
+/// fragment (`include "d.php"`, `$f()`, a runtime callable) demands everything, as every eval
+/// once did.
 fn eval_fragments_may_reach_dates(module: &Module) -> bool {
-    for function in module
-        .functions
-        .iter()
-        .chain(module.class_methods.iter())
-        .chain(module.closures.iter())
-        .chain(module.fiber_wrappers.iter())
-        .chain(module.callback_wrappers.iter())
-        .chain(module.extern_callback_trampolines.iter())
-        .chain(module.runtime_callable_invokers.iter())
-    {
-        for (inst_index, inst) in function.instructions.iter().enumerate() {
-            if !instruction_uses_eval(module, inst) {
-                continue;
-            }
-            // Every eval op other than a literal call resolves its source at runtime, and
-            // `eval_literal_call_requires_bridge` answers `true` for them on the same reasoning.
-            if crate::ir_lower::program::eval_literal_call_requires_bridge(
-                module, function, inst_index, inst,
-            ) {
-                return true;
-            }
-        }
+    let demand = super::program::eval_demand(module);
+    if demand.names_any(
+        |class| matches!(class, "datetime" | "datetimeimmutable" | "datetimeinterface"
+            | "datetimezone" | "dateinterval" | "dateperiod"),
+        function_may_reach_date_surface,
+    ) {
+        return true;
     }
-    false
+    demand.names_wildcard_method(|method| {
+        EVAL_DATE_ALIAS_METHOD_NAMES
+            .iter()
+            .chain(DATE_TIMEZONE_ALIAS_METHOD_NAMES)
+            .any(|name| crate::names::php_symbol_key(name) == method)
+    })
+}
+
+/// Returns true when a case-folded function name is, or can dispatch into, the date surface.
+///
+/// Deliberately wide: every `date*`/`timezone*` function, the calendar family and the classic
+/// date/time functions, because several of them are lowered as `DateTime` statics
+/// (`__elephc_strftime`, `__elephc_date_parse_from_format`, `__elephc_cal_to_jd`, ...). Naming
+/// one of them from a fragment must lower the alias set exactly as a runtime-sourced eval
+/// would; naming none keeps the 10 MB of DateTime assembly out of the binary. `time()`,
+/// `microtime()` and the sleep family are plain native builtins and stay out of the list.
+fn function_may_reach_date_surface(name: &str) -> bool {
+    name.starts_with("date")
+        || name.starts_with("timezone")
+        || name.starts_with("cal_")
+        || name.starts_with("jd")
+        || name.starts_with("easter_")
+        || name.ends_with("tojd")
+        || matches!(
+            name,
+            "gmdate" | "idate" | "strtotime" | "mktime" | "gmmktime" | "checkdate" | "strftime"
+                | "gmstrftime" | "strptime" | "localtime" | "getdate" | "gettimeofday"
+        )
 }
 
 /// Returns true when the lowered module has any dependency on the eval bridge.
@@ -337,40 +353,6 @@ fn function_uses_eval(module: &Module, function: &Function) -> bool {
         .instructions
         .iter()
         .any(|inst| instruction_uses_eval(module, inst))
-}
-
-/// Returns true when one instruction requires eval runtime support.
-fn instruction_uses_eval(module: &Module, inst: &crate::ir::Instruction) -> bool {
-    matches!(
-        inst.op,
-        Op::EvalLiteralCall
-            | Op::EvalFunctionCall
-            | Op::EvalFunctionCallArray
-            | Op::EvalObjectNew
-            | Op::EvalStaticMethodCall
-            | Op::EvalFunctionExists
-            | Op::EvalClassExists
-            | Op::EvalConstantExists
-            | Op::EvalConstantFetch
-    ) || builtin_call_is_eval(module, inst)
-}
-
-/// Returns true when one lowered builtin call is PHP's `eval` construct.
-fn builtin_call_is_eval(module: &Module, inst: &crate::ir::Instruction) -> bool {
-    if inst.op != Op::LanguageConstructCall {
-        return false;
-    }
-    // A profiled call carries the SAME construct name, in a different immediate shape. Matching
-    // only the bare form let `eval($computed)` past this filter unseen.
-    let data = match inst.immediate {
-        Some(Immediate::Data(data)) | Some(Immediate::ProfiledData { data, .. }) => data,
-        _ => return false,
-    };
-    module
-        .data
-        .function_names
-        .get(data.as_raw() as usize)
-        .is_some_and(|name| crate::names::php_symbol_key(name.trim_start_matches('\\')) == "eval")
 }
 
 /// Finds builtin date/time methods whose symbols are required by already-lowered EIR.

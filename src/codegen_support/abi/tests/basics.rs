@@ -48,7 +48,7 @@ fn test_emit_branch_if_equal_wide() {
 /// Tests frame setup and teardown for a small frame (64 bytes).
 /// Verifies that the prologue allocates 64 bytes, saves FP/LR at sp+#48,
 /// sets up x29 as the frame pointer, and that restore/return undo this correctly
-/// via the frame-pointer-anchored restore (immune to mid-body sp drift).
+/// via the frame-pointer-anchored restore. The footer stays live until both loads finish.
 #[test]
 fn test_emit_frame_helpers_small_frame() {
     let mut emitter = test_emitter();
@@ -64,8 +64,8 @@ fn test_emit_frame_helpers_small_frame() {
             "    stp x29, x30, [sp, #48]\n",
             "    add x29, sp, #48\n",
             "    mov x9, x29\n",
-            "    add sp, x9, #16\n",
             "    ldp x29, x30, [x9]\n",
+            "    add sp, x9, #16\n",
             "    ret\n",
         )
     );

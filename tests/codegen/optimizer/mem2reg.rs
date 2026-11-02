@@ -102,6 +102,33 @@ fn test_mem2reg_promotes_branch_join() {
     }
 }
 
+/// Flags initialized to false retain boolean SSA parameters through conditional loop updates.
+#[test]
+fn test_mem2reg_promotes_false_initialized_boolean_flag() {
+    let source = r#"<?php
+function findFlag(int $n, int $key): bool {
+    $found = false;
+    for ($i = 0; $i < $n; $i++) {
+        if ($i === $key) { $found = true; }
+    }
+    return $found;
+}
+echo findFlag($argc + 3, $argc) ? "found" : "missing";
+echo "|", findFlag($argc + 3, $argc + 4) ? "found" : "missing";
+"#;
+    let plain = function_ir(source, false, "findFlag");
+    let optimized = function_ir(source, true, "findFlag");
+    let boolean_load = |line: &str| line.contains("load_local")
+        && (line.contains("php=bool") || line.contains("php=false"));
+    assert!(plain.lines().any(boolean_load), "{plain}");
+    assert!(!optimized.lines().any(boolean_load), "{optimized}");
+    assert!(optimized.lines().any(|line| line.contains("for.cond(") && line.contains("php=bool")),
+        "the loop carries a boolean SSA parameter: {optimized}");
+    for optimized in [false, true] {
+        assert_eq!(run_variant(source, optimized), "found|missing");
+    }
+}
+
 /// Floating-point loop state is promoted without changing PHP's printed result.
 #[test]
 fn test_mem2reg_promotes_float_loop() {

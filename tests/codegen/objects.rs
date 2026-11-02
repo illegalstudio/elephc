@@ -18,6 +18,8 @@ mod gc_aliasing;
 mod magic_methods;
 #[path = "objects/cloning.rs"]
 mod cloning;
+#[path = "objects/debug_info_dumps.rs"]
+mod debug_info_dumps;
 #[path = "objects/dynamic_property_dumps.rs"]
 mod dynamic_property_dumps;
 #[path = "objects/property_access/mod.rs"]
@@ -26,6 +28,12 @@ mod property_access;
 mod constructor_promotion;
 #[path = "objects/static_properties.rs"]
 mod static_properties;
+#[path = "objects/static_false_writes.rs"]
+mod static_false_writes;
+#[path = "objects/nested_write_review.rs"]
+mod nested_write_review;
+#[path = "objects/nested_append_review.rs"]
+mod nested_append_review;
 #[path = "objects/untyped_property_defaults.rs"]
 mod untyped_property_defaults;
 #[path = "objects/nested_array_property_defaults.rs"]

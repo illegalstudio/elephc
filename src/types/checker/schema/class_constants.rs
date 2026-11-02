@@ -324,7 +324,7 @@ fn constant_value(
 
 /// Returns whether `expected` accepts every value represented by `actual` without coercion.
 /// `allow_int_to_float` is enabled only for initializer values, never for variance checks.
-fn strict_type_accepts(
+pub(super) fn strict_type_accepts(
     checker: &Checker,
     expected: &PhpType,
     actual: &PhpType,

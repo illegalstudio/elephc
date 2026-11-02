@@ -293,33 +293,48 @@ fn compiled_functions_called_from_eval_throw_argument_count_errors() {
     );
 }
 
-/// The OPcache names, with and without the prelude compiled in. The prelude is injected only
-/// when the program names a function, and then eval resolves that name to a native function
-/// whose userland binding would accept surplus arguments; PHP's internal-function count still
-/// wins on every spelling. `$argc` keeps the referencing branch alive but never taken.
-#[test]
-fn opcache_functions_refuse_counts_like_php() {
-    let with_prelude = "<?php\nif ($argc > 99) { opcache_reset(); \
-                        var_dump(opcache_is_script_cached(__FILE__), opcache_invalidate(__FILE__)); }\n\
-                        $code = getenv('REVIEW_CODE');\neval($code);\n";
-    let binary = compile("eval_arity_opcache", with_prelude, &["--ini", "opcache.enable_cli=1"]);
-    let fallback = compile("eval_arity_opcache_fallback", EVAL_ONLY, &[]);
-    let code = catching(&[
+/// The refused OPcache counts, every caught `ArgumentCountError` pinned from PHP 8.5.10.
+const OPCACHE_COUNT_REFUSALS: &str =
+    "ArgumentCountError: opcache_reset() expects exactly 0 arguments, 1 given\n\
+     ArgumentCountError: opcache_reset() expects exactly 0 arguments, 1 given\n\
+     ArgumentCountError: opcache_reset() expects exactly 0 arguments, 1 given\n\
+     ArgumentCountError: opcache_is_script_cached() expects exactly 1 argument, 0 given\n\
+     ArgumentCountError: opcache_is_script_cached() expects exactly 1 argument, 0 given\n\
+     ArgumentCountError: opcache_invalidate() expects at least 1 argument, 0 given\n";
+
+/// Builds the eval'd fragment that calls the OPcache names with counts PHP refuses, directly
+/// and through `call_user_func()` / `call_user_func_array()`.
+fn opcache_count_refusal_calls() -> String {
+    catching(&[
         "opcache_reset(1)",
         "call_user_func('opcache_reset', 1)",
         "call_user_func_array('opcache_reset', [1])",
         "opcache_is_script_cached()",
         "call_user_func_array('opcache_is_script_cached', [])",
         "opcache_invalidate()",
-    ]);
-    let expected = "ArgumentCountError: opcache_reset() expects exactly 0 arguments, 1 given\n\
-                    ArgumentCountError: opcache_reset() expects exactly 0 arguments, 1 given\n\
-                    ArgumentCountError: opcache_reset() expects exactly 0 arguments, 1 given\n\
-                    ArgumentCountError: opcache_is_script_cached() expects exactly 1 argument, 0 given\n\
-                    ArgumentCountError: opcache_is_script_cached() expects exactly 1 argument, 0 given\n\
-                    ArgumentCountError: opcache_invalidate() expects at least 1 argument, 0 given\n";
-    assert_stdout(&binary, &code, expected);
-    assert_stdout(&fallback, &code, expected);
+    ])
+}
+
+/// The OPcache names with the prelude compiled in. The prelude is injected only when the
+/// program names a function, and then eval resolves that name to a native function whose
+/// userland binding would accept surplus arguments; PHP's internal-function count still wins on
+/// every spelling. `$argc` keeps the referencing branch alive but never taken.
+///
+/// The prelude-free control is a separate test: each binary is a full eval-linked compile.
+#[test]
+fn opcache_functions_refuse_counts_like_php() {
+    let with_prelude = "<?php\nif ($argc > 99) { opcache_reset(); \
+                        var_dump(opcache_is_script_cached(__FILE__), opcache_invalidate(__FILE__)); }\n\
+                        $code = getenv('REVIEW_CODE');\neval($code);\n";
+    let binary = compile("eval_arity_opcache", with_prelude, &["--ini", "opcache.enable_cli=1"]);
+    assert_stdout(&binary, &opcache_count_refusal_calls(), OPCACHE_COUNT_REFUSALS);
+}
+
+/// The same refused counts without the prelude, where eval answers from its own fallback.
+#[test]
+fn opcache_functions_refuse_counts_like_php_in_the_fallback() {
+    let fallback = compile("eval_arity_opcache_fallback", EVAL_ONLY, &[]);
+    assert_stdout(&fallback, &opcache_count_refusal_calls(), OPCACHE_COUNT_REFUSALS);
 }
 
 /// Spread and named arguments to the OPcache names bind like PHP's internal functions, with the
@@ -378,16 +393,10 @@ fn opcache_spread_and_named_arguments_bind_like_php() {
     assert_stdout(&native, named, "no scripts\n");
 }
 
-/// Named OPcache callable arguments use the same internal binding as direct calls.
-/// The opaque source exercises fallback and native dispatch, including caught errors.
-#[test]
-fn opcache_named_callable_arguments_use_internal_binding() {
-    let fallback = compile("eval_opcache_named_fallback", EVAL_ONLY, &[]);
-    let native = compile(
-        "eval_opcache_named_native",
-        EVAL_ONLY,
-        &["--ini", "opcache.enable_cli=1"],
-    );
+/// Asserts that named OPcache callable arguments bind like direct calls in `binary`: the
+/// variable, `call_user_func()`, `call_user_func_array()` and first-class routes, their caught
+/// errors, and left-to-right evaluation of the named arguments.
+fn assert_opcache_named_callable_binding(binary: &Path) {
     let code: String = [
         "$f = 'opcache_invalidate'; var_dump($f(filename: '/missing', force: true))",
         "var_dump(call_user_func_array('opcache_invalidate', ['force' => true, 'filename' => '/missing']))",
@@ -422,27 +431,45 @@ fn opcache_named_callable_arguments_use_internal_binding() {
                     Error: Named parameter $filename overwrites previous argument\n\
                     Error: Named parameter $callback overwrites previous argument\n\
                     ArgumentCountError: call_user_func() expects at least 1 argument, 0 given\n";
-    assert_stdout(&fallback, &code, expected);
-    assert_stdout(&native, &code, expected);
+    assert_stdout(binary, &code, expected);
     let ordered = "function mark($label) { echo $label; return '/missing'; } \
                    $f = 'opcache_invalidate'; \
                    var_dump($f(force: mark('force '), filename: mark('filename ')));";
-    let expected_order = "force filename bool(false)\n";
-    assert_stdout(&fallback, ordered, expected_order);
-    assert_stdout(&native, ordered, expected_order);
+    assert_stdout(binary, ordered, "force filename bool(false)\n");
 }
 
-/// User declarations with OPcache names retain their signatures and reference parameters on
-/// direct, variable, first-class and call_user_func routes, in default and configured binaries.
+/// Named OPcache callable arguments use the same internal binding as direct calls when eval
+/// answers from its own fallback (the CLI-default binary), including caught errors.
+///
+/// The native-dispatch case is a separate test: each binary is a full eval-linked compile.
 #[test]
-fn opcache_user_declarations_keep_their_callable_semantics() {
-    let declarations = r#"
+fn opcache_named_callable_arguments_use_internal_binding() {
+    let fallback = compile("eval_opcache_named_fallback", EVAL_ONLY, &[]);
+    assert_opcache_named_callable_binding(&fallback);
+}
+
+/// The same binding when `opcache.enable_cli=1` makes the opaque source reach the native
+/// declarations.
+#[test]
+fn opcache_named_callable_arguments_use_internal_binding_natively() {
+    let native = compile(
+        "eval_opcache_named_native",
+        EVAL_ONLY,
+        &["--ini", "opcache.enable_cli=1"],
+    );
+    assert_opcache_named_callable_binding(&native);
+}
+
+/// User functions that take OPcache names: a by-name signature and a by-reference parameter.
+const OPCACHE_USER_DECLARATIONS: &str = r#"
 function opcache_get_status(string $message, string $suffix = ''): string {
     return $message . $suffix;
 }
 function opcache_reset(int &$counter): int { $counter += 1; return $counter; }
 "#;
-    let calls = r#"
+
+/// Calls the user declarations on the direct, variable, first-class and `call_user_func` routes.
+const OPCACHE_USER_DECLARATION_CALLS: &str = r#"
 echo opcache_get_status(suffix: ':direct', message: 'own'), "\n";
 $f = 'opcache_get_status';
 echo $f(suffix: ':variable', message: 'own'), "\n";
@@ -460,16 +487,47 @@ echo $f(counter: $counter), ':', $counter, "\n";
 echo call_user_func_array('opcache_reset', ['counter' => &$counter]), ':', $counter, "\n";
 echo call_user_func('opcache_reset', counter: $counter), ':', $counter, "\n";
 "#;
-    let expected = "own:direct\nown:variable\nown:array\nown:callback\nown:first-class\n\
-                    own:surplus\n2:2\n3:3\n4:4\n5:5\n6:5\n";
-    let source = format!("<?php\n{declarations}\n$code = getenv('REVIEW_CODE'); eval($code);");
-    for ini in [&[][..], &["--ini", "opcache.enable_cli=1"][..]] {
-        let binary = compile("eval_opcache_native_user", &source, ini);
-        assert_stdout(&binary, calls, expected);
-        fs::remove_dir_all(binary.parent().unwrap()).unwrap();
-    }
+
+/// What the user declarations print on every route, the by-reference counter included.
+const OPCACHE_USER_DECLARATION_OUTPUT: &str =
+    "own:direct\nown:variable\nown:array\nown:callback\nown:first-class\n\
+     own:surplus\n2:2\n3:3\n4:4\n5:5\n6:5\n";
+
+/// Compiles the user declarations natively with the given extra CLI arguments, runs the calls
+/// through an opaque `eval()`, asserts the pinned output and removes the fixture directory.
+fn assert_native_opcache_user_declarations(ini: &[&str]) {
+    let source =
+        format!("<?php\n{OPCACHE_USER_DECLARATIONS}\n$code = getenv('REVIEW_CODE'); eval($code);");
+    let binary = compile("eval_opcache_native_user", &source, ini);
+    assert_stdout(&binary, OPCACHE_USER_DECLARATION_CALLS, OPCACHE_USER_DECLARATION_OUTPUT);
+    fs::remove_dir_all(binary.parent().unwrap()).unwrap();
+}
+
+/// User declarations with OPcache names retain their signatures and reference parameters on
+/// direct, variable, first-class and call_user_func routes in the CLI-default binary.
+///
+/// The configured binary and the eval-declared case are separate tests: each is a full
+/// eval-linked compile.
+#[test]
+fn opcache_user_declarations_keep_their_callable_semantics() {
+    assert_native_opcache_user_declarations(&[]);
+}
+
+/// The same native user declarations keep their semantics with `opcache.enable_cli=1`.
+#[test]
+fn opcache_user_declarations_keep_their_callable_semantics_with_the_cache_enabled() {
+    assert_native_opcache_user_declarations(&["--ini", "opcache.enable_cli=1"]);
+}
+
+/// The same declarations made inside the eval'd fragment keep their semantics too.
+#[test]
+fn opcache_user_declarations_made_in_eval_keep_their_callable_semantics() {
     let binary = compile("eval_opcache_eval_user", EVAL_ONLY, &[]);
-    assert_stdout(&binary, &format!("{declarations}\n{calls}"), expected);
+    assert_stdout(
+        &binary,
+        &format!("{OPCACHE_USER_DECLARATIONS}\n{OPCACHE_USER_DECLARATION_CALLS}"),
+        OPCACHE_USER_DECLARATION_OUTPUT,
+    );
     fs::remove_dir_all(binary.parent().unwrap()).unwrap();
 }
 

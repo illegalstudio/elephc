@@ -29,7 +29,7 @@ pub(in crate::interpreter) fn eval_binary_result(
         | EvalBinOp::BitOr
         | EvalBinOp::BitXor
         | EvalBinOp::ShiftLeft
-        | EvalBinOp::ShiftRight => values.bitwise(op, left, right),
+        | EvalBinOp::ShiftRight => values.bitwise_dispatch(op, left, right),
         EvalBinOp::Concat => eval_concat_result(left, right, context, values),
         EvalBinOp::LogicalXor => {
             let left_truthy = values.truthy(left)?;
@@ -145,8 +145,24 @@ pub(super) fn eval_cast_expr(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     with_eval_operands(&[expr], context, scope, values, |args, context, _, values| {
         match target {
-            EvalCastType::Int => values.cast_int(args[0]),
-            EvalCastType::Float => values.cast_float(args[0]),
+            EvalCastType::Int => match eval_object_scalar_adapter(
+                args[0],
+                "__elephc_to_int",
+                context,
+                values,
+            )? {
+                Some(value) => Ok(value),
+                None => values.cast_int(args[0]),
+            },
+            EvalCastType::Float => match eval_object_scalar_adapter(
+                args[0],
+                "__elephc_to_float",
+                context,
+                values,
+            )? {
+                Some(value) => Ok(value),
+                None => values.cast_float(args[0]),
+            },
             EvalCastType::String => {
                 let value = eval_string_context_value(args[0], context, values)?;
                 let result = values.cast_string(value);
@@ -155,7 +171,15 @@ pub(super) fn eval_cast_expr(
                 } else { Ok(()) };
                 result.and_then(|result| released.map(|()| result))
             }
-            EvalCastType::Bool => values.cast_bool(args[0]),
+            EvalCastType::Bool => match eval_object_scalar_adapter(
+                args[0],
+                "__elephc_to_bool",
+                context,
+                values,
+            )? {
+                Some(value) => Ok(value),
+                None => values.cast_bool(args[0]),
+            },
         }
     })
 }

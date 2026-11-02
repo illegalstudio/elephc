@@ -157,14 +157,16 @@ pub enum BuiltinArgumentLowering {
     Standard,
     /// Preserve concrete values and nullable types for runtime PHP parameter conversion.
     PreserveValues,
+    /// Keep source storage without scalar binding or runtime-parser capture allocations.
+    PreserveUncoerced,
     /// Materialize every regular default through shared planning, including positional calls.
     MaterializeDefaults,
     /// Drop the unsupported statically-default count mode after shared planning.
     Count,
     /// Preserve date's literal-format specialization inputs.
     Date,
-    /// Preserve JSON decode's source-sensitive option handling.
-    JsonDecode,
+    /// Preserve JSON source storage and own any boxed string conversion through the call.
+    JsonSource,
     /// Preserve getenv's nullable name until runtime selects lookup or enumeration.
     Getenv,
     /// Keep source-sensitive omitted PCNTL defaults absent after named/spread planning.
@@ -204,6 +206,10 @@ pub enum BuiltinArgumentLowering {
     /// `sole` limits it to a call where this is the ONLY argument — `max($a)`, not `max($a, $b)`,
     /// where the array itself is the value compared and its keys come back with it.
     BareArrayValues { arg: usize, sole: bool },
+    /// Convert a weakly bound Stringable object while preserving the other union alternatives.
+    /// Strict callers keep their original operand for the ordinary parameter diagnostic.
+    /// The descriptor must retain the observable effects of user conversion callbacks.
+    WeakStringUnion { arg: usize },
     /// Bind the receiver to its hidden internal-array-pointer cursor slot.
     ///
     /// PHP's `key`/`current`/`next`/`prev`/`reset`/`end` read and move a per-array
@@ -314,6 +320,14 @@ pub trait BuiltinLoweringContext {
 
     /// Returns the PHP type metadata attached to an existing SSA operand.
     fn value_php_type(&self, value: ValueId) -> PhpType;
+
+    /// Reports whether the compiled program declares the named internal class.
+    ///
+    /// Builtin hooks use this before selecting a prelude helper that only exists when
+    /// the owning extension was detected.
+    fn has_class(&self, _name: &str) -> bool {
+        false
+    }
 
     /// Interns a class-name literal for EIR operations such as `ConstClassName`.
     fn intern_class_name(&mut self, value: &str) -> crate::ir::DataId;

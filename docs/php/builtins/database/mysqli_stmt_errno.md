@@ -2,7 +2,7 @@
 title: "mysqli_stmt_errno()"
 description: "Returns the error code of the last call on a statement."
 sidebar:
-  order: 163
+  order: 166
 ---
 
 ## mysqli_stmt_errno()

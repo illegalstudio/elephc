@@ -292,7 +292,33 @@ pub(super) fn eval_reflection_owner_object_with_members(
     if release_backing_value {
         values.release(backing_value_cell)?;
     }
+    if matches!(owner_kind, EVAL_REFLECTION_OWNER_FUNCTION | EVAL_REFLECTION_OWNER_METHOD) {
+        let identity = values.object_identity(object)?;
+        if let Some(target) = eval_reflection_function_method_target(identity, context, values)? {
+            let rendered = eval_reflection_function_method_to_string(&target);
+            let owner = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
+                "ReflectionMethod"
+            } else { "ReflectionFunction" };
+            if let Err(status) = eval_reflection_store_dump(object, owner, &rendered, context, values) {
+                let _ = eval_release_value(context, values, object);
+                return Err(status);
+            }
+        }
+    }
     Ok(object)
+}
+
+/// Stores a dump in the slot read by native casts, releasing the temporary on both paths.
+fn eval_reflection_store_dump(
+    object: RuntimeCellHandle, owner: &str, rendered: &str,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let text = values.string(rendered)?;
+    let result = eval_reflection_with_declaring_class_scope(owner, context, |_| {
+        values.property_set(object, "__string", text)
+    });
+    let released = values.release(text);
+    result.and(released)
 }
 
 /// Builds the `ReflectionClass|false` value stored in parent or declaring-class slots.
@@ -654,6 +680,17 @@ pub(super) fn eval_reflection_parameter_object_result(
     values.release(default_value_constant_name)?;
     values.release(class_value)?;
     values.release(constructor)?;
+    if let Err(status) = attach_parameter_default_factory(object, parameter, context, values) {
+        let _ = eval_release_value(context, values, object);
+        return Err(status);
+    }
+    let rendered = eval_reflection_function_method_parameter_to_string(parameter);
+    if let Err(status) = eval_reflection_store_dump(
+        object, "ReflectionParameter", &rendered, context, values,
+    ) {
+        let _ = eval_release_value(context, values, object);
+        return Err(status);
+    }
     Ok(object)
 }
 
@@ -690,6 +727,10 @@ pub(super) fn eval_reflection_parameter_default_value(
     let Some(default) = parameter.default_value.as_ref() else {
         return values.null();
     };
+    // The factory, not metadata construction, owns evaluation of a deferred tree.
+    if parameter_default_is_deferred(default) {
+        return values.null();
+    }
     if let Some(class_name) = parameter.declaring_class_name.as_deref() {
         context.push_class_scope(class_name.to_string());
         context.push_called_class_scope(class_name.to_string());
@@ -1018,7 +1059,11 @@ pub(super) fn eval_reflection_member_object_result(
         member.is_abstract,
         member.is_readonly,
     );
-    if member.default_value.is_some() {
+    if member.default_value.is_some() || (owner_kind == EVAL_REFLECTION_OWNER_PROPERTY
+        && member.declaring_class_name.as_deref().is_some_and(|class| {
+            context.native_property_default_error(class, reflected_name).is_some()
+        }))
+    {
         flags |= EVAL_REFLECTION_MEMBER_FLAG_HAS_DEFAULT_VALUE;
     }
     if member.is_promoted {

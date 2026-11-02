@@ -10,8 +10,24 @@
 use super::*;
 
 /// Returns true when a module function should expose metadata to eval fragments.
+///
+/// `__elephc_gmp_*` is the one compiler-internal prefix eval must reach: the public `gmp_*`
+/// registry builtins have no prelude functions of their own, so their Magician homes forward
+/// to the hidden prelude helper of the same suffix. Only the 51 public helpers are registered;
+/// the rest of the GMP prelude remains invisible to eval.
 pub(super) fn function_has_eval_metadata(function: &Function) -> bool {
-    !function.flags.is_main && !function.name.starts_with('_')
+    if function.flags.is_main {
+        return false;
+    }
+    if function.name == "__elephc_gmp_unserialize" {
+        return true;
+    }
+    if let Some(helper) = function.name.strip_prefix("__elephc_gmp_") {
+        return elephc_builtin_contract::GMP_FUNCTIONS
+            .iter()
+            .any(|name| name.strip_prefix("gmp_") == Some(helper));
+    }
+    !function.name.starts_with('_')
 }
 
 /// Returns true when eval can dispatch a native function through the generated bridge.
@@ -58,8 +74,10 @@ pub(super) fn constructor_signature_can_bridge_with_eval(signature: &FunctionSig
 }
 
 /// Returns true when one native method argument type fits the eval method bridge.
+///
+/// A `?ptr<T>` argument is cast like an int by the bridge: PHP null becomes address 0.
 pub(super) fn eval_native_method_param_supported(ty: &PhpType) -> bool {
-    matches!(
+    crate::types::is_nullable_pointer_type(ty) || matches!(
         ty.codegen_repr(),
         PhpType::Int
             | PhpType::Bool
@@ -76,8 +94,10 @@ pub(super) fn eval_native_method_param_supported(ty: &PhpType) -> bool {
 }
 
 /// Returns true when one native constructor argument type fits the eval bridge.
+///
+/// A `?ptr<T>` argument is cast like an int by the bridge: PHP null becomes address 0.
 pub(super) fn eval_native_constructor_param_supported(ty: &PhpType) -> bool {
-    matches!(
+    crate::types::is_nullable_pointer_type(ty) || matches!(
         ty.codegen_repr(),
         PhpType::Int
             | PhpType::Bool
@@ -94,8 +114,10 @@ pub(super) fn eval_native_constructor_param_supported(ty: &PhpType) -> bool {
 }
 
 /// Returns true when one native method return type can be boxed back for eval.
+///
+/// A `?ptr<T>` return is boxed by its declared union, address 0 as PHP null.
 pub(super) fn eval_native_method_return_supported(ty: &PhpType) -> bool {
-    matches!(
+    crate::types::is_nullable_pointer_type(ty) || matches!(
         ty.codegen_repr(),
         PhpType::Void
             | PhpType::Int
@@ -224,6 +246,7 @@ pub(super) fn eval_native_php_type_spec(php_type: &PhpType, allow_return_atoms: 
         | PhpType::Packed(_)
         | PhpType::Pointer(_)
         | PhpType::Resource(_)
+        | PhpType::Narrow(_)
         | PhpType::TaggedScalar => None,
     }
 }

@@ -162,6 +162,7 @@ pub struct Value {
 | `Array(inner)` | `Heap(Array)` | Indexed array heap object; element type stays in `php_type`. |
 | `AssocArray { key, value }` | `Heap(Hash)` | Hash table heap object; key/value types stay in `php_type`. |
 | `Buffer(inner)` | `Heap(Buffer(inner))` | Opaque generation/index handle resolved through the static buffer descriptor registry; not PHP array COW storage. |
+| `Narrow(width)` | never a value | Storage width of a `buffer<T>` element (`buffer<i32>`, `buffer<u8>`, `buffer<f32>`); only appears inside `Buffer(inner)`. Element reads and writes carry its value type (`Int` or `Float`); packed fields keep their width in `PackedFieldInfo::width` instead. |
 | `Callable` | `I64` | Callable descriptor address; ownership is tracked separately and released via callable descriptor runtime. |
 | `Object(name)` | `Heap(Object(name))` | Runtime object pointer and class metadata. |
 | `Packed(name)` | `Heap(Packed(name))` | Pointer/layout handle for packed POD data. |
@@ -202,7 +203,7 @@ diagnostic, it produces a conversion.
 | a constant or class constant | the resolved constant/enum-case metadata |
 | a call to a user or extern function | `ctx.functions` / `ctx.extern_functions`, the declared return type |
 | a call to a **builtin** | `ctx.builtin_call_types`, keyed by the call's own span |
-| a method, static-method, property, or element read | the matching `*_expr_type_for_ir` resolver |
+| a method, static-method, property, or element read | the matching `*_expr_type_for_ir` resolver; a method call on a receiver of no single class takes the return type every declaring class shares, or `Mixed` |
 | anything else | `infer_expr_type_syntactic` |
 The builtin row is the one with a history. A builtin is in neither function map,
 so before issue #1096 it fell through to `infer_expr_type_syntactic`, which
@@ -234,6 +235,40 @@ answers — a concrete value is boxed into it on the way in, a `Mixed` value is 
 as-is — and it is what a literal mixing a builtin call with a plain element already
 merged to.
 
+### Missing array elements at lazy merges
+
+A typed array describes its populated elements; a read can still produce `null`.
+AST pruning retains a merge whose selected arm/default is an array read until EIR,
+rather than replacing the entire merge with its raw read. Materialized branch types therefore
+include the missing-value alternative before choosing storage for `match`, ternary, short-ternary and coalescing results. Object/container
+reads keep their concrete getter and nullable merge storage preserves their null
+payload. A merge-bound raw scalar or callable read uses the boxed getter so absence
+is distinguished before conversion, including a float miss that an ordinary
+warned typed read represents as zero. Already-tagged integer getters keep their
+existing null-aware path. Receiver/key evaluation and warnings still
+occur once. Explicit casts and string offsets keep their usual lowering.
+
+When a nullable object/callable merge returns through a concrete payload ABI,
+`MixedUnbox` takes an independent payload reference before the owning merge cell
+is released. This prevents a clean-looking return value from leaking its box.
+
+Unpacking uses a separate storage projection for a direct container read. Its
+implicit null alternative does not turn native indexed storage into a hash;
+the unpack operation still rejects an actual null value at runtime. Literal,
+positional-call and boxed-binder classification share that projection, including
+error-suppressed reads, so argument binding cannot replace the unpack diagnostic
+with an arity error. Ordinary
+literal elements retain the nullable logical type because inserting a missed
+read is valid and must store PHP null.
+
+A nullable receiver's null path still evaluates the offset once and honors the
+normal/silent warning flag. Undefined roots and native nullable containers can
+carry a raw null word, so the null arm retires the original owning source and
+creates a canonical boxed-null receiver for the dynamic getter ABI. That receiver
+is parked in the in-flight cleanup chain while offset evaluation or warning
+delivery can throw. The getter retires it normally; its proven-null payload has
+no user destructor, so detaching that non-owning cleanup record afterwards is safe.
+
 ### Parsed Type Expressions
 
 `TypeExpr` maps into `PhpType` during type checking before EIR lowering. EIR
@@ -252,12 +287,16 @@ back to a source declaration.
 ### C Type Mapping
 
 Extern declarations use `CType`. EIR preserves the C-facing type in
-`ExternDecl` metadata so the IR backend can use the correct C ABI helpers.
+`ExternDecl` metadata so the IR backend can use the correct C ABI helpers: the
+PHP type decides the storage, and the parallel `ExternAbiType` keeps the
+declared C width so the backend can normalize registers at the call boundary.
 
 | `CType` | EIR storage |
 |---|---|
 | `Int`, `Bool`, `Ptr`, `TypedPtr(_)`, `Callable` | `I64` |
+| `IntWidth(_)` (`i8`..`u32`, `u64`) | `I64`; the width lives in `ExternAbiType` and only drives sign/zero extension of returns and caller-side extension of narrow arguments. |
 | `Float` | `F64` |
+| `F32` | `F64`; `ExternAbiType::Float32` rounds the argument to a single before the call and widens the return after it. |
 | `Str` | `I64` native C string pointer; PHP strings are converted at the boundary. |
 | `Void` | `Void` |
 
@@ -395,7 +434,8 @@ Ownership operations:
 | `Release` | owned value | `Void` | `REFCOUNT_OP`, maybe `WRITES_HEAP`, destruction may throw and debug may fatal | `__rt_decref_any`, `__rt_heap_free_safe`, callable descriptor release |
 | `Move` | any value | same type | pure validator operation | no machine instruction |
 | `Borrow` | value with live owner | same type | pure validator operation | no machine instruction |
-| `EnsureOwned` | maybe-owned value | same type | may branch, refcount effect | emits conditional retain/ownership normalization |
+| `EnsureOwned` | fresh transient `Str` argument (`.`, interpolation, scalar-to-string; never a builtin view) | `Str`, same payload, owned | `REFCOUNT_OP`, `WRITES_HEAP` | `__rt_str_claim`: retags a `CONCAT_TEMP_HEAP_KIND` block as an owned string in place, leaves scratch and literals untouched; emitted before a user call that may return the argument |
+| `ReleaseUnlessAliases` | owned argument, call result | `Void` | `REFCOUNT_OP`, `WRITES_HEAP`, `READS_HEAP` | releases the argument unless its payload pointer equals the result's: boxed `Mixed` pairs, and owned `Str` arguments (claimed or acquired) of a user call |
 
 Strings are not modeled as generic heap pointers because their ABI is `(ptr,
 len)`, but string ownership still participates in validator checks.
@@ -451,6 +491,15 @@ the conversion must not stay hidden inside register materialization because a
 string result can be an interior slice of its argument. ABI-created boxed-Mixed
 arguments use explicit post-call cleanup slots, including for constructors, and
 an exact pointer check transfers the box when a passthrough result reuses it.
+
+Method receivers are stabilized before arguments are evaluated. A borrowed
+reference-cell payload or boxed local needs a marked lifetime `Acquire` and a
+published operand-owner slot: an argument can replace that payload before the
+method instruction consumes the earlier load. The source borrow is preserved;
+only the acquired lease is retired after the call or during exceptional cleanup.
+Persistent values and proven concrete `$this` borrows keep their existing
+lifetime. Receiver roots backed by unchanged concrete parameters or proven owned
+locals are removed before inlining only under the storage proofs described below.
 
 Before lowering releases an owning call-argument temporary, the checker provides
 a conservative return-to-parameter alias summary for each source function and
@@ -753,6 +802,7 @@ preserves PHP exponentiation result rules.
 | `MixedUnbox(expected)` | `Heap(Mixed)` | expected storage | `reads_heap`, `may_fatal` |
 | `MixedTagOf` | `Heap(Mixed)` | `I64` | `reads_heap` |
 | `ArrayToMixed`, `HashToMixed` | array/hash | `Heap(Mixed)` | `alloc_heap`, `refcount_op` |
+| `ArrayToPointerWords` | owned array bound to a pointer-array slot | `Heap(Array)` with raw `?ptr<T>` words | `reads_heap`, `writes_heap`, `alloc_heap`, `refcount_op` |
 | `MixedCastBool`, `MixedCastInt`, `MixedCastFloat`, `MixedCastString` | `Heap(Mixed)` | scalar/string | `reads_heap`, maybe `alloc_concat`, `may_warn` |
 
 ### Strings
@@ -1006,6 +1056,7 @@ drifting apart silently.
 | `PropGet(class_id, property)` | object | property type | `reads_heap`, maybe `may_deopt` |
 | `PropGetForWrite(property)` | object | property type, **borrowed** | `reads_heap`, `writes_heap`, `alloc_heap`, `refcount_op`, `may_throw`, `may_warn`, `may_deopt` |
 | `PropSet(class_id, property, value)` | object, value | `Void` | `writes_heap`, `refcount_op`, maybe `may_deopt` |
+| `PackedFieldMixedToInt`, `PackedFieldMixedToFloat`, `PackedFieldMixedToBool` | boxed value bound for a packed or extern struct field, `TypeError` message prefix | raw `I64`, `F64` or bool payload: only the field's own runtime type passes (a float field also widens an int), anything else throws | `reads_heap`, `alloc_heap`, `may_throw` |
 | `DynamicPropGet`, `DynamicPropSet` | object, property string/value | value or `Void` | `reads_heap`/`writes_heap`, `may_deopt`, maybe `may_warn` |
 | `NullsafePropGet`, `NullsafeMethodCall` | nullable object and metadata | nullable result | branch plus underlying op effects |
 | `MethodLookup` | object, method id | callable entry | `reads_heap`, `reads_global`, `may_deopt` |
@@ -1037,7 +1088,7 @@ Builtin calls use the checker's result recorded for their call span.
 | Op | Operands | Result | Effects |
 |---|---|---|---|
 | `Call(function_id, args)` | normalized args | return type | callee effect summary |
-| `FunctionVariantCall(group, args)` | normalized args | return type | union of variant effects |
+| `FunctionVariantCall(group, args)` (reserved) | normalized args | return type | retained in the IR vocabulary and analyses; current lowering uses `Call` to the public include-variant dispatcher, and codegen has no lowering arm for this op |
 | `LanguageConstructCall(name, args)` | normalized args | construct-specific return | compiler-resident construct effect summary |
 | `RuntimeCall(target, args)` | normalized typed operands | target-declared return | descriptor/typed-target effect summary |
 | `ExternCall(name, args)` | C ABI args | extern return | conservative FFI effects |
@@ -1089,15 +1140,30 @@ eval-scope helpers, or retain interpreter fallback. See
 | `PtrReadString`, `PtrWriteString` | pointer and string/len | string or int | native memory effects, maybe `alloc_heap`, `may_fatal` |
 | `PtrOffset` | pointer, byte offset | `I64` pointer | pure arithmetic, but php_type tag preserved |
 | `PtrCheckNonnull` | pointer | `Void` | `may_fatal` |
-| `BufferNew(element_type, len)` | length | `Heap(Buffer)` | allocates a separate payload and publishes a generation-safe handle; `alloc_heap`, `may_fatal` |
+| `BufferNew(element_type, len)` | `I64` length | `Heap(Buffer)` | allocates a separate payload and publishes a generation-safe handle; `alloc_heap`, `may_fatal`. Lowering converts a non-`int` length (checked int arithmetic, `mixed`, `int\|float`) first, dispatching a boxed value on its runtime tag (`TypePredicate`): an int payload is cast exactly, a float payload is truncated with the silent `FToI`, and any other value is cast both to int and to float. The count becomes `-1` unless `IToF` of it gives the same float back and it is not `PHP_INT_MAX` (where numeric strings saturate), so a fraction, NaN, infinity or an out-of-range value fails the runtime length validation; each path converts only the representation it runs with, so none raises a cast warning after EIR passes narrow the box to a raw scalar |
 | `BufferLen` | buffer handle | `I64` | resolves generation/activity, then `reads_heap`; `may_fatal` on stale or invalid handles |
 | `BufferGet`, `BufferSet` | buffer handle, index, value | typed value or `Void` | resolve generation/activity before payload access; `reads_heap`/`writes_heap`, bounds `may_fatal` |
+| `BufferResolve` | buffer handle | `I64` descriptor | optimizer-only; resolves generation/activity WITHOUT faulting and answers 0 for a stale or invalid handle; `reads_heap` |
+| `BufferGetResolved`, `BufferSetResolved` | descriptor, index, value; optional `true` immediate | typed value or `Void` | optimizer-only forms of `BufferGet`/`BufferSet` behind a hoisted `BufferResolve`; a zero descriptor always raises the use-after-free fatal at the access; absent immediate performs the usual unsigned bounds check, while `true` records a same-buffer loop proof and omits that check; `reads_heap` or `writes_heap`, `may_fatal` |
 | `BufferFree` | local buffer handle | `Void` | invalidates the descriptor before releasing the payload and clears the local; `writes_heap`, `may_fatal` on stale aliases |
 | `PackedFieldGet`, `PackedFieldSet` | packed pointer, field metadata | typed value or `Void` | raw memory effects |
 | `ExternGlobalLoad`, `ExternGlobalStore` | global metadata | typed value or `Void` | external state effects |
 
 Pointer and extern memory effects are conservative because they can alias data
 outside PHP's heap.
+
+Buffer properties on the method receiver can also supply a loop-invariant
+handle. In a loop without calls, property writes, frees or other invalidating
+operations, the buffer pass relocates a guaranteed named read of `$this` and
+resolves its handle in the preheader. Buffer acquire/release instructions are
+word operations and do not block this proof. A header read already executes on
+zero-trip loops. A body-only read instead gets a taken-only entry block behind
+a duplicate of the scalar loop condition, so an uninitialized property stays
+unread when the loop never enters. The property instruction keeps its original
+id, source span and lexical scope. Conditional reads, faulting prefixes,
+non-scalar header computations and header SSA values used after the loop retain
+their ordinary form. Generators, exception handlers, eval, asynchronous signals
+and modules with magic getters retain the existing conservative gates.
 
 ### Output, Diagnostics, Exceptions, Fibers, and Generators
 
@@ -1310,7 +1376,11 @@ Validation has two modes:
 8. Callable descriptor ops require `PhpType::Callable` metadata even when the
    storage type is `I64`.
 9. Pointer ops require `PhpType::Pointer(_)` metadata.
-10. Buffer ops require `Heap(Buffer(_))`.
+10. Buffer ops require `Heap(Buffer(_))`, except `BufferGetResolved` and
+    `BufferSetResolved`, whose first operand is the `I64` descriptor of a
+    `BufferResolve`. Their optional immediate may only be `true`, meaning the
+    optimizer proved the exact index nonnegative and below that descriptor's
+    logical length.
 
 ### Ownership Rules
 
@@ -1358,11 +1428,25 @@ over each function-like body (functions, methods, closures, trampolines,
 invokers) repeatedly until a full sweep reports no change, capped at a fixed
 iteration budget. Candidate-driven passes can cheaply declare themselves
 inapplicable to a function; skipped passes perform neither analysis nor the
-debug-build post-pass validation. A pass that opts into `run_after_fixed_point`
-is removed from this sweep.
+debug-build post-pass validation. Passes that opt into `run_before_inlining` or
+`run_after_fixed_point` run in separate preparation or finalization sweeps.
+
+Preparation removes redundant method receiver roots before their lowering shape
+is changed by inlining. `borrowed_receiver_roots` accepts only direct concrete
+object parameter loads whose by-value frame binding is never written, aliased or
+used as iterator storage. `receiver_local_roots` also admits an ordinary object
+local with exactly one owned, matching-type store in the entry block, dominating
+every read. Parameters, main, exception handlers, entry-block re-execution,
+address escapes and every other operation naming that local fail this local-owner
+proof. The acquired value must feed only its hidden root and
+ordinary method receiver operands. The pass removes that extra retain together
+with its root store, publication and retirement, and forwards the method call to
+the original frame-owner load. Eval-capable modules keep the original roots. The
+parameter proof in `src/ir/parameter_roots.rs` is shared with caller-visible effect
+summaries; remaining cleanup instructions keep their full effects.
 
 The representation-changing pipeline runs to a **module-level fixed point**:
-`optimize_module` partitions those post-fixed-point passes out, then
+`optimize_module` runs preparation and partitions post-fixed-point passes out, then
 `optimize_module_to_fixed_point` interleaves the cross-function
 [small-function inliner](#small-function-inlining) with the remaining
 per-function passes and repeats the round until neither layer changes anything
@@ -1496,6 +1580,16 @@ an integer cast/store whose value traces through transparent acquires to checked
 arithmetic. The pass also returns before building its use graph when a function
 contains no checked-arithmetic candidate.
 
+A final phase (`src/ir_passes/checked_int_sink/bound_comparisons.rs`) rewrites
+`php_rel_cmp(L, ichecked_sub(X, c)) Slt` (or the mirrored `Sgt` with the bound on
+the left) to `icmp` against a cast-mode `ichecked_sub_to_int` when `L` is an
+integer, `c` is a literal in `1..=1024` and every other use of the bound is a
+release. PHP evaluates an overflowing `X - c` as `(double)X - (double)c`, which for
+such `c` rounds to exactly -2^63, and the cast mode converts that to
+`PHP_INT_MIN`; `L < PHP_INT_MIN` and PHP's `(double)L < -2^63` are both false for
+every integer. A non-strict comparison is left alone: `(double)L <= -2^63` holds
+for every `L` within 512 of `PHP_INT_MIN`.
+
 Codegen keeps the in-range path in scalar registers. On signed overflow it
 recomputes the operation as a double and applies the shared PHP float-to-int
 conversion, so removing the box does not change PHP's overflow semantics. The
@@ -1504,11 +1598,104 @@ typed opcode is implemented for macOS AArch64, Linux AArch64, and Linux x86_64.
 ownership rewrite cannot hand the sink a new integer-only use graph. See
 [Fresh Mixed Assignment Transfer](#fresh-mixed-assignment-transfer).
 
+### Scalar Buffer Element Increments
+
+`++` and `--` of one element of a scalar `buffer<T>` (an integer width, `float` or `f32`) lower
+in `src/ir_lower/stmt/buffer_element_updates.rs` to a typed `buffer_get`, one step and a typed
+`buffer_set`, in both IR modes. The parser writes a statement update as
+`$b[$k] = (new = ++(old = $b[$k]))` and an expression update as
+`old = $b[$k]; new = old + 1; $b[$k] = new` over generated locals; lowered generically, the
+working local is `mixed` because an int `++` may promote to float, so each update boxed its
+seed, ran `str_inc_dec` and copied the result with `mixed_clone` (or boxed `new` through
+`ichecked_add`).
+
+An int element steps with `ichecked_add_to_int`/`ichecked_sub_to_int` and the `true` cast
+immediate: in range it is one flag-setting add, and on overflow it recomputes the double and
+applies the shared PHP float-to-int conversion, which is what `buffer_set` stored from the boxed
+float before. A float element uses `fadd`/`fsub` with `1.0`. The statement paths decide from the
+loaded handle or the receiver's property type, the same facts that select `buffer_set`; the
+expression path decides at the element read, after the prelude has stabilized the receiver and
+the key, from the type `load_local` will give the receiver (a nullable receiver keeps the generic
+path), then reads and steps the element where the prelude did, before the write loads its handle
+or receiver, so user code run by the read is seen by the write as before. The key, the receiver
+lease, the bounds and freed-buffer checks and the width conversion of the store are the ordinary
+write path's. Only the value of a prefix expression on an int element stays a checked `mixed`
+(`ichecked_add`, emitted after the store), because PHP's prefix value is the promoted float past
+the integer range; the store beside it is still typed. Loops of such updates now pass the
+`buffer_access` allowlist, so their handle resolution is hoisted like any other buffer loop.
+
+### Bounded Mixed Counters
+
+`src/ir_passes/bounded_mixed_counter.rs` considers ordinary Mixed locals updated
+by increment/decrement and seeded with concrete PHP integers, or with checked or
+mixed `+`, `-`, `*` of raw integers and of the counters proven with them
+(`$j = $i + 1`). A seed producer becomes the matching `ichecked_*_to_int` on the
+trial and, like an update, must be rewritten to unchecked arithmetic. A comparison
+of a counter with a checked `+`/`-` of raw integers (`$i < $n - 1`) stays a
+`php_rel_cmp`, since the bound may be an overflowed float; IntegerRange bounds the
+counter through it only on the outcome the overflow direction cannot produce. A complete
+storage/use scan excludes aliases, other types, pointer escapes, parameters,
+static/global storage, eval, suspension and exceptional CFGs. Direct-call
+consumers are accepted only at physical, by-value `mixed` parameter positions
+recorded from the module before function optimization. The snapshot uses the
+backend's PHP canonical name keys and first-match priority (free functions before
+closures), retaining an ineligible first target instead of selecting a later one.
+Call targets, signatures,
+closure eligibility and return representations remain unchanged.
+
+The pass scalarizes a private trial function, removes transparent numeric owner
+copies with the shared rewrite helpers, and requires successful SSA promotion.
+The existing integer-range analysis must rewrite every new checked update to an
+unchecked integer operation before the trial can replace the original function.
+Strict integer bounds can establish that the update fits even at a runtime limit
+of PHP_INT_MAX or PHP_INT_MIN. An inclusive bound, an unrelated loop condition,
+a late type change or a missing proof keeps the boxed path and PHP float promotion.
+The analysis is capped at 16 candidate locals in functions of at most 4096
+instructions. It runs only with IR optimization enabled and uses the existing
+scalar and call-argument backends for every supported target.
+
+### Guarded Loop Counter Versions
+
+`loop_counter_versioning` follows the static bounded-counter proof. For a small
+innermost loop with an entry-tested counter and a stable integer or Mixed bound,
+it guards the seed and bound tags, plus inclusive integer extrema, before entering
+a private integer copy. The original boxed loop remains the fallback; each fast
+entry unboxes the guarded integer payloads without PHP cast effects, and each fast
+exit publishes the exact final counter to the original slot. Post-test loops and
+conditions computed outside the header cannot justify unchecked counter updates.
+Committed copies accept only consumers whose existing opcode handles raw integers;
+coercing stores and operations requiring a boxed input retain the generic loop.
+Cast targets must be scalar, and ordering partners must preserve PHP numeric or
+boxed comparison rules; boolean/null ordering partners retain the generic loop.
+Strict identity with raw pointer, buffer or packed partners also keeps its original
+boxed counter input, preserving the runtime boxing semantics.
+Loose equality with external Mixed-representation partners keeps a boxed counter
+so objects still use PHP's complete comparison rules.
+The broader value-only inventory remains available to discarded storage trials,
+whose later AST lowering rebuilds representation conversions.
+Comparison partner rules also constrain those trials: relowering a numeric binding
+can otherwise change PHP coercion or identity dispatch before IR optimization runs.
+
+A preceding seed guard can skip a dead-at-exit loop when a checked directional
+seed overflow makes its first comparison false. This also requires an innermost
+loop, so one header comparison cannot authorize repeated nested updates. All eligible
+seed guards are exhausted before the separate loop-copy budget is spent. Integer
+and boolean preheader constants and retired bookkeeping are accepted only when the resulting
+CFG still validates. Both
+rewrites operate on EIR and preserve the original AST binding decisions and
+source metadata. See [the optimizer](the-optimizer.md) for the complete eligibility
+and code-growth limits.
+
 ### Boxed Numeric Chain Fusion
 
 `src/ir_passes/checked_numeric_chain.rs` fuses compatible checked arithmetic
 chains that are consumed only as integers, avoiding intermediate Mixed boxes.
 It runs after checked integer sink specialization and before constant folding.
+Private index locals can connect a chain to its final integer casts when every
+rewritten read has the same unique reaching writer. An intervening store or
+retirement rejects that rewrite. Float promotion remains part of the complete
+chain through the final cast; a generic loop copy retains any boxed storage and
+cleanup that it still uses.
 
 ### Constant Folding
 
@@ -1683,8 +1870,11 @@ callee signatures (which parameters are by-reference), the pass uses a
 conservative default-deny allowlist: a slot is excluded whenever any of its
 `load_local` results is consumed by an instruction that is not a proven
 value-only consumer (arithmetic, comparison, cast, output, store, string, or
-refcount op). Every call, object construction, closure capture, property/array
-access, and any future opcode is treated as a possible by-reference escape.
+refcount op). Operand zero of `prop_get` and `method_call` is a value-only
+receiver on every lowering route. Later method operands remain conservative,
+even when they repeat the receiver value. Other call operands, object
+construction, closure capture, property/array access, and any future opcode
+are treated as possible by-reference escapes.
 Feeding a load into a value-only op first is safe because codegen only traces a
 *direct* `load_local` back to a slot.
 
@@ -1698,13 +1888,18 @@ instruction elimination on a later driver sweep.
 ### Branch Simplification
 
 The branch simplification transform (`src/ir_passes/branch_simplify.rs`) simplifies
-the CFG in four ways:
+the CFG in five ways:
 
 - **Constant-condition folding** — a `cond_br` whose condition resolves to a
   constant (`const_bool`, `const_i64` via PHP truthiness, or `const_null`) becomes
   an unconditional `br` to the taken edge. A `switch` on a `const_i64`/`const_bool`
   scrutinee folds to a `br` to the matching case (or the default). A `while (true)`
   loop, for example, lowers to a constant `cond_br` that this fold collapses.
+- **Repeated-guard folding**: `guard_facts` reuses a tested boolean SSA condition
+  when the selected edge's target has only that branch as predecessor, the branch
+  strictly dominates the target, and the target dominates the later test. Joins
+  and entry re-execution cannot supply facts; fresh mutable-storage reads are
+  distinct SSA conditions and keep their own tests.
 - **Empty-block jump threading**: compose each incoming edge's arguments through
   non-entry blocks containing only unused Nops and an unconditional branch.
   Parameters must not escape the forwarding terminator, and cyclic forwarding
@@ -1796,9 +1991,35 @@ storage types, so spread/named-boxed-`mixed` and `int`↔`float` sites stay ordi
 calls), and any `string` argument must come from a non-scratch source
 (`const_str`/`load_local`), because the spliced body runs the callee's
 statement-boundary concat-buffer reset in the host frame and would otherwise free an
-in-flight scratch string argument. Call-site name resolution (`call` Data immediates
-and `function_variant_call` include-variant refs) uses snapshots taken before
-mutation, so the rewrite loop never aliases the module while holding a function.
+in-flight scratch string argument. Call-site name resolution uses snapshots taken
+before mutation, so the rewrite loop never aliases the module while holding a
+function. Current lowering emits `call` with a Data immediate, including calls
+to public include-variant dispatchers. The inliner's resolver also retains support
+for reserved `function_variant_call` references; that opcode is not emitted by
+the current AST-to-EIR path.
+
+Small instance methods also participate through `src/ir_passes/inline/methods.rs`.
+Its `MethodTargets` snapshot resolves a `method_call` only for a plain non-nullable
+user-class receiver when the class or method is final, or the method has no vtable
+slot. Generic receivers also qualify when
+`generics::dispatch::has_fixed_instantiation` proves their arguments cannot widen,
+as for scalar specializations. Instantiations with potentially widening object
+arguments keep a real call because variance can change the actual instantiation.
+The borrowed `$this` parameter is the only object exemption from the ordinary
+boundary rules. The body must be
+frame-independent, and literal parameter guards, by-reference arguments, variadics
+and backtrace-visible method frames retain their calls. A splice checks the receiver
+for null after argument binding, except when it is the host method's own `$this`.
+Transplanted method locals receive generated names so they cannot enter the caller's
+PHP variable scope.
+
+Each transplanted instruction keeps its lexical class in `Function::inlined_scopes`
+when that class differs from the host's `lexical_class`. Codegen reads this through
+the per-instruction `FunctionContext::lexical_class()`, preserving private-property
+resolution even in another class or a free function. Passes copying a body must carry
+these entries to the corresponding new instruction IDs; the inliner and tail-call
+splicer both do so. Passes moving instructions keep their IDs, and property-read
+reuse requires equal scope entries before equating separate `prop_get` values.
 
 ### Fresh Mixed Assignment Transfer
 
@@ -2033,7 +2254,7 @@ instructions, but they must be represented in metadata or consumed by lowering.
 | `ClassProperty` / `PropertyHooks` | Class metadata, property layout, readonly/final/static flags, hooks, defaults, and attributes. |
 | `ClassConst` | Class/interface/trait constant metadata and value expression. |
 | `ClassMethod` | Separate `Function` plus method metadata and vtable/static dispatch metadata. |
-| `CType::Int`, `Float`, `Str`, `Bool`, `Void`, `Ptr`, `TypedPtr`, `Callable` | Extern ABI metadata consumed by `ExternCall`, extern globals, and callback trampolines. |
+| `CType::Int`, `IntWidth`, `Float`, `F32`, `Str`, `Bool`, `Void`, `Ptr`, `TypedPtr`, `Callable` | Extern ABI metadata. `ExternAbiType` drives `ExternCall` argument and return normalization only; extern globals and callback trampolines still see the PHP type. |
 | `ExternParam` | Extern function parameter metadata. |
 | `ExternField` | Extern class/struct field offset/type metadata. |
 | `PackedField` | Packed class field offset/type metadata. |
@@ -2068,7 +2289,7 @@ instructions, but they must be represented in metadata or consumed by lowering.
 | `ArrayLiteralAssoc` | Allocate hash table and insert key/value pairs in source order; empty hash keeps mixed key/value metadata. |
 | `Match` | Lower subject once; build strict-comparison arm CFG; default absence may `Fatal` via match-unhandled runtime. |
 | `ArrayAccess` | Lower base/index; dispatch to array/hash/mixed/object ArrayAccess/buffer access as type requires. |
-| `Ternary` | Lower condition, then branch CFG; result block joins branch values. |
+| `Ternary` | Lower condition, then branch CFG; result block joins branch values through a hidden merge temp typed from the arms. Arms of one `buffer<T>` type keep the handle word instead of a boxed `mixed` temp, and a `throw` arm of such a merge ends its branch with `Unreachable` (`ShortTernary`, `Match` and `NullCoalesce` merge the same way). |
 | `ShortTernary` | Lower value once; truthy path reuses value; false path lowers default. |
 | `Cast` | Lower expression then emit `Cast`/specific conversion op. |
 | `Closure` | Emit callable descriptor, capture metadata, and deferred closure function body. |
@@ -2232,9 +2453,13 @@ greatest fixed point, so a value written before a loop remains eligible when
 the back edge only reads it.
 
 Promotion requires ordinary integer, boolean, or float local storage with only
-plain load/store accesses. Address escapes, by-reference uses, global and static
-slots, refcounted values, nonstandard slot operations, eval scope access, and
-functions with implicit exception-handler edges stay slot-backed. This pass runs
+plain load/store accesses. Stored values and loads must match the slot's logical
+PHP type as well as its representation, with `false` values admitted into boolean
+storage. Resource payloads in integer storage cannot acquire integer semantics
+through SSA forwarding. Address escapes,
+by-reference uses, global and static slots, refcounted values, nonstandard slot
+operations, eval scope access, and functions with implicit exception-handler
+edges stay slot-backed. This pass runs
 in the fixed-point EIR optimizer before register allocation. Both `--ir-opt=off`
 and `--regalloc=stack` remain available for comparison.
 

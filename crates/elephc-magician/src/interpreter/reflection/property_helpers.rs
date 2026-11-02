@@ -374,6 +374,7 @@ pub(super) fn eval_reflection_property_hook_parameters(
         required_parameter_count: 1,
     };
     vec![EvalReflectionParameterMetadata {
+        native_default_factory: None,
         name: "value".to_string(),
         declaring_class_name: Some(declaring_class.to_string()),
         declaring_function: Some(declaring_function),

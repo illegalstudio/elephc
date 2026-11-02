@@ -97,13 +97,30 @@ pub(super) fn box_ip2long_result(ctx: &mut FunctionContext<'_>) {
 
 /// Boxes a string result or null-pointer failure sentinel into Mixed form.
 pub(super) fn box_string_or_false_result(ctx: &mut FunctionContext<'_>, label_prefix: &str) {
+    box_string_or_false_with_ownership(ctx, label_prefix, false);
+}
+
+/// Transfers an owned string or boxes its null-pointer failure sentinel into Mixed form.
+pub(super) fn box_owned_string_or_false_result(ctx: &mut FunctionContext<'_>, label_prefix: &str) {
+    box_string_or_false_with_ownership(ctx, label_prefix, true);
+}
+
+/// Shares sentinel handling while retaining the source string ownership contract.
+fn box_string_or_false_with_ownership(ctx: &mut FunctionContext<'_>, label_prefix: &str, owned: bool) {
     let false_label = ctx.next_label(&format!("{}_false", label_prefix));
     let done_label = ctx.next_label(&format!("{}_done", label_prefix));
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            // -- select string or false boxing from the pointer sentinel --
             ctx.emitter.instruction(&format!("cbz x1, {}", false_label));       // a null string pointer means the conversion failed
-            crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+            // -- transfer owned output or persist borrowed string storage --
+            if owned {
+                crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Str);
+            } else {
+                crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+            }
             ctx.emitter.instruction(&format!("b {}", done_label));              // skip false boxing after a valid string result
+            // -- materialize PHP false for the failure sentinel --
             ctx.emitter.label(&false_label);
             ctx.emitter.instruction("mov x1, #0");                              // false payload = 0 for failed conversion
             ctx.emitter.instruction("mov x2, #0");                              // bool Mixed payloads do not use a high word
@@ -112,10 +129,17 @@ pub(super) fn box_string_or_false_result(ctx: &mut FunctionContext<'_>, label_pr
             ctx.emitter.label(&done_label);
         }
         Arch::X86_64 => {
+            // -- select string or false boxing from the pointer sentinel --
             ctx.emitter.instruction("test rax, rax");                           // a null string pointer means the conversion failed
             ctx.emitter.instruction(&format!("jz {}", false_label));            // box PHP false for failed conversions
-            crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+            // -- transfer owned output or persist borrowed string storage --
+            if owned {
+                crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Str);
+            } else {
+                crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+            }
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip false boxing after a valid string result
+            // -- materialize PHP false for the failure sentinel --
             ctx.emitter.label(&false_label);
             ctx.emitter.instruction("xor edi, edi");                            // false payload = 0 for failed conversion
             ctx.emitter.instruction("xor esi, esi");                            // bool Mixed payloads do not use a high word

@@ -9,11 +9,16 @@
 
 use super::*;
 
-/// Collects literal defaults that can be copied directly into object property slots.
-pub(super) fn collect_property_defaults(
+/// Selects direct literal copies or the class's EIR initializer for object property slots.
+pub(super) fn collect_property_initialization(
     class_info: &ClassInfo,
     inst: &Instruction,
-) -> Result<Vec<PropertyDefault>> {
+) -> PropertyInitialization {
+    if class_info.deferred_property_default_error.is_some() {
+        return PropertyInitialization::Thunk {
+            class_id: class_info.class_id,
+        };
+    }
     let mut defaults = Vec::new();
     for (index, (property, php_type)) in class_info.properties.iter().enumerate() {
         let Some(default_expr) = class_info.defaults.get(index).and_then(Option::as_ref) else {
@@ -28,18 +33,87 @@ pub(super) fn collect_property_defaults(
             continue;
         }
         let offset = 8 + index * 16;
+        let Ok(value) = literal_default_value(
+            &format!("property ${}", property),
+            php_type,
+            &default_expr.kind,
+            inst.op.name(),
+        ) else {
+            // The class initializer is ordinary EIR and can preserve lazy branches in constant
+            // expressions that the direct literal copier deliberately does not interpret.
+            return PropertyInitialization::Thunk {
+                class_id: class_info.class_id,
+            };
+        };
         defaults.push(PropertyDefault {
             offset,
-            value: literal_default_value(
-                &format!("property ${}", property),
-                php_type,
-                &default_expr.kind,
-                inst.op.name(),
-            )?,
+            value,
             is_reference: class_info.owned_reference_properties.contains(property),
         });
     }
-    Ok(defaults)
+    PropertyInitialization::Inline(defaults)
+}
+
+/// Initializes an object held in an EIR value through literals or its EIR thunk.
+pub(super) fn emit_property_initialization(
+    ctx: &mut FunctionContext<'_>,
+    object: crate::ir::ValueId,
+    initialization: &PropertyInitialization,
+) -> Result<()> {
+    match initialization {
+        PropertyInitialization::Inline(defaults) => emit_property_defaults(ctx, object, defaults),
+        PropertyInitialization::Thunk { class_id } => {
+            let argument = abi::int_arg_reg_name(ctx.emitter.target, 0);
+            ctx.load_value_to_reg(object, argument)?;
+            emit_property_init_thunk_call(ctx, *class_id)
+        }
+    }
+}
+
+/// Initializes an object parked in a temporary stack slot through literals or its EIR thunk.
+pub(super) fn emit_stacked_property_initialization(
+    ctx: &mut FunctionContext<'_>,
+    object_stack_offset: usize,
+    initialization: &PropertyInitialization,
+) -> Result<()> {
+    match initialization {
+        PropertyInitialization::Inline(defaults) => {
+            let object_reg = abi::secondary_scratch_reg(ctx.emitter);
+            for default in defaults {
+                abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, object_stack_offset);
+                emit_property_default(ctx, object_reg, default)?;
+            }
+            Ok(())
+        }
+        PropertyInitialization::Thunk { class_id } => {
+            abi::emit_load_temporary_stack_slot(
+                ctx.emitter,
+                abi::int_arg_reg_name(ctx.emitter.target, 0),
+                object_stack_offset,
+            );
+            emit_property_init_thunk_call(ctx, *class_id)
+        }
+    }
+}
+
+/// Calls one emitted class-property initializer with the object in ABI argument zero.
+fn emit_property_init_thunk_call(ctx: &mut FunctionContext<'_>, class_id: u64) -> Result<()> {
+    let thunk = format!("_class_propinit_{class_id}");
+    if !ctx
+        .module
+        .functions
+        .iter()
+        .any(|function| function.name == thunk)
+    {
+        return Err(CodegenIrError::unsupported(format!(
+            "object property initializer thunk {thunk} was not emitted"
+        )));
+    }
+    let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, 0);
+    abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    abi::emit_call_label(ctx.emitter, &thunk);
+    abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    Ok(())
 }
 
 /// Writes all supported property defaults into the newly allocated object.

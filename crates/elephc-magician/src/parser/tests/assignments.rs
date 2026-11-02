@@ -286,3 +286,46 @@ fn parse_fragment_accepts_echo_comma_list_source() {
         ]
     );
 }
+
+/// Verifies an assignment expression inside a call argument stores and yields its value.
+#[test]
+fn parse_fragment_accepts_assignment_inside_call_argument() {
+    let program = parse_fragment(b"var_dump($n = 42);").expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Expr(EvalExpr::Call {
+            name: "var_dump".to_string(),
+            args: vec![EvalCallArg::positional(EvalExpr::Assign {
+                name: "n".to_string(),
+                value: Box::new(EvalExpr::Const(EvalConst::Int(42))),
+            })],
+        })]
+    );
+}
+
+/// Verifies assignment expressions stay right-associative and bind tighter than `or`.
+#[test]
+fn parse_fragment_assignment_expression_precedence_matches_php() {
+    let program = parse_fragment(b"return $a = $b = 1; return $a = $b or $c;")
+        .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[
+            EvalStmt::Return(Some(EvalExpr::Assign {
+                name: "a".to_string(),
+                value: Box::new(EvalExpr::Assign {
+                    name: "b".to_string(),
+                    value: Box::new(EvalExpr::Const(EvalConst::Int(1))),
+                }),
+            })),
+            EvalStmt::Return(Some(EvalExpr::Binary {
+                op: EvalBinOp::LogicalOr,
+                left: Box::new(EvalExpr::Assign {
+                    name: "a".to_string(),
+                    value: Box::new(EvalExpr::LoadVar("b".to_string())),
+                }),
+                right: Box::new(EvalExpr::LoadVar("c".to_string())),
+            })),
+        ]
+    );
+}

@@ -42,10 +42,11 @@ pub enum PhpType {
         value: Box<PhpType>,
     },
     Buffer(Box<PhpType>),
+    Narrow(ScalarWidth),           // storage width of a buffer<T> element only (buffer<i32>, buffer<f32>)
     Callable,                      // closures and function references
     Object(String),                // class instance, e.g., Object("Point") or Object("App\\Point")
     Packed(String),
-    Pointer(Option<String>),       // opaque ptr or typed ptr<Class>
+    Pointer(Option<String>),       // opaque ptr or pointer tagged with a target type
     Resource(Option<String>),      // generic resource or typed resource such as resource<stream>
     Union(Vec<PhpType>),
     TaggedScalar,                  // codegen-internal inline nullable scalar: {payload, tag} pair
@@ -53,6 +54,13 @@ pub enum PhpType {
 ```
 
 This is still much smaller than full PHP's runtime type system, but it now includes user-written union and nullable annotations where the language subset supports them. `Union(...)` values are lowered to the same boxed runtime representation used by `Mixed`. `TaggedScalar` is never produced by the checker itself: codegen funnels construct it from `int|null` unions under the tagged null representation (the default; see `--null-repr`), storing the value as an inline two-word `{payload, tag}` pair instead of a heap-boxed cell. The distinction between `Array` (indexed) and `AssocArray` (key-value) is determined at compile time from the literal syntax (`[1, 2]` vs `["a" => 1]`), and heterogeneous payloads in either representation widen to boxed `Mixed` elements.
+
+`Narrow(width)` is the storage width of a `buffer<T>` element declared with a C width name
+(`buffer<u8>`, `buffer<i32>`, `buffer<f32>`). It only ever appears inside `Buffer`: every
+element read and write uses `storage_value_type()`, the `Int` or `Float` the width reads as, so
+no value is typed `Narrow` (the EIR validator rejects one). Packed class fields keep the same
+widths in their metadata instead, as `PackedFieldInfo::width` beside the field's `int` or
+`float` type, and `PackedClassInfo::align` records the natural C alignment the layout pads to.
 
 `False` is the PHP literal `false` subtype used by false-sentinel declarations such as `int|false` (the shape many builtins like `strpos` return). Its runtime representation is identical to `Bool`, and `bool` accepts a `False` value. Union normalization keeps a distinct `False` member only when the declaration is false-only: a full `bool` member in the same union absorbs it.
 
@@ -64,7 +72,7 @@ This is still much smaller than full PHP's runtime type system, but it now inclu
 
 `Object(String)` represents a class instance. The string carries the canonical class name after name resolution (for example `"Point"` or `"App\\Point"`). Objects are heap-allocated pointers (8 bytes on the stack).
 
-`Pointer(Option<String>)` represents a raw 64-bit address. `Pointer(None)` is an opaque pointer, while `Pointer(Some("Point"))` is a pointer tagged with a checked pointee type. The tag affects static checking, but the runtime value is still just an address in `x0`.
+`Pointer(Option<String>)` represents a raw 64-bit address. `Pointer(None)` is an opaque pointer, while `Pointer(Some("Point"))` is a pointer tagged with a checked pointee type. The tag affects static checking, but the runtime value is still just a native address. A target tag can name a class, a C width, or a nested pointer such as `ptr<App\\Node>`. C widths use a reserved internal prefix so they cannot collide with a class of the same name; `PhpType` display removes that prefix. Class-name consumers must unwrap nested targets using `names::pointer_target_leaf` or `pointer_target_leaf_name`.
 
 `Resource(Option<String>)` represents PHP resource handles. `Resource(None)` is a generic resource, while `Resource(Some("stream"))` is the stream-handle shape used by successful `fopen()` calls and the `STDIN` / `STDOUT` / `STDERR` constants. Resource values are stored as one 8-byte native payload in codegen, but the type checker keeps them distinct from integers so stream built-ins can reject plain numeric descriptors.
 
@@ -77,11 +85,44 @@ again. Generic traits are instantiated before trait flattening. Templates are
 removed before downstream optimization and EIR lowering, which receive ordinary
 concrete declarations such as `Box<int>` and `identity<int>`.
 
+Generated class, interface, and trait declarations precede executable statements.
+This keeps specializations available when the program ends with a terminating
+statement, including the `exit()` appended by the native test driver. A generic
+class reached only from a test method uses the same specialization path as an
+ordinary program.
+
+Included generic functions retain their runtime include dispatch. The checker binds the
+public template at each call and specializes every possible include variant before
+comparing their concrete signatures. Variants must declare matching type parameter
+contracts, including bounds and defaults; parameter names may differ. After the fixed
+point, each public specialization has its own dispatcher and activation marks at the
+original include positions. This also applies to functions declared in files required
+by `elephc test`.
+The rewrite updates both the AST and the checker's retained class and enum method
+bodies, including flattened trait methods, because EIR lowers those retained copies.
+
 The checker validates bounds and variance, and records resolved call, construction,
 and method sites in `CheckResult`. Site keys include the enclosing body scope and
 source span, so one template coordinate can select different instantiations.
 Typed arrays retain their declared element or key/value storage, and callable
 signatures carry inference information while keeping ordinary descriptor storage.
+
+Native storage widths remain in generic bindings and specialization identities.
+`generics::substitute_value_type()` maps a bound width to its PHP scalar carrier
+only when materializing a value annotation. The AST walker's `transform_value_type`
+hook covers parameters, returns, ordinary members, locals, and closure signatures;
+buffer allocation elements, nested buffer types, class arguments, and type defaults
+retain raw substitution. Checker-created signatures use the same value helper as
+the spliced AST, so `T = u32` yields an `int` method ABI over `buffer<u32>` storage.
+Concrete bindings recurse through PHP value wrappers before their annotations resolve;
+widths nested inside `buffer<T>` or class arguments remain storage identities. Bounds
+check the same PHP carriers. Written generic call suffixes resolve in caller scope and
+participate in the shared AST type walk. Parser-owned suffixes retain all explicit
+root qualifiers until resolution; no-op type walks preserve their original spelling.
+Resolved suffixes then use canonical specialization names. Rooted width-named classes retain that marker
+through binding adaptation and name decoding, so they cannot be confused with bare
+storage widths. The dispatch stability proof treats native width slots as scalars,
+allowing final accessors to inline without permitting width arguments to widen.
 
 Supported PHPDoc templates are applied per physical file after the strict-PHP
 audit. They affect type checking and specialization in both modes; strict mode
@@ -138,6 +179,8 @@ Call arguments are the fourth aliasing source, and it is wider than a declared `
 
 Shapes 1 and 2 — the ones that END a binding — are additionally gated by `Checker::local_binding_is_killable`: the local's CURRENT binding must have been created by a statement that itself sits at conditional depth 0 (not inside an `if`/loop/`try`/`switch`/…) — which can be anywhere in the body, not only its first statement — and the `unset`/reassignment must itself sit at conditional depth 0 too, so the store that replaces the binding definitely runs.
 
+A `for` initializer counts as a statement at the depth of the `for` itself. `check_stmt` opens one conditional scope for the whole loop, but the initializer runs exactly once, unconditionally, whenever the statement does, so the `For` arm checks it with the depth lowered back (and `mixed_storage_scan` mirrors that): `for ($i = 0; …)` binds `$i` exactly like `$i = 0;` written before the loop, and a later straight-line `unset($i)` or `$i = "done";` ends that binding instead of failing. The condition and the update repeat with the body and stay at the body's depth.
+
 `require_once`'d top-level code never satisfies that: its include guard lowers to a runtime branch, so every TOP-LEVEL statement of the included file sits at depth ≥ 1. That covers the included file's TOP-LEVEL statements ONLY: `enter_local_binding_scope` resets the depth counter per body, so a function/method/closure declared in the same file starts its own locals at depth 0 and both shapes apply to them as usual. Plain `require` splices the file in unguarded, so even its top-level statements behave like inline code.
 
 Shape 1 has one further top-level exclusion of its own, `Checker::program_global_names`: inside main, a name declared `global` by any function-like STATEMENT body of the program lives in a `_eir_global_*` symbol other bodies reach by name, so `unset` keeps the binding there and is a plain typing no-op. That set is `crate::global_decls::collect_global_var_names`, the ONE walk EIR lowering reads as well, and it descends into statement bodies only: a `global` written inside a closure body, an assignment prelude, or an enum method is invisible to the veto and to lowering alike — a deliberate blind spot shared by both sides, tracked upstream, with both directions of widening it measured and rejected (see the module preamble for the measurements). Shape 2 is deliberately NOT gated by that list — the retype through such a name lowers correctly today, and vetoing it would reject working code.
@@ -160,6 +203,8 @@ Shape 1 has one further top-level exclusion of its own, `Checker::program_global
 
    A PARAMETER is never marked (it is already bound when the body starts, at a type the frame's ABI fixed), but a by-value closure CAPTURE — the other pre-bound shape — is: suppressing its mark strands the value the capture owns. Its warning is withheld when replaying the name's assignments from the capture's INCOMING type merges cleanly, because the advice to compile with `--strict-locals` would be false there; the mark and its boxed store sites stay either way.
 
+**Storage-only numeric re-bind.** A COMPATIBLE statement-form reassignment can also end a binding, silently and for storage alone. A frame slot is typed by everything ever stored into it, so `for ($i = $n - 1; …; $i--)` after `for ($i = 0; $i < $n; $i++)` used to widen the one slot both loops shared to boxed `Mixed` (a checked `int - int` is `mixed` until proven), and the first loop, whose own updates are provably integer, ran boxed too. `merge_local_assignment_type` therefore records the assignment in `local_retype_sites` when `splits_numeric_binding` holds: both the binding's type and the assigned type are numeric (`int`, `float`, the `int|float` an increment leaves, or `mixed`), they differ, and the assigned value cannot borrow the old binding's cell (a raw `int`/`float`, or a fresh arithmetic result), because the re-bind releases the old occupant before the store retains the new value. Eligibility is shape 2's (`local_binding_is_killable`, statement form, a span that names a node), plus the program-global veto, and parameters are excluded (`Checker::local_parameter_names`): backtrace frames read a parameter's current argument value from the first slot of its name. Unlike shape 2 nothing typing-visible changes: the environment still takes the MERGED type and no warning is filed, so `--strict-locals` does not affect it. EIR lowering re-binds the slot at the same `rebind_local_for_retype` point; it skips the `zero_local_slot` a numeric slot does not need (raw scalar storage, or a boxed slot `release_local_slot` just cleared), and `checked_int_sink` accepts a retirement no later access can reach, so the old binding can still narrow to a raw integer. `get_defined_vars()` orders a name by the first slot that ever carried it, so this re-bind, like a retype or an `unset` kill, leaves the variable at the position PHP keeps for it.
+
 `--strict-locals` turns shapes 2 and 3 back into the hard error:
 
 ```text
@@ -168,7 +213,20 @@ Type error: cannot reassign $a from int to string
 
 Shape 1 (`unset()` kill) is unaffected in either mode.
 
-Because a `Span` carries no file identity, elephc cannot always tell apart two DIFFERENT statements that happen to sit at the same line and column — the same position in two different included files, or the same file `require`d twice. When such a collision lands on a retype/kill/mixed-storage decision, `binding_decision_ambiguity.rs` rejects it with `Cannot re-bind $a here: …` instead of silently mis-lowering one of the two sites. It also checks the mixed-storage keys a later scan REMOVED (`retired_mixed_storage_store_sites`): a re-decision drops the decisions filed against the sites it is about to re-decide, matching by `(span, name)`, so one body's scan can strip another body's decision and leave nothing behind to reject. The kill and retype maps are deliberately not given the same treatment — a stripped decision there falls back to the pre-feature lowering path, which is correct, whereas a stripped mixed-storage decision removes the name from `CheckResult::mixed_storage_local_names()` while the checker still types the local `Mixed`.
+Every parsed file instance (each include execution and each autoloaded class file) lexes with its own source identity packed into its spans (see [the lexer](the-lexer.md)), so two statements at the same line and column of DIFFERENT files are distinct decision keys. A key can still name more than one node of one parsed source, and when such a collision lands on a retype/kill/mixed-storage decision, `binding_decision_ambiguity.rs` rejects it with `Cannot re-bind $a here: …` instead of silently mis-lowering one of the two sites. It also checks the mixed-storage keys a later scan REMOVED (`retired_mixed_storage_store_sites`): a re-decision drops the decisions filed against the sites it is about to re-decide, matching by `(span, name)`, so one body's scan can strip another body's decision and leave nothing behind to reject. The kill and retype maps are deliberately not given the same treatment: a stripped decision there falls back to the pre-feature lowering path, which is correct, whereas a stripped mixed-storage decision removes the name from `CheckResult::mixed_storage_local_names()` while the checker still types the local `Mixed`.
+
+Nested numeric locals can also split at the starts found by
+`src/types/checker/numeric_regions.rs`. This syntactic scan requires every use of a
+name to lie inside a maximal initialized region: a `for` initializer through its
+loop exit, or an assignment through the end of its statement list. A read before
+an initializer or after its region vetoes that name. Incoming names, captures,
+possible reference arguments and scope-observing constructs are excluded. Every
+assignment must remain numeric. Checked arithmetic can depend on other region
+locals; a later nonnumeric writer retracts the complete transitive dependency
+graph of region decisions. `numeric_region_retypes` records decisions justified only
+by this scan, so retraction preserves independently valid straight-line numeric
+splits. The original assignment spans enter `local_retype_sites`, so
+existing ambiguity and AST-duplication guards apply to these decisions too.
 
 `eval()`'d code — whether interpreted by the optional Magician bridge or AOT-lowered from a literal fragment into an EIR scope function — reads and writes its locals through a boxed `Mixed` scope cell rather than a compiled, typed frame slot (see [eval() scope behavior](../php/eval.md#scope-behavior)), so it was never subject to this rule to begin with: `--strict-locals` has no effect inside `eval()` fragments. The body that CALLS `eval()` is the reverse case: because the scope cell is addressed by NAME, shapes 1 and 2 would hand the fragment a slot the rest of the body no longer uses, so `mixed_storage_scan` records a per-body "contains eval" flag (`Checker::body_contains_eval`) and `local_binding_is_killable` refuses both there — body-scoped rather than point-in-time, since `eval_barrier_active` only rises once the walk has PASSED an `eval` and the hazard includes an `eval` below the site. See [`--strict-locals`](../compiling/cli-reference.md#strict-locals-mode) for the CLI flag.
 
@@ -275,6 +333,13 @@ A literal that mixes spreads and explicit keys uses `AssocArray` with `Mixed`
 keys. Each spread contributes its source's element type once, so spreading an
 array of arrays preserves the nested array type in the resulting value slots.
 
+An indexed literal with spreads (`[...$list, 1]`) stays an `Array` while every
+spread source is a list, and becomes an `AssocArray` with `Mixed` keys as soon
+as one source is a hash or `mixed`. The scan that decides this types each spread
+source once, and the element merge that follows reuses those types: typing a
+source again would double the work at every level when such literals nest under
+`??` or a ternary.
+
 ### Binary operations
 
 | Operation | Types | Result |
@@ -349,9 +414,18 @@ ptr_cast<T>($ptr: Pointer) → Pointer(Some(T))
 
 Most entries in the table above come from the builtin signature registry, while pointer-tag casts like `ptr_cast<T>()` are checked directly when the type checker visits `ExprKind::PtrCast`. `instanceof` is also checked as a dedicated expression: it always returns `Bool`, validates named `self` / `parent` / `static` targets against the current class context, checks dynamic target expressions for ordinary expression validity, and deliberately allows unknown named targets so runtime behavior can return `false` like PHP. For some built-ins the checker also enforces container shape, not just raw argument count:
 
-- `array_push($arr, $val)` requires the first argument to be an indexed `Array`, not an `AssocArray`
+- `array_push($arr, ...$values)` accepts indexed, associative, and boxed PHP array receivers. A statically typed associative receiver keeps its entry type instead of widening it (see [#1508](https://github.com/illegalstudio/elephc/issues/1508)).
 - `array_column($rows, $column_key)` requires the first argument to be an indexed array whose element type is `AssocArray`
 - `wordwrap()` accepts 1 to 4 arguments, matching the builtin checker
+
+`array_push()` distinguishes explicit `=&` groups from the broader set of escaped
+reference aliases. Plain values cannot widen a native indexed receiver in an
+explicit alias group; fresh boxed closure captures can widen. Runtime spreads
+also reject native indexed storage anywhere along an aliased receiver chain.
+For properties, the checker records the selected class, any indirect-write
+error, and whether the slot supports a live managed reference. Declared `array`
+and `mixed` slots support that path; inferred native array/hash slots use
+copy/write-back for plain values and reject runtime spreads.
 
 The type checker validates:
 1. **Argument count** — too few or too many arguments → error
@@ -425,6 +499,19 @@ is therefore still `Implementation|false`. Storage operands never qualify, whate
 as null, and the checker has no definite-assignment analysis to rule those out. Inferred returns do
 not qualify either, since a body that falls off its end returns an implicit `null` its inferred
 type omits, and neither do builtin and extern results.
+
+### Buffer merges
+
+**Files:** `src/types/checker/inference/expr/buffer_merges.rs`
+
+A ternary, `?:`, `match` or `??` with an arm that holds a `buffer<T>` is typed by its own rule
+before the joins above: every arm that completes must have that same buffer type, and the merge
+is then that buffer. A `throw` arm is skipped by its shape (it is typed `never` by `infer_type`
+and `null` by the assignment-effects walk), and so are a dead or `null` default of `??` and a
+`null` left operand. Any other arm (another buffer type, `null`, `mixed`, a scalar) is a compile
+error: a buffer has no null and no `mixed` form, and the boxed handle a `mixed` merge would hold
+reads its elements back as null. The EIR merge typing in `src/ir_lower/expr/merge_temps.rs`
+(`shared_buffer_merge_type`) keeps the same handle word for the same arms.
 
 ## User-defined function checking
 
@@ -671,7 +758,7 @@ LFC statements retain the builtin guard even under that flag. Both statement che
 and the mixed-storage pre-scan install each statement's `source_mode`, so a function's
 guards and boxing warnings do not depend on whether its caller was written in PHP or LFC.
 
-The guarded receiver may be a variable, a simple instance property (`$var->prop`, `$this->prop`), or a simple static property (`self::$p`, `Cls::$p`). `static::$p` is never narrowed, because late static binding can select a subclass that redeclares the property. Property narrowings are stored under a synthetic environment key and are conservatively dropped after anything that could mutate the property — a property assignment, any call, or loop-body entry — and dropped per-object when the root local is rebound. Properties backed by PHP 8.4 `get` hooks or `__get` are never narrowed, because two reads may produce different values. Guard detection never raises a diagnostic of its own: a receiver whose type cannot be inferred is simply not narrowed.
+The guarded receiver may be a variable, a simple instance property (`$var->prop`, `$this->prop`), or a simple static property (`self::$p`, `Cls::$p`). `static::$p` is never narrowed, because late static binding can select a subclass that redeclares the property. Property narrowings are stored under a synthetic environment key and are conservatively dropped after anything that could mutate the property — a property assignment, any call, or loop-body entry — and dropped per-object when the root local is rebound. A call keeps the narrowing of a `readonly` property of `$this` (declared `readonly` or in a `readonly` class): an initialized readonly property cannot be written again, and `$this` cannot be rebound. Any other root may be rebound by the call (a by-reference parameter, a `=&` alias, a global, a by-reference closure capture), and PHP 8.3+ can reinitialize a readonly property while cloning, so a call drops the fact for every other root and in any hierarchy that declares `__clone`. Properties backed by PHP 8.4 `get` hooks or `__get` are never narrowed, because two reads may produce different values. Guard detection never raises a diagnostic of its own: a receiver whose type cannot be inferred is simply not narrowed.
 
 #### Lazy initialization (the singleton shape)
 
@@ -700,7 +787,13 @@ function set($x): void {                 // $x inferred int|Foo from the call si
 }
 ```
 
-Narrowing is purely a type-checker step: the variable keeps its boxed runtime (`Mixed`) representation, and codegen coerces it where the narrowed type is required — unboxing for scalar uses, and dispatching a method on a `Mixed`/union receiver by its runtime class id. Reassigning a narrowed variable inside a branch replaces the narrowed binding with the assigned type, and it invalidates any property narrowings rooted at that variable.
+Narrowing preserves the variable's runtime storage. Codegen coerces boxed `Mixed` values where the narrowed type is required, unboxing scalar uses and dispatching methods on `Mixed`/union receivers by runtime class id. For an interface receiver already stored as an object pointer, the checker carries the receiver type at each property read or method call into EIR. A guarded read can therefore select a concrete class's property or a derived interface's method while the local slot keeps its original interface type and ownership. The shared local-load storage predicate accepts these different object names as the same pointer representation, so codegen performs no conversion and cleanup treats the refined load as a borrowed slot view. These facts are keyed by body scope and source node; conflicting flow-sensitive checks disable the refinement for that use. Preliminary loop-storage inference omits guards and narrowed capture types, so it cannot publish receiver facts for the queried body or its lexical closures. Independently checked callees retain their own facts; the named-function context distinguishes a user function called `main` from the program entry scope. Receiver observations are retained when a property result is already narrowed and when `isset()` bypasses ordinary read inference. Silent probes choose their class and initialization check from the checked receiver view before any property read; ordinary reads still raise for uninitialized typed properties. Named, literal dynamic and runtime-name property reads, including their nullsafe forms, consume the same checked receiver view. Dynamic probes carry a nullable result and their shared slot-state guard yields null for an uninitialized typed property. Buffer probes retain their element type and use a raw missing-handle sentinel, since boxing a buffer discards the layout required by later element access. Reassigning a narrowed variable inside a branch replaces the narrowed binding with the assigned type, and it invalidates any property narrowings rooted at that variable.
+
+Property assignments and `unset()` record the same checked receiver view. A write records its receiver before inferring the RHS, and lowering applies that view before choosing the destination type or evaluating the RHS. Runtime-name writes also refine the receiver before evaluating the name. Removal selects its supported storage shape and magic behavior from the checked view before lowering the receiver once. These operations retain the existing receiver leases, readonly checks and exception cleanup; they do not read a property's value just to remove it.
+
+Silent classification resolves instance and static property receiver types from class metadata before applying the checked view. Dynamic unset names use declared user/extern return types and retain existing builtin string hints, because a generic builtin contract may be wider than a checked string result.
+
+Static write chains fetch their receiver after evaluating the RHS and runtime name. Those effects can replace the object after an `instanceof` guard, so delayed interface receivers use a temporary boxed runtime view instead of applying the earlier concrete-class fact. The static slot keeps its declared interface type. Each selected child transfers the receiver lease to the next view, preserving cleanup on both normal and exceptional paths.
 
 #### Assigning inside a guarded region
 
@@ -727,6 +820,21 @@ After successful checking, elephc also runs a warning pass over the AST (`src/ty
 - suspicious OOP declarations, such as `final private` methods (never overridden, so `final` is meaningless outside `__construct`)
 
 Warnings are returned through `CheckResult` and printed by the CLI without failing the compilation.
+
+Checker errors and warnings carry only a `Span`. Each file the resolver or the autoload pass lexes gets its own source identity, and `Span::register_source_path` records which physical file that identity came from; `print_error` / `print_warning` prefer `Span::source_path` over an explicit file tag, so an entry-file tag cannot rename a position in another file. The pipeline registers the entry path before frontend processing, making positioned diagnostics print as `kind[file:line:col]`. Class schema errors (circular inheritance, extending a `final` class, duplicate or unknown parent classes) point at the class declaration.
+
+The discarded autoload prelude probe restores only thread-local source IDs and anonymous-class numbering. Synthetic spans and hidden value-include temporaries use monotonic process-global counters, so a probe cannot recycle identities allocated by another compiler thread. Gaps left by discarded work do not affect PHP values or name resolution.
+
+### Lookup indexes
+
+Large programs (thousands of classes) made several per-member scans of the whole class table dominate checking time. The checker keeps lazily built indexes for them, each stored with the `classes.len()` it was built for, so registering a class invalidates it:
+
+- `class_children_index`: direct subclasses per parent, used by `class_and_descendants` for late-bound `new static` targets.
+- `method_impl_users_index`: the classes whose method table dispatches a given `(implementing class, method, is_static)` to that implementation, to which each checked body's inferred return is copied.
+- `property_sharers_index`: the classes sharing a `(property, declaring class)` slot, retyped together by a constructor argument.
+- `loop_storage_scope_spans`: the loop spans `loop_storage_types` holds for each scope, so re-walking a scope clears only its own loop contracts.
+
+Builtin, function and folded-map lookups try the exact key before the case-insensitive scan.
 
 ## Where the checker sits in the optimizer pipeline
 

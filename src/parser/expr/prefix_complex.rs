@@ -17,7 +17,7 @@ use crate::parser::ast::{
     CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, StmtKind, TypeExpr,
 };
 use crate::parser::stmt::{
-    looks_like_typed_param, parse_anonymous_class, parse_block, parse_name, parse_type_expr,
+    looks_like_typed_param, parse_anonymous_class, parse_block, parse_name, parse_type_arguments_only, parse_type_expr,
 };
 use crate::span::Span;
 
@@ -706,7 +706,7 @@ pub(super) fn parse_named_expr(
                 let (_, args) =
                     crate::parser::stmt::parse_inherited_name_at(tokens, pos, span, &name)?;
                 if !args.is_empty() {
-                    name = name.with_type_arguments(&args);
+                    name = name.with_written_type_arguments(&args);
                 }
             }
             _ => {}
@@ -738,12 +738,11 @@ pub(super) fn parse_named_expr(
         && *pos < tokens.len()
         && tokens[*pos].0 == Token::Less
     {
-        *pos += 1;
-        let element_type = parse_type_expr(tokens, pos, span)?;
-        if *pos >= tokens.len() || tokens[*pos].0 != Token::Greater {
-            return Err(CompileError::new(span, "Expected '>' after buffer_new<T"));
+        let mut args = parse_type_arguments_only(tokens, pos, span)?;
+        if args.len() != 1 {
+            return Err(CompileError::new(span, "Expected one buffer element type"));
         }
-        *pos += 1;
+        let element_type = args.remove(0);
         if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
             return Err(CompileError::new(span, "Expected '(' after buffer_new<T>"));
         }
@@ -782,8 +781,14 @@ pub(super) fn parse_named_expr(
         && tokens[*pos].0 == Token::Less
     {
         *pos += 1;
-        let target_type = parse_name(tokens, pos, span, "Expected type name after 'ptr_cast<'")?
-            .as_canonical();
+        let target_name = parse_name(tokens, pos, span, "Expected type name after 'ptr_cast<'")?;
+        // Keep the leading `\` of a fully qualified target: the name resolver applies the current
+        // namespace to every other spelling, so `ptr_cast<\Pair>` must stay distinguishable.
+        let target_type = if target_name.is_fully_qualified() {
+            format!("\\{}", target_name.as_canonical())
+        } else {
+            target_name.as_canonical()
+        };
         if *pos >= tokens.len() || tokens[*pos].0 != Token::Greater {
             return Err(CompileError::new(span, "Expected '>' after ptr_cast<T"));
         }

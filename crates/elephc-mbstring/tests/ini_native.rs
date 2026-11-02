@@ -142,3 +142,111 @@ fn ini_native_metadata_preserves_aliases_and_retires_reused_allocations() {
     assert_eq!(elephc_mbstring_ini_string_retain_v1(next), 1);
     assert_eq!(elephc_mbstring_native_string_lookup_v1(0x100, 5), 0);
 }
+
+/// Refreshes one allocation through changing lengths before publishing its final current bytes.
+#[test]
+fn ini_native_refresh_resolves_current_length_and_preserves_rejected_updates() {
+    assert_eq!(elephc_mbstring_native_string_reset_v1(), 0);
+    let bytes = *b"ASCII\0X";
+    let owner = bytes.as_ptr() as u64;
+    for length in [1, 0, 7, 2, 5] {
+        assert_eq!(elephc_mbstring_native_string_fresh_v1(owner, length), 0);
+        assert_eq!(elephc_mbstring_native_string_lookup_v1(owner, length), 0);
+    }
+    assert_eq!(elephc_mbstring_native_string_fresh_v1(owner, u64::MAX), 1);
+    assert_eq!(elephc_mbstring_native_string_fresh_v1(0, 5), 1);
+    assert_eq!(unsafe { elephc_mbstring_native_string_resolve_v1(owner, 7) }, 0);
+    let first = unsafe { elephc_mbstring_native_string_resolve_v1(owner, 5) };
+    assert_ne!(first, 0);
+    assert_eq!(elephc_mbstring_native_string_bind_v1(0x100, 4, first), 1);
+    assert_eq!(elephc_mbstring_native_string_bind_v1(0x100, 5, first), 0);
+    assert_eq!(elephc_mbstring_native_string_fresh_v1(owner, 7), 0);
+    assert_eq!(elephc_mbstring_native_string_lookup_v1(owner, 7), 0);
+    let second = unsafe { elephc_mbstring_native_string_resolve_v1(owner, 7) };
+    assert_ne!(second, 0);
+    assert_ne!(second, first);
+    assert_eq!(elephc_mbstring_native_string_bind_v1(0x200, 7, second), 0);
+    assert_eq!(elephc_mbstring_native_string_lookup_v1(0x100, 5), first);
+    assert_eq!(elephc_mbstring_native_string_reset_v1(), 0);
+    for id in [first, second] { assert_eq!(elephc_mbstring_ini_string_retain_v1(id), 1); }
+}
+
+/// Keeps a copied unresolved origin's old length when the source changes before either alias resolves.
+#[test]
+fn ini_native_refresh_detaches_unresolved_alias_before_length_change() {
+    assert_eq!(elephc_mbstring_native_string_reset_v1(), 0);
+    let mut source = *b"ASCII\0X";
+    let copy = source;
+    let a = source.as_ptr() as u64;
+    let b = copy.as_ptr() as u64;
+    assert_eq!(elephc_mbstring_native_string_fresh_v1(a, 5), 0);
+    assert_eq!(elephc_mbstring_native_string_copy_v1(b, a, 5), 0);
+    assert_eq!(elephc_mbstring_native_string_fresh_v1(a, 7), 0);
+    source[0] = b'B';
+    assert_ne!(source, copy);
+    let old = unsafe { elephc_mbstring_native_string_resolve_v1(b, 5) };
+    let new = unsafe { elephc_mbstring_native_string_resolve_v1(a, 7) };
+    assert_ne!(old, 0);
+    assert_ne!(new, 0);
+    assert_ne!(old, new);
+    assert_eq!(elephc_mbstring_native_string_lookup_v1(a, 5), 0);
+    assert_eq!(elephc_mbstring_native_string_bind_v1(0x100, 5, old), 0);
+    assert_eq!(elephc_mbstring_native_string_bind_v1(0x200, 7, new), 0);
+    assert_eq!(elephc_mbstring_native_string_reset_v1(), 0);
+    for id in [old, new] { assert_eq!(elephc_mbstring_ini_string_retain_v1(id), 1); }
+}
+
+/// Promotes a literal only when copied and preserves its aliases through repeated observations.
+#[test]
+fn ini_native_copied_literal_keeps_identity_after_source_refresh() {
+    assert_eq!(elephc_mbstring_native_string_reset_v1(), 0);
+    let source = b"alias".to_vec();
+    let alias = source.clone();
+    let a = source.as_ptr() as u64;
+    let b = alias.as_ptr() as u64;
+    assert_eq!(elephc_mbstring_native_string_literal_v1(a, 5), 0);
+    assert_eq!(elephc_mbstring_native_string_copy_v1(b, a, 5), 0);
+    for _ in 0..4 { assert_eq!(elephc_mbstring_native_string_literal_v1(a, 5), 0); }
+    let original = unsafe { elephc_mbstring_native_string_resolve_v1(b, 5) };
+    assert_ne!(original, 0);
+    assert_eq!(elephc_mbstring_native_string_lookup_v1(a, 5), original);
+    assert_eq!(elephc_mbstring_native_string_literal_v1(a, 5), 0);
+    assert_eq!(elephc_mbstring_native_string_lookup_v1(a, 5), original);
+    assert_eq!(elephc_mbstring_native_string_fresh_v1(a, 5), 0);
+    let fresh = unsafe { elephc_mbstring_native_string_resolve_v1(a, 5) };
+    assert_ne!(fresh, 0);
+    assert_ne!(fresh, original);
+    assert_eq!(elephc_mbstring_native_string_forget_v1(a), 0);
+    assert_eq!(elephc_mbstring_native_string_lookup_v1(b, 5), original);
+    assert_eq!(elephc_mbstring_ini_string_retain_v1(fresh), 1);
+    assert_eq!(elephc_mbstring_native_string_reset_v1(), 0);
+    assert_eq!(elephc_mbstring_ini_string_retain_v1(original), 1);
+}
+
+/// Clears replaced leases for unknown copy sources and creates independent persisted origins.
+#[test]
+fn ini_native_unknown_copy_and_persist_retire_previous_destination() {
+    assert_eq!(elephc_mbstring_native_string_reset_v1(), 0);
+    let source = b"ASCII".to_vec();
+    let destination = source.clone();
+    let a = source.as_ptr() as u64;
+    let b = destination.as_ptr() as u64;
+    assert_eq!(elephc_mbstring_native_string_fresh_v1(b, 5), 0);
+    let original = unsafe { elephc_mbstring_native_string_resolve_v1(b, 5) };
+    assert_ne!(original, 0);
+    assert_eq!(elephc_mbstring_native_string_copy_v1(b, a, 5), 0);
+    assert_eq!(unsafe { elephc_mbstring_native_string_resolve_v1(b, 5) }, 0);
+    assert_eq!(elephc_mbstring_ini_string_retain_v1(original), 1);
+    assert_eq!(elephc_mbstring_native_string_persist_v1(b, a, 5), 0);
+    let persisted = unsafe { elephc_mbstring_native_string_resolve_v1(b, 5) };
+    assert_ne!(persisted, 0);
+    assert_ne!(persisted, original);
+    assert_eq!(elephc_mbstring_native_string_persist_v1(b, a, 5), 0);
+    assert_eq!(elephc_mbstring_ini_string_retain_v1(persisted), 1);
+    let replacement = unsafe { elephc_mbstring_native_string_resolve_v1(b, 5) };
+    assert_ne!(replacement, 0);
+    assert_ne!(replacement, persisted);
+    assert_eq!(unsafe { elephc_mbstring_native_string_resolve_v1(a, 5) }, 0);
+    assert_eq!(elephc_mbstring_native_string_reset_v1(), 0);
+    assert_eq!(elephc_mbstring_ini_string_retain_v1(replacement), 1);
+}

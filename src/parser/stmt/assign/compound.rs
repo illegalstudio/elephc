@@ -23,6 +23,8 @@ pub(super) enum AssignmentOperator {
     Assign,
     Compound(BinOp),
     NullCoalesce,
+    /// An internal incdec update, distinct from numeric compound arithmetic.
+    IncDec(bool),
 }
 
 /// Parses a direct variable compound assignment statement (`$x += 1`, `$x ??= 2`, etc.).
@@ -162,6 +164,7 @@ pub(super) fn assignment_operator(token: &Token) -> Option<AssignmentOperator> {
 ///   `rhs` on the right) so the codegen emits read-modify-write for the target variable.
 /// - `NullCoalesce`: wraps as a `NullCoalesce` node with `target` as the value and `rhs` as
 ///   the default, preserving the short-circuit semantics of `??`.
+/// - `IncDec`: captures the element once and applies ordinary pre-incdec to that local.
 pub(super) fn assignment_value(
     target: Expr,
     op: AssignmentOperator,
@@ -170,6 +173,21 @@ pub(super) fn assignment_value(
 ) -> Expr {
     match op {
         AssignmentOperator::Assign => rhs,
+        AssignmentOperator::IncDec(increment) => {
+            let old = crate::names::generated_local_name(&format!(
+                "__elephc_element_incdec_old_{}_{}", span.line, span.col));
+            let new = crate::names::generated_local_name(&format!(
+                "__elephc_element_incdec_new_{}_{}", span.line, span.col));
+            let operation = if increment { ExprKind::PreIncrement(old.clone()) }
+                else { ExprKind::PreDecrement(old.clone()) };
+            Expr::new(ExprKind::Assignment {
+                target: Box::new(Expr::new(ExprKind::Variable(new), span)),
+                value: Box::new(Expr::new(operation, span)),
+                result_target: None,
+                prelude: vec![Stmt::new(StmtKind::Assign { name: old, value: target }, span)],
+                conditional_value_temp: None,
+            }, span)
+        }
         AssignmentOperator::Compound(op) => Expr::new(
             ExprKind::BinaryOp {
                 left: Box::new(target),

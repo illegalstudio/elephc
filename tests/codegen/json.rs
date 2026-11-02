@@ -70,3 +70,8 @@ mod coordinate_regressions;
 
 #[path = "json/token_dispatch.rs"]
 mod token_dispatch;
+
+#[path = "json/packed_integer.rs"]
+mod packed_integer;
+#[path = "json/encode_large_string.rs"]
+mod encode_large_string;

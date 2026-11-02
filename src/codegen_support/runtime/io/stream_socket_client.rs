@@ -9,7 +9,7 @@
 //! - Opens a TCP connection: `socket` + `connect` on the parsed
 //!   `[tcp://]A.B.C.D:port` address; returns the descriptor or -1.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch, platform::Platform};
+use crate::codegen_support::{abi, emit::Emitter, platform::Arch, platform::Platform};
 
 /// stream_socket_client: open a connected TCP socket to an IPv4 address.
 /// Input:  x0 = address string pointer, x1 = address string length
@@ -141,7 +141,7 @@ pub fn emit_stream_socket_client(emitter: &mut Emitter) {
 
     emitter.instruction("bl __rt_inet_addr_parse");                             // x0 = packed IPv4 or -1, x1 = port
     emitter.instruction("cmp x0, #0");                                          // did the address fail to parse?
-    emitter.instruction("b.lt __rt_stream_socket_client_fail");                 // bail out on a bad address
+    emitter.instruction("b.lt __rt_stream_socket_client_lookup_failed");        // retain a resolver failure separately from native socket errors
     emitter.instruction("str x0, [sp, #16]");                                   // save the packed address
     emitter.instruction("str x1, [sp, #24]");                                   // save the port
 
@@ -155,6 +155,7 @@ pub fn emit_stream_socket_client(emitter: &mut Emitter) {
         emitter.instruction("cmp x0, #0");                                      // Linux: a negative descriptor means failure
     }
     emitter.instruction(&plat.branch_on_syscall_success("__rt_stream_socket_client_sock_ok")); // continue when socket succeeded
+    super::fileinfo_streams::capture_socket_error(emitter);
     emitter.instruction("b __rt_stream_socket_client_fail");                    // socket() failed
     emitter.label("__rt_stream_socket_client_sock_ok");
     emitter.instruction("str x0, [sp, #32]");                                   // save the socket descriptor
@@ -205,6 +206,7 @@ pub fn emit_stream_socket_client(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the connected socket
 
     emitter.label("__rt_stream_socket_client_fail_close");
+    super::fileinfo_streams::capture_socket_error(emitter);
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the socket descriptor
     emitter.syscall(6);
 
@@ -213,6 +215,9 @@ pub fn emit_stream_socket_client(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #80");                                     // release the frame
     emitter.instruction("ret");                                                 // return the failure result
+    emitter.label("__rt_stream_socket_client_lookup_failed");
+    abi::emit_store_imm_to_symbol(emitter, "_stream_error_code", 0, -1);
+    emitter.instruction("b __rt_stream_socket_client_fail");                    // return false with the captured resolver cause
 }
 
 /// Emits the Linux x86_64 stream runtime helper for stream socket client.
@@ -337,7 +342,7 @@ fn emit_stream_socket_client_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("call __rt_inet_addr_parse");                           // rax = packed IPv4 or -1, rdx = port
     emitter.instruction("test rax, rax");                                       // did the address fail to parse?
-    emitter.instruction("js __rt_stream_socket_client_fail_x86");               // bail out on a bad address
+    emitter.instruction("js __rt_stream_socket_client_lookup_failed_x86");      // retain resolver failures separately from socket errors
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the packed address
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the port
 
@@ -348,7 +353,7 @@ fn emit_stream_socket_client_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 41");                                         // Linux x86_64 syscall 41 = socket
     emitter.instruction("syscall");                                             // create the socket
     emitter.instruction("test rax, rax");                                       // did socket() fail?
-    emitter.instruction("js __rt_stream_socket_client_fail_x86");               // socket() failed
+    emitter.instruction("js __rt_stream_socket_client_syscall_failed_x86");     // preserve the failed socket syscall's native errno
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the socket descriptor
     emitter.instruction("mov rdi, rax");                                        // pass fd to the bindto helper
     emitter.instruction("call __rt_apply_socket_bindto");                       // honor socket.bindto before connect (best-effort)
@@ -388,6 +393,7 @@ fn emit_stream_socket_client_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the connected socket
 
     emitter.label("__rt_stream_socket_client_fail_close_x86");
+    super::fileinfo_streams::capture_socket_error(emitter);
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the socket descriptor
     emitter.instruction("mov eax, 3");                                          // Linux x86_64 syscall 3 = close
     emitter.instruction("syscall");                                             // close the failed socket
@@ -397,4 +403,10 @@ fn emit_stream_socket_client_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 64");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the failure result
+    emitter.label("__rt_stream_socket_client_syscall_failed_x86");
+    super::fileinfo_streams::capture_socket_error(emitter);
+    emitter.instruction("jmp __rt_stream_socket_client_fail_x86");              // return false with the captured socket cause
+    emitter.label("__rt_stream_socket_client_lookup_failed_x86");
+    abi::emit_store_imm_to_symbol(emitter, "_stream_error_code", 0, -1);
+    emitter.instruction("jmp __rt_stream_socket_client_fail_x86");              // return false with the captured resolver cause
 }

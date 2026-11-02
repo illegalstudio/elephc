@@ -40,6 +40,9 @@
 use super::*;
 use crate::codegen::lower_inst::runtime_class_messages;
 use crate::codegen_support::emit::Emitter;
+use crate::types::diagnostic_names::php_type_name;
+#[cfg(test)]
+use crate::types::diagnostic_names::php_union_type_name;
 
 /// Runtime tags `__rt_mixed_unbox` can report, with the PHP type name each carries into a
 /// `TypeError` message. Tag 7 never reaches here: the unbox helper peels nested boxes.
@@ -271,7 +274,7 @@ pub(super) fn emit_mixed_property_type_guard(
             TagAction::AcceptIntoInt => {
                 let refuse_label =
                     ctx.next_label(&format!("typed_prop_{}_refused_{}", fragment, type_name));
-                emit_int_destination_diagnostics(ctx, slot, *tag, &refuse_label);
+                emit_int_destination_diagnostics(ctx, *tag, &refuse_label);
                 abi::emit_jump(ctx.emitter, &accept_label);
                 ctx.emitter.label(&refuse_label);
                 emit_property_type_error(ctx, slot, type_name);
@@ -308,7 +311,7 @@ pub(super) fn emit_mixed_property_type_guard(
                         ctx.next_label(&format!("typed_prop_{}_refused_{}", fragment, type_name));
                     let coerce_label =
                         ctx.next_label(&format!("typed_prop_{}_coerce_{}", fragment, type_name));
-                    emit_int_destination_diagnostics(ctx, slot, *tag, &refuse_label);
+                    emit_int_destination_diagnostics(ctx, *tag, &refuse_label);
                     abi::emit_jump(ctx.emitter, &coerce_label);
                     ctx.emitter.label(&refuse_label);
                     match fallback {
@@ -583,13 +586,12 @@ fn emit_accept_object_classes(emitter: &mut Emitter, class_ids: &[u64], accepted
 /// anything outside the int range are a `TypeError` rather than a silently wrapped integer.
 fn emit_int_destination_diagnostics(
     ctx: &mut FunctionContext<'_>,
-    slot: &PropertySlot,
     tag: u8,
     refuse_label: &str,
 ) {
     match tag {
         FLOAT_TAG => emit_float_into_int_diagnostics(ctx, refuse_label),
-        STRING_TAG => emit_string_into_int_diagnostics(ctx, slot, refuse_label),
+        STRING_TAG => emit_string_into_int_diagnostics(ctx, refuse_label),
         _ => {}
     }
 }
@@ -605,12 +607,11 @@ fn emit_float_into_int_diagnostics(ctx: &mut FunctionContext<'_>, refuse_label: 
 ///
 /// The original string bytes have to survive the conversion because PHP quotes them verbatim
 /// in the deprecation, so the pointer/length pair is saved before `__rt_str_to_number` runs.
-fn emit_string_into_int_diagnostics(
+/// On acceptance the converted integer is restored after any diagnostic handler returns.
+pub(in crate::codegen) fn emit_string_into_int_diagnostics(
     ctx: &mut FunctionContext<'_>,
-    slot: &PropertySlot,
     caller_refuse_label: &str,
 ) {
-    let _ = slot;
     let numeric_label = ctx.next_label("typed_prop_string_numeric");
     let refuse_label = ctx.next_label("typed_prop_string_refused");
     let exact_label = ctx.next_label("typed_prop_string_exact");
@@ -654,6 +655,11 @@ fn emit_string_into_int_diagnostics(
     emit_truncation_is_exact_jump(ctx, STRING_TO_INT_VALUE_OFFSET, &exact_label);
     emit_float_string_precision_deprecation(ctx);
     ctx.emitter.label(&exact_label);
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        STRING_TO_INT_VALUE_OFFSET,
+    );
     abi::emit_release_temporary_stack(ctx.emitter, STRING_TO_INT_FRAME_BYTES);
     abi::emit_jump(ctx.emitter, &accept_label);
 
@@ -816,82 +822,6 @@ fn emit_object_property_type_error(ctx: &mut FunctionContext<'_>, slot: &Propert
     super::super::exceptions::emit_type_error_from_string_result(ctx);
 }
 
-/// Spells a declared property type the way PHP spells it in a `TypeError`.
-pub(super) fn php_type_name(php_type: &PhpType) -> String {
-    match php_type {
-        PhpType::Int => "int".to_string(),
-        PhpType::Float => "float".to_string(),
-        PhpType::Str => "string".to_string(),
-        PhpType::Bool => "bool".to_string(),
-        PhpType::False => "false".to_string(),
-        PhpType::Void | PhpType::Never => "null".to_string(),
-        PhpType::Mixed => "mixed".to_string(),
-        PhpType::Array(_) | PhpType::AssocArray { .. } => "array".to_string(),
-        PhpType::Iterable => "Traversable|array".to_string(),
-        PhpType::Object(class_name) if class_name.is_empty() => "object".to_string(),
-        PhpType::Object(class_name) => class_name.trim_start_matches('\\').to_string(),
-        PhpType::Union(members) => php_union_type_name(members),
-        other => format!("{:?}", other),
-    }
-}
-
-/// The order php-src prints built-in union members in, after the class names.
-///
-/// `zend_type_to_string` walks a fixed type mask, so a union is NEVER printed in declaration
-/// order: `int|string` prints as `string|int` and `null|int|string` as `string|int|null`. A
-/// message built from declaration order disagrees with reference PHP for most unions, which is
-/// why the spelling is normalized here instead of being joined as written.
-const PHP_BUILTIN_TYPE_ORDER: [&str; 8] = [
-    "object", "array", "string", "int", "float", "bool", "false", "true",
-];
-
-/// Spells a union the way PHP does, collapsing a nullable single type to `?T`.
-fn php_union_type_name(members: &[PhpType]) -> String {
-    let is_null = |member: &PhpType| matches!(member, PhpType::Void | PhpType::Never);
-    let has_null = members.iter().any(is_null);
-    let mut classes: Vec<String> = Vec::new();
-    let mut builtins: Vec<String> = Vec::new();
-    for member in members.iter().filter(|member| !is_null(member)) {
-        for name in member_type_names(member) {
-            let bucket = if PHP_BUILTIN_TYPE_ORDER.contains(&name.as_str()) {
-                &mut builtins
-            } else {
-                &mut classes
-            };
-            if !bucket.contains(&name) {
-                bucket.push(name);
-            }
-        }
-    }
-    builtins.sort_by_key(|name| {
-        PHP_BUILTIN_TYPE_ORDER
-            .iter()
-            .position(|known| known == name)
-            .unwrap_or(PHP_BUILTIN_TYPE_ORDER.len())
-    });
-    let mut named = classes;
-    named.extend(builtins);
-    if named.len() == 1 && has_null {
-        return format!("?{}", named[0]);
-    }
-    if has_null {
-        named.push("null".to_string());
-    }
-    named.join("|")
-}
-
-/// The individual names one declared union member contributes to the printed spelling.
-///
-/// `array` reaches codegen as the two-member union of its indexed and hash representations, so
-/// both collapse to one `array`; `iterable` is stored as one member but PHP prints it as the
-/// two types it stands for.
-fn member_type_names(member: &PhpType) -> Vec<String> {
-    match member {
-        PhpType::Iterable => vec!["Traversable".to_string(), "array".to_string()],
-        PhpType::Union(inner) => inner.iter().flat_map(member_type_names).collect(),
-        other => vec![php_type_name(other)],
-    }
-}
 
 /// Decides what the guard does with every runtime tag for this declared property type.
 ///

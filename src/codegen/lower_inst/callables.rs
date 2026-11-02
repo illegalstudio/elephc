@@ -30,6 +30,7 @@ use super::{
     emit_instance_method_descriptor_entry_wrapper, emit_ref_arg_writebacks,
     emit_runtime_builtin_wrapper_inline, emit_runtime_builtin_invoker_inline,
     emit_runtime_callable_invoker_inline,
+    emit_runtime_callable_invoker_in_class,
     emit_runtime_callable_invoker_with_string_owner,
     emit_runtime_descriptor_with_receiver_capture, emit_runtime_extern_wrapper_inline,
     emit_static_method_descriptor_entry_wrapper, expect_operand, function_signature_from_eir,
@@ -952,6 +953,19 @@ fn runtime_builtin_descriptor_cases_at_arity(
         {
             continue;
         }
+        // GMP's EIR lowering forwards to prelude helpers. Without the injected prelude
+        // (`--with-gmp`, or a compiled GMP reference) there is no helper to wrap, and a
+        // callable-table entry would only fail codegen on an unrelated eval host.
+        if elephc_builtin_contract::lookup(name)
+            .is_some_and(|contract| contract.module == elephc_builtin_contract::PhpModule::Gmp)
+            && !ctx
+                .module
+                .functions
+                .iter()
+                .any(|function| function.name == "__elephc_gmp_abs")
+        {
+            continue;
+        }
         let Some(sig) = crate::types::first_class_callable_builtin_sig(name) else {
             continue;
         };
@@ -1300,7 +1314,9 @@ fn runtime_instance_method_descriptor_template(
     let owns_string_return = crate::codegen::runtime_callable_invoker::method_returns_owned_string(
         ctx.module, impl_class, method_key, false,
     );
-    let invoker_label = emit_runtime_callable_invoker_with_string_owner(ctx, sig, &captures, owns_string_return, true);
+    let invoker_label = emit_runtime_callable_invoker_in_class(
+        ctx, sig, &captures, owns_string_return, true, Some(impl_class),
+    );
     let php_name = format!("{}::{}", impl_class, method_name);
     let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
         ctx.data,
@@ -1761,7 +1777,9 @@ fn runtime_static_method_descriptor_cases(
         let owns_string_return = crate::codegen::runtime_callable_invoker::method_returns_owned_string(
             ctx.module, &impl_class, &method_key, true,
         );
-        let invoker_label = emit_runtime_callable_invoker_with_string_owner(ctx, &wrapper_sig, &[], owns_string_return, true);
+        let invoker_label = emit_runtime_callable_invoker_in_class(
+            ctx, &wrapper_sig, &[], owns_string_return, true, Some(&impl_class),
+        );
         let declared_name = format!("{}::{}", impl_class, method_name);
         let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
             ctx.data,
@@ -2752,7 +2770,7 @@ fn emit_owned_descriptor_args_boundary(ctx: &mut FunctionContext<'_>, owns_descr
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 2),
-        ctx.lexical_class_id(),
+        ctx.callable_invocation_profile(),
     );
     abi::emit_call_label(ctx.emitter, entry);
 }
@@ -3025,23 +3043,96 @@ pub(super) fn emit_invoker_arg_mixed(ctx: &mut FunctionContext<'_>, args: &[Valu
     Ok(())
 }
 
+/// Builds `trigger_error`'s handler arguments, replacing the baked file and line with the
+/// caller location when the call was compiled from injected prelude code.
+///
+/// php-src attributes an internal function's user-level notice to the user's call site, not to
+/// the internal implementation. Injected prelude functions are the compiler's internal
+/// functions, so their `trigger_error` must report the location `prepare_call_site` published
+/// for the entering call instead of the prelude's synthetic span.
+pub(super) fn emit_trigger_error_handler_args(
+    ctx: &mut FunctionContext<'_>,
+    level: ValueId,
+    message: ValueId,
+    file: ValueId,
+    line: ValueId,
+    caller_site: bool,
+) -> Result<()> {
+    if !caller_site {
+        return emit_invoker_arg_mixed(ctx, &[level, message, file, line]);
+    }
+    emit_invoker_arg_array_with(ctx, &[level, message], true)?;
+    emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)));
+    Ok(())
+}
+
 /// Creates the indexed array consumed by runtime callable descriptor invokers.
 fn emit_invoker_arg_array(ctx: &mut FunctionContext<'_>, args: &[ValueId]) -> Result<()> {
-    emit_new_invoker_arg_array(ctx, args.len());
-    if args.is_empty() {
+    emit_invoker_arg_array_with(ctx, args, false)
+}
+
+/// Builds the invoker argument array, optionally appending the published caller file and line.
+fn emit_invoker_arg_array_with(
+    ctx: &mut FunctionContext<'_>,
+    args: &[ValueId],
+    caller_site: bool,
+) -> Result<()> {
+    let extra = if caller_site { 2 } else { 0 };
+    emit_new_invoker_arg_array(ctx, args.len() + extra);
+    if args.is_empty() && !caller_site {
         return Ok(());
     }
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)); // preserve the in-progress invoker argument array across element boxing
     for arg in args {
         emit_box_invoker_arg(ctx, *arg)?;
-        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)); // preserve the boxed argument while loading the invoker array
-        emit_append_boxed_invoker_arg(ctx);
-        emit_release_pushed_refcounted_temp_after_array_push(ctx.emitter, &PhpType::Mixed);
-        emit_store_result_to_top_stack_slot(ctx);
+        emit_append_boxed_result_as_invoker_arg(ctx);
+    }
+    if caller_site {
+        emit_append_published_invoker_arg(ctx, PublishedInvokerArg::File);
+        emit_append_published_invoker_arg(ctx, PublishedInvokerArg::Line);
     }
     abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     Ok(())
+}
+
+/// One component of the caller location `prepare_call_site` published before the call.
+#[derive(Clone, Copy)]
+enum PublishedInvokerArg {
+    /// `_php_diagnostic_file` plus its length.
+    File,
+    /// `_php_diagnostic_line`.
+    Line,
+}
+
+/// Loads one published caller-location component, boxes it, and appends it to the argument array.
+fn emit_append_published_invoker_arg(ctx: &mut FunctionContext<'_>, component: PublishedInvokerArg) {
+    match component {
+        PublishedInvokerArg::File => {
+            let (pointer_reg, length_reg) = abi::string_result_regs(ctx.emitter);
+            abi::emit_load_symbol_to_reg(ctx.emitter, pointer_reg, "_php_diagnostic_file", 0);
+            abi::emit_load_symbol_to_reg(ctx.emitter, length_reg, "_php_diagnostic_file_len", 0);
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+        }
+        PublishedInvokerArg::Line => {
+            abi::emit_load_symbol_to_reg(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                "_php_diagnostic_line",
+                0,
+            );
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+        }
+    }
+    emit_append_boxed_result_as_invoker_arg(ctx);
+}
+
+/// Appends the boxed cell currently in the result register into the invoker argument array.
+fn emit_append_boxed_result_as_invoker_arg(ctx: &mut FunctionContext<'_>) {
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)); // preserve the boxed argument while loading the invoker array
+    emit_append_boxed_invoker_arg(ctx);
+    emit_release_pushed_refcounted_temp_after_array_push(ctx.emitter, &PhpType::Mixed);
+    emit_store_result_to_top_stack_slot(ctx);
 }
 
 /// Allocates the raw indexed array used to pass visible arguments to descriptor invokers.
@@ -3062,13 +3153,22 @@ fn emit_new_invoker_arg_array(ctx: &mut FunctionContext<'_>, arg_count: usize) {
 /// Boxes or retains a visible descriptor-invoker argument as an owned Mixed cell.
 fn emit_box_invoker_arg(ctx: &mut FunctionContext<'_>, arg: ValueId) -> Result<()> {
     let arg_ty = ctx.value_php_type(arg)?.codegen_repr();
+    // The declared type, so a `?ptr<T>` argument boxes address 0 as PHP null.
+    let box_ty = ctx.mixed_box_type(arg)?;
     ctx.load_value_to_result(arg)?;
     if matches!(arg_ty, PhpType::Mixed | PhpType::Union(_)) {
         abi::emit_incref_if_refcounted(ctx.emitter, &arg_ty);
     } else if ctx.value_can_own_mixed_box_source(arg)? {
-        emit_box_current_owned_value_as_mixed(ctx.emitter, &arg_ty);
+        emit_box_current_owned_value_as_mixed(ctx.emitter, &box_ty);
     } else {
-        emit_box_current_value_as_mixed(ctx.emitter, &arg_ty);
+        let staged = if arg_ty == PhpType::Str {
+            let (pointer_reg, length_reg) = abi::string_result_regs(ctx.emitter);
+            super::ownership::stage_string_byte_view(ctx, arg, pointer_reg, length_reg)
+        } else {
+            false
+        };
+        emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
+        super::ownership::release_string_byte_stage(ctx, staged);
     }
     Ok(())
 }
@@ -3396,7 +3496,8 @@ fn store_runtime_string_call_result(
     if matches!(result_ty, PhpType::Mixed | PhpType::Union(_))
         && return_ty.codegen_repr() != PhpType::Mixed
     {
-        emit_box_current_value_as_mixed(ctx.emitter, &return_ty.codegen_repr());
+        // A `?ptr<T>` return keeps its union, so address 0 is PHP null.
+        emit_box_current_value_as_mixed(ctx.emitter, &crate::types::mixed_box_php_type(return_ty));
     }
     ctx.store_result_value(result)
 }

@@ -22,7 +22,7 @@ use super::{
     emit_boundary_pop_aarch64, emit_boundary_pop_x86_64, emit_boundary_push_aarch64,
     emit_boundary_push_x86_64, emit_clear_error_inline, emit_set_static_error_aarch64,
     emit_set_static_error_x86_64, emit_store_immediate_to_symbol, label_suffix, BOUNDARY_ACTIVE,
-    BOUNDARY_STATUS, CONCAT_SCRATCH_CAPACITY, STATUS_ALLOCATION_FAILURE,
+    BOUNDARY_STATUS, STATUS_ALLOCATION_FAILURE,
     STATUS_INVALID_ARGUMENT, STATUS_OK, STATUS_PHP_EXCEPTION, STATUS_RUNTIME_FAILURE,
 };
 
@@ -376,11 +376,8 @@ pub(super) fn emit_enter_boundary(emitter: &mut Emitter, concat_offset: usize, s
             emitter.label(&nested);
             abi::emit_load_symbol_to_reg(emitter, "x10", "_concat_off", 0);
             abi::store_at_offset(emitter, "x10", concat_offset);
-            emit_store_immediate_to_symbol(
-                emitter,
-                "_concat_off",
-                CONCAT_SCRATCH_CAPACITY,
-            );
+            abi::emit_load_symbol_to_reg(emitter, "x10", "_concat_capacity", 0);
+            abi::emit_store_reg_to_symbol(emitter, "x10", "_concat_off", 0);
             emitter.label(&configured);
             abi::emit_load_symbol_to_reg(emitter, "x9", BOUNDARY_ACTIVE, 0);
             emitter.instruction("add x9, x9, #1");                              // increment the re-entrant boundary depth
@@ -397,11 +394,8 @@ pub(super) fn emit_enter_boundary(emitter: &mut Emitter, concat_offset: usize, s
             emitter.label(&nested);
             abi::emit_load_symbol_to_reg(emitter, "r11", "_concat_off", 0);
             abi::store_at_offset(emitter, "r11", concat_offset);
-            emit_store_immediate_to_symbol(
-                emitter,
-                "_concat_off",
-                CONCAT_SCRATCH_CAPACITY,
-            );
+            abi::emit_load_symbol_to_reg(emitter, "r11", "_concat_capacity", 0);
+            abi::emit_store_reg_to_symbol(emitter, "r11", "_concat_off", 0);
             emitter.label(&configured);
             abi::emit_load_symbol_to_reg(emitter, "r10", BOUNDARY_ACTIVE, 0);
             emitter.instruction("add r10, 1");                                  // increment the re-entrant boundary depth

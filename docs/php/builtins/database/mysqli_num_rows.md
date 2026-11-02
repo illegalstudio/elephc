@@ -2,7 +2,7 @@
 title: "mysqli_num_rows()"
 description: "Returns how many rows a result has."
 sidebar:
-  order: 143
+  order: 146
 ---
 
 ## mysqli_num_rows()

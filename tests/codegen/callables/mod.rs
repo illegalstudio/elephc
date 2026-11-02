@@ -12,6 +12,7 @@ mod branch_reach;
 mod callable_strings;
 mod closure_array_returns;
 mod closure_call_returns;
+mod closure_binding_scopes;
 mod closures;
 mod property_callable_metadata;
 mod expr_calls;

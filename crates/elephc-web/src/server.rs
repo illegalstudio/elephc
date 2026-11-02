@@ -14,13 +14,42 @@
 mod args;
 
 use std::ffi::c_char;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::{Duration, Instant};
 
 use args::{parse_args, ParsedArgs, ServerArgs};
 use crate::handler_broker::BrokerMode;
 use crate::isolated_worker;
 use crate::worker;
+
+/// Version-one generated callbacks; all PHP exceptions are contained before returning to Rust.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ApplicationCallbacks {
+    /// Executes the original top level once in the forked worker.
+    pub bootstrap: extern "C" fn(),
+    /// Returns one only after bootstrap registration has committed.
+    pub ready: extern "C" fn() -> i64,
+    /// Prepares, dispatches and cleans up one request.
+    pub request: extern "C" fn(),
+    /// Runs application shutdown and releases remaining PHP state.
+    pub shutdown: extern "C" fn(),
+}
+
+/// Private adapter phase: bootstrap (0), compiler commit (1), requests (2), shutdown (3).
+static APPLICATION_PHASE: AtomicI64 = AtomicI64::new(0);
+
+/// Lets the PHP adapter validate phase methods without allowing application code to set its flag.
+#[no_mangle]
+pub extern "C" fn elephc_web_application_phase() -> i64 {
+    APPLICATION_PHASE.load(Ordering::Relaxed)
+}
+
+/// Called only by the compiler's final bootstrap statements, before publishing ready.
+#[no_mangle]
+pub extern "C" fn elephc_web_application_commit_bootstrap() {
+    let _ = APPLICATION_PHASE.compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed);
+}
 
 /// Compile-time model selected by the generated bridge symbol.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -59,6 +88,8 @@ impl IsolationMode {
 const FAST_DEATH: Duration = Duration::from_millis(1000);
 /// Consecutive fast worker deaths tolerated before the master gives up.
 const MAX_FAST_DEATHS: u32 = 10;
+/// Failed application bootstraps count toward startup failure regardless of their duration.
+const BOOTSTRAP_FAILURE_EXIT_CODE: i32 = 87;
 
 /// Set by the SIGINT/SIGTERM handler so the master supervision loop can break and
 /// shut workers down cleanly. Async-signal-safe: the handler only stores to it.
@@ -107,6 +138,7 @@ fn spawn_worker(
     handler: extern "C" fn(),
     args: &ServerArgs,
     isolation: IsolationMode,
+    application: Option<ApplicationCallbacks>,
 ) -> libc::pid_t {
     match unsafe { libc::fork() } {
         -1 => {
@@ -115,6 +147,24 @@ fn spawn_worker(
         }
         0 => {
             reset_signal_handlers_to_default();
+            if let Some(callbacks) = application {
+                worker::install_application_shutdown();
+                crate::request_state::reset_response();
+                APPLICATION_PHASE.store(0, Ordering::Relaxed);
+                worker::with_application_signals_blocked(|| (callbacks.bootstrap)());
+                if (callbacks.ready)() != 1 {
+                    eprintln!("elephc-web: application bootstrap failed");
+                    APPLICATION_PHASE.store(3, Ordering::Relaxed);
+                    worker::with_application_signals_blocked(|| (callbacks.shutdown)());
+                    std::process::exit(BOOTSTRAP_FAILURE_EXIT_CODE);
+                }
+                APPLICATION_PHASE.store(2, Ordering::Relaxed);
+                worker::serve_application(listen, callbacks.request, args.worker_config());
+                crate::request_state::set_capture(false);
+                APPLICATION_PHASE.store(3, Ordering::Relaxed);
+                worker::with_application_signals_blocked(|| (callbacks.shutdown)());
+                std::process::exit(worker::RECYCLE_EXIT_CODE);
+            }
             match isolation.broker_mode() {
                 None => worker::serve(listen, handler, args.worker_config()),
                 Some(mode) => {
@@ -169,7 +219,7 @@ pub extern "C" fn elephc_web_run(
     argv: *const *const c_char,
     handler: extern "C" fn(),
 ) -> i32 {
-    run_server(argc, argv, handler, IsolationMode::Worker)
+    run_server(argc, argv, handler, IsolationMode::Worker, None)
 }
 
 /// Pool-isolated server entry selected by `--web-isolation=pool` at compilation.
@@ -179,7 +229,7 @@ pub extern "C" fn elephc_web_run_pool(
     argv: *const *const c_char,
     handler: extern "C" fn(),
 ) -> i32 {
-    run_server(argc, argv, handler, IsolationMode::Pool)
+    run_server(argc, argv, handler, IsolationMode::Pool, None)
 }
 
 /// Request-isolated server entry selected by `--web-isolation=request` at compilation.
@@ -189,7 +239,21 @@ pub extern "C" fn elephc_web_run_request(
     argv: *const *const c_char,
     handler: extern "C" fn(),
 ) -> i32 {
-    run_server(argc, argv, handler, IsolationMode::Request)
+    run_server(argc, argv, handler, IsolationMode::Request, None)
+}
+
+/// Selects the post-fork application lifecycle without changing the legacy bridge entries.
+///
+/// # Safety
+/// `callbacks` points to the compiler's static four-word callback table for this binary.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_web_run_application(
+    argc: i32,
+    argv: *const *const c_char,
+    callbacks: *const ApplicationCallbacks,
+) -> i32 {
+    let Some(callbacks) = callbacks.as_ref().copied() else { return 1 };
+    run_server(argc, argv, callbacks.request, IsolationMode::Worker, Some(callbacks))
 }
 
 /// Parses runtime arguments and supervises the selected compile-time server model.
@@ -198,6 +262,7 @@ fn run_server(
     argv: *const *const c_char,
     handler: extern "C" fn(),
     isolation: IsolationMode,
+    application: Option<ApplicationCallbacks>,
 ) -> i32 {
     let args = match parse_args(argc, argv, isolation) {
         ParsedArgs::Run(a) => a,
@@ -208,7 +273,7 @@ fn run_server(
     // time so a crash-on-startup loop (e.g. a failed bind) can be detected.
     let mut children: Vec<(libc::pid_t, Instant)> = Vec::new();
     for _ in 0..args.workers {
-        let pid = spawn_worker(&args.listen, handler, &args, isolation);
+        let pid = spawn_worker(&args.listen, handler, &args, isolation, application);
         children.push((pid, Instant::now()));
     }
     eprintln!(
@@ -220,6 +285,7 @@ fn run_server(
     );
     // Supervise: wait for any child; break on a shutdown request (SIGINT/SIGTERM).
     let mut fast_deaths: u32 = 0;
+    let mut exit_code = 0;
     loop {
         if SHUTDOWN.load(Ordering::SeqCst) {
             break;
@@ -256,9 +322,13 @@ fn run_server(
                         libc::WEXITSTATUS(status)
                     );
                 }
-                if spawned_at.elapsed() < FAST_DEATH {
+                let bootstrap_failed = application.is_some()
+                    && libc::WIFEXITED(status)
+                    && libc::WEXITSTATUS(status) == BOOTSTRAP_FAILURE_EXIT_CODE;
+                if bootstrap_failed || spawned_at.elapsed() < FAST_DEATH {
                     fast_deaths += 1;
                     if fast_deaths >= MAX_FAST_DEATHS {
+                        if application.is_some() { exit_code = 1; }
                         eprintln!(
                             "elephc-web: {} workers died on startup (likely a bad --listen or a \
                              handler crashing every request); giving up",
@@ -271,7 +341,7 @@ fn run_server(
                 }
             }
             // The worker is gone (crash or recycle): replace it to keep the pool at N.
-            let new_pid = spawn_worker(&args.listen, handler, &args, isolation);
+            let new_pid = spawn_worker(&args.listen, handler, &args, isolation, application);
             children.push((new_pid, Instant::now()));
         } else if pid == -1 {
             // ECHILD: nothing left to wait for. EINTR: a signal arrived → re-loop
@@ -289,7 +359,7 @@ fn run_server(
         let mut status = 0;
         unsafe { libc::waitpid(pid, &mut status, 0); }
     }
-    0
+    exit_code
 }
 
 #[cfg(test)]

@@ -30,6 +30,11 @@ thread_local! {
 
 /// Runtime value hooks required by the EvalIR interpreter.
 pub trait RuntimeValueOps {
+    /// Boxes a borrowed persistent native callable descriptor for Reflection default factories.
+    fn native_callable_from_raw(&mut self, _descriptor: usize) -> Result<RuntimeCellHandle, EvalStatus> {
+        Err(EvalStatus::UnsupportedConstruct)
+    }
+
     /// Invokes a reviewed static operator adapter using PHP-visible arguments.
     /// Native implementations bind hidden physical parameters before entering the method.
     fn operator_static_call(&mut self, class: &str, method: &str, args: Vec<RuntimeCellHandle>) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -87,6 +92,38 @@ pub trait RuntimeValueOps {
             return Ok(result);
         }
         self.pow_raw(left, right)
+    }
+
+    /// Applies the shared internal-class handler before scalar bitwise operations.
+    fn bitwise_dispatch(
+        &mut self,
+        op: EvalBinOp,
+        left: RuntimeCellHandle,
+        right: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        if let Some(result) = object_operators::shift(self, op, left, right)? {
+            return Ok(result);
+        }
+        if let Some(result) = object_operators::bitwise(self, op, left, right)? {
+            return Ok(result);
+        }
+        self.bitwise(op, left, right)
+    }
+
+    /// Applies the shared internal-class handler before scalar bitwise NOT.
+    fn bit_not_dispatch(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        if let Some(result) = object_operators::bit_not(self, value)? {
+            return Ok(result);
+        }
+        self.bit_not(value)
+    }
+
+    /// Materializes PHP's `_IS_NUMBER` view of an internal value object for numeric aggregates.
+    fn number_value(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        match object_operators::number_cast(self, value)? {
+            Some(number) => Ok(number),
+            None => Ok(value),
+        }
     }
 
     /// Compares internal value classes while preserving strict object identity.
@@ -1077,15 +1114,15 @@ pub trait RuntimeValueOps {
     fn ob_implicit_flush(&mut self, enable: bool) -> Result<(), EvalStatus>;
 }
 
-pub(super) const EVAL_TAG_INT: u64 = 0;
-pub(super) const EVAL_TAG_STRING: u64 = 1;
-pub(super) const EVAL_TAG_FLOAT: u64 = 2;
-pub(super) const EVAL_TAG_BOOL: u64 = 3;
+pub(crate) const EVAL_TAG_INT: u64 = 0;
+pub(crate) const EVAL_TAG_STRING: u64 = 1;
+pub(crate) const EVAL_TAG_FLOAT: u64 = 2;
+pub(crate) const EVAL_TAG_BOOL: u64 = 3;
 pub(super) const EVAL_TAG_ARRAY: u64 = 4;
 pub(super) const EVAL_TAG_ASSOC: u64 = 5;
 pub(super) const EVAL_TAG_OBJECT: u64 = 6;
 pub(super) const EVAL_TAG_MIXED: u64 = 7;
-pub(super) const EVAL_TAG_NULL: u64 = 8;
+pub(crate) const EVAL_TAG_NULL: u64 = 8;
 pub(super) const EVAL_TAG_RESOURCE: u64 = 9;
 pub(super) const EVAL_TAG_CALLABLE: u64 = 10;
 pub(super) const EVAL_TAG_INVOKER_REF_CELL: u64 = 11;

@@ -89,12 +89,10 @@ pub(super) fn lower_array_fetch_for_write_runtime_call(
     let receiver = expect_operand(inst, 0)?;
     let key = expect_operand(inst, 1)?;
     let receiver_ty = ctx.value_php_type(receiver)?.codegen_repr();
-    let normalization = if matches!(inst.immediate,
-        Some(Immediate::RuntimeCall(
-            RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed
-                | RuntimeCallTarget::PendingAppendFetchForWriteAlreadyDiagnosed,
-        )))
-    {
+    let normalization = if matches!(inst.immediate, Some(Immediate::RuntimeCall(
+        RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed
+            | RuntimeCallTarget::PendingAppendFetchForWriteAlreadyDiagnosed,
+    ))) {
         hashes::HashKeyNormalization::PhpAlreadyDiagnosed
     } else { hashes::HashKeyNormalization::Php };
     match receiver_ty {
@@ -116,6 +114,9 @@ pub(super) fn lower_array_fetch_for_write_runtime_call(
             store_if_result(ctx, inst)
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
+            if let Some(slot) = super::receiver_place::ReceiverPlace::resolve(ctx, receiver)?.slot() {
+                ctx.prepare_mutated_source_local_owner(slot, receiver)?;
+            }
             let indexed = matches!(receiver_ty, PhpType::Array(_));
             let tag: i64 = if indexed {
                 4
@@ -214,7 +215,8 @@ pub(super) fn lower_mixed_array_runtime_set_aarch64(
     if matches!(value_ty, PhpType::Mixed | PhpType::Union(_)) {
         abi::emit_incref_if_refcounted(ctx.emitter, &value_ty);
     } else {
-        emit_box_current_value_as_mixed(ctx.emitter, &value_ty);
+        // The declared type for a `?ptr<T>`, so address 0 is stored as PHP null.
+        emit_box_current_value_as_mixed(ctx.emitter, &ctx.mixed_box_type(value)?);
     }
     abi::emit_push_reg(ctx.emitter, "x0");
     hashes::materialize_hash_key_aarch64_with(ctx, key, normalization)?;
@@ -238,7 +240,8 @@ pub(super) fn lower_mixed_array_runtime_set_x86_64(
     if matches!(value_ty, PhpType::Mixed | PhpType::Union(_)) {
         abi::emit_incref_if_refcounted(ctx.emitter, &value_ty);
     } else {
-        emit_box_current_value_as_mixed(ctx.emitter, &value_ty);
+        // The declared type for a `?ptr<T>`, so address 0 is stored as PHP null.
+        emit_box_current_value_as_mixed(ctx.emitter, &ctx.mixed_box_type(value)?);
     }
     abi::emit_push_reg(ctx.emitter, "rax");
     hashes::materialize_hash_key_x86_64_with(ctx, key, normalization)?;

@@ -107,6 +107,7 @@ pub struct DataSection {
     comm_dedup: HashMap<String, String>,
     static_locals: Vec<StaticLocalRecord>,
     static_local_dedup: HashMap<String, usize>,
+    extern_callback_slots: Vec<String>,
 }
 
 impl DataSection {
@@ -125,7 +126,19 @@ impl DataSection {
             comm_dedup: HashMap::new(),
             static_locals: Vec::new(),
             static_local_dedup: HashMap::new(),
+            extern_callback_slots: Vec::new(),
         }
+    }
+
+    /// Records one extern callback descriptor slot, so program exit and the `--web` request
+    /// reset can release the descriptor it retains.
+    pub fn record_extern_callback_slot(&mut self, label: String) {
+        self.extern_callback_slots.push(label);
+    }
+
+    /// Returns the recorded extern callback descriptor slots in emission order.
+    pub fn extern_callback_slots(&self) -> &[String] {
+        &self.extern_callback_slots
     }
 
     /// Records one function static local's storage metadata for the `--web`

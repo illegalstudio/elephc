@@ -37,6 +37,7 @@ pub(crate) fn emit_link_call_operand_owner_at_stack(
     emit_load_int_immediate(emitter, scratch, 0);
     emit_store_to_sp(emitter, scratch, record_offset + 24);
     emit_store_to_sp(emitter, scratch, record_offset + 32);
+    emit_symbol_address(emitter, scratch, "__rt_gc_operand_frame_owners");
     emit_store_to_sp(emitter, scratch, record_offset + 40);
     emit_temporary_stack_address(emitter, scratch, record_offset);
     emit_store_reg_to_symbol(emitter, scratch, "_exc_call_frame_top", 0);

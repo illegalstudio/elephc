@@ -60,7 +60,7 @@ pub(crate) fn emit_fiber_wrapper(emitter: &mut Emitter, wrapper: &DeferredFiberW
     emitter.instruction("blr x20");                                             // call the original closure with ABI-correct arguments
     abi::emit_release_temporary_stack(emitter, call_stack_padding); // drop the wrapper-only caller-stack alignment pad
     abi::emit_release_temporary_stack(emitter, overflow_bytes); // drop stack-passed closure arguments after the Fiber callback returns
-    box_wrapper_return(emitter, wrapper.sig.return_type.codegen_repr());
+    box_wrapper_return(emitter, crate::types::mixed_box_php_type(&wrapper.sig.return_type));
 
     emitter.instruction(&format!(
         "ldp x22, x23, [sp, #{}]",
@@ -83,7 +83,7 @@ fn emit_descriptor_invoker_wrapper(emitter: &mut Emitter, label: &str) {
 
 /// Emits the ARM64 descriptor-invoker Fiber wrapper.
 fn emit_aarch64_descriptor_invoker_wrapper(emitter: &mut Emitter, label: &str) {
-    let frame_size = 96;
+    let frame_size = 144;
     let missing_label = format!("{}_missing_invoker", label);
     let loop_label = format!("{}_copy_args", label);
     let copy_done_label = format!("{}_args_done", label);
@@ -113,18 +113,22 @@ fn emit_aarch64_descriptor_invoker_wrapper(emitter: &mut Emitter, label: &str) {
     emit_box_descriptor_start_arg_array(emitter, "x22", "x1");
 
     emitter.instruction("mov x25, x1");                                         // keep the boxed argument array alive across the descriptor invocation
+    emitter.instruction("mov x0, x25");                                         // protect the argument container across suspended exceptional unwinding
+    runtime::exception_guards::guard(emitter, 64, 112);
     emitter.instruction("mov x0, x20");                                         // pass callable descriptor as invoker argument 1
     callable_descriptor::emit_load_invoker_from_descriptor(emitter, "x24", "x20");
     emitter.instruction(&format!("cbz x24, {}", missing_label));                // reject descriptors that do not expose the uniform invoker slot
     emitter.instruction("mov x1, x25");                                         // pass boxed start-argument array as invoker argument 2
     emitter.instruction("blr x24");                                             // invoke descriptor adapter; x0 = boxed Mixed return value
     emitter.instruction("mov x24, x0");                                         // preserve the Fiber callback return while releasing the argument container
+    runtime::exception_guards::unguard(emitter, 64, 112);
     emitter.instruction("mov x0, x25");                                         // move the boxed argument container into the decref helper input
     emitter.instruction("bl __rt_decref_mixed");                                // release the temporary boxed argument container
     emitter.instruction("mov x0, x24");                                         // restore the callback return value for __rt_fiber_entry
     emitter.instruction(&format!("b {}", return_label));                        // skip the missing-invoker diagnostic path
 
     emitter.label(&missing_label);
+    runtime::exception_guards::unguard(emitter, 64, 112);
     emitter.instruction("mov x0, x25");                                         // move the boxed argument container into the decref helper before throwing
     emitter.instruction("bl __rt_decref_mixed");                                // release the temporary boxed argument container on the error path
     abi::emit_symbol_address(emitter, "x0", "_fiber_msg_unsupported_callable"); // x0 = pointer to the unsupported-callable diagnostic
@@ -190,7 +194,7 @@ fn emit_box_descriptor_start_arg_array(emitter: &mut Emitter, source_reg: &str, 
 
 /// Emits the x86_64 descriptor-invoker Fiber wrapper.
 fn emit_x86_64_descriptor_invoker_wrapper(emitter: &mut Emitter, label: &str) {
-    let frame_size = 96;
+    let frame_size = 144;
     let saved_fiber_offset = 16;
     let saved_descriptor_offset = 24;
     let saved_count_offset = 32;
@@ -226,6 +230,8 @@ fn emit_x86_64_descriptor_invoker_wrapper(emitter: &mut Emitter, label: &str) {
     emit_box_descriptor_start_arg_array(emitter, "r15", "rsi");
 
     emitter.instruction("mov rbx, rsi");                                        // keep the boxed argument array alive across the descriptor invocation
+    emitter.instruction("mov rax, rbx");                                        // protect the boxed argument owner while the callback is parked
+    runtime::exception_guards::guard(emitter, 64, 112);
     emitter.instruction("mov rdi, r13");                                        // pass callable descriptor as invoker argument 1
     callable_descriptor::emit_load_invoker_from_descriptor(emitter, "r10", "r13");
     emitter.instruction(&format!("test r10, r10"));                             // check whether the descriptor exposes a uniform invoker slot
@@ -233,12 +239,14 @@ fn emit_x86_64_descriptor_invoker_wrapper(emitter: &mut Emitter, label: &str) {
     emitter.instruction("mov rsi, rbx");                                        // pass boxed start-argument array as invoker argument 2
     emitter.instruction("call r10");                                            // invoke descriptor adapter; rax = boxed Mixed return value
     emitter.instruction("mov r15, rax");                                        // preserve the Fiber callback return while releasing the argument container
+    runtime::exception_guards::unguard(emitter, 64, 112);
     emitter.instruction("mov rax, rbx");                                        // move the boxed argument container into the decref helper input
     emitter.instruction("call __rt_decref_mixed");                              // release the temporary boxed argument container
     emitter.instruction("mov rax, r15");                                        // restore the callback return value for __rt_fiber_entry
     emitter.instruction(&format!("jmp {}", return_label));                      // skip the missing-invoker diagnostic path
 
     emitter.label(&missing_label);
+    runtime::exception_guards::unguard(emitter, 64, 112);
     emitter.instruction("mov rax, rbx");                                        // move the boxed argument container into the decref helper before throwing
     emitter.instruction("call __rt_decref_mixed");                              // release the temporary boxed argument container on the error path
     abi::emit_symbol_address(emitter, "rdi", "_fiber_msg_unsupported_callable"); // rdi = pointer to the unsupported-callable diagnostic
@@ -627,7 +635,7 @@ fn emit_x86_64_wrapper(emitter: &mut Emitter, wrapper: &DeferredFiberWrapper) {
     let overflow_bytes = materialize_spilled_args_for_closure_call_x86_64(emitter, &arg_types);
     abi::emit_call_reg(emitter, "r13");
     abi::emit_release_temporary_stack(emitter, overflow_bytes); // drop stack-passed closure arguments after the Fiber callback returns
-    box_wrapper_return(emitter, wrapper.sig.return_type.codegen_repr());
+    box_wrapper_return(emitter, crate::types::mixed_box_php_type(&wrapper.sig.return_type));
 
     abi::load_at_offset(emitter, "rbx", saved_tail_index_offset);
     abi::load_at_offset(emitter, "r15", saved_tail_count_offset);

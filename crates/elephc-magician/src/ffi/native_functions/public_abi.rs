@@ -10,6 +10,26 @@
 
 use super::*;
 
+/// Registers source constant metadata without evaluating or replacing a native default.
+///
+/// # Safety
+/// Context and UTF-8 buffers must be valid for their declared use and lengths.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_function_param_default_constant_name(
+    ctx: *mut ElephcEvalContext, key: *const u8, key_len: u64,
+    index: u64, name: *const u8, name_len: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        let Some(context) = ctx.as_mut() else { return 0; };
+        if context.abi_version() != ABI_VERSION { return 0; }
+        let Ok(key) = abi_name_to_string(key, key_len) else { return 0; };
+        let Ok(name) = abi_name_to_string(name, name_len) else { return 0; };
+        let Ok(index) = usize::try_from(index) else { return 0; };
+        i32::from(context.define_native_function_param_default_constant_name(
+            &key.to_ascii_lowercase(), index, name))
+    }).unwrap_or(0)
+}
+
 /// Registers a generated native PHP function callback in an eval context.
 ///
 /// # Safety

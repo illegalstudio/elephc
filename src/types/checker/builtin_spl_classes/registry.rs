@@ -247,13 +247,21 @@ mod tests {
     }
 
     /// Enumerating the symbol table names nothing, so nothing can be inferred and everything is
-    /// registered.
+    /// registered; so does an eval whose source is only known at runtime.
     #[test]
     fn introspection_registers_everything() {
         assert!(program_may_reference_spl(&parse(
             "<?php print_r(get_declared_classes());"
         )));
-        assert!(program_may_reference_spl(&parse("<?php eval('$x = 1;');")));
+        assert!(program_may_reference_spl(&parse("<?php eval($argv[1]);")));
+    }
+
+    /// A literal eval is read as inline code: it registers the SPL surface only when its source
+    /// names it.
+    #[test]
+    fn a_literal_eval_registers_only_what_it_names() {
+        assert!(!program_may_reference_spl(&parse("<?php eval('$x = 1;');")));
+        assert!(program_may_reference_spl(&parse("<?php eval('$s = new SplStack();');")));
     }
 
     /// Case-insensitivity, because PHP class names are.

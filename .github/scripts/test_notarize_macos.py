@@ -18,6 +18,8 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / ".github/actions/notarize-macos/notarize.sh"
+# The runner's own keychains, including a path with a space for the parser.
+SEARCH_LIST = ["/Users/runner/Library/Keychains/login.keychain-db", "/Library/Keychains/Fixture Keychain.keychain-db"]
 
 
 def read_yaml(path):
@@ -50,10 +52,22 @@ if tool == "security":
         sys.exit(1)
     if args[0] == "delete-keychain":
         Path(args[-1]).unlink(missing_ok=True)
+    if args[0] == "list-keychains":
+        search_list = Path(os.environ["MOCK_SEARCH_LIST"])
+        if "-s" in args:
+            search_list.write_text(json.dumps(args[args.index("-s") + 1:]))
+        else:
+            for keychain in json.loads(search_list.read_text()):
+                print(f'    "{keychain}"')
 elif tool == "codesign":
     if os.environ.get("MOCK_CODESIGN_FAIL") == args[0]:
         sys.exit(1)
     if args[0] == "--force":
+        # Like the real tool, --keychain only filters the user search list.
+        keychain = args[args.index("--keychain") + 1]
+        if keychain not in json.loads(Path(os.environ["MOCK_SEARCH_LIST"]).read_text()):
+            print("error: The specified item could not be found in the keychain.", file=sys.stderr)
+            sys.exit(1)
         binary = Path(args[-1])
         binary.write_bytes(binary.read_bytes() + b"signed-by-fixture\n")
 elif tool == "ditto":
@@ -109,6 +123,8 @@ class NotarizationTests(unittest.TestCase):
         self.runner_temp = self.root / "runner-temp"
         self.runner_temp.mkdir()
         self.log = self.root / "commands.jsonl"
+        self.search_list = self.root / "search-list.json"
+        self.search_list.write_text(json.dumps(SEARCH_LIST))
         self.binary = self.root / "elephc"
         self.binary.write_text("#!/bin/sh\necho fixture\n")
         self.binary.chmod(0o755)
@@ -125,6 +141,7 @@ class NotarizationTests(unittest.TestCase):
             "RUNNER_TEMP": str(self.runner_temp),
             "NOTARIZE_BINARY": str(self.binary),
             "MOCK_LOG": str(self.log),
+            "MOCK_SEARCH_LIST": str(self.search_list),
             "APPLE_CERTIFICATE_P12": base64.b64encode(b"fixture certificate").decode(),
             "APPLE_CERTIFICATE_PASSWORD": "fixture-certificate-password",
             "APPLE_SIGNING_IDENTITY": "Developer ID Application: Fixture",
@@ -140,6 +157,7 @@ class NotarizationTests(unittest.TestCase):
             capture_output=True, text=True, timeout=20,
         )
         self.assertEqual(list(self.runner_temp.iterdir()), [], result.stdout + result.stderr)
+        self.assertEqual(json.loads(self.search_list.read_text()), SEARCH_LIST, "Runner search list must be restored")
         calls = [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
         if calls:
             self.assertEqual(calls[-1]["tool"], "security")
@@ -154,7 +172,10 @@ class NotarizationTests(unittest.TestCase):
         self.assertIn("runtime", sign["args"])
         self.assertIn("--timestamp", sign["args"])
         self.assertIn("--keychain", sign["args"])
-        self.assertFalse(any(call["tool"] == "security" and call["args"][0] == "list-keychains" for call in calls))
+        keychain = next(call["args"][-1] for call in calls if call["args"][0] == "create-keychain")
+        self.assertIn(["list-keychains", "-d", "user", "-s", keychain, *SEARCH_LIST], [call["args"] for call in calls])
+        steps = [(call["tool"], call["args"][0]) for call in calls]
+        self.assertLess(steps.index(("security", "find-identity")), steps.index(("codesign", "--force")))
 
     def test_missing_secret_fails_before_import(self):
         result, calls = self.run_gate(APPLE_ID="")
@@ -243,6 +264,7 @@ class NotarizationTests(unittest.TestCase):
             self.assertEqual(process.returncode, 143, stdout + stderr)
             self.assertLess(time.monotonic() - started, 5)
             self.assertEqual(list(self.runner_temp.iterdir()), [], stdout + stderr)
+            self.assertEqual(json.loads(self.search_list.read_text()), SEARCH_LIST)
             self.assertTrue(child_pid_file.is_file(), "Worker must remain alive after signalling its parent")
             with self.assertRaises(ProcessLookupError):
                 os.kill(int(child_pid_file.read_text()), 0)

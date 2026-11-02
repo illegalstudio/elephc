@@ -493,7 +493,7 @@ pub(super) unsafe fn register_native_method_param_default_string_inner(
     default_ptr: *const u8,
     default_len: u64,
 ) -> i32 {
-    let Ok(default) = abi_name_to_string(default_ptr, default_len) else {
+    let Ok(default) = crate::ffi::util::abi_data_bytes(default_ptr, default_len) else {
         return 0;
     };
     register_native_method_param_default_inner(
@@ -502,7 +502,7 @@ pub(super) unsafe fn register_native_method_param_default_string_inner(
         method_key_len,
         is_static,
         param_index,
-        NativeCallableDefault::String(default),
+        NativeCallableDefault::from_php_bytes(default),
     )
 }
 

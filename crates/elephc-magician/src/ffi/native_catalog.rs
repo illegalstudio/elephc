@@ -12,6 +12,12 @@
 use crate::abi::{ElephcEvalContext, ABI_VERSION};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+mod deferred;
+pub use deferred::{__elephc_eval_context_can_defer_native_catalog,
+    __elephc_eval_context_can_flush_without_native_catalog};
+#[cfg(not(test))]
+pub(super) use deferred::metadata_free_fragment;
+
 static NEXT_CATALOG_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 /// Assigns one process-unique generation to a live module's zero-initialized token.
@@ -66,7 +72,7 @@ pub unsafe extern "C" fn __elephc_eval_context_native_catalog_ready(
     }).unwrap_or(0)
 }
 
-/// Publishes a fully registered native catalog before executing PHP in this context.
+/// Publishes a complete catalog before metadata-dependent PHP executes in this context.
 ///
 /// # Safety
 /// `ctx` must be null or a live eval context handle on its owning thread.

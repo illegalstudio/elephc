@@ -33,5 +33,5 @@ pub use buffer_free::emit_buffer_free;
 pub use buffer_len::emit_buffer_len;
 pub use buffer_new::emit_buffer_new;
 pub use registry_fail::emit_buffer_registry_fail;
-pub use resolve::emit_buffer_resolve;
+pub use resolve::{emit_buffer_resolve, emit_buffer_try_resolve};
 pub use use_after_free::emit_buffer_use_after_free;

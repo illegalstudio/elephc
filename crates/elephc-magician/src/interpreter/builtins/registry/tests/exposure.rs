@@ -262,6 +262,7 @@ use super::*;
             "str_contains",
             "str_pad",
             "str_replace",
+            "strip_tags",
             "strlen",
             "str_repeat",
             "strrev",

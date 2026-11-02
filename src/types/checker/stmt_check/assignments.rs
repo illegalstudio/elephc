@@ -14,6 +14,8 @@ mod properties;
 mod properties_null_coalesce;
 mod static_properties;
 
+pub(in crate::types::checker) use arrays::expr_is_string_offset_target;
+
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind, NESTED_APPEND_TEMP_PREFIX};
 use crate::types::{normalized_array_key_type, PhpType, TypeEnv};
@@ -136,6 +138,16 @@ impl Checker {
         stmt: &Stmt,
         env: &mut TypeEnv,
     ) -> Result<(), CompileError> {
+        self.check_assignment_like_stmt_with_property_update(stmt, env, false)
+    }
+
+    /// Preserves a compound expression's property-write mode after its value becomes a temp.
+    pub(crate) fn check_assignment_like_stmt_with_property_update(
+        &mut self,
+        stmt: &Stmt,
+        env: &mut TypeEnv,
+        compound_property_update: bool,
+    ) -> Result<(), CompileError> {
         let result = match &stmt.kind {
             StmtKind::Assign { name, value } => {
                 // The one statement-form local assignment: `stmt_form: true` makes an
@@ -221,6 +233,7 @@ impl Checker {
                 value,
                 stmt.span,
                 env,
+                compound_property_update,
             ),
             StmtKind::PropertyArrayPush {
                 object,

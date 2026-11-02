@@ -1,0 +1,20 @@
+[package]
+name = "elephc-gmp"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "libgmp-backed PHP GMP engine and C ABI for elephc"
+publish = false
+
+# Built as a C-callable staticlib (linked into compiled PHP programs whose prelude
+# declares the `extern "elephc_gmp"` block, together with the managed `gmp` native
+# package's `libgmp.a`) and an rlib (so the operation table is unit-testable).
+#
+# Like elephc-curl and elephc-xml, this bridge DECLARES libgmp's `extern "C"`
+# symbols without linking them: `cargo build -p elephc-gmp` only produces archives,
+# so the unresolved `__gmpz_*` references stay unresolved until the final program
+# link. See `build.rs` for how `cargo test -p elephc-gmp` opts into a real link.
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]

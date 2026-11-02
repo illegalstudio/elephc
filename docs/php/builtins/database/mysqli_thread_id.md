@@ -2,7 +2,7 @@
 title: "mysqli_thread_id()"
 description: "Returns the connection's thread id on the server."
 sidebar:
-  order: 179
+  order: 182
 ---
 
 ## mysqli_thread_id()

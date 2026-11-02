@@ -12,7 +12,7 @@ use crate::errors::CompileError;
 use crate::parser::ast::{CatchClause, Expr, StaticReceiver, Stmt, TypeExpr};
 
 use super::list::resolve_stmt_list;
-use super::super::expressions::resolve_expr;
+use super::super::expressions::{resolve_expr, with_constant_expression};
 use super::super::names::{resolve_special_or_class_name, resolve_type_expr};
 use super::super::{resolved_name, Imports, Symbols};
 
@@ -123,7 +123,7 @@ pub(in crate::name_resolver) fn resolve_params(
             (
                 name.clone(),
                 type_ann.as_ref().map(|ty| ctx.type_expr(ty)),
-                default.as_ref().map(|expr| ctx.expr(expr)),
+                default.as_ref().map(|expr| with_constant_expression(|| ctx.expr(expr))),
                 *is_ref,
             )
         })

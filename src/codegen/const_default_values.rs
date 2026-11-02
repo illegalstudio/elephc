@@ -5,6 +5,7 @@
 //! Called from:
 //! - `crate::codegen::lower_inst::builtins::eval` default registration.
 //! - `crate::codegen::runtime_callable_invoker::defaults` descriptor invoker metadata.
+//! - Reflection property-default metadata folding.
 //!
 //! Key details:
 //! - Resolution is PURE. Global constants come from `Module::global_constants`, which already
@@ -15,11 +16,18 @@
 //!   the eval registration path encodes it, and the descriptor invoker materializes it.
 //! - Constant recursion is bounded by `MAX_CONST_DEFAULT_DEPTH`, so a self-referential constant
 //!   declines instead of recursing forever.
+//! - Numeric values reuse the PHP-equivalent AST arithmetic folder, including integer division and power.
 
 use crate::names::php_symbol_key;
 use crate::ir::Module;
 use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver};
 use crate::types::{is_php_integer_array_key, ClassInfo, InterfaceInfo};
+
+mod arrays;
+pub(in crate::codegen) use arrays::resolve_array_const_default;
+
+#[cfg(test)]
+mod tests;
 
 /// Compact scalar kind for PHP `null` in a resolved default.
 pub(in crate::codegen) const CONST_DEFAULT_NULL: i64 = 0;
@@ -101,6 +109,47 @@ pub(in crate::codegen) fn resolve_const_default(
     resolve_const_default_at(expr, context, 0)
 }
 
+/// Converts a resolved scalar to its PHP literal without changing its numeric type.
+pub(in crate::codegen) fn resolved_scalar_literal(value: ConstDefaultValue) -> Option<ExprKind> {
+    match value {
+        ConstDefaultValue::String(value) => Some(ExprKind::StringLiteral(value)),
+        ConstDefaultValue::Scalar { kind, payload } => match kind {
+            CONST_DEFAULT_NULL => Some(ExprKind::Null),
+            CONST_DEFAULT_BOOL => Some(ExprKind::BoolLiteral(payload != 0)),
+            CONST_DEFAULT_INT => Some(ExprKind::IntLiteral(payload)),
+            CONST_DEFAULT_FLOAT => Some(ExprKind::FloatLiteral(f64::from_bits(payload as u64))),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Restores resolved scalar and array trees for literal property storage without eager branches.
+pub(in crate::codegen) fn resolved_literal_default(value: ConstDefaultValue) -> Option<ExprKind> {
+    let elements = match value {
+        ConstDefaultValue::Scalar { kind: CONST_DEFAULT_EMPTY_ARRAY, .. } =>
+            return Some(ExprKind::ArrayLiteral(Vec::new())),
+        ConstDefaultValue::Array(elements) => elements,
+        value => return resolved_scalar_literal(value),
+    };
+    let span = crate::span::Span::synthetic();
+    if elements.iter().all(|element| element.key.is_none()) {
+        let items = elements.into_iter().map(|element|
+            Some(Expr::new(resolved_literal_default(element.default)?, span)))
+            .collect::<Option<Vec<_>>>()?;
+        Some(ExprKind::ArrayLiteral(items))
+    } else {
+        let items = elements.into_iter().map(|element| {
+            let key = match element.key? {
+                ConstDefaultArrayKey::Int(value) => ExprKind::IntLiteral(value),
+                ConstDefaultArrayKey::String(value) => ExprKind::StringLiteral(value),
+            };
+            Some((Expr::new(key, span), Expr::new(resolved_literal_default(element.default)?, span)))
+        }).collect::<Option<Vec<_>>>()?;
+        Some(ExprKind::ArrayLiteralAssoc(items))
+    }
+}
+
 /// Resolves one PHP default expression while preserving the constant recursion limit.
 pub(in crate::codegen) fn resolve_const_default_at(
     expr: &Expr,
@@ -125,7 +174,8 @@ fn resolve_constant_expression_const_default(
     match &expr.kind {
         ExprKind::ConstRef(name) => resolve_global_constant_default(context, name, depth + 1),
         ExprKind::ClassConstant { receiver } => {
-            resolve_static_receiver_name(context, receiver).map(ConstDefaultValue::String)
+            resolve_static_receiver_name(context, receiver)
+                .map(|name| ConstDefaultValue::String(crate::names::class_name_literal(&name)))
         }
         ExprKind::ScopedConstantAccess { receiver, name } => {
             resolve_scoped_constant_default(context, receiver, name, depth + 1)
@@ -180,13 +230,8 @@ fn resolve_binary_expression_default(
     depth: usize,
 ) -> Option<ConstDefaultValue> {
     match op {
-        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Pow => {
+        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow => {
             resolve_numeric_binary_default(left, op, right, context, depth + 1)
-        }
-        BinOp::Mod => {
-            let left = const_default_int(left, context, depth + 1)?;
-            let right = const_default_int(right, context, depth + 1)?;
-            (right != 0).then(|| const_default_int_value(left % right))
         }
         BinOp::Concat => {
             let left = const_default_string(left, context, depth + 1)?;
@@ -247,34 +292,19 @@ fn resolve_numeric_binary_default(
     context: &ConstDefaultContext<'_>,
     depth: usize,
 ) -> Option<ConstDefaultValue> {
-    if let (Some(left), Some(right)) = (
-        const_default_int(left, context, depth + 1),
-        const_default_int(right, context, depth + 1),
-    ) {
-        return match op {
-            BinOp::Add => left.checked_add(right).map(const_default_int_value),
-            BinOp::Sub => left.checked_sub(right).map(const_default_int_value),
-            BinOp::Mul => left.checked_mul(right).map(const_default_int_value),
-            BinOp::Div if right != 0 => Some(const_default_float(left as f64 / right as f64)),
-            BinOp::Pow => {
-                let value = (left as f64).powf(right as f64);
-                value.is_finite().then(|| const_default_float(value))
-            }
-            _ => None,
+    let literal = |expr: &Expr| {
+        let kind = match resolve_const_default_at(expr, context, depth + 1)? {
+            ConstDefaultValue::Scalar { kind: CONST_DEFAULT_INT, payload } => ExprKind::IntLiteral(payload),
+            ConstDefaultValue::Scalar { kind: CONST_DEFAULT_FLOAT, payload } =>
+                ExprKind::FloatLiteral(f64::from_bits(payload as u64)),
+            _ => return None,
         };
-    }
-
-    let left = const_default_numeric(left, context, depth + 1)?;
-    let right = const_default_numeric(right, context, depth + 1)?;
-    let value = match op {
-        BinOp::Add => left + right,
-        BinOp::Sub => left - right,
-        BinOp::Mul => left * right,
-        BinOp::Div if right != 0.0 => left / right,
-        BinOp::Pow => left.powf(right),
-        _ => return None,
+        Some(Expr::new(kind, expr.span))
     };
-    value.is_finite().then(|| const_default_float(value))
+    let expression = Expr::new(ExprKind::BinaryOp {
+        left: Box::new(literal(left)?), op: op.clone(), right: Box::new(literal(right)?),
+    }, left.span);
+    resolve_literal_const_default(&crate::optimize::fold_constant_expression(expression))
 }
 
 /// Builds one bool constant value.
@@ -364,25 +394,6 @@ fn const_default_int(
     }
 }
 
-/// Extracts a numeric value from one resolvable default expression.
-fn const_default_numeric(
-    expr: &Expr,
-    context: &ConstDefaultContext<'_>,
-    depth: usize,
-) -> Option<f64> {
-    match resolve_const_default_at(expr, context, depth)? {
-        ConstDefaultValue::Scalar {
-            kind: CONST_DEFAULT_INT,
-            payload,
-        } => Some(payload as f64),
-        ConstDefaultValue::Scalar {
-            kind: CONST_DEFAULT_FLOAT,
-            payload,
-        } => Some(f64::from_bits(payload as u64)),
-        _ => None,
-    }
-}
-
 /// Extracts a string value from one resolvable default expression.
 fn const_default_string(
     expr: &Expr,
@@ -464,101 +475,17 @@ fn resolve_object_const_default_arg(
     }
 }
 
-/// Resolves supported array-valued defaults into a constant value.
-pub(in crate::codegen) fn resolve_array_const_default(
-    expr: &Expr,
-    context: &ConstDefaultContext<'_>,
-    depth: usize,
-) -> Option<ConstDefaultValue> {
-    match &expr.kind {
-        ExprKind::ArrayLiteral(elements) => {
-            let mut default_elements = Vec::with_capacity(elements.len());
-            for element in elements {
-                if matches!(element.kind, ExprKind::Spread(_)) {
-                    return None;
-                }
-                default_elements.push(ConstDefaultArrayElement {
-                    key: None,
-                    default: resolve_const_default_at(element, context, depth + 1)?,
-                });
-            }
-            Some(ConstDefaultValue::Array(default_elements))
-        }
-        ExprKind::ArrayLiteralAssoc(elements) => {
-            let mut default_elements = Vec::with_capacity(elements.len());
-            for (key, value) in elements {
-                default_elements.push(ConstDefaultArrayElement {
-                    key: Some(resolve_array_const_default_key(key, context, depth + 1)?),
-                    default: resolve_const_default_at(value, context, depth + 1)?,
-                });
-            }
-            Some(ConstDefaultValue::Array(default_elements))
-        }
-        _ => None,
-    }
-}
-
-/// Resolves one supported static array key.
-fn resolve_array_const_default_key(
-    expr: &Expr,
-    context: &ConstDefaultContext<'_>,
-    depth: usize,
-) -> Option<ConstDefaultArrayKey> {
-    if let Some(key) = resolve_literal_array_const_default_key(expr) {
-        return Some(key);
-    }
-    match resolve_const_default_at(expr, context, depth + 1)? {
-        ConstDefaultValue::Scalar {
-            kind: CONST_DEFAULT_NULL,
-            ..
-        } => Some(ConstDefaultArrayKey::String(String::new())),
-        ConstDefaultValue::Scalar {
-            kind: CONST_DEFAULT_BOOL,
-            payload,
-        } => Some(ConstDefaultArrayKey::Int((payload != 0) as i64)),
-        ConstDefaultValue::Scalar {
-            kind: CONST_DEFAULT_INT,
-            payload,
-        } => Some(ConstDefaultArrayKey::Int(payload)),
-        ConstDefaultValue::Scalar {
-            kind: CONST_DEFAULT_FLOAT,
-            payload,
-        } => Some(ConstDefaultArrayKey::Int(
-            f64::from_bits(payload as u64) as i64
-        )),
-        ConstDefaultValue::String(value) => const_default_string_array_key(&value),
-        _ => None,
-    }
-}
-
-/// Resolves one literal static array key.
-pub(in crate::codegen) fn resolve_literal_array_const_default_key(
-    expr: &Expr,
-) -> Option<ConstDefaultArrayKey> {
-    match &expr.kind {
-        ExprKind::IntLiteral(value) => Some(ConstDefaultArrayKey::Int(*value)),
-        ExprKind::BoolLiteral(value) => Some(ConstDefaultArrayKey::Int(i64::from(*value))),
-        ExprKind::FloatLiteral(value) => Some(ConstDefaultArrayKey::Int(*value as i64)),
-        ExprKind::StringLiteral(value) => const_default_string_array_key(value),
-        ExprKind::Null => Some(ConstDefaultArrayKey::String(String::new())),
-        ExprKind::Negate(inner) => match &inner.kind {
-            ExprKind::IntLiteral(value) => value.checked_neg().map(ConstDefaultArrayKey::Int),
-            ExprKind::FloatLiteral(value) => Some(ConstDefaultArrayKey::Int((-*value) as i64)),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
 /// Normalizes one string array key to PHP's integer-key rules.
 pub(in crate::codegen) fn const_default_string_array_key(
     value: &str,
 ) -> Option<ConstDefaultArrayKey> {
-    if is_php_integer_array_key(value) {
-        value.parse::<i64>().ok().map(ConstDefaultArrayKey::Int)
-    } else {
-        Some(ConstDefaultArrayKey::String(value.to_string()))
+    let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
+    if let Ok(decoded) = std::str::from_utf8(&bytes) {
+        if is_php_integer_array_key(decoded) {
+            return decoded.parse::<i64>().ok().map(ConstDefaultArrayKey::Int);
+        }
     }
+    Some(ConstDefaultArrayKey::String(value.to_string()))
 }
 
 /// Resolves one global constant default expression.

@@ -80,7 +80,7 @@ rustls = { version = "0.23.46", default-features = false, features = [
     "tls12",
 ], optional = true }
 # Default trust roots for pg verification when no custom `sslrootcert` is given.
-webpki-roots = { version = "0.26", optional = true }
+webpki-roots = { version = "1.0.10", optional = true }
 # Parses a custom `sslrootcert`/client-cert PEM into the pg rustls config.
 rustls-pemfile = { version = "2", optional = true }
 

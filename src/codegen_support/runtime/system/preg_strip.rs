@@ -7,6 +7,9 @@
 //!
 //! Key details:
 //! - Regex helpers preserve PHP PCRE-flavored pattern bytes and pass PCRE2 POSIX-wrapper flags downstream.
+//! - The removed `/e` modifier sets bit 30. That bit is not a PCRE2 flag, and
+//!   PCRE2 would accept it. Every regex helper tests the bit after stripping
+//!   and rejects the pattern before compilation, so it never reaches `pcre2_regcomp`.
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
@@ -58,6 +61,11 @@ pub(crate) fn emit_preg_strip(emitter: &mut Emitter) {
 
     // -- check supported PCRE2 POSIX-wrapper flags --
     emitter.instruction("ldr x3, [sp, #16]");                                   // load the accumulated PCRE2 POSIX compile flags
+    emitter.instruction("cmp w9, #101");                                        // check for the removed 'e' eval modifier
+    emitter.instruction("b.ne __rt_preg_strip_flag_i");                         // continue with the supported modifiers
+    emitter.instruction("orr x3, x3, #0x40000000");                             // mark the pattern invalid: PHP 8 rejects /e
+    emitter.instruction("b __rt_preg_strip_save_flag");                         // keep scanning for the closing delimiter
+    emitter.label("__rt_preg_strip_flag_i");
     emitter.instruction("cmp w9, #105");                                        // check for 'i' case-insensitive modifier
     emitter.instruction("b.ne __rt_preg_strip_flag_m");                         // try the next supported regex modifier
     emitter.instruction("orr x3, x3, #1");                                      // add REG_ICASE for case-insensitive matching
@@ -80,8 +88,13 @@ pub(crate) fn emit_preg_strip(emitter: &mut Emitter) {
     emitter.instruction("b __rt_preg_strip_save_flag");                         // save the updated flag word
     emitter.label("__rt_preg_strip_flag_U");
     emitter.instruction("cmp w9, #85");                                         // check for 'U' ungreedy modifier
-    emitter.instruction("b.ne __rt_preg_strip_skip_flag");                      // ignore unsupported trailing modifiers for now
+    emitter.instruction("b.ne __rt_preg_strip_flag_x");                         // try the extended-mode modifier
     emitter.instruction("orr x3, x3, #512");                                    // add REG_UNGREEDY for inverted quantifier greediness
+    emitter.instruction("b __rt_preg_strip_save_flag");                         // save the updated flag word
+    emitter.label("__rt_preg_strip_flag_x");
+    emitter.instruction("cmp w9, #120");                                        // check for 'x' extended modifier
+    emitter.instruction("b.ne __rt_preg_strip_skip_flag");                      // ignore unsupported trailing modifiers for now
+    emitter.instruction("orr x3, x3, #0x2000");                                 // record the private PCRE2_EXTENDED flag for the shim
     emitter.label("__rt_preg_strip_save_flag");
     emitter.instruction("str x3, [sp, #16]");                                   // save accumulated PCRE2 POSIX flags
     emitter.label("__rt_preg_strip_skip_flag");
@@ -128,6 +141,11 @@ fn emit_preg_strip_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("movzx r8d, BYTE PTR [rax + r9]");                      // load the current reverse-scan byte from the slash-delimited pattern literal
     emitter.instruction("cmp r8d, 47");                                         // did the reverse scan find the closing '/' delimiter?
     emitter.instruction("je __rt_preg_strip_found_linux_x86_64");               // stop once the closing slash delimiter is located
+    emitter.instruction("cmp r8d, 101");                                        // detect the removed 'e' eval modifier while walking backward
+    emitter.instruction("jne __rt_preg_strip_flag_i_linux_x86_64");             // continue with the supported modifiers
+    emitter.instruction("or rcx, 0x40000000");                                  // mark the pattern invalid: PHP 8 rejects /e
+    emitter.instruction("jmp __rt_preg_strip_skip_flag_linux_x86_64");          // keep scanning for the closing delimiter
+    emitter.label("__rt_preg_strip_flag_i_linux_x86_64");
     emitter.instruction("cmp r8d, 105");                                        // detect the trailing 'i' case-insensitive modifier while walking backward
     emitter.instruction("jne __rt_preg_strip_flag_m_linux_x86_64");             // try the next supported regex modifier
     emitter.instruction("or rcx, 1");                                           // record REG_ICASE for PCRE2 POSIX compilation
@@ -149,8 +167,13 @@ fn emit_preg_strip_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_preg_strip_skip_flag_linux_x86_64");          // continue scanning toward the opening delimiter
     emitter.label("__rt_preg_strip_flag_U_linux_x86_64");
     emitter.instruction("cmp r8d, 85");                                         // detect the trailing 'U' ungreedy modifier
-    emitter.instruction("jne __rt_preg_strip_skip_flag_linux_x86_64");          // ignore unsupported trailing modifiers for now
+    emitter.instruction("jne __rt_preg_strip_flag_x_linux_x86_64");             // try the extended-mode modifier
     emitter.instruction("or rcx, 512");                                         // record REG_UNGREEDY for inverted quantifier greediness
+    emitter.instruction("jmp __rt_preg_strip_skip_flag_linux_x86_64");          // continue scanning toward the opening delimiter
+    emitter.label("__rt_preg_strip_flag_x_linux_x86_64");
+    emitter.instruction("cmp r8d, 120");                                        // detect the trailing 'x' extended modifier
+    emitter.instruction("jne __rt_preg_strip_skip_flag_linux_x86_64");          // ignore unsupported trailing modifiers for now
+    emitter.instruction("or rcx, 0x2000");                                      // record the private PCRE2_EXTENDED flag for the shim
 
     emitter.label("__rt_preg_strip_skip_flag_linux_x86_64");
     emitter.instruction("sub r9, 1");                                           // move the reverse scan cursor one byte closer to the opening delimiter

@@ -69,6 +69,10 @@ fn clone_body(host: &mut Function, source: &Function) -> BodyMap {
         if let Some(immediate) = &mut inst.immediate { remap_immediate_local(immediate, &map.locals); }
         host.instructions.push(inst);
     }
+    // A method body the inliner spliced into `source` keeps its class scope in the clone.
+    for (old, scope) in &source.inlined_scopes {
+        host.inlined_scopes.insert(map.instructions[old], scope.clone());
+    }
     for old in &source.blocks {
         let mut block = old.clone();
         block.id = map.blocks[&old.id];

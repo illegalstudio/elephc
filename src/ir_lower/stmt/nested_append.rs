@@ -186,6 +186,48 @@ pub(super) fn recognize<'a>(
     })
 }
 
+/// Fuses an array-root append whose parser-generated writeback matches the captured read.
+pub(super) fn try_lower_array_root(
+    ctx: &mut LoweringContext<'_, '_>, body: &[Stmt], span: Span,
+) -> bool {
+    if body.len() < 3 { return false; }
+    let (prefix, triple) = body.split_at(body.len() - 3);
+    let StmtKind::Assign { name: temp, value: target } = &triple[0].kind else { return false; };
+    if !temp.starts_with(NESTED_APPEND_TEMP_PREFIX) { return false; }
+    let ExprKind::ArrayAccess { array, .. } = &target.kind else { return false; };
+    let StmtKind::ArrayPush { array: pushed, value } = &triple[1].kind else { return false; };
+    let (stored, matches_target) = match &triple[2].kind {
+        StmtKind::NestedArrayAssign { target: written, value } => (value, written == target),
+        StmtKind::ArrayAssign { array: written, index, value } => (value, matches!(
+            &array.kind, ExprKind::Variable(name) if name == written
+        ) && matches!(&target.kind, ExprKind::ArrayAccess { index: read, .. } if read.as_ref() == index)),
+        StmtKind::StaticPropertyArrayAssign { receiver, property, index, value } => (value, matches!(
+            &array.kind, ExprKind::StaticPropertyAccess { receiver: read, property: name }
+                if read == receiver && name == property
+        ) && matches!(&target.kind, ExprKind::ArrayAccess { index: read, .. } if read.as_ref() == index)),
+        _ => return false,
+    };
+    if pushed != temp || !matches_target
+        || !matches!(&stored.kind, ExprKind::Variable(name) if name == temp)
+    { return false; }
+    let mut root = target;
+    while let ExprKind::ArrayAccess { array, .. } = &root.kind { root = array; }
+    let supported = match &root.kind {
+        ExprKind::Variable(name) => ctx.has_local_slot(name) && matches!(
+            ctx.local_type(name).codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
+        ),
+        ExprKind::StaticPropertyAccess { .. } =>
+            super::nested_array_writes::nested_target_has_static_array_root(ctx, target)
+                && (matches!(array.kind, ExprKind::ArrayAccess { .. })
+                    || super::nested_array_writes::static_root_supports_attached_fetch(ctx, root)),
+        _ => false,
+    };
+    if !supported { return false; }
+    for stmt in prefix { super::lower_stmt(ctx, stmt); }
+    super::nested_plain_writes::lower_append(ctx, target, value, span);
+    true
+}
+
 /// Lowers a recognized nested append: vivify if missing, then read, detach, push in place,
 /// write back.
 ///

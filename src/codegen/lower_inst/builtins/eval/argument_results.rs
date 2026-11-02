@@ -203,6 +203,7 @@ pub(super) fn emit_eval_result_as_type(ctx: &mut FunctionContext<'_>, result_ty:
         | PhpType::Callable
         | PhpType::Packed(_)
         | PhpType::Pointer(_)
+        | PhpType::Narrow(_)
         | PhpType::Resource(_) => {
             emit_eval_unbox_mixed_to_owned_result(ctx, &result_ty.codegen_repr());
             Ok(())

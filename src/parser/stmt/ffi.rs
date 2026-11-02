@@ -10,27 +10,51 @@
 
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
-use crate::parser::ast::{CType, ExternField, ExternParam, Stmt, StmtKind};
+use crate::parser::ast::{CIntWidth, CType, ExternField, ExternParam, Stmt, StmtKind};
 use crate::span::Span;
 
 use super::{expect_semicolon, expect_token, recover_to_statement_boundary};
 
 /// Parses a C type token and returns the corresponding CType variant.
-/// Handles primitive types (int, float, string, bool, void, callable) and pointer types
-/// including ptr and ptr<TypeName>. Advances `pos` on success.
+/// Handles primitive types (int, float, string, bool, void, callable), explicit C integer
+/// widths (`i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, `u64`), the C `float` width (`f32`,
+/// with `f64` an alias of `float`), pointer types including ptr and ptr<TypeName>, and the
+/// nullable `?string` (a `char*` that may be NULL). `?` before any other type is rejected: a
+/// `ptr` already carries NULL as the address 0. Advances `pos` on success.
 fn parse_c_type(tokens: &[SpannedToken], pos: &mut usize) -> Result<CType, CompileError> {
     let span = if *pos < tokens.len() {
         tokens[*pos].1.span
     } else {
         Span::dummy()
     };
+    if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Question)) {
+        *pos += 1; // consume ?
+        return match tokens.get(*pos).map(|(t, _)| t) {
+            Some(Token::Identifier(name)) if name == "string" => {
+                *pos += 1;
+                Ok(CType::NullableStr)
+            }
+            _ => Err(CompileError::new(
+                span,
+                "Only ?string can be nullable in an extern declaration (a ptr already accepts null)",
+            )),
+        };
+    }
     match tokens.get(*pos).map(|(t, _)| t) {
         Some(Token::Identifier(name)) => {
             let name = name.clone();
             *pos += 1;
             match name.as_str() {
-                "int" | "integer" => Ok(CType::Int),
-                "float" | "double" => Ok(CType::Float),
+                "int" | "integer" | "i64" => Ok(CType::Int),
+                "i8" => Ok(CType::IntWidth(CIntWidth::I8)),
+                "u8" => Ok(CType::IntWidth(CIntWidth::U8)),
+                "i16" => Ok(CType::IntWidth(CIntWidth::I16)),
+                "u16" => Ok(CType::IntWidth(CIntWidth::U16)),
+                "i32" => Ok(CType::IntWidth(CIntWidth::I32)),
+                "u32" => Ok(CType::IntWidth(CIntWidth::U32)),
+                "u64" => Ok(CType::IntWidth(CIntWidth::U64)),
+                "float" | "double" | "f64" => Ok(CType::Float),
+                "f32" => Ok(CType::F32),
                 "string" => Ok(CType::Str),
                 "bool" | "boolean" => Ok(CType::Bool),
                 "void" => Ok(CType::Void),
@@ -43,24 +67,11 @@ fn parse_c_type(tokens: &[SpannedToken], pos: &mut usize) -> Result<CType, Compi
                     }
                     // Check for ptr<TypeName>
                     if *pos < tokens.len() && tokens[*pos].0 == Token::Less {
-                        *pos += 1; // consume <
-                        let type_name = match tokens.get(*pos).map(|(t, _)| t) {
-                            Some(Token::Identifier(t)) => {
-                                let t = t.clone();
-                                *pos += 1;
-                                t
-                            }
-                            _ => {
-                                return Err(CompileError::new(
-                                    span,
-                                    "Expected type name after 'ptr<'",
-                                ))
-                            }
-                        };
-                        if *pos >= tokens.len() || tokens[*pos].0 != Token::Greater {
-                            return Err(CompileError::new(span, "Expected '>' after ptr<T"));
+                        let mut closes = super::params::AngleCloses::default();
+                        let type_name = parse_pointer_target(tokens, pos, span, &mut closes)?;
+                        if closes.pending_count() != 0 {
+                            return Err(CompileError::new(span, "Unbalanced '>' in pointer type"));
                         }
-                        *pos += 1; // consume >
                         Ok(CType::TypedPtr(type_name))
                     } else {
                         Ok(CType::Ptr)
@@ -74,6 +85,34 @@ fn parse_c_type(tokens: &[SpannedToken], pos: &mut usize) -> Result<CType, Compi
         }
         _ => Err(CompileError::new(span, "Expected type name")),
     }
+}
+
+/// Parses a pointer target and its enclosing angle brackets, including nested pointer targets.
+fn parse_pointer_target(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+    closes: &mut super::params::AngleCloses,
+) -> Result<String, CompileError> {
+    *pos += 1; // consume <
+    let target = match tokens.get(*pos).map(|(token, _)| token) {
+        Some(Token::Identifier(name)) => {
+            *pos += 1;
+            name.clone()
+        }
+        _ => return Err(CompileError::new(span, "Expected type name after 'ptr<'")),
+    };
+    let target = if target == "ptr"
+        && matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Less))
+    {
+        format!("ptr<{}>", parse_pointer_target(tokens, pos, span, closes)?)
+    } else {
+        target
+    };
+    super::params::expect_type_list_close(
+        tokens, pos, span, closes, "Expected '>' after ptr<T",
+    )?;
+    Ok(target)
 }
 
 /// Parses extern function parameters inside parentheses: `($param1: CType, $param2: CType)`.

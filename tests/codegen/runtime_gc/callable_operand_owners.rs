@@ -623,7 +623,7 @@ echo callBoundInLoop(32), ':', callBoundWithSameFrameCatch(), ':', callBoundWith
 #[test]
 fn test_core_static_callable_forms_balance_fresh_string_arguments_across_repeated_calls() {
     let source = r#"<?php
-extern function atoi(string $value): int;
+extern function atoi(string $value): i32;
 function passthrough(string $value): string { return $value; }
 function parseThroughExternCallable(string $left, string $right): int {
     return call_user_func('atoi', implode('', [$left, $right]));

@@ -255,6 +255,37 @@ fn test_fold_string_orderings_match_php() {
     }
 }
 
+/// Verifies a 20-digit integer part keeps PHP's `oflow` when a `.` or an exponent follows.
+///
+/// PHP stops its integer scan at `MAX_LENGTH_OF_LONG` (20) significant digits and records
+/// `oflow` before reaching the fraction or exponent, so these spellings take the byte
+/// fallback or the overflow-sign rule instead of comparing as plain doubles. Nineteen digits
+/// stay a genuine float. Expectations measured with `php -r` on PHP 8.5.12.
+#[test]
+fn test_fold_twenty_digit_float_spellings_keep_integer_overflow() {
+    let cases: &[(&str, &str, i64)] = &[
+        ("99999999999999999999.0", "100000000000000000000.0", 1),
+        ("10000000000000000000", "10000000000000000000e0", -1),
+        ("10000000000000000000E0", "10000000000000000000.0", 1),
+        ("00099999999999999999999.0", "100000000000000000000", -1),
+        ("-99999999999999999999.0", "-100000000000000000000.0", 1),
+        ("10000000000000000000e-30", "5", 1),
+        ("9999999999999999999.5", "9999999999999999999.4", 0),
+        ("1000000000000000000.0", "1000000000000000000", 0),
+    ];
+    for (left, right, expected) in cases {
+        assert_eq!(
+            fold_binop(
+                Expr::string_lit(*left),
+                BinOp::Spaceship,
+                Expr::string_lit(*right)
+            ),
+            ExprKind::IntLiteral(*expected),
+            "{left:?} <=> {right:?}"
+        );
+    }
+}
+
 /// Verifies NAN keeps PHP's asymmetric comparison behavior.
 ///
 /// PHP answers `false` for `NAN < 1`, `NAN > 1`, `NAN <= 1` and `NAN >= 1` alike, but `1 <=>

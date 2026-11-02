@@ -180,7 +180,7 @@ pub fn emit_curl_invoke_callback(emitter: &mut Emitter) {
     emitter.instruction("mov x10, sp");                                         // x10 = address of this handler record
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // link it as active
     emitter.instruction("add x0, sp, #24");                                     // x0 = &jmp_buf inside the handler record
-    emitter.bl_c("setjmp"); // 0 on the first pass, 1 when a throw longjmps back
+    emitter.save_exception_handler();                                           // 0 on the first pass, 1 when a throw longjmps back
     emitter.instruction("cbnz x0, __rt_curl_invoke_cb_threw");                  // nonzero → arrived via longjmp
 
     // -- normal path: invoke the PHP callable through its uniform invoker (offset 56) --
@@ -365,7 +365,7 @@ fn emit_curl_invoke_callback_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea r10, [rbp - 288]");                                // r10 = address of this handler record
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // link it as active
     emitter.instruction("lea rdi, [rbp - 264]");                                // rdi = &jmp_buf inside the handler record
-    emitter.bl_c("setjmp"); // 0 on the first pass, 1 when a throw longjmps back
+    emitter.save_exception_handler();                                           // 0 on the first pass, 1 when a throw longjmps back
     emitter.instruction("test rax, rax");                                       // did control arrive via longjmp?
     emitter.instruction("jne __rt_curl_invoke_cb_threw_x86");                   // nonzero → the callable threw
 

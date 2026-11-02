@@ -2,7 +2,7 @@
 title: "array_merge_recursive()"
 description: "Recursively merges two arrays, combining scalar collisions into lists."
 sidebar:
-  order: 25
+  order: 27
 ---
 
 ## array_merge_recursive()

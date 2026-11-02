@@ -47,7 +47,7 @@ pub(super) fn emit(module: &Module, emitter: &mut Emitter) {
     abi::emit_frame_slot_address(emitter, result, HANDLER);
     abi::emit_store_reg_to_symbol(emitter, result, "_exc_handler_top", 0);
     abi::emit_frame_slot_address(emitter, arg0, HANDLER - TRY_HANDLER_JMP_BUF_OFFSET);
-    emitter.bl_c("setjmp");                                                     // keep destructor exceptions below the Rust interpreter's frames
+    emitter.save_exception_handler();                                           // keep destructor exceptions below the Rust interpreter's frames
     abi::emit_branch_if_int_result_nonzero(emitter, "__rt_eval_unset_caught");
     for index in 0..5 {
         abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), (index + 1) * 8);
@@ -114,7 +114,7 @@ mod tests {
             let asm = emitter.output();
             assert!(asm.contains(&format!("{}:", target.extern_symbol("__elephc_eval_value_typed_property_unset_v2"))), "{name}");
             assert!(!asm.contains(&format!("{}:", target.extern_symbol("__elephc_eval_value_typed_property_unset"))), "{name}");
-            let enter = asm.find(&target.extern_symbol("setjmp")).unwrap();
+            let enter = asm.find(&target.extern_symbol("_setjmp")).unwrap();
             let unset = asm.find("__rt_eval_typed_property_unset").unwrap();
             let caught = asm.find("__rt_eval_unset_caught:").unwrap();
             let boxed = asm.find("__rt_mixed_from_value").unwrap();

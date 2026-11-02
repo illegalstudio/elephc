@@ -188,6 +188,34 @@ unset($before, $after, $reference, $map, $key);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Nested entry increments return their old/new snapshots while retaining the entry alias.
+#[test]
+fn test_core_weak_map_nested_incdec_expression_results() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function nestedWeakKey(object $key): object { echo 'key;'; return $key; }
+$key = new stdClass();
+$map = new WeakMap();
+$map[$key] = 4;
+$maps = [$map];
+$reference = &$map[$key];
+echo ++$maps[0][nestedWeakKey($key)], ':', $maps[0][$key], ':', $reference, ';';
+echo $maps[0][nestedWeakKey($key)]--, ':', $maps[0][$key], ':', $reference;
+$map[$key] = 'az';
+$reference = &$map[$key];
+echo ';', $maps[0][nestedWeakKey($key)]++, ':', $maps[0][$key], ':', $reference;
+unset($reference, $maps, $map, $key);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "key;5:5:5;key;5:4:4;key;az:ba:ba", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Nested entry expression snapshots remain correct without EIR optimization.
+#[test]
+fn test_core_weak_map_nested_incdec_expression_results_no_ir_opt() {
+    without_ir_opt(test_core_weak_map_nested_incdec_expression_results);
+}
+
 /// Direct reference parameters borrow the actual managed entry cell.
 #[test]
 fn test_core_weak_map_entry_by_ref_call() {

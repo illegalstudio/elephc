@@ -14,6 +14,7 @@ use crate::builtins::semantics::{
     BuiltinTargetSupport, BuiltinValidation, LoweredBuiltinValue, NormalizedBuiltinCall,
 };
 use crate::ir::{Immediate, IrType, Op};
+use crate::types::PhpType;
 
 builtin! {
     contract: "strval",
@@ -44,9 +45,13 @@ fn lower(
     ctx: &mut dyn BuiltinLoweringContext,
     call: &NormalizedBuiltinCall<'_>,
 ) -> Result<LoweredBuiltinValue, BuiltinLoweringError> {
+    let value = call.operand(0)?;
+    if ctx.value_php_type(value).codegen_repr() == PhpType::Str {
+        return Ok(LoweredBuiltinValue { value });
+    }
     Ok(ctx.emit_value(
         Op::Cast,
-        vec![call.operand(0)?],
+        vec![value],
         Some(Immediate::CastTarget(IrType::Str)),
         call.result_type.clone(),
         Op::Cast.default_effects(),
