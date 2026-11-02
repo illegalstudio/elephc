@@ -277,6 +277,16 @@ extern "elephc_pdo" {
     function elephc_pdo_mysql_charset(int $conn): string;
     function elephc_pdo_sql_has_multiple_statements(int $conn, string $sql, int $len): int;
     function elephc_pdo_real_escape_string(int $conn, string $data, int $len): int;
+    // v60: the rest of the mysqli connection surface over the same client: the
+    // last OK packet's info string ($info / mysqli_info()), a real COM_PING, a
+    // real COM_CHANGE_USER ($has_db = 0 keeps no database selected), and the
+    // server-side id of a native prepare (mysqli_stmt::$id), plus the linked client
+    // library's version string with no connection (mysqli_get_client_info()).
+    function elephc_pdo_mysql_info(int $conn): string;
+    function elephc_pdo_mysql_client_info(): string;
+    function elephc_pdo_mysql_ping(int $conn): int;
+    function elephc_pdo_mysql_change_user(int $conn, string $user, string $pass, string $db, int $has_db): int;
+    function elephc_pdo_mysql_stmt_id(int $stmt): int;
     // v22: a live transaction-state read backing PDO::inTransaction() /
     // beginTransaction()'s already-active guard (P1-g). SQLite reads native
     // autocommit; PostgreSQL/MySQL use bridge-maintained state updated after every

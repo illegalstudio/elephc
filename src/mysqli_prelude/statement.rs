@@ -1,29 +1,24 @@
 //! Purpose:
-//! The `mysqli_stmt` class, as an elephc-PHP source fragment: native prepares
-//! over `elephc_pdo_prepare(…, 0)`, parameter binding, execute/step, and
-//! `get_result` draining into an independent `mysqli_result`.
+//! The `mysqli_stmt` class, as an elephc-PHP source fragment (the parse-parity
+//! oracle for `build::statement`): native prepares over `elephc_pdo_prepare(…, 0)`,
+//! reference parameter binding, result binding with `fetch()`, `store_result()`
+//! buffering with `data_seek()`, long data, attributes, multiple result sets,
+//! and `get_result()` draining into an independent `mysqli_result`.
 //!
 //! Called from:
 //! - `crate::mysqli_prelude::fragments::source_for_version` (concatenated into
 //!   the injected prelude).
 //!
 //! Key details:
-//! - `bind_param(string $types, mixed &...$vars)` keeps PHP's signature
-//!   (literals are rejected, the variable count is validated against the type
-//!   string), but the variable VALUES are captured at bind time — a documented
-//!   divergence: elephc cannot alias caller variables past the call (variadic
-//!   by-ref elements alias only inside the callee frame, and per-variable
-//!   closure captures need fixed parameter names, whose defaulted-by-ref
-//!   lowering the backend does not support). Re-executing with fresh values
-//!   means re-calling bind_param or using `execute($params)`.
-//! - `bind_result` / `fetch` are deliberately NOT declared: writing a fetched
-//!   row back into caller variables after the binding call is exactly the
-//!   post-call aliasing elephc cannot express, and a silently inert binding
-//!   would be worse than an honest "undefined method". `get_result()` +
-//!   `mysqli_result` fetches cover row reading; `method_exists` stays honest.
-//! - `execute` steps once to learn whether a result set exists; `get_result`
-//!   drains the rest and resets the statement so it can be re-executed;
-//!   `store_result` consumes the pending rows so `num_rows` is valid.
+//! - `bind_param(string $types, mixed &...$vars)` and `bind_result(mixed &...$vars)`
+//!   keep PHP's REFERENCE semantics through closures that capture the by-ref
+//!   variadic by reference: `execute()` reads the variables' current values and
+//!   `fetch()` writes each row back into them, exactly like php.
+//! - `execute` steps once to learn whether a result set exists; `fetch` /
+//!   `get_result` / `store_result` consume the rest and rewind the statement
+//!   (unless a CALL left another result set, probed for `more_results()`).
+//! - `$legacyAttributes` is rewritten per version: PHP < 8.4 still accepts
+//!   MYSQLI_STMT_ATTR_PREFETCH_ROWS and the FOR_UPDATE / SCROLLABLE cursor types.
 
 /// The `mysqli_stmt` class (fragment without a `<?php` header).
 pub(super) const SRC: &str = r##"
@@ -31,71 +26,103 @@ pub(super) const SRC: &str = r##"
 
 class mysqli_stmt {
     public int $affected_rows = 0;
-    public int $errno = 0;
-    public string $error = "";
-    public int $field_count = 0;
     public int $insert_id = 0;
     public int $num_rows = 0;
     public int $param_count = 0;
-    public string $sqlstate = "00000";
+    public int $field_count = 0;
+    public int $errno = 0;
     public array $error_list = [];
+    public string $error = "";
+    public string $sqlstate = "00000";
+    public int $id = 0;
+
+    // PHP < 8.4 also accepts MYSQLI_STMT_ATTR_PREFETCH_ROWS and the FOR_UPDATE /
+    // SCROLLABLE cursor types; the literal is rewritten per version (fragments.rs).
+    private static bool $legacyAttributes = false;
 
     // Bridge handles: the prepared-statement handle and the owning connection.
     private int $stmt = -1;
     private int $conn = -1;
     private ?mysqli $link = null;
+    private bool $closed = false;
 
-    // bind_param state: the type string and the values captured at bind time.
+    // bind_param(): the type string and a closure that reads the bound
+    // variables' CURRENT values (captured by reference), so each execute()
+    // sends whatever the variables hold at that moment — php's semantics.
     private string $bindTypes = "";
-    private array $boundParams = [];
+    private ?Closure $paramReader = null;
+    // bind_result(): a closure that writes one fetched row into the bound
+    // variables (captured by reference).
+    private ?Closure $resultWriter = null;
+    // send_long_data() chunks, one slot per parameter (0-based), plus whether
+    // the slot received any chunk since the last execute().
+    private array $longData = [];
+    private array $longDataSent = [];
 
-    // Cursor state: execute() pre-steps once; get_result/store_result drain.
+    // Cursor state: execute() pre-steps once; fetch()/get_result()/store_result()
+    // consume the pending rows. store_result() buffers them here so data_seek()
+    // and fetch() can walk them.
     private bool $executedOnce = false;
     private bool $hasPending = false;
     private int $pendingStep = 0;
+    private bool $stored = false;
+    private array $storedCells = [];
+    private int $storedCount = 0;
+    private int $storedPos = 0;
+    // Whether the statement holds a further result set (CALL procedures).
+    private bool $moreResults = false;
+    private int $warningCount = 0;
 
-    // Internal factory used by mysqli::prepare (a user never constructs
-    // mysqli_stmt directly in the v1 subset).
-    private static function __elephcFromPrepare(mysqli $link, int $conn, int $stmt, string $query): mysqli_stmt {
-        $_statement = new mysqli_stmt();
-        $_statement->link = $link;
-        $_statement->conn = $conn;
-        $_statement->stmt = $stmt;
-        // The bridge reports the server's exact parameter marker count off the
-        // prepared statement (no client-side `?`-scanning, which used to diverge
-        // from the multi-statement scanner on `--` comments / backslash rules).
-        $_statement->param_count = elephc_pdo_mysql_param_count($stmt);
-        return $_statement;
+    // mysqli_stmt::attr_set() state.
+    private int $attrUpdateMaxLength = 0;
+    private int $attrCursorType = 0;
+    private int $attrPrefetchRows = 1;
+
+    // php: `new mysqli_stmt($mysql, $query)` is mysqli_stmt_init() plus an
+    // optional prepare.
+    public function __construct(mysqli $mysql, ?string $query = null) {
+        $_conn = $mysql->__elephcConn();
+        if ($_conn < 0) {
+            throw new Error("mysqli object is not fully initialized");
+        }
+        $this->link = $mysql;
+        $this->conn = $_conn;
+        if ($query !== null) {
+            $this->prepare($query);
+        }
     }
 
-    // Internal factory for the two-step mysqli::stmt_init() + prepare() form:
-    // an unprepared statement bound to a connection, ready for prepare().
-    // Private like __elephcFromPrepare — the checker's mysqli friend channel
-    // exposes it to mysqli::stmt_init only.
-    private static function __elephcInit(mysqli $link, int $conn): mysqli_stmt {
-        $_statement = new mysqli_stmt();
-        $_statement->link = $link;
-        $_statement->conn = $conn;
-        return $_statement;
+    // Internal: mysqli::prepare()'s one-step prepare. On failure php copies the
+    // statement's error onto the connection before reporting it.
+    private function __elephcPrepareOrCopyError(string $query): bool {
+        return $this->prepareHandle($query, true);
     }
 
     public function prepare(string $query): bool {
-        if ($this->conn < 0) {
-            $this->syntheticFailure(2006, "mysqli_stmt object is not associated with a connection", "HY000");
-            return false;
-        }
-        if ($query === "") {
-            throw new ValueError("mysqli_stmt::prepare(): Argument #1 (\$query) cannot be empty");
+        if ($this->closed) {
+            throw new Error("mysqli_stmt object is already closed");
         }
         if (!$this->requireLinkNotBusy()) {
             return false;
         }
+        return $this->prepareHandle($query, false);
+    }
+
+    // Prepares $query natively (real `?` placeholders on the server), dropping
+    // any earlier prepared handle and every bind. $copyToLink mirrors a failure
+    // onto the owning connection (mysqli::prepare's contract).
+    private function prepareHandle(string $query, bool $copyToLink): bool {
         if ($this->stmt >= 0) {
             elephc_pdo_finalize($this->stmt);
             $this->stmt = -1;
         }
+        $this->linkBump("com_stmt_prepare");
         $_handle = elephc_pdo_prepare($this->conn, $query, 0);
         if ($_handle < 0) {
+            $_link = $this->link;
+            if ($copyToLink && $_link !== null) {
+                $_link->__elephcAdoptBridgeError();
+            }
             // stmt is still -1, so opFailed reads the connection's error state
             // (its stmt-errno fallback), which is where a prepare error lives.
             $this->opFailed();
@@ -103,78 +130,96 @@ class mysqli_stmt {
         }
         $this->stmt = $_handle;
         $this->param_count = elephc_pdo_mysql_param_count($_handle);
+        // Native prepares know their columns before execution, except CALL,
+        // whose result shape exists only once the procedure runs.
+        $_head = strtoupper(ltrim($query));
+        $this->field_count = str_starts_with($_head, "CALL") ? 0 : elephc_pdo_column_count($_handle);
+        $this->id = elephc_pdo_mysql_stmt_id($_handle);
+        $this->bindTypes = "";
+        $this->paramReader = null;
+        $this->resultWriter = null;
+        $this->clearLongData();
         $this->executedOnce = false;
         $this->hasPending = false;
+        $this->dropStored();
+        $this->moreResults = false;
+        $this->affected_rows = 0;
+        $this->insert_id = 0;
+        $this->num_rows = 0;
         $this->clearError();
         return true;
     }
 
-    // Guards the two-step prepare() and execute() while the LINK has
-    // unconsumed results (a multi_query batch or a real_query result):
-    // php-src raises CR_COMMANDS_OUT_OF_SYNC (2014) on the statement there —
-    // sending COM_STMT_PREPARE / COM_STMT_EXECUTE on a busy connection would
-    // corrupt the pending batch. One-shot mysqli::prepare() has its own
-    // connection-level guard; this is the statement-side twin, reading the
-    // link's private state through the checker's mysqli friend channel.
-    private function requireLinkNotBusy(): bool {
-        $_link = $this->link;
-        if ($_link !== null && $_link->__elephcHasPendingResults()) {
-            $this->syntheticFailure(2014, "Commands out of sync; you can't run this command now", "HY000");
-            return false;
-        }
-        return true;
-    }
-
-    public function free_result(): void {
-        // Discards a pending buffered result so the statement can be re-executed
-        // (php frees the client-side buffer). We buffer per-statement in the
-        // bridge, so draining/resetting the cursor is the equivalent.
-        if ($this->hasPending && $this->stmt >= 0) {
-            elephc_pdo_reset($this->stmt);
-        }
-        $this->hasPending = false;
-    }
-
     public function bind_param(string $types, mixed &...$vars): bool {
-        // Variadic by-ref keeps PHP's signature contract (a literal argument
-        // is rejected with "must be passed a variable"); the values are
-        // captured HERE — see the module preamble for the documented
-        // divergence from PHP's read-at-execute reference semantics.
-        $_values = [];
-        $_given = count($vars);
-        for ($_i = 0; $_i < $_given; $_i++) {
-            $_values[] = $vars[$_i];
-        }
-        return $this->__elephcBindParamValues($types, $_values);
+        // The closure captures the variadic BY REFERENCE, so each execute()
+        // reads the bound variables' current values — php's reference binding.
+        return $this->__elephcBindParamReader("mysqli_stmt::bind_param", 1, $types, count($vars), function () use (&$vars): array {
+            $_values = [];
+            $_n = count($vars);
+            for ($_i = 0; $_i < $_n; $_i++) {
+                $_values[] = $vars[$_i];
+            }
+            return $_values;
+        });
     }
 
-    // Shared validation + snapshot behind bind_param (the procedural
-    // mysqli_stmt_bind_param alias forwards through bind_param itself).
-    // Private: not part of PHP's mysqli surface.
-    private function __elephcBindParamValues(string $types, array $values): bool {
+    // Shared validation + binding behind bind_param and the procedural
+    // mysqli_stmt_bind_param (whose by-ref variadic cannot be spread-forwarded).
+    private function __elephcBindParamReader(string $context, int $typesArg, string $types, int $given, Closure $reader): bool {
+        $this->requireValid();
         $_want = strlen($types);
         if ($_want == 0) {
-            throw new ValueError("mysqli_stmt::bind_param(): Argument #1 (\$types) cannot be empty");
+            throw new ValueError($context . "(): Argument #" . $typesArg . " (\$types) must not be empty");
+        }
+        if ($_want != $given) {
+            throw new ArgumentCountError("The number of elements in the type definition string must match the number of bind variables");
+        }
+        if ($_want != $this->param_count) {
+            throw new ArgumentCountError("The number of variables must match the number of parameters in the prepared statement");
         }
         for ($_i = 0; $_i < $_want; $_i++) {
             $_char = substr($types, $_i, 1);
             if ($_char !== "i" && $_char !== "d" && $_char !== "s" && $_char !== "b") {
-                throw new ValueError("mysqli_stmt::bind_param(): Argument #1 (\$types) must only contain the \"b\", \"d\", \"i\", \"s\" type specifiers");
+                throw new ValueError($context . "(): Argument #" . $typesArg . " (\$types) must only contain the \"b\", \"d\", \"i\", \"s\" type specifiers");
             }
         }
-        if (count($values) != $_want) {
-            $this->syntheticFailure(2031, "The number of variables must match the number of parameters in the prepared statement", "HY000");
-            return false;
-        }
         $this->bindTypes = $types;
-        $this->boundParams = $values;
+        $this->paramReader = $reader;
+        return true;
+    }
+
+    public function bind_result(mixed &...$vars): bool {
+        // Captured BY REFERENCE: every fetch() writes the row into the caller's
+        // variables, exactly like php's result binding.
+        return $this->__elephcBindResultWriter(count($vars), function (array $row) use (&$vars): void {
+            $_n = count($vars);
+            for ($_i = 0; $_i < $_n; $_i++) {
+                $vars[$_i] = $row[$_i];
+            }
+        });
+    }
+
+    // Shared validation behind bind_result and the procedural
+    // mysqli_stmt_bind_result.
+    private function __elephcBindResultWriter(int $given, Closure $writer): bool {
+        $this->requireValid();
+        if ($given != $this->field_count) {
+            throw new ArgumentCountError("Number of bind variables doesn't match number of fields in prepared statement");
+        }
+        $this->resultWriter = $writer;
         return true;
     }
 
     public function execute(?array $params = null): bool {
-        if ($this->stmt < 0) {
-            $this->syntheticFailure(2006, "mysqli_stmt object is already closed", "HY000");
-            return false;
+        $this->requireValid();
+        if ($params !== null) {
+            if (!array_is_list($params)) {
+                throw new ValueError("mysqli_stmt::execute(): Argument #1 (\$params) must be a list array");
+            }
+            $_given = count($params);
+            if ($_given != $this->param_count) {
+                throw new ValueError("mysqli_stmt::execute(): Argument #1 (\$params) must consist of exactly " . $this->param_count . " elements, " . $_given . " present");
+            }
         }
         if (!$this->requireLinkNotBusy()) {
             return false;
@@ -187,14 +232,12 @@ class mysqli_stmt {
         $this->executedOnce = true;
         $this->hasPending = false;
         $this->pendingStep = 0;
+        $this->dropStored();
+        $this->moreResults = false;
         if ($params !== null) {
             // PHP 8.1+: execute's own $params bind as strings, in order.
-            $_given = count($params);
-            if ($_given != $this->param_count) {
-                $this->syntheticFailure(2031, "mysqli_stmt::execute(): Argument #1 (\$params) must consist of exactly " . $this->param_count . " elements, " . $_given . " given", "HY000");
-                return false;
-            }
-            for ($_i = 0; $_i < $_given; $_i++) {
+            $_n = count($params);
+            for ($_i = 0; $_i < $_n; $_i++) {
                 $_value = $params[$_i];
                 if ($_value === null) {
                     elephc_pdo_bind_null($this->stmt, $_i + 1);
@@ -204,24 +247,28 @@ class mysqli_stmt {
                 }
             }
         } elseif ($this->bindTypes !== "") {
-            if (strlen($this->bindTypes) != $this->param_count) {
-                $this->syntheticFailure(2034, "Number of variables doesn't match number of parameters in prepared statement", "HY000");
-                return false;
-            }
+            $_values = $this->readBoundParams();
             $_n = strlen($this->bindTypes);
             for ($_i = 0; $_i < $_n; $_i++) {
-                // The values captured by the most recent bind_param call.
-                $_value = $this->boundParams[$_i];
+                // The bound variable's value RIGHT NOW (reference semantics).
+                $_value = $_values[$_i];
                 $_char = substr($this->bindTypes, $_i, 1);
-                if ($_value === null) {
+                if ($_char === "b") {
+                    // mysqlnd sends a "b" parameter only through send_long_data();
+                    // a NULL variable stays NULL, anything else without chunks is "".
+                    $_sent = (bool) $this->longDataSent[$_i];
+                    if ($_value === null && !$_sent) {
+                        elephc_pdo_bind_null($this->stmt, $_i + 1);
+                    } else {
+                        $_blob = (string) $this->longData[$_i];
+                        elephc_pdo_bind_blob($this->stmt, $_i + 1, $_blob, strlen($_blob));
+                    }
+                } elseif ($_value === null) {
                     elephc_pdo_bind_null($this->stmt, $_i + 1);
                 } elseif ($_char === "i") {
                     elephc_pdo_bind_int($this->stmt, $_i + 1, (int) $_value);
                 } elseif ($_char === "d") {
                     elephc_pdo_bind_double($this->stmt, $_i + 1, (float) $_value);
-                } elseif ($_char === "b") {
-                    $_blob = (string) $_value;
-                    elephc_pdo_bind_blob($this->stmt, $_i + 1, $_blob, strlen($_blob));
                 } else {
                     $_text = (string) $_value;
                     elephc_pdo_bind_text($this->stmt, $_i + 1, $_text, strlen($_text));
@@ -231,12 +278,16 @@ class mysqli_stmt {
             $this->syntheticFailure(2031, "No data supplied for parameters in prepared statement", "HY000");
             return false;
         }
+        // mysqlnd forgets the long-data chunks once they were sent.
+        $this->clearLongData();
+        $this->linkBump("com_stmt_execute");
         $_rc = elephc_pdo_step($this->stmt);
         if ($_rc < 0) {
             return $this->opFailed();
         }
         $_cols = elephc_pdo_column_count($this->stmt);
         $this->field_count = $_cols;
+        $this->warningCount = elephc_pdo_warning_count($this->conn);
         if ($_cols == 0) {
             $this->affected_rows = elephc_pdo_changes($this->conn);
             $this->insert_id = elephc_pdo_last_insert_id($this->conn, "");
@@ -247,7 +298,7 @@ class mysqli_stmt {
             return true;
         }
         // A result set exists: the first step's verdict (1 = row, 0 = empty)
-        // is kept pending; get_result()/store_result() drain from here.
+        // is kept pending; fetch()/get_result()/store_result() drain from here.
         $this->hasPending = true;
         $this->pendingStep = $_rc;
         $this->num_rows = 0;
@@ -256,47 +307,74 @@ class mysqli_stmt {
         return true;
     }
 
-    // php refreshes the OWNING connection's affected_rows / insert_id /
-    // warning_count from every command's OK packet, so the canonical
-    // `$stmt->execute(); $db->insert_id;` idiom reads the statement's value —
-    // not a stale one. Mirror the statement's freshly-updated copies onto the
-    // link (a no-op if the statement was detached from its connection).
-    private function refreshLink(): void {
-        if ($this->link !== null) {
-            $this->link->affected_rows = $this->affected_rows;
-            $this->link->insert_id = $this->insert_id;
-            $this->link->warning_count = elephc_pdo_warning_count($this->conn);
+    public function fetch(): ?bool {
+        $this->requireValid();
+        if ($this->stored) {
+            // Buffered by store_result(): walk the client-side rows.
+            if ($this->storedPos >= $this->storedCount) {
+                return null;
+            }
+            $_row = [];
+            $_base = $this->storedPos * $this->field_count;
+            for ($_i = 0; $_i < $this->field_count; $_i++) {
+                $_row[] = $this->storedCells[$_base + $_i];
+            }
+            $this->storedPos = $this->storedPos + 1;
+            $this->writeRow($_row);
+            return true;
         }
+        if (!$this->hasPending) {
+            if (!$this->executedOnce) {
+                $this->syntheticFailure(2014, "Commands out of sync; you can't run this command now", "HY000");
+                return false;
+            }
+            return null;
+        }
+        if ($this->pendingStep < 0) {
+            // The previous advance failed: report it now.
+            $this->hasPending = false;
+            $this->opFailed();
+            return false;
+        }
+        if ($this->pendingStep == 0) {
+            $this->finishResultSet();
+            return null;
+        }
+        $_row = [];
+        for ($_i = 0; $_i < $this->field_count; $_i++) {
+            $_row[] = $this->columnValue($_i);
+        }
+        $this->num_rows = $this->num_rows + 1;
+        $this->pendingStep = elephc_pdo_step($this->stmt);
+        $this->writeRow($_row);
+        return true;
     }
 
     public function get_result(): mysqli_result|false {
-        if ($this->stmt < 0) {
-            $this->syntheticFailure(2050, "mysqli_stmt object is already closed", "HY000");
-            return false;
+        $this->requireValid();
+        if ($this->stored) {
+            // Rows already buffered by store_result(): hand the unread ones over.
+            $_cells = [];
+            $_rows = $this->storedCount - $this->storedPos;
+            $_start = $this->storedPos * $this->field_count;
+            $_end = $this->storedCount * $this->field_count;
+            for ($_i = $_start; $_i < $_end; $_i++) {
+                $_cells[] = $this->storedCells[$_i];
+            }
+            $this->storedPos = $this->storedCount;
+            return $this->buildResult($_cells, $_rows);
         }
         if (!$this->hasPending) {
+            if (!$this->executedOnce) {
+                $this->syntheticFailure(2014, "Commands out of sync; you can't run this command now", "HY000");
+            }
             return false;
-        }
-        $_cols = $this->field_count;
-        $_names = [];
-        $_tables = [];
-        $_natives = [];
-        $_flags = [];
-        $_lens = [];
-        $_decimals = [];
-        for ($_i = 0; $_i < $_cols; $_i++) {
-            $_names[] = elephc_pdo_column_name($this->stmt, $_i);
-            $_tables[] = elephc_pdo_column_table_name($this->stmt, $_i);
-            $_natives[] = elephc_pdo_column_native_type($this->stmt, $_i);
-            $_flags[] = elephc_pdo_column_flags($this->stmt, $_i);
-            $_lens[] = elephc_pdo_column_len($this->stmt, $_i);
-            $_decimals[] = elephc_pdo_column_precision($this->stmt, $_i);
         }
         $_cells = [];
         $_rowCount = 0;
         $_rc = $this->pendingStep;
         while ($_rc == 1) {
-            for ($_i = 0; $_i < $_cols; $_i++) {
+            for ($_i = 0; $_i < $this->field_count; $_i++) {
                 $_cells[] = $this->columnValue($_i);
             }
             $_rowCount = $_rowCount + 1;
@@ -307,29 +385,30 @@ class mysqli_stmt {
             $this->opFailed();
             return false;
         }
-        // The statement stays alive and rewound, so it can be re-executed.
-        elephc_pdo_reset($this->stmt);
+        $this->linkBump("ps_buffered_sets");
         $this->num_rows = $_rowCount;
         $this->affected_rows = $_rowCount;
+        $this->finishResultSet();
         $this->clearError();
-        return mysqli_result::__elephcFromDrain($_cells, $_rowCount, $_names, $_tables, $_natives, $_flags, $_lens, $_decimals);
+        return $this->buildResult($_cells, $_rowCount);
     }
 
     public function store_result(): bool {
-        if ($this->stmt < 0) {
-            $this->syntheticFailure(2050, "mysqli_stmt object is already closed", "HY000");
-            return false;
-        }
+        $this->requireValid();
         if (!$this->hasPending) {
             // Nothing pending (non-select execute, or already consumed):
             // php-src treats this as a successful no-op.
             return true;
         }
-        // Without bind_result/fetch (see the module preamble) the buffered
-        // rows have no reader; consume and count them so num_rows is valid.
+        // Buffer the remaining rows client-side so fetch() / data_seek() walk
+        // them and num_rows is exact.
+        $_cells = [];
         $_rowCount = 0;
         $_rc = $this->pendingStep;
         while ($_rc == 1) {
+            for ($_i = 0; $_i < $this->field_count; $_i++) {
+                $_cells[] = $this->columnValue($_i);
+            }
             $_rowCount = $_rowCount + 1;
             $_rc = elephc_pdo_step($this->stmt);
         }
@@ -337,50 +416,334 @@ class mysqli_stmt {
         if ($_rc < 0) {
             return $this->opFailed();
         }
-        elephc_pdo_reset($this->stmt);
+        $this->linkBump("ps_buffered_sets");
+        $this->stored = true;
+        $this->storedCells = $_cells;
+        $this->storedCount = $_rowCount;
+        $this->storedPos = 0;
         $this->num_rows = $_rowCount;
         $this->affected_rows = $_rowCount;
+        $this->finishResultSet();
         $this->clearError();
         return true;
     }
 
-    public function reset(): bool {
-        if ($this->stmt < 0) {
+    public function data_seek(int $offset): void {
+        if ($offset < 0) {
+            throw new ValueError("mysqli_stmt::data_seek(): Argument #1 (\$offset) must be greater than or equal to 0");
+        }
+        $this->requireValid();
+        // Meaningful on a store_result()-buffered statement (php's contract);
+        // an offset past the end leaves the cursor exhausted.
+        if ($this->stored) {
+            $this->storedPos = $offset > $this->storedCount ? $this->storedCount : $offset;
+        }
+    }
+
+    public function num_rows(): int {
+        $this->requireValid();
+        return $this->num_rows;
+    }
+
+    public function result_metadata(): mysqli_result|false {
+        $this->requireValid();
+        if ($this->field_count == 0) {
             return false;
         }
-        elephc_pdo_reset($this->stmt);
-        elephc_pdo_clear_bindings($this->stmt);
+        // No rows: an empty slice of the cell buffer keeps the cell list's
+        // element type (a bare `[]` literal would narrow the parameter).
+        return $this->buildResult(array_slice($this->storedCells, 0, 0), 0);
+    }
+
+    public function more_results(): bool {
+        $this->requireValid();
+        return $this->moreResults;
+    }
+
+    public function next_result(): bool {
+        $this->requireValid();
+        if (!$this->moreResults) {
+            return false;
+        }
+        // The probe in finishResultSet() already advanced onto the next set.
+        $this->moreResults = false;
+        $_rc = elephc_pdo_step($this->stmt);
+        if ($_rc < 0) {
+            return $this->opFailed();
+        }
+        $this->dropStored();
+        $this->field_count = elephc_pdo_column_count($this->stmt);
+        $this->num_rows = 0;
+        if ($this->field_count == 0) {
+            $this->hasPending = false;
+            $this->affected_rows = elephc_pdo_changes($this->conn);
+            $this->finishResultSet();
+        } else {
+            $this->hasPending = true;
+            $this->pendingStep = $_rc;
+        }
+        $this->clearError();
+        return true;
+    }
+
+    public function send_long_data(int $param_num, string $data): bool {
+        if ($param_num < 0) {
+            throw new ValueError("mysqli_stmt::send_long_data(): Argument #1 (\$param_num) must be greater than or equal to 0");
+        }
+        $this->requireValid();
+        if ($param_num >= $this->param_count) {
+            // CR_INVALID_PARAMETER_NO, recorded but not reported (php returns false).
+            $this->errno = 2034;
+            $this->error = "Invalid parameter number";
+            $this->sqlstate = "HY000";
+            $this->error_list = [["errno" => 2034, "sqlstate" => "HY000", "error" => "Invalid parameter number"]];
+            return false;
+        }
+        // Chunks accumulate until the next execute() sends them as one value.
+        $this->longData[$param_num] = ((string) $this->longData[$param_num]) . $data;
+        $this->longDataSent[$param_num] = true;
+        $this->linkBump("com_stmt_send_long_data");
+        return true;
+    }
+
+    public function attr_get(int $attribute): int {
+        $this->requireValid();
+        if ($attribute == 0) {
+            return $this->attrUpdateMaxLength;
+        }
+        if ($attribute == 1) {
+            return $this->attrCursorType;
+        }
+        if ($attribute == 2 && mysqli_stmt::$legacyAttributes) {
+            return $this->attrPrefetchRows;
+        }
+        throw new ValueError($this->attributeError("mysqli_stmt::attr_get"));
+    }
+
+    public function attr_set(int $attribute, int $value): bool {
+        $this->requireValid();
+        if ($attribute == 0) {
+            if ($value != 0 && $value != 1) {
+                throw new ValueError("mysqli_stmt::attr_set(): Argument #2 (\$value) must be 0 or 1 for attribute MYSQLI_STMT_ATTR_UPDATE_MAX_LENGTH");
+            }
+            $this->attrUpdateMaxLength = $value;
+            return true;
+        }
+        if ($attribute == 1) {
+            $_legal = $value == 0 || $value == 1
+                || (mysqli_stmt::$legacyAttributes && ($value == 2 || $value == 4));
+            if (!$_legal) {
+                throw new ValueError("mysqli_stmt::attr_set(): Argument #2 (\$value) must be one of the MYSQLI_CURSOR_TYPE_* constants for attribute MYSQLI_STMT_ATTR_CURSOR_TYPE");
+            }
+            if ($value > 1) {
+                // mysqlnd implements only NO_CURSOR and READ_ONLY.
+                $this->syntheticFailure(2054, "Not implemented", "HY000");
+                return false;
+            }
+            $this->attrCursorType = $value;
+            return true;
+        }
+        if ($attribute == 2 && mysqli_stmt::$legacyAttributes) {
+            if ($value < 1) {
+                throw new ValueError("mysqli_stmt::attr_set(): Argument #2 (\$value) must be greater than 0 for attribute MYSQLI_STMT_ATTR_PREFETCH_ROWS");
+            }
+            if ($value > 1) {
+                $this->syntheticFailure(2054, "Not implemented", "HY000");
+                return false;
+            }
+            $this->attrPrefetchRows = $value;
+            return true;
+        }
+        throw new ValueError($this->attributeError("mysqli_stmt::attr_set"));
+    }
+
+    public function get_warnings(): mysqli_warning|false {
+        $this->requireValid();
+        $_link = $this->link;
+        if ($_link === null || $this->warningCount == 0) {
+            return false;
+        }
+        return $_link->__elephcFetchWarnings();
+    }
+
+    public function free_result(): void {
+        $this->requireValid();
+        // Discards pending or buffered rows so the statement can be re-executed.
+        if ($this->hasPending && $this->stmt >= 0) {
+            elephc_pdo_reset($this->stmt);
+        }
         $this->hasPending = false;
+        $this->moreResults = false;
+        $this->dropStored();
+    }
+
+    public function reset(): bool {
+        $this->requireValid();
+        $this->linkBump("com_stmt_reset");
+        elephc_pdo_reset($this->stmt);
+        // php's reset keeps the parameter and result bindings but discards
+        // long data and any pending rows.
+        $this->clearLongData();
+        $this->hasPending = false;
+        $this->moreResults = false;
+        $this->dropStored();
         $this->num_rows = 0;
         $this->clearError();
         return true;
     }
 
     public function close(): bool {
-        if ($this->stmt >= 0) {
-            elephc_pdo_finalize($this->stmt);
-            $this->stmt = -1;
-        }
-        // Clear the pending-result flag too: a post-close get_result() /
-        // store_result() must see a closed statement (and raise the
-        // already-closed error), not drive the bridge with handle -1.
-        $this->hasPending = false;
-        $this->link = null;
+        $this->requireValid();
+        $this->linkBump("explicit_stmt_close");
+        $this->linkBump("com_stmt_close");
+        $this->release();
+        $this->closed = true;
         return true;
     }
 
     public function __destruct() {
         // The bridge ignores an unknown/already-finalized handle, so this is
         // safe even when the owning mysqli connection was closed first.
+        $this->release();
+    }
+
+    // -- internal helpers ($_-prefixed locals; same checker rule as PDO) --
+
+    // Finalizes the bridge statement and drops every per-execution state.
+    private function release(): void {
         if ($this->stmt >= 0) {
             elephc_pdo_finalize($this->stmt);
             $this->stmt = -1;
         }
         $this->hasPending = false;
+        $this->moreResults = false;
+        $this->dropStored();
+        $this->paramReader = null;
+        $this->resultWriter = null;
         $this->link = null;
     }
 
-    // -- internal helpers ($_-prefixed locals; same checker rule as PDO) --
+    // php 8: methods on an unprepared statement raise "not fully initialized",
+    // on a closed one "already closed" (Error, regardless of mysqli_report).
+    private function requireValid(): void {
+        if ($this->closed) {
+            throw new Error("mysqli_stmt object is already closed");
+        }
+        if ($this->stmt < 0) {
+            throw new Error("mysqli_stmt object is not fully initialized");
+        }
+    }
+
+    // The ValueError text for an unknown statement attribute (php 8.4 dropped
+    // MYSQLI_STMT_ATTR_PREFETCH_ROWS from the accepted set and the message).
+    private function attributeError(string $context): string {
+        if (mysqli_stmt::$legacyAttributes) {
+            return $context . "(): Argument #1 (\$attribute) must be one of MYSQLI_STMT_ATTR_UPDATE_MAX_LENGTH, MYSQLI_STMT_ATTR_PREFETCH_ROWS, or STMT_ATTR_CURSOR_TYPE";
+        }
+        return $context . "(): Argument #1 (\$attribute) must be either MYSQLI_STMT_ATTR_UPDATE_MAX_LENGTH or MYSQLI_STMT_ATTR_CURSOR_TYPE";
+    }
+
+    // The bind_param() variables' CURRENT values, read through the reference
+    // closure (empty when nothing was bound).
+    private function readBoundParams(): array {
+        $_reader = $this->paramReader;
+        if ($_reader === null) {
+            return [];
+        }
+        return (array) $_reader();
+    }
+
+    // Writes one fetched row into the bind_result() variables (if any).
+    private function writeRow(array $row): void {
+        $_writer = $this->resultWriter;
+        $_row = $row;
+        if ($_writer !== null) {
+            $_writer($_row);
+        }
+    }
+
+    // Resets every parameter's long-data slot to "no chunk sent".
+    private function clearLongData(): void {
+        $_data = [];
+        $_sent = [];
+        for ($_i = 0; $_i < $this->param_count; $_i++) {
+            $_data[] = "";
+            $_sent[] = false;
+        }
+        $this->longData = $_data;
+        $this->longDataSent = $_sent;
+    }
+
+    // Forgets the store_result() buffer.
+    private function dropStored(): void {
+        $this->stored = false;
+        $this->storedCells = [];
+        $this->storedCount = 0;
+        $this->storedPos = 0;
+    }
+
+    // Called once the current result set is fully consumed: probes for a
+    // further result set (CALL procedures return several) and, when there is
+    // none, rewinds the statement so it is immediately re-executable.
+    private function finishResultSet(): void {
+        $this->hasPending = false;
+        $this->moreResults = elephc_pdo_next_rowset($this->stmt) == 1;
+        if (!$this->moreResults) {
+            elephc_pdo_reset($this->stmt);
+        }
+    }
+
+    // Wraps buffered cells (flat, row-major) in an independent mysqli_result
+    // carrying this statement's column metadata.
+    private function buildResult(array $cells, int $rowCount): mysqli_result {
+        $_names = [];
+        $_tables = [];
+        $_natives = [];
+        $_flags = [];
+        $_lens = [];
+        $_decimals = [];
+        for ($_i = 0; $_i < $this->field_count; $_i++) {
+            $_names[] = elephc_pdo_column_name($this->stmt, $_i);
+            $_tables[] = elephc_pdo_column_table_name($this->stmt, $_i);
+            $_natives[] = elephc_pdo_column_native_type($this->stmt, $_i);
+            $_flags[] = elephc_pdo_column_flags($this->stmt, $_i);
+            $_lens[] = elephc_pdo_column_len($this->stmt, $_i);
+            $_decimals[] = elephc_pdo_column_precision($this->stmt, $_i);
+        }
+        return mysqli_result::__elephcFromDrain($cells, $rowCount, $_names, $_tables, $_natives, $_flags, $_lens, $_decimals);
+    }
+
+    // Guards the two-step prepare() and execute() while the LINK has
+    // unconsumed results (a multi_query batch or a real_query result):
+    // php-src raises CR_COMMANDS_OUT_OF_SYNC (2014) on the statement there.
+    private function requireLinkNotBusy(): bool {
+        $_link = $this->link;
+        if ($_link !== null && $_link->__elephcHasPendingResults()) {
+            $this->syntheticFailure(2014, "Commands out of sync; you can't run this command now", "HY000");
+            return false;
+        }
+        return true;
+    }
+
+    // Bumps a statistic on the owning connection (no-op once detached).
+    private function linkBump(string $key): void {
+        $_link = $this->link;
+        if ($_link !== null) {
+            $_link->__elephcBump($key);
+        }
+    }
+
+    // php refreshes the OWNING connection's affected_rows / insert_id /
+    // warning_count from every command's OK packet, so the canonical
+    // `$stmt->execute(); $db->insert_id;` idiom reads the statement's value.
+    private function refreshLink(): void {
+        $_link = $this->link;
+        if ($_link !== null) {
+            $_link->affected_rows = $this->affected_rows;
+            $_link->insert_id = $this->insert_id;
+            $_link->warning_count = $this->warningCount;
+        }
+    }
 
     // Decodes one cell of the statement's current row; same dispatch as the
     // connection's columnValue (int / float / null / length-counted bytes).
@@ -417,11 +780,11 @@ class mysqli_stmt {
     // dispatches mysqli_report. Always returns false so callers tail-call it.
     private function opFailed(): bool {
         $this->errno = elephc_pdo_stmt_errcode($this->stmt);
-        $this->error = elephc_pdo_stmt_errmsg($this->stmt);
+        $this->error = mysqli::__elephcServerMessage(elephc_pdo_stmt_errmsg($this->stmt));
         $this->sqlstate = elephc_pdo_stmt_sqlstate($this->stmt);
         if ($this->errno == 0 && $this->conn >= 0) {
             $this->errno = elephc_pdo_errcode($this->conn);
-            $this->error = elephc_pdo_errmsg($this->conn);
+            $this->error = mysqli::__elephcServerMessage(elephc_pdo_errmsg($this->conn));
             $this->sqlstate = elephc_pdo_sqlstate($this->conn);
         }
         if ($this->sqlstate === "") {
@@ -444,9 +807,7 @@ class mysqli_stmt {
     // writes to STDERR, OFF is silent (same contract as mysqli::report).
     private function report(string $message, int $errno, string $sqlstate): void {
         if ((mysqli::$reportMode & 2) != 0) {
-            $_e = new mysqli_sql_exception($message, $errno);
-            $_e->sqlstate = $sqlstate;
-            throw $_e;
+            throw mysqli_sql_exception::__elephcCreate($message, $errno, $sqlstate);
         }
         if ((mysqli::$reportMode & 1) != 0) {
             fwrite(STDERR, "mysqli error: " . $message . "\n");

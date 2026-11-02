@@ -248,6 +248,10 @@ fn native_type_name(t: ColumnType) -> &'static str {
     }
 }
 
+/// The linked pure-Rust MySQL client's implementation/version string, reported as
+/// PDO's client version and as mysqli's `client_info` / `mysqli_get_client_info()`.
+pub const MYSQL_CLIENT_INFO: &str = "mysql 28.0.4";
+
 /// A live MySQL/MariaDB connection plus the last operation's bookkeeping that PDO
 /// reads back (`rowCount`, `lastInsertId`, `errorCode`/`errorInfo`).
 pub struct MyConn {
@@ -2285,7 +2289,7 @@ impl MyConn {
     /// standalone binary, so reporting the linked client crate is the truthful
     /// equivalent of `mysql_get_client_info()`.
     pub fn client_version(&self) -> String {
-        "mysql 28.0.4".to_string()
+        MYSQL_CLIENT_INFO.to_string()
     }
 
     /// Returns the connection transport description in the same shape as
@@ -2368,6 +2372,72 @@ impl MyConn {
             .as_ref()
             .map(|c| i64::from(c.connection_id()))
             .unwrap_or(0)
+    }
+
+    /// Returns the info string of the last OK packet ("Records: 3  Duplicates: 0
+    /// Warnings: 0", "Rows matched: …"), backing `mysqli::$info` / `mysqli_info()`.
+    /// Empty when the server sent none or the client is owned by a stream worker.
+    pub fn info(&self) -> String {
+        self.conn
+            .0
+            .as_ref()
+            .map(|c| c.info_str().into_owned())
+            .unwrap_or_default()
+    }
+
+    /// Records a client error from the `mysql` crate as the connection's last error.
+    fn record_mysql_error(&mut self, error: &mysql::Error) {
+        self.sqlstate = err_sqlstate(error);
+        self.errmsg = error.to_string();
+        self.errcode = err_code(error);
+    }
+
+    /// Sends a real `COM_PING`, backing `mysqli::ping()`. Returns `1` on success
+    /// and `-1` (error recorded) when the server is gone or the client is busy.
+    pub fn ping(&mut self) -> i64 {
+        if !self.ensure_not_busy() {
+            return -1;
+        }
+        match self.conn.ping() {
+            Ok(()) => {
+                self.errcode = 0;
+                self.sqlstate = "00000".to_string();
+                1
+            }
+            Err(error) => {
+                self.record_mysql_error(&error);
+                -1
+            }
+        }
+    }
+
+    /// Sends `COM_CHANGE_USER`, backing `mysqli::change_user()`: re-authenticates
+    /// the same connection, which resets the session (open transactions rolled back,
+    /// temporary tables dropped, session variables and charset reset). Returns `1` on
+    /// success and `-1` with the error recorded on failure.
+    pub fn change_user(&mut self, user: &str, pass: &str, db_name: Option<&str>) -> i64 {
+        if !self.ensure_not_busy() {
+            return -1;
+        }
+        let opts = mysql::ChangeUserOpts::default()
+            .with_user(Some(user.to_string()))
+            .with_pass(Some(pass.to_string()))
+            .with_db_name(db_name.map(str::to_string));
+        match self.conn.change_user(opts) {
+            Ok(()) => {
+                self.errcode = 0;
+                self.sqlstate = "00000".to_string();
+                self.in_transaction = false;
+                self.autocommit = true;
+                self.current_charset = "utf8mb4".to_string();
+                self.no_backslash_escapes = self.no_backslash_escape();
+                1
+            }
+            Err(error) => {
+                self.record_mysql_error(&error);
+                -1
+            }
+        }
     }
 
     /// Prepares a statement: translates placeholders and prepares it server-side
@@ -2750,6 +2820,15 @@ impl MyStmt {
     /// `mysqli_stmt::$param_count`), so no client-side `?`-scanning is needed.
     pub fn param_count(&self) -> i64 {
         self.binds.len() as i64
+    }
+
+    /// Returns the server-side statement id of a native prepare (mysqli's
+    /// `mysqli_stmt::$id`), or `0` for an emulated (client-side) statement.
+    pub fn server_statement_id(&self) -> i64 {
+        self.statement
+            .as_ref()
+            .map(|statement| i64::from(statement.id()))
+            .unwrap_or(0)
     }
 
     /// Resolves a named placeholder to its 1-based slot (0 if unknown). The

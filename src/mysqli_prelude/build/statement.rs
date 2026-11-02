@@ -1,41 +1,30 @@
 //! Purpose:
-//! Builds the `mysqli_stmt` class as AST: native prepares over
-//! `elephc_pdo_prepare(…, 0)`, parameter binding, execute/step, and
-//! `get_result` draining into an independent `mysqli_result`.
+//! Builds the `mysqli_stmt` class as AST: native prepares, reference parameter
+//! binding, result binding with `fetch()`, `store_result()` buffering with
+//! `data_seek()`, long data, attributes, and multiple result sets.
 //!
 //! Called from:
 //! - `crate::mysqli_prelude::build::mysqli_declarations`.
 //!
 //! Key details:
 //! - TRANSCRIBED from `mysqli_prelude::statement::SRC` (`synthetic_class::transcribe`);
-//!   the oracle `built_declarations_match_the_php_for_every_version` compares the
-//!   built class against that PHP for every profile.
-//! - `bind_param(string $types, mixed &...$vars)` keeps PHP's signature
-//!   (literals are rejected, the variable count is validated against the type
-//!   string), but the variable VALUES are captured at bind time — a documented
-//!   divergence: elephc cannot alias caller variables past the call (variadic
-//!   by-ref elements alias only inside the callee frame, and per-variable
-//!   closure captures need fixed parameter names, whose defaulted-by-ref
-//!   lowering the backend does not support). Re-executing with fresh values
-//!   means re-calling bind_param or using `execute($params)`.
-//! - `bind_result` / `fetch` are deliberately NOT declared: writing a fetched
-//!   row back into caller variables after the binding call is exactly the
-//!   post-call aliasing elephc cannot express, and a silently inert binding
-//!   would be worse than an honest "undefined method". `get_result()` +
-//!   `mysqli_result` fetches cover row reading; `method_exists` stays honest.
-//! - `execute` steps once to learn whether a result set exists; `get_result`
-//!   drains the rest and resets the statement so it can be re-executed;
-//!   `store_result` consumes the pending rows so `num_rows` is valid.
+//!   the oracle compares the built class against that PHP for every profile.
+//!   `$legacyAttributes` (true below PHP 8.4) is the one version conditional.
+//! - `bind_param` / `bind_result` keep php's reference semantics through
+//!   closures that capture the by-ref variadic by reference.
 
+use crate::php_version::PhpVersion;
 use crate::parser::ast::{BinOp, CastType, TypeExpr, Stmt};
 use crate::synthetic_class::{
     class,
+    closure,
     e_array,
     e_array_assoc,
     e_binop,
     e_bool,
     e_call,
     e_cast,
+    e_closure_call,
     e_const,
     e_index,
     e_int,
@@ -48,15 +37,18 @@ use crate::synthetic_class::{
     e_static_call,
     e_static_prop,
     e_str,
+    e_ternary,
     e_this,
     e_this_prop,
     e_var,
     method,
+    s_array_assign,
     s_array_push,
     s_assign,
     s_expr,
     s_for,
     s_if,
+    s_prop_array_assign,
     s_prop_assign,
     s_return,
     s_throw,
@@ -69,70 +61,73 @@ use crate::synthetic_class::{
 };
 
 /// `mysqli_stmt` — transcribed from the PHP form.
-pub(super) fn decl_class_mysqli_stmt() -> Stmt {
+pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
     class("mysqli_stmt")
         .prop("affected_rows", TypeExpr::Int, Some(e_int(0)))
-        .prop("errno", TypeExpr::Int, Some(e_int(0)))
-        .prop("error", TypeExpr::Str, Some(e_str("")))
-        .prop("field_count", TypeExpr::Int, Some(e_int(0)))
         .prop("insert_id", TypeExpr::Int, Some(e_int(0)))
         .prop("num_rows", TypeExpr::Int, Some(e_int(0)))
         .prop("param_count", TypeExpr::Int, Some(e_int(0)))
-        .prop("sqlstate", TypeExpr::Str, Some(e_str("00000")))
+        .prop("field_count", TypeExpr::Int, Some(e_int(0)))
+        .prop("errno", TypeExpr::Int, Some(e_int(0)))
         .prop("error_list", t_array(), Some(e_array(vec![])))
-        // Bridge handles: the prepared-statement handle and the owning connection.
+        .prop("error", TypeExpr::Str, Some(e_str("")))
+        .prop("sqlstate", TypeExpr::Str, Some(e_str("00000")))
+        .prop("id", TypeExpr::Int, Some(e_int(0)))
+        .private_static_prop("legacyAttributes", TypeExpr::Bool, Some(e_bool(php_version < PhpVersion::Php84)))
         .private_prop("stmt", TypeExpr::Int, Some(e_neg(e_int(1))))
         .private_prop("conn", TypeExpr::Int, Some(e_neg(e_int(1))))
         .private_prop("link", t_nullable(t_class("mysqli")), Some(e_null()))
-        // bind_param state: the type string and the values captured at bind time.
+        .private_prop("closed", TypeExpr::Bool, Some(e_bool(false)))
         .private_prop("bindTypes", TypeExpr::Str, Some(e_str("")))
-        .private_prop("boundParams", t_array(), Some(e_array(vec![])))
-        // Cursor state: execute() pre-steps once; get_result/store_result drain.
+        .private_prop("paramReader", t_nullable(t_class("Closure")), Some(e_null()))
+        .private_prop("resultWriter", t_nullable(t_class("Closure")), Some(e_null()))
+        .private_prop("longData", t_array(), Some(e_array(vec![])))
+        .private_prop("longDataSent", t_array(), Some(e_array(vec![])))
         .private_prop("executedOnce", TypeExpr::Bool, Some(e_bool(false)))
         .private_prop("hasPending", TypeExpr::Bool, Some(e_bool(false)))
         .private_prop("pendingStep", TypeExpr::Int, Some(e_int(0)))
-        // Internal factory used by mysqli::prepare (a user never constructs mysqli_stmt directly
-        // in the v1 subset).
+        .private_prop("stored", TypeExpr::Bool, Some(e_bool(false)))
+        .private_prop("storedCells", t_array(), Some(e_array(vec![])))
+        .private_prop("storedCount", TypeExpr::Int, Some(e_int(0)))
+        .private_prop("storedPos", TypeExpr::Int, Some(e_int(0)))
+        .private_prop("moreResults", TypeExpr::Bool, Some(e_bool(false)))
+        .private_prop("warningCount", TypeExpr::Int, Some(e_int(0)))
+        .private_prop("attrUpdateMaxLength", TypeExpr::Int, Some(e_int(0)))
+        .private_prop("attrCursorType", TypeExpr::Int, Some(e_int(0)))
+        .private_prop("attrPrefetchRows", TypeExpr::Int, Some(e_int(1)))
         .method(
-            method("__elephcFromPrepare")
-                .private()
-                .static_()
-                .param("link", t_class("mysqli"))
-                .param("conn", TypeExpr::Int)
-                .param("stmt", TypeExpr::Int)
-                .param("query", TypeExpr::Str)
-                // `$query` is not stored: the bridge reports the parameter count itself (below),
-                // so the SQL text has no further use here. The PHP form left it unread, and the
-                // oracle holds the built body to that.
-                .keep_unread_params()
-                .returns(t_class("mysqli_stmt"))
+            method("__construct")
+                .param("mysql", t_class("mysqli"))
+                .param_default("query", t_nullable(TypeExpr::Str), e_null())
                 .body(vec![
-                    s_assign("_statement", e_new("mysqli_stmt", vec![])),
-                    s_prop_assign(e_var("_statement"), "link", e_var("link")),
-                    s_prop_assign(e_var("_statement"), "conn", e_var("conn")),
-                    s_prop_assign(e_var("_statement"), "stmt", e_var("stmt")),
-                    // The bridge reports the server's exact parameter marker count off the
-                    // prepared statement (no client-side `?`-scanning, which used to diverge from
-                    // the multi-statement scanner on `--` comments / backslash rules).
-                    s_prop_assign(e_var("_statement"), "param_count", e_call("elephc_pdo_mysql_param_count", vec![e_var("stmt")])),
-                    s_return(e_var("_statement")),
+                    s_assign("_conn", e_method_call(e_var("mysql"), "__elephcConn", vec![])),
+                    s_if(
+                        e_binop(e_var("_conn"), BinOp::Lt, e_int(0)),
+                        vec![
+                            s_throw(e_new("Error", vec![e_str("mysqli object is not fully initialized")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_prop_assign(e_this(), "link", e_var("mysql")),
+                    s_prop_assign(e_this(), "conn", e_var("_conn")),
+                    s_if(
+                        e_binop(e_var("query"), BinOp::StrictNotEq, e_null()),
+                        vec![
+                            s_expr(e_method_call(e_this(), "prepare", vec![e_var("query")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
                 ]),
         )
-        // Internal factory for the two-step mysqli::stmt_init() + prepare() form: an unprepared
-        // statement bound to a connection, ready for prepare(). Private like __elephcFromPrepare —
-        // the checker's mysqli friend channel exposes it to mysqli::stmt_init only.
         .method(
-            method("__elephcInit")
+            method("__elephcPrepareOrCopyError")
                 .private()
-                .static_()
-                .param("link", t_class("mysqli"))
-                .param("conn", TypeExpr::Int)
-                .returns(t_class("mysqli_stmt"))
+                .param("query", TypeExpr::Str)
+                .returns(TypeExpr::Bool)
                 .body(vec![
-                    s_assign("_statement", e_new("mysqli_stmt", vec![])),
-                    s_prop_assign(e_var("_statement"), "link", e_var("link")),
-                    s_prop_assign(e_var("_statement"), "conn", e_var("conn")),
-                    s_return(e_var("_statement")),
+                    s_return(e_method_call(e_this(), "prepareHandle", vec![e_var("query"), e_bool(true)])),
                 ]),
         )
         .method(
@@ -141,18 +136,216 @@ pub(super) fn decl_class_mysqli_stmt() -> Stmt {
                 .returns(TypeExpr::Bool)
                 .body(vec![
                     s_if(
-                        e_binop(e_this_prop("conn"), BinOp::Lt, e_int(0)),
+                        e_this_prop("closed"),
                         vec![
-                            s_expr(e_method_call(e_this(), "syntheticFailure", vec![e_int(2006), e_str("mysqli_stmt object is not associated with a connection"), e_str("HY000")])),
-                            s_return(e_bool(false)),
+                            s_throw(e_new("Error", vec![e_str("mysqli_stmt object is already closed")])),
                         ],
                         vec![],
                         None,
                     ),
                     s_if(
-                        e_binop(e_var("query"), BinOp::StrictEq, e_str("")),
+                        e_not(e_method_call(e_this(), "requireLinkNotBusy", vec![])),
                         vec![
-                            s_throw(e_new("ValueError", vec![e_str("mysqli_stmt::prepare(): Argument #1 ($query) cannot be empty")])),
+                            s_return(e_bool(false)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_method_call(e_this(), "prepareHandle", vec![e_var("query"), e_bool(false)])),
+                ]),
+        )
+        .method(
+            method("prepareHandle")
+                .private()
+                .param("query", TypeExpr::Str)
+                .param("copyToLink", TypeExpr::Bool)
+                .returns(TypeExpr::Bool)
+                .body(vec![
+                    s_if(
+                        e_binop(e_this_prop("stmt"), BinOp::GtEq, e_int(0)),
+                        vec![
+                            s_expr(e_call("elephc_pdo_finalize", vec![e_this_prop("stmt")])),
+                            s_prop_assign(e_this(), "stmt", e_neg(e_int(1))),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_expr(e_method_call(e_this(), "linkBump", vec![e_str("com_stmt_prepare")])),
+                    s_assign("_handle", e_call("elephc_pdo_prepare", vec![e_this_prop("conn"), e_var("query"), e_int(0)])),
+                    s_if(
+                        e_binop(e_var("_handle"), BinOp::Lt, e_int(0)),
+                        vec![
+                            s_assign("_link", e_this_prop("link")),
+                            s_if(
+                                e_binop(e_var("copyToLink"), BinOp::And, e_binop(e_var("_link"), BinOp::StrictNotEq, e_null())),
+                                vec![
+                                    s_expr(e_method_call(e_var("_link"), "__elephcAdoptBridgeError", vec![])),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                            s_expr(e_method_call(e_this(), "opFailed", vec![])),
+                            s_return(e_bool(false)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_prop_assign(e_this(), "stmt", e_var("_handle")),
+                    s_prop_assign(e_this(), "param_count", e_call("elephc_pdo_mysql_param_count", vec![e_var("_handle")])),
+                    s_assign("_head", e_call("strtoupper", vec![e_call("ltrim", vec![e_var("query")])])),
+                    s_prop_assign(e_this(), "field_count", e_ternary(e_call("str_starts_with", vec![e_var("_head"), e_str("CALL")]), e_int(0), e_call("elephc_pdo_column_count", vec![e_var("_handle")]))),
+                    s_prop_assign(e_this(), "id", e_call("elephc_pdo_mysql_stmt_id", vec![e_var("_handle")])),
+                    s_prop_assign(e_this(), "bindTypes", e_str("")),
+                    s_prop_assign(e_this(), "paramReader", e_null()),
+                    s_prop_assign(e_this(), "resultWriter", e_null()),
+                    s_expr(e_method_call(e_this(), "clearLongData", vec![])),
+                    s_prop_assign(e_this(), "executedOnce", e_bool(false)),
+                    s_prop_assign(e_this(), "hasPending", e_bool(false)),
+                    s_expr(e_method_call(e_this(), "dropStored", vec![])),
+                    s_prop_assign(e_this(), "moreResults", e_bool(false)),
+                    s_prop_assign(e_this(), "affected_rows", e_int(0)),
+                    s_prop_assign(e_this(), "insert_id", e_int(0)),
+                    s_prop_assign(e_this(), "num_rows", e_int(0)),
+                    s_expr(e_method_call(e_this(), "clearError", vec![])),
+                    s_return(e_bool(true)),
+                ]),
+        )
+        .method(
+            method("bind_param")
+                .param("types", TypeExpr::Str)
+                .variadic_by_ref("vars", Some(t_mixed()))
+                .returns(TypeExpr::Bool)
+                .body(vec![
+                    s_return(e_method_call(e_this(), "__elephcBindParamReader", vec![e_str("mysqli_stmt::bind_param"), e_int(1), e_var("types"), e_call("count", vec![e_var("vars")]), closure()
+                        .captures_ref("vars")
+                        .returns(t_array())
+                        .body(vec![
+                            s_assign("_values", e_array(vec![])),
+                            s_assign("_n", e_call("count", vec![e_var("vars")])),
+                            s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_var("_n"))), Some(s_expr(e_post_inc("_i"))), vec![
+                                s_array_push("_values", e_index(e_var("vars"), e_var("_i"))),
+                            ]),
+                            s_return(e_var("_values")),
+                        ])
+                        .build()])),
+                ]),
+        )
+        .method(
+            method("__elephcBindParamReader")
+                .private()
+                .param("context", TypeExpr::Str)
+                .param("typesArg", TypeExpr::Int)
+                .param("types", TypeExpr::Str)
+                .param("given", TypeExpr::Int)
+                .param("reader", t_class("Closure"))
+                .returns(TypeExpr::Bool)
+                .body(vec![
+                    s_expr(e_method_call(e_this(), "requireValid", vec![])),
+                    s_assign("_want", e_call("strlen", vec![e_var("types")])),
+                    s_if(
+                        e_binop(e_var("_want"), BinOp::Eq, e_int(0)),
+                        vec![
+                            s_throw(e_new("ValueError", vec![e_binop(e_binop(e_binop(e_var("context"), BinOp::Concat, e_str("(): Argument #")), BinOp::Concat, e_var("typesArg")), BinOp::Concat, e_str(" ($types) must not be empty"))])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("_want"), BinOp::NotEq, e_var("given")),
+                        vec![
+                            s_throw(e_new("ArgumentCountError", vec![e_str("The number of elements in the type definition string must match the number of bind variables")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("_want"), BinOp::NotEq, e_this_prop("param_count")),
+                        vec![
+                            s_throw(e_new("ArgumentCountError", vec![e_str("The number of variables must match the number of parameters in the prepared statement")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_var("_want"))), Some(s_expr(e_post_inc("_i"))), vec![
+                        s_assign("_char", e_call("substr", vec![e_var("types"), e_var("_i"), e_int(1)])),
+                        s_if(
+                            e_binop(e_binop(e_binop(e_binop(e_var("_char"), BinOp::StrictNotEq, e_str("i")), BinOp::And, e_binop(e_var("_char"), BinOp::StrictNotEq, e_str("d"))), BinOp::And, e_binop(e_var("_char"), BinOp::StrictNotEq, e_str("s"))), BinOp::And, e_binop(e_var("_char"), BinOp::StrictNotEq, e_str("b"))),
+                            vec![
+                                s_throw(e_new("ValueError", vec![e_binop(e_binop(e_binop(e_var("context"), BinOp::Concat, e_str("(): Argument #")), BinOp::Concat, e_var("typesArg")), BinOp::Concat, e_str(" ($types) must only contain the \"b\", \"d\", \"i\", \"s\" type specifiers"))])),
+                            ],
+                            vec![],
+                            None,
+                        ),
+                    ]),
+                    s_prop_assign(e_this(), "bindTypes", e_var("types")),
+                    s_prop_assign(e_this(), "paramReader", e_var("reader")),
+                    s_return(e_bool(true)),
+                ]),
+        )
+        .method(
+            method("bind_result")
+                .variadic_by_ref("vars", Some(t_mixed()))
+                .returns(TypeExpr::Bool)
+                .body(vec![
+                    s_return(e_method_call(e_this(), "__elephcBindResultWriter", vec![e_call("count", vec![e_var("vars")]), closure()
+                        .param("row", t_array())
+                        .captures_ref("vars")
+                        .returns(TypeExpr::Void)
+                        .body(vec![
+                            s_assign("_n", e_call("count", vec![e_var("vars")])),
+                            s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_var("_n"))), Some(s_expr(e_post_inc("_i"))), vec![
+                                s_array_assign("vars", e_var("_i"), e_index(e_var("row"), e_var("_i"))),
+                            ]),
+                        ])
+                        .build()])),
+                ]),
+        )
+        .method(
+            method("__elephcBindResultWriter")
+                .private()
+                .param("given", TypeExpr::Int)
+                .param("writer", t_class("Closure"))
+                .returns(TypeExpr::Bool)
+                .body(vec![
+                    s_expr(e_method_call(e_this(), "requireValid", vec![])),
+                    s_if(
+                        e_binop(e_var("given"), BinOp::NotEq, e_this_prop("field_count")),
+                        vec![
+                            s_throw(e_new("ArgumentCountError", vec![e_str("Number of bind variables doesn't match number of fields in prepared statement")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_prop_assign(e_this(), "resultWriter", e_var("writer")),
+                    s_return(e_bool(true)),
+                ]),
+        )
+        .method(
+            method("execute")
+                .param_default("params", t_nullable(t_array()), e_null())
+                .returns(TypeExpr::Bool)
+                .body(vec![
+                    s_expr(e_method_call(e_this(), "requireValid", vec![])),
+                    s_if(
+                        e_binop(e_var("params"), BinOp::StrictNotEq, e_null()),
+                        vec![
+                            s_if(
+                                e_not(e_call("array_is_list", vec![e_var("params")])),
+                                vec![
+                                    s_throw(e_new("ValueError", vec![e_str("mysqli_stmt::execute(): Argument #1 ($params) must be a list array")])),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                            s_assign("_given", e_call("count", vec![e_var("params")])),
+                            s_if(
+                                e_binop(e_var("_given"), BinOp::NotEq, e_this_prop("param_count")),
+                                vec![
+                                    s_throw(e_new("ValueError", vec![e_binop(e_binop(e_binop(e_binop(e_str("mysqli_stmt::execute(): Argument #1 ($params) must consist of exactly "), BinOp::Concat, e_this_prop("param_count")), BinOp::Concat, e_str(" elements, ")), BinOp::Concat, e_var("_given")), BinOp::Concat, e_str(" present"))])),
+                                ],
+                                vec![],
+                                None,
+                            ),
                         ],
                         vec![],
                         None,
@@ -166,6 +359,624 @@ pub(super) fn decl_class_mysqli_stmt() -> Stmt {
                         None,
                     ),
                     s_if(
+                        e_this_prop("executedOnce"),
+                        vec![
+                            s_expr(e_call("elephc_pdo_reset", vec![e_this_prop("stmt")])),
+                            s_expr(e_call("elephc_pdo_clear_bindings", vec![e_this_prop("stmt")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_prop_assign(e_this(), "executedOnce", e_bool(true)),
+                    s_prop_assign(e_this(), "hasPending", e_bool(false)),
+                    s_prop_assign(e_this(), "pendingStep", e_int(0)),
+                    s_expr(e_method_call(e_this(), "dropStored", vec![])),
+                    s_prop_assign(e_this(), "moreResults", e_bool(false)),
+                    s_if(
+                        e_binop(e_var("params"), BinOp::StrictNotEq, e_null()),
+                        vec![
+                            s_assign("_n", e_call("count", vec![e_var("params")])),
+                            s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_var("_n"))), Some(s_expr(e_post_inc("_i"))), vec![
+                                s_assign("_value", e_index(e_var("params"), e_var("_i"))),
+                                s_if(
+                                    e_binop(e_var("_value"), BinOp::StrictEq, e_null()),
+                                    vec![
+                                        s_expr(e_call("elephc_pdo_bind_null", vec![e_this_prop("stmt"), e_binop(e_var("_i"), BinOp::Add, e_int(1))])),
+                                    ],
+                                    vec![],
+                                    Some(vec![
+                                    s_assign("_text", e_cast(CastType::String, e_var("_value"))),
+                                    s_expr(e_call("elephc_pdo_bind_text", vec![e_this_prop("stmt"), e_binop(e_var("_i"), BinOp::Add, e_int(1)), e_var("_text"), e_call("strlen", vec![e_var("_text")])])),
+                                ]),
+                                ),
+                            ]),
+                        ],
+                        vec![
+                        (e_binop(e_this_prop("bindTypes"), BinOp::StrictNotEq, e_str("")), vec![
+                            s_assign("_values", e_method_call(e_this(), "readBoundParams", vec![])),
+                            s_assign("_n", e_call("strlen", vec![e_this_prop("bindTypes")])),
+                            s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_var("_n"))), Some(s_expr(e_post_inc("_i"))), vec![
+                                s_assign("_value", e_index(e_var("_values"), e_var("_i"))),
+                                s_assign("_char", e_call("substr", vec![e_this_prop("bindTypes"), e_var("_i"), e_int(1)])),
+                                s_if(
+                                    e_binop(e_var("_char"), BinOp::StrictEq, e_str("b")),
+                                    vec![
+                                        s_assign("_sent", e_cast(CastType::Bool, e_index(e_this_prop("longDataSent"), e_var("_i")))),
+                                        s_if(
+                                            e_binop(e_binop(e_var("_value"), BinOp::StrictEq, e_null()), BinOp::And, e_not(e_var("_sent"))),
+                                            vec![
+                                                s_expr(e_call("elephc_pdo_bind_null", vec![e_this_prop("stmt"), e_binop(e_var("_i"), BinOp::Add, e_int(1))])),
+                                            ],
+                                            vec![],
+                                            Some(vec![
+                                            s_assign("_blob", e_cast(CastType::String, e_index(e_this_prop("longData"), e_var("_i")))),
+                                            s_expr(e_call("elephc_pdo_bind_blob", vec![e_this_prop("stmt"), e_binop(e_var("_i"), BinOp::Add, e_int(1)), e_var("_blob"), e_call("strlen", vec![e_var("_blob")])])),
+                                        ]),
+                                        ),
+                                    ],
+                                    vec![
+                                    (e_binop(e_var("_value"), BinOp::StrictEq, e_null()), vec![
+                                        s_expr(e_call("elephc_pdo_bind_null", vec![e_this_prop("stmt"), e_binop(e_var("_i"), BinOp::Add, e_int(1))])),
+                                    ]),
+                                    (e_binop(e_var("_char"), BinOp::StrictEq, e_str("i")), vec![
+                                        s_expr(e_call("elephc_pdo_bind_int", vec![e_this_prop("stmt"), e_binop(e_var("_i"), BinOp::Add, e_int(1)), e_cast(CastType::Int, e_var("_value"))])),
+                                    ]),
+                                    (e_binop(e_var("_char"), BinOp::StrictEq, e_str("d")), vec![
+                                        s_expr(e_call("elephc_pdo_bind_double", vec![e_this_prop("stmt"), e_binop(e_var("_i"), BinOp::Add, e_int(1)), e_cast(CastType::Float, e_var("_value"))])),
+                                    ]),
+                                ],
+                                    Some(vec![
+                                    s_assign("_text", e_cast(CastType::String, e_var("_value"))),
+                                    s_expr(e_call("elephc_pdo_bind_text", vec![e_this_prop("stmt"), e_binop(e_var("_i"), BinOp::Add, e_int(1)), e_var("_text"), e_call("strlen", vec![e_var("_text")])])),
+                                ]),
+                                ),
+                            ]),
+                        ]),
+                        (e_binop(e_this_prop("param_count"), BinOp::Gt, e_int(0)), vec![
+                            s_expr(e_method_call(e_this(), "syntheticFailure", vec![e_int(2031), e_str("No data supplied for parameters in prepared statement"), e_str("HY000")])),
+                            s_return(e_bool(false)),
+                        ]),
+                    ],
+                        None,
+                    ),
+                    s_expr(e_method_call(e_this(), "clearLongData", vec![])),
+                    s_expr(e_method_call(e_this(), "linkBump", vec![e_str("com_stmt_execute")])),
+                    s_assign("_rc", e_call("elephc_pdo_step", vec![e_this_prop("stmt")])),
+                    s_if(
+                        e_binop(e_var("_rc"), BinOp::Lt, e_int(0)),
+                        vec![
+                            s_return(e_method_call(e_this(), "opFailed", vec![])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_assign("_cols", e_call("elephc_pdo_column_count", vec![e_this_prop("stmt")])),
+                    s_prop_assign(e_this(), "field_count", e_var("_cols")),
+                    s_prop_assign(e_this(), "warningCount", e_call("elephc_pdo_warning_count", vec![e_this_prop("conn")])),
+                    s_if(
+                        e_binop(e_var("_cols"), BinOp::Eq, e_int(0)),
+                        vec![
+                            s_prop_assign(e_this(), "affected_rows", e_call("elephc_pdo_changes", vec![e_this_prop("conn")])),
+                            s_prop_assign(e_this(), "insert_id", e_call("elephc_pdo_last_insert_id", vec![e_this_prop("conn"), e_str("")])),
+                            s_expr(e_method_call(e_this(), "refreshLink", vec![])),
+                            s_expr(e_call("elephc_pdo_reset", vec![e_this_prop("stmt")])),
+                            s_expr(e_method_call(e_this(), "clearError", vec![])),
+                            s_return(e_bool(true)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_prop_assign(e_this(), "hasPending", e_bool(true)),
+                    s_prop_assign(e_this(), "pendingStep", e_var("_rc")),
+                    s_prop_assign(e_this(), "num_rows", e_int(0)),
+                    s_expr(e_method_call(e_this(), "refreshLink", vec![])),
+                    s_expr(e_method_call(e_this(), "clearError", vec![])),
+                    s_return(e_bool(true)),
+                ]),
+        )
+        .method(
+            method("fetch")
+                .returns(t_nullable(TypeExpr::Bool))
+                .body(vec![
+                    s_expr(e_method_call(e_this(), "requireValid", vec![])),
+                    s_if(
+                        e_this_prop("stored"),
+                        vec![
+                            s_if(
+                                e_binop(e_this_prop("storedPos"), BinOp::GtEq, e_this_prop("storedCount")),
+                                vec![
+                                    s_return(e_null()),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                            s_assign("_row", e_array(vec![])),
+                            s_assign("_base", e_binop(e_this_prop("storedPos"), BinOp::Mul, e_this_prop("field_count"))),
+                            s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_this_prop("field_count"))), Some(s_expr(e_post_inc("_i"))), vec![
+                                s_array_push("_row", e_index(e_this_prop("storedCells"), e_binop(e_var("_base"), BinOp::Add, e_var("_i")))),
+                            ]),
+                            s_prop_assign(e_this(), "storedPos", e_binop(e_this_prop("storedPos"), BinOp::Add, e_int(1))),
+                            s_expr(e_method_call(e_this(), "writeRow", vec![e_var("_row")])),
+                            s_return(e_bool(true)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_not(e_this_prop("hasPending")),
+                        vec![
+                            s_if(
+                                e_not(e_this_prop("executedOnce")),
+                                vec![
+                                    s_expr(e_method_call(e_this(), "syntheticFailure", vec![e_int(2014), e_str("Commands out of sync; you can't run this command now"), e_str("HY000")])),
+                                    s_return(e_bool(false)),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                            s_return(e_null()),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_this_prop("pendingStep"), BinOp::Lt, e_int(0)),
+                        vec![
+                            s_prop_assign(e_this(), "hasPending", e_bool(false)),
+                            s_expr(e_method_call(e_this(), "opFailed", vec![])),
+                            s_return(e_bool(false)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_this_prop("pendingStep"), BinOp::Eq, e_int(0)),
+                        vec![
+                            s_expr(e_method_call(e_this(), "finishResultSet", vec![])),
+                            s_return(e_null()),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_assign("_row", e_array(vec![])),
+                    s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_this_prop("field_count"))), Some(s_expr(e_post_inc("_i"))), vec![
+                        s_array_push("_row", e_method_call(e_this(), "columnValue", vec![e_var("_i")])),
+                    ]),
+                    s_prop_assign(e_this(), "num_rows", e_binop(e_this_prop("num_rows"), BinOp::Add, e_int(1))),
+                    s_prop_assign(e_this(), "pendingStep", e_call("elephc_pdo_step", vec![e_this_prop("stmt")])),
+                    s_expr(e_method_call(e_this(), "writeRow", vec![e_var("_row")])),
+                    s_return(e_bool(true)),
+                ]),
+        )
+        .method(
+            method("get_result")
+                .returns(t_union(vec![t_class("mysqli_result"), TypeExpr::False]))
+                .body(vec![
+                    s_expr(e_method_call(e_this(), "requireValid", vec![])),
+                    s_if(
+                        e_this_prop("stored"),
+                        vec![
+                            s_assign("_cells", e_array(vec![])),
+                            s_assign("_rows", e_binop(e_this_prop("storedCount"), BinOp::Sub, e_this_prop("storedPos"))),
+                            s_assign("_start", e_binop(e_this_prop("storedPos"), BinOp::Mul, e_this_prop("field_count"))),
+                            s_assign("_end", e_binop(e_this_prop("storedCount"), BinOp::Mul, e_this_prop("field_count"))),
+                            s_for(Some(s_assign("_i", e_var("_start"))), Some(e_binop(e_var("_i"), BinOp::Lt, e_var("_end"))), Some(s_expr(e_post_inc("_i"))), vec![
+                                s_array_push("_cells", e_index(e_this_prop("storedCells"), e_var("_i"))),
+                            ]),
+                            s_prop_assign(e_this(), "storedPos", e_this_prop("storedCount")),
+                            s_return(e_method_call(e_this(), "buildResult", vec![e_var("_cells"), e_var("_rows")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_not(e_this_prop("hasPending")),
+                        vec![
+                            s_if(
+                                e_not(e_this_prop("executedOnce")),
+                                vec![
+                                    s_expr(e_method_call(e_this(), "syntheticFailure", vec![e_int(2014), e_str("Commands out of sync; you can't run this command now"), e_str("HY000")])),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                            s_return(e_bool(false)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_assign("_cells", e_array(vec![])),
+                    s_assign("_rowCount", e_int(0)),
+                    s_assign("_rc", e_this_prop("pendingStep")),
+                    s_while(e_binop(e_var("_rc"), BinOp::Eq, e_int(1)), vec![
+                        s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_this_prop("field_count"))), Some(s_expr(e_post_inc("_i"))), vec![
+                            s_array_push("_cells", e_method_call(e_this(), "columnValue", vec![e_var("_i")])),
+                        ]),
+                        s_assign("_rowCount", e_binop(e_var("_rowCount"), BinOp::Add, e_int(1))),
+                        s_assign("_rc", e_call("elephc_pdo_step", vec![e_this_prop("stmt")])),
+                    ]),
+                    s_prop_assign(e_this(), "hasPending", e_bool(false)),
+                    s_if(
+                        e_binop(e_var("_rc"), BinOp::Lt, e_int(0)),
+                        vec![
+                            s_expr(e_method_call(e_this(), "opFailed", vec![])),
+                            s_return(e_bool(false)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_expr(e_method_call(e_this(), "linkBump", vec![e_str("ps_buffered_sets")])),
+                    s_prop_assign(e_this(), "num_rows", e_var("_rowCount")),
+                    s_prop_assign(e_this(), "affected_rows", e_var("_rowCount")),
+                    s_expr(e_method_call(e_this(), "finishResultSet", vec![])),
+                    s_expr(e_method_call(e_this(), "clearError", vec![])),
+                    s_return(e_method_call(e_this(), "buildResult", vec![e_var("_cells"), e_var("_rowCount")])),
+                ]),
+        )
+        .method(
+            method("store_result")
+                .returns(TypeExpr::Bool)
+                .body(vec![
+                    s_expr(e_method_call(e_this(), "requireValid", vec![])),
+                    s_if(
+                        e_not(e_this_prop("hasPending")),
+                        vec![
+                            s_return(e_bool(true)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_assign("_cells", e_array(vec![])),
+                    s_assign("_rowCount", e_int(0)),
+                    s_assign("_rc", e_this_prop("pendingStep")),
+                    s_while(e_binop(e_var("_rc"), BinOp::Eq, e_int(1)), vec![
+                        s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_this_prop("field_count"))), Some(s_expr(e_post_inc("_i"))), vec![
+                            s_array_push("_cells", e_method_call(e_this(), "columnValue", vec![e_var("_i")])),
+                        ]),
+                        s_assign("_rowCount", e_binop(e_var("_rowCount"), BinOp::Add, e_int(1))),
+                        s_assign("_rc", e_call("elephc_pdo_step", vec![e_this_prop("stmt")])),
+                    ]),
+                    s_prop_assign(e_this(), "hasPending", e_bool(false)),
+                    s_if(
+                        e_binop(e_var("_rc"), BinOp::Lt, e_int(0)),
+                        vec![
+                            s_return(e_method_call(e_this(), "opFailed", vec![])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_expr(e_method_call(e_this(), "linkBump", vec![e_str("ps_buffered_sets")])),
+                    s_prop_assign(e_this(), "stored", e_bool(true)),
+                    s_prop_assign(e_this(), "storedCells", e_var("_cells")),
+                    s_prop_assign(e_this(), "storedCount", e_var("_rowCount")),
+                    s_prop_assign(e_this(), "storedPos", e_int(0)),
+                    s_prop_assign(e_this(), "num_rows", e_var("_rowCount")),
+                    s_prop_assign(e_this(), "affected_rows", e_var("_rowCount")),
+                    s_expr(e_method_call(e_this(), "finishResultSet", vec![])),
+                    s_expr(e_method_call(e_this(), "clearError", vec![])),
+                    s_return(e_bool(true)),
+                ]),
+        )
+        .method(
+            method("data_seek")
+                .param("offset", TypeExpr::Int)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_if(
+                        e_binop(e_var("offset"), BinOp::Lt, e_int(0)),
+                        vec![
+                            s_throw(e_new("ValueError", vec![e_str("mysqli_stmt::data_seek(): Argument #1 ($offset) must be greater than or equal to 0")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_expr(e_method_call(e_this(), "requireValid", vec![])),
+                    s_if(
+                        e_this_prop("stored"),
+                        vec![
+                            s_prop_assign(e_this(), "storedPos", e_ternary(e_binop(e_var("offset"), BinOp::Gt, e_this_prop("storedCount")), e_this_prop("storedCount"), e_var("offset"))),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                ]),
+        )
+        .method(
+            method("num_rows")
+                .returns(TypeExpr::Int)
+                .body(vec![
+                    s_expr(e_method_call(e_this(), "requireValid", vec![])),
+                    s_return(e_this_prop("num_rows")),
+                ]),
+        )
+        .method(
+            method("result_metadata")
+                .returns(t_union(vec![t_class("mysqli_result"), TypeExpr::False]))
+                .body(vec![
+                    s_expr(e_method_call(e_this(), "requireValid", vec![])),
+                    s_if(
+                        e_binop(e_this_prop("field_count"), BinOp::Eq, e_int(0)),
+                        vec![
+                            s_return(e_bool(false)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_method_call(e_this(), "buildResult", vec![e_call("array_slice", vec![e_this_prop("storedCells"), e_int(0), e_int(0)]), e_int(0)])),
+                ]),
+        )
+        .method(
+            method("more_results")
+                .returns(TypeExpr::Bool)
+                .body(vec![
+                    s_expr(e_method_call(e_this(), "requireValid", vec![])),
+                    s_return(e_this_prop("moreResults")),
+                ]),
+        )
+        .method(
+            method("next_result")
+                .returns(TypeExpr::Bool)
+                .body(vec![
+                    s_expr(e_method_call(e_this(), "requireValid", vec![])),
+                    s_if(
+                        e_not(e_this_prop("moreResults")),
+                        vec![
+                            s_return(e_bool(false)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_prop_assign(e_this(), "moreResults", e_bool(false)),
+                    s_assign("_rc", e_call("elephc_pdo_step", vec![e_this_prop("stmt")])),
+                    s_if(
+                        e_binop(e_var("_rc"), BinOp::Lt, e_int(0)),
+                        vec![
+                            s_return(e_method_call(e_this(), "opFailed", vec![])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_expr(e_method_call(e_this(), "dropStored", vec![])),
+                    s_prop_assign(e_this(), "field_count", e_call("elephc_pdo_column_count", vec![e_this_prop("stmt")])),
+                    s_prop_assign(e_this(), "num_rows", e_int(0)),
+                    s_if(
+                        e_binop(e_this_prop("field_count"), BinOp::Eq, e_int(0)),
+                        vec![
+                            s_prop_assign(e_this(), "hasPending", e_bool(false)),
+                            s_prop_assign(e_this(), "affected_rows", e_call("elephc_pdo_changes", vec![e_this_prop("conn")])),
+                            s_expr(e_method_call(e_this(), "finishResultSet", vec![])),
+                        ],
+                        vec![],
+                        Some(vec![
+                        s_prop_assign(e_this(), "hasPending", e_bool(true)),
+                        s_prop_assign(e_this(), "pendingStep", e_var("_rc")),
+                    ]),
+                    ),
+                    s_expr(e_method_call(e_this(), "clearError", vec![])),
+                    s_return(e_bool(true)),
+                ]),
+        )
+        .method(
+            method("send_long_data")
+                .param("param_num", TypeExpr::Int)
+                .param("data", TypeExpr::Str)
+                .returns(TypeExpr::Bool)
+                .body(vec![
+                    s_if(
+                        e_binop(e_var("param_num"), BinOp::Lt, e_int(0)),
+                        vec![
+                            s_throw(e_new("ValueError", vec![e_str("mysqli_stmt::send_long_data(): Argument #1 ($param_num) must be greater than or equal to 0")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_expr(e_method_call(e_this(), "requireValid", vec![])),
+                    s_if(
+                        e_binop(e_var("param_num"), BinOp::GtEq, e_this_prop("param_count")),
+                        vec![
+                            s_prop_assign(e_this(), "errno", e_int(2034)),
+                            s_prop_assign(e_this(), "error", e_str("Invalid parameter number")),
+                            s_prop_assign(e_this(), "sqlstate", e_str("HY000")),
+                            s_prop_assign(e_this(), "error_list", e_array(vec![e_array_assoc(vec![(e_str("errno"), e_int(2034)), (e_str("sqlstate"), e_str("HY000")), (e_str("error"), e_str("Invalid parameter number"))])])),
+                            s_return(e_bool(false)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_prop_array_assign(e_this(), "longData", e_var("param_num"), e_binop(e_cast(CastType::String, e_index(e_this_prop("longData"), e_var("param_num"))), BinOp::Concat, e_var("data"))),
+                    s_prop_array_assign(e_this(), "longDataSent", e_var("param_num"), e_bool(true)),
+                    s_expr(e_method_call(e_this(), "linkBump", vec![e_str("com_stmt_send_long_data")])),
+                    s_return(e_bool(true)),
+                ]),
+        )
+        .method(
+            method("attr_get")
+                .param("attribute", TypeExpr::Int)
+                .returns(TypeExpr::Int)
+                .body(vec![
+                    s_expr(e_method_call(e_this(), "requireValid", vec![])),
+                    s_if(
+                        e_binop(e_var("attribute"), BinOp::Eq, e_int(0)),
+                        vec![
+                            s_return(e_this_prop("attrUpdateMaxLength")),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("attribute"), BinOp::Eq, e_int(1)),
+                        vec![
+                            s_return(e_this_prop("attrCursorType")),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_binop(e_var("attribute"), BinOp::Eq, e_int(2)), BinOp::And, e_static_prop("mysqli_stmt", "legacyAttributes")),
+                        vec![
+                            s_return(e_this_prop("attrPrefetchRows")),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_throw(e_new("ValueError", vec![e_method_call(e_this(), "attributeError", vec![e_str("mysqli_stmt::attr_get")])])),
+                ]),
+        )
+        .method(
+            method("attr_set")
+                .param("attribute", TypeExpr::Int)
+                .param("value", TypeExpr::Int)
+                .returns(TypeExpr::Bool)
+                .body(vec![
+                    s_expr(e_method_call(e_this(), "requireValid", vec![])),
+                    s_if(
+                        e_binop(e_var("attribute"), BinOp::Eq, e_int(0)),
+                        vec![
+                            s_if(
+                                e_binop(e_binop(e_var("value"), BinOp::NotEq, e_int(0)), BinOp::And, e_binop(e_var("value"), BinOp::NotEq, e_int(1))),
+                                vec![
+                                    s_throw(e_new("ValueError", vec![e_str("mysqli_stmt::attr_set(): Argument #2 ($value) must be 0 or 1 for attribute MYSQLI_STMT_ATTR_UPDATE_MAX_LENGTH")])),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                            s_prop_assign(e_this(), "attrUpdateMaxLength", e_var("value")),
+                            s_return(e_bool(true)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("attribute"), BinOp::Eq, e_int(1)),
+                        vec![
+                            s_assign("_legal", e_binop(e_binop(e_binop(e_var("value"), BinOp::Eq, e_int(0)), BinOp::Or, e_binop(e_var("value"), BinOp::Eq, e_int(1))), BinOp::Or, e_binop(e_static_prop("mysqli_stmt", "legacyAttributes"), BinOp::And, e_binop(e_binop(e_var("value"), BinOp::Eq, e_int(2)), BinOp::Or, e_binop(e_var("value"), BinOp::Eq, e_int(4)))))),
+                            s_if(
+                                e_not(e_var("_legal")),
+                                vec![
+                                    s_throw(e_new("ValueError", vec![e_str("mysqli_stmt::attr_set(): Argument #2 ($value) must be one of the MYSQLI_CURSOR_TYPE_* constants for attribute MYSQLI_STMT_ATTR_CURSOR_TYPE")])),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                            s_if(
+                                e_binop(e_var("value"), BinOp::Gt, e_int(1)),
+                                vec![
+                                    s_expr(e_method_call(e_this(), "syntheticFailure", vec![e_int(2054), e_str("Not implemented"), e_str("HY000")])),
+                                    s_return(e_bool(false)),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                            s_prop_assign(e_this(), "attrCursorType", e_var("value")),
+                            s_return(e_bool(true)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_binop(e_var("attribute"), BinOp::Eq, e_int(2)), BinOp::And, e_static_prop("mysqli_stmt", "legacyAttributes")),
+                        vec![
+                            s_if(
+                                e_binop(e_var("value"), BinOp::Lt, e_int(1)),
+                                vec![
+                                    s_throw(e_new("ValueError", vec![e_str("mysqli_stmt::attr_set(): Argument #2 ($value) must be greater than 0 for attribute MYSQLI_STMT_ATTR_PREFETCH_ROWS")])),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                            s_if(
+                                e_binop(e_var("value"), BinOp::Gt, e_int(1)),
+                                vec![
+                                    s_expr(e_method_call(e_this(), "syntheticFailure", vec![e_int(2054), e_str("Not implemented"), e_str("HY000")])),
+                                    s_return(e_bool(false)),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                            s_prop_assign(e_this(), "attrPrefetchRows", e_var("value")),
+                            s_return(e_bool(true)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_throw(e_new("ValueError", vec![e_method_call(e_this(), "attributeError", vec![e_str("mysqli_stmt::attr_set")])])),
+                ]),
+        )
+        .method(
+            method("get_warnings")
+                .returns(t_union(vec![t_class("mysqli_warning"), TypeExpr::False]))
+                .body(vec![
+                    s_expr(e_method_call(e_this(), "requireValid", vec![])),
+                    s_assign("_link", e_this_prop("link")),
+                    s_if(
+                        e_binop(e_binop(e_var("_link"), BinOp::StrictEq, e_null()), BinOp::Or, e_binop(e_this_prop("warningCount"), BinOp::Eq, e_int(0))),
+                        vec![
+                            s_return(e_bool(false)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_method_call(e_var("_link"), "__elephcFetchWarnings", vec![])),
+                ]),
+        )
+        .method(
+            method("free_result")
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_expr(e_method_call(e_this(), "requireValid", vec![])),
+                    s_if(
+                        e_binop(e_this_prop("hasPending"), BinOp::And, e_binop(e_this_prop("stmt"), BinOp::GtEq, e_int(0))),
+                        vec![
+                            s_expr(e_call("elephc_pdo_reset", vec![e_this_prop("stmt")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_prop_assign(e_this(), "hasPending", e_bool(false)),
+                    s_prop_assign(e_this(), "moreResults", e_bool(false)),
+                    s_expr(e_method_call(e_this(), "dropStored", vec![])),
+                ]),
+        )
+        .method(
+            method("reset")
+                .returns(TypeExpr::Bool)
+                .body(vec![
+                    s_expr(e_method_call(e_this(), "requireValid", vec![])),
+                    s_expr(e_method_call(e_this(), "linkBump", vec![e_str("com_stmt_reset")])),
+                    s_expr(e_call("elephc_pdo_reset", vec![e_this_prop("stmt")])),
+                    s_expr(e_method_call(e_this(), "clearLongData", vec![])),
+                    s_prop_assign(e_this(), "hasPending", e_bool(false)),
+                    s_prop_assign(e_this(), "moreResults", e_bool(false)),
+                    s_expr(e_method_call(e_this(), "dropStored", vec![])),
+                    s_prop_assign(e_this(), "num_rows", e_int(0)),
+                    s_expr(e_method_call(e_this(), "clearError", vec![])),
+                    s_return(e_bool(true)),
+                ]),
+        )
+        .method(
+            method("close")
+                .returns(TypeExpr::Bool)
+                .body(vec![
+                    s_expr(e_method_call(e_this(), "requireValid", vec![])),
+                    s_expr(e_method_call(e_this(), "linkBump", vec![e_str("explicit_stmt_close")])),
+                    s_expr(e_method_call(e_this(), "linkBump", vec![e_str("com_stmt_close")])),
+                    s_expr(e_method_call(e_this(), "release", vec![])),
+                    s_prop_assign(e_this(), "closed", e_bool(true)),
+                    s_return(e_bool(true)),
+                ]),
+        )
+        .method(
+            method("__destruct")
+                .body(vec![
+                    s_expr(e_method_call(e_this(), "release", vec![])),
+                ]),
+        )
+        .method(
+            method("release")
+                .private()
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_if(
                         e_binop(e_this_prop("stmt"), BinOp::GtEq, e_int(0)),
                         vec![
                             s_expr(e_call("elephc_pdo_finalize", vec![e_this_prop("stmt")])),
@@ -174,32 +985,156 @@ pub(super) fn decl_class_mysqli_stmt() -> Stmt {
                         vec![],
                         None,
                     ),
-                    s_assign("_handle", e_call("elephc_pdo_prepare", vec![e_this_prop("conn"), e_var("query"), e_int(0)])),
+                    s_prop_assign(e_this(), "hasPending", e_bool(false)),
+                    s_prop_assign(e_this(), "moreResults", e_bool(false)),
+                    s_expr(e_method_call(e_this(), "dropStored", vec![])),
+                    s_prop_assign(e_this(), "paramReader", e_null()),
+                    s_prop_assign(e_this(), "resultWriter", e_null()),
+                    s_prop_assign(e_this(), "link", e_null()),
+                ]),
+        )
+        .method(
+            method("requireValid")
+                .private()
+                .returns(TypeExpr::Void)
+                .body(vec![
                     s_if(
-                        e_binop(e_var("_handle"), BinOp::Lt, e_int(0)),
+                        e_this_prop("closed"),
                         vec![
-                            // stmt is still -1, so opFailed reads the connection's error state
-                            // (its stmt-errno fallback), which is where a prepare error lives.
-                            s_expr(e_method_call(e_this(), "opFailed", vec![])),
-                            s_return(e_bool(false)),
+                            s_throw(e_new("Error", vec![e_str("mysqli_stmt object is already closed")])),
                         ],
                         vec![],
                         None,
                     ),
-                    s_prop_assign(e_this(), "stmt", e_var("_handle")),
-                    s_prop_assign(e_this(), "param_count", e_call("elephc_pdo_mysql_param_count", vec![e_var("_handle")])),
-                    s_prop_assign(e_this(), "executedOnce", e_bool(false)),
-                    s_prop_assign(e_this(), "hasPending", e_bool(false)),
-                    s_expr(e_method_call(e_this(), "clearError", vec![])),
-                    s_return(e_bool(true)),
+                    s_if(
+                        e_binop(e_this_prop("stmt"), BinOp::Lt, e_int(0)),
+                        vec![
+                            s_throw(e_new("Error", vec![e_str("mysqli_stmt object is not fully initialized")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
                 ]),
         )
-        // Guards the two-step prepare() and execute() while the LINK has unconsumed results (a
-        // multi_query batch or a real_query result): php-src raises CR_COMMANDS_OUT_OF_SYNC (2014)
-        // on the statement there — sending COM_STMT_PREPARE / COM_STMT_EXECUTE on a busy
-        // connection would corrupt the pending batch. One-shot mysqli::prepare() has its own
-        // connection-level guard; this is the statement-side twin, reading the link's private
-        // state through the checker's mysqli friend channel.
+        .method(
+            method("attributeError")
+                .private()
+                .param("context", TypeExpr::Str)
+                .returns(TypeExpr::Str)
+                .body(vec![
+                    s_if(
+                        e_static_prop("mysqli_stmt", "legacyAttributes"),
+                        vec![
+                            s_return(e_binop(e_var("context"), BinOp::Concat, e_str("(): Argument #1 ($attribute) must be one of MYSQLI_STMT_ATTR_UPDATE_MAX_LENGTH, MYSQLI_STMT_ATTR_PREFETCH_ROWS, or STMT_ATTR_CURSOR_TYPE"))),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_binop(e_var("context"), BinOp::Concat, e_str("(): Argument #1 ($attribute) must be either MYSQLI_STMT_ATTR_UPDATE_MAX_LENGTH or MYSQLI_STMT_ATTR_CURSOR_TYPE"))),
+                ]),
+        )
+        .method(
+            method("readBoundParams")
+                .private()
+                .returns(t_array())
+                .body(vec![
+                    s_assign("_reader", e_this_prop("paramReader")),
+                    s_if(
+                        e_binop(e_var("_reader"), BinOp::StrictEq, e_null()),
+                        vec![
+                            s_return(e_array(vec![])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_cast(CastType::Array, e_closure_call("_reader", vec![]))),
+                ]),
+        )
+        .method(
+            method("writeRow")
+                .private()
+                .param("row", t_array())
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_assign("_writer", e_this_prop("resultWriter")),
+                    s_assign("_row", e_var("row")),
+                    s_if(
+                        e_binop(e_var("_writer"), BinOp::StrictNotEq, e_null()),
+                        vec![
+                            s_expr(e_closure_call("_writer", vec![e_var("_row")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                ]),
+        )
+        .method(
+            method("clearLongData")
+                .private()
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_assign("_data", e_array(vec![])),
+                    s_assign("_sent", e_array(vec![])),
+                    s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_this_prop("param_count"))), Some(s_expr(e_post_inc("_i"))), vec![
+                        s_array_push("_data", e_str("")),
+                        s_array_push("_sent", e_bool(false)),
+                    ]),
+                    s_prop_assign(e_this(), "longData", e_var("_data")),
+                    s_prop_assign(e_this(), "longDataSent", e_var("_sent")),
+                ]),
+        )
+        .method(
+            method("dropStored")
+                .private()
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_prop_assign(e_this(), "stored", e_bool(false)),
+                    s_prop_assign(e_this(), "storedCells", e_array(vec![])),
+                    s_prop_assign(e_this(), "storedCount", e_int(0)),
+                    s_prop_assign(e_this(), "storedPos", e_int(0)),
+                ]),
+        )
+        .method(
+            method("finishResultSet")
+                .private()
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_prop_assign(e_this(), "hasPending", e_bool(false)),
+                    s_prop_assign(e_this(), "moreResults", e_binop(e_call("elephc_pdo_next_rowset", vec![e_this_prop("stmt")]), BinOp::Eq, e_int(1))),
+                    s_if(
+                        e_not(e_this_prop("moreResults")),
+                        vec![
+                            s_expr(e_call("elephc_pdo_reset", vec![e_this_prop("stmt")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                ]),
+        )
+        .method(
+            method("buildResult")
+                .private()
+                .param("cells", t_array())
+                .param("rowCount", TypeExpr::Int)
+                .returns(t_class("mysqli_result"))
+                .body(vec![
+                    s_assign("_names", e_array(vec![])),
+                    s_assign("_tables", e_array(vec![])),
+                    s_assign("_natives", e_array(vec![])),
+                    s_assign("_flags", e_array(vec![])),
+                    s_assign("_lens", e_array(vec![])),
+                    s_assign("_decimals", e_array(vec![])),
+                    s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_this_prop("field_count"))), Some(s_expr(e_post_inc("_i"))), vec![
+                        s_array_push("_names", e_call("elephc_pdo_column_name", vec![e_this_prop("stmt"), e_var("_i")])),
+                        s_array_push("_tables", e_call("elephc_pdo_column_table_name", vec![e_this_prop("stmt"), e_var("_i")])),
+                        s_array_push("_natives", e_call("elephc_pdo_column_native_type", vec![e_this_prop("stmt"), e_var("_i")])),
+                        s_array_push("_flags", e_call("elephc_pdo_column_flags", vec![e_this_prop("stmt"), e_var("_i")])),
+                        s_array_push("_lens", e_call("elephc_pdo_column_len", vec![e_this_prop("stmt"), e_var("_i")])),
+                        s_array_push("_decimals", e_call("elephc_pdo_column_precision", vec![e_this_prop("stmt"), e_var("_i")])),
+                    ]),
+                    s_return(e_static_call("mysqli_result", "__elephcFromDrain", vec![e_var("cells"), e_var("rowCount"), e_var("_names"), e_var("_tables"), e_var("_natives"), e_var("_flags"), e_var("_lens"), e_var("_decimals")])),
+                ]),
+        )
         .method(
             method("requireLinkNotBusy")
                 .private()
@@ -219,425 +1154,40 @@ pub(super) fn decl_class_mysqli_stmt() -> Stmt {
                 ]),
         )
         .method(
-            method("free_result")
+            method("linkBump")
+                .private()
+                .param("key", TypeExpr::Str)
                 .returns(TypeExpr::Void)
                 .body(vec![
-                    // Discards a pending buffered result so the statement can be re-executed (php
-                    // frees the client-side buffer). We buffer per-statement in the bridge, so
-                    // draining/resetting the cursor is the equivalent.
+                    s_assign("_link", e_this_prop("link")),
                     s_if(
-                        e_binop(e_this_prop("hasPending"), BinOp::And, e_binop(e_this_prop("stmt"), BinOp::GtEq, e_int(0))),
+                        e_binop(e_var("_link"), BinOp::StrictNotEq, e_null()),
                         vec![
-                            s_expr(e_call("elephc_pdo_reset", vec![e_this_prop("stmt")])),
+                            s_expr(e_method_call(e_var("_link"), "__elephcBump", vec![e_var("key")])),
                         ],
                         vec![],
                         None,
                     ),
-                    s_prop_assign(e_this(), "hasPending", e_bool(false)),
                 ]),
         )
-        .method(
-            method("bind_param")
-                .param("types", TypeExpr::Str)
-                .variadic_by_ref("vars", Some(t_mixed()))
-                .returns(TypeExpr::Bool)
-                .body(vec![
-                    // Variadic by-ref keeps PHP's signature contract (a literal argument is
-                    // rejected with "must be passed a variable"); the values are captured HERE —
-                    // see the module preamble for the documented divergence from PHP's
-                    // read-at-execute reference semantics.
-                    s_assign("_values", e_array(vec![])),
-                    s_assign("_given", e_call("count", vec![e_var("vars")])),
-                    s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_var("_given"))), Some(s_expr(e_post_inc("_i"))), vec![
-                        s_array_push("_values", e_index(e_var("vars"), e_var("_i"))),
-                    ]),
-                    s_return(e_method_call(e_this(), "__elephcBindParamValues", vec![e_var("types"), e_var("_values")])),
-                ]),
-        )
-        // Shared validation + snapshot behind bind_param (the procedural mysqli_stmt_bind_param
-        // alias forwards through it directly). Private: not part of PHP's mysqli surface.
-        .method(
-            method("__elephcBindParamValues")
-                .private()
-                .param("types", TypeExpr::Str)
-                .param("values", t_array())
-                .returns(TypeExpr::Bool)
-                .body(vec![
-                    s_assign("_want", e_call("strlen", vec![e_var("types")])),
-                    s_if(
-                        e_binop(e_var("_want"), BinOp::Eq, e_int(0)),
-                        vec![
-                            s_throw(e_new("ValueError", vec![e_str("mysqli_stmt::bind_param(): Argument #1 ($types) cannot be empty")])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_var("_want"))), Some(s_expr(e_post_inc("_i"))), vec![
-                        s_assign("_char", e_call("substr", vec![e_var("types"), e_var("_i"), e_int(1)])),
-                        s_if(
-                            e_binop(e_binop(e_binop(e_binop(e_var("_char"), BinOp::StrictNotEq, e_str("i")), BinOp::And, e_binop(e_var("_char"), BinOp::StrictNotEq, e_str("d"))), BinOp::And, e_binop(e_var("_char"), BinOp::StrictNotEq, e_str("s"))), BinOp::And, e_binop(e_var("_char"), BinOp::StrictNotEq, e_str("b"))),
-                            vec![
-                                s_throw(e_new("ValueError", vec![e_str("mysqli_stmt::bind_param(): Argument #1 ($types) must only contain the \"b\", \"d\", \"i\", \"s\" type specifiers")])),
-                            ],
-                            vec![],
-                            None,
-                        ),
-                    ]),
-                    s_if(
-                        e_binop(e_call("count", vec![e_var("values")]), BinOp::NotEq, e_var("_want")),
-                        vec![
-                            s_expr(e_method_call(e_this(), "syntheticFailure", vec![e_int(2031), e_str("The number of variables must match the number of parameters in the prepared statement"), e_str("HY000")])),
-                            s_return(e_bool(false)),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_prop_assign(e_this(), "bindTypes", e_var("types")),
-                    s_prop_assign(e_this(), "boundParams", e_var("values")),
-                    s_return(e_bool(true)),
-                ]),
-        )
-        .method(
-            method("execute")
-                .param_default("params", t_nullable(t_array()), e_null())
-                .returns(TypeExpr::Bool)
-                .body(vec![
-                    s_if(
-                        e_binop(e_this_prop("stmt"), BinOp::Lt, e_int(0)),
-                        vec![
-                            s_expr(e_method_call(e_this(), "syntheticFailure", vec![e_int(2006), e_str("mysqli_stmt object is already closed"), e_str("HY000")])),
-                            s_return(e_bool(false)),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_if(
-                        e_not(e_method_call(e_this(), "requireLinkNotBusy", vec![])),
-                        vec![
-                            s_return(e_bool(false)),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    // Re-execution: rewind the server-side cursor and drop old binds.
-                    s_if(
-                        e_this_prop("executedOnce"),
-                        vec![
-                            s_expr(e_call("elephc_pdo_reset", vec![e_this_prop("stmt")])),
-                            s_expr(e_call("elephc_pdo_clear_bindings", vec![e_this_prop("stmt")])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_prop_assign(e_this(), "executedOnce", e_bool(true)),
-                    s_prop_assign(e_this(), "hasPending", e_bool(false)),
-                    s_prop_assign(e_this(), "pendingStep", e_int(0)),
-                    // PHP 8.1+: execute's own $params bind as strings, in order.
-                    s_if(
-                        e_binop(e_var("params"), BinOp::StrictNotEq, e_null()),
-                        vec![
-                            s_assign("_given", e_call("count", vec![e_var("params")])),
-                            s_if(
-                                e_binop(e_var("_given"), BinOp::NotEq, e_this_prop("param_count")),
-                                vec![
-                                    s_expr(e_method_call(e_this(), "syntheticFailure", vec![e_int(2031), e_binop(e_binop(e_binop(e_binop(e_str("mysqli_stmt::execute(): Argument #1 ($params) must consist of exactly "), BinOp::Concat, e_this_prop("param_count")), BinOp::Concat, e_str(" elements, ")), BinOp::Concat, e_var("_given")), BinOp::Concat, e_str(" given")), e_str("HY000")])),
-                                    s_return(e_bool(false)),
-                                ],
-                                vec![],
-                                None,
-                            ),
-                            s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_var("_given"))), Some(s_expr(e_post_inc("_i"))), vec![
-                                s_assign("_value", e_index(e_var("params"), e_var("_i"))),
-                                s_if(
-                                    e_binop(e_var("_value"), BinOp::StrictEq, e_null()),
-                                    vec![
-                                        s_expr(e_call("elephc_pdo_bind_null", vec![e_this_prop("stmt"), e_binop(e_var("_i"), BinOp::Add, e_int(1))])),
-                                    ],
-                                    vec![],
-                                    Some(vec![
-                                    s_assign("_text", e_cast(CastType::String, e_var("_value"))),
-                                    s_expr(e_call("elephc_pdo_bind_text", vec![e_this_prop("stmt"), e_binop(e_var("_i"), BinOp::Add, e_int(1)), e_var("_text"), e_call("strlen", vec![e_var("_text")])])),
-                                ]),
-                                ),
-                            ]),
-                        ],
-                        vec![
-                        (e_binop(e_this_prop("bindTypes"), BinOp::StrictNotEq, e_str("")), vec![
-                            s_if(
-                                e_binop(e_call("strlen", vec![e_this_prop("bindTypes")]), BinOp::NotEq, e_this_prop("param_count")),
-                                vec![
-                                    s_expr(e_method_call(e_this(), "syntheticFailure", vec![e_int(2034), e_str("Number of variables doesn't match number of parameters in prepared statement"), e_str("HY000")])),
-                                    s_return(e_bool(false)),
-                                ],
-                                vec![],
-                                None,
-                            ),
-                            s_assign("_n", e_call("strlen", vec![e_this_prop("bindTypes")])),
-                            s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_var("_n"))), Some(s_expr(e_post_inc("_i"))), vec![
-                                // The values captured by the most recent bind_param call.
-                                s_assign("_value", e_index(e_this_prop("boundParams"), e_var("_i"))),
-                                s_assign("_char", e_call("substr", vec![e_this_prop("bindTypes"), e_var("_i"), e_int(1)])),
-                                s_if(
-                                    e_binop(e_var("_value"), BinOp::StrictEq, e_null()),
-                                    vec![
-                                        s_expr(e_call("elephc_pdo_bind_null", vec![e_this_prop("stmt"), e_binop(e_var("_i"), BinOp::Add, e_int(1))])),
-                                    ],
-                                    vec![
-                                    (e_binop(e_var("_char"), BinOp::StrictEq, e_str("i")), vec![
-                                        s_expr(e_call("elephc_pdo_bind_int", vec![e_this_prop("stmt"), e_binop(e_var("_i"), BinOp::Add, e_int(1)), e_cast(CastType::Int, e_var("_value"))])),
-                                    ]),
-                                    (e_binop(e_var("_char"), BinOp::StrictEq, e_str("d")), vec![
-                                        s_expr(e_call("elephc_pdo_bind_double", vec![e_this_prop("stmt"), e_binop(e_var("_i"), BinOp::Add, e_int(1)), e_cast(CastType::Float, e_var("_value"))])),
-                                    ]),
-                                    (e_binop(e_var("_char"), BinOp::StrictEq, e_str("b")), vec![
-                                        s_assign("_blob", e_cast(CastType::String, e_var("_value"))),
-                                        s_expr(e_call("elephc_pdo_bind_blob", vec![e_this_prop("stmt"), e_binop(e_var("_i"), BinOp::Add, e_int(1)), e_var("_blob"), e_call("strlen", vec![e_var("_blob")])])),
-                                    ]),
-                                ],
-                                    Some(vec![
-                                    s_assign("_text", e_cast(CastType::String, e_var("_value"))),
-                                    s_expr(e_call("elephc_pdo_bind_text", vec![e_this_prop("stmt"), e_binop(e_var("_i"), BinOp::Add, e_int(1)), e_var("_text"), e_call("strlen", vec![e_var("_text")])])),
-                                ]),
-                                ),
-                            ]),
-                        ]),
-                        (e_binop(e_this_prop("param_count"), BinOp::Gt, e_int(0)), vec![
-                            s_expr(e_method_call(e_this(), "syntheticFailure", vec![e_int(2031), e_str("No data supplied for parameters in prepared statement"), e_str("HY000")])),
-                            s_return(e_bool(false)),
-                        ]),
-                    ],
-                        None,
-                    ),
-                    s_assign("_rc", e_call("elephc_pdo_step", vec![e_this_prop("stmt")])),
-                    s_if(
-                        e_binop(e_var("_rc"), BinOp::Lt, e_int(0)),
-                        vec![
-                            s_return(e_method_call(e_this(), "opFailed", vec![])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_assign("_cols", e_call("elephc_pdo_column_count", vec![e_this_prop("stmt")])),
-                    s_prop_assign(e_this(), "field_count", e_var("_cols")),
-                    s_if(
-                        e_binop(e_var("_cols"), BinOp::Eq, e_int(0)),
-                        vec![
-                            s_prop_assign(e_this(), "affected_rows", e_call("elephc_pdo_changes", vec![e_this_prop("conn")])),
-                            s_prop_assign(e_this(), "insert_id", e_call("elephc_pdo_last_insert_id", vec![e_this_prop("conn"), e_str("")])),
-                            s_expr(e_method_call(e_this(), "refreshLink", vec![])),
-                            // Rewind now so the statement is immediately re-executable.
-                            s_expr(e_call("elephc_pdo_reset", vec![e_this_prop("stmt")])),
-                            s_expr(e_method_call(e_this(), "clearError", vec![])),
-                            s_return(e_bool(true)),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    // A result set exists: the first step's verdict (1 = row, 0 = empty) is kept
-                    // pending; get_result()/store_result() drain from here.
-                    s_prop_assign(e_this(), "hasPending", e_bool(true)),
-                    s_prop_assign(e_this(), "pendingStep", e_var("_rc")),
-                    s_prop_assign(e_this(), "num_rows", e_int(0)),
-                    s_expr(e_method_call(e_this(), "refreshLink", vec![])),
-                    s_expr(e_method_call(e_this(), "clearError", vec![])),
-                    s_return(e_bool(true)),
-                ]),
-        )
-        // php refreshes the OWNING connection's affected_rows / insert_id / warning_count from
-        // every command's OK packet, so the canonical `$stmt->execute(); $db->insert_id;` idiom
-        // reads the statement's value — not a stale one. Mirror the statement's freshly-updated
-        // copies onto the link (a no-op if the statement was detached from its connection).
         .method(
             method("refreshLink")
                 .private()
                 .returns(TypeExpr::Void)
                 .body(vec![
+                    s_assign("_link", e_this_prop("link")),
                     s_if(
-                        e_binop(e_this_prop("link"), BinOp::StrictNotEq, e_null()),
+                        e_binop(e_var("_link"), BinOp::StrictNotEq, e_null()),
                         vec![
-                            s_prop_assign(e_this_prop("link"), "affected_rows", e_this_prop("affected_rows")),
-                            s_prop_assign(e_this_prop("link"), "insert_id", e_this_prop("insert_id")),
-                            s_prop_assign(e_this_prop("link"), "warning_count", e_call("elephc_pdo_warning_count", vec![e_this_prop("conn")])),
+                            s_prop_assign(e_var("_link"), "affected_rows", e_this_prop("affected_rows")),
+                            s_prop_assign(e_var("_link"), "insert_id", e_this_prop("insert_id")),
+                            s_prop_assign(e_var("_link"), "warning_count", e_this_prop("warningCount")),
                         ],
                         vec![],
                         None,
                     ),
                 ]),
         )
-        .method(
-            method("get_result")
-                .returns(t_union(vec![t_class("mysqli_result"), TypeExpr::False]))
-                .body(vec![
-                    s_if(
-                        e_binop(e_this_prop("stmt"), BinOp::Lt, e_int(0)),
-                        vec![
-                            s_expr(e_method_call(e_this(), "syntheticFailure", vec![e_int(2050), e_str("mysqli_stmt object is already closed"), e_str("HY000")])),
-                            s_return(e_bool(false)),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_if(
-                        e_not(e_this_prop("hasPending")),
-                        vec![
-                            s_return(e_bool(false)),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_assign("_cols", e_this_prop("field_count")),
-                    s_assign("_names", e_array(vec![])),
-                    s_assign("_tables", e_array(vec![])),
-                    s_assign("_natives", e_array(vec![])),
-                    s_assign("_flags", e_array(vec![])),
-                    s_assign("_lens", e_array(vec![])),
-                    s_assign("_decimals", e_array(vec![])),
-                    s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_var("_cols"))), Some(s_expr(e_post_inc("_i"))), vec![
-                        s_array_push("_names", e_call("elephc_pdo_column_name", vec![e_this_prop("stmt"), e_var("_i")])),
-                        s_array_push("_tables", e_call("elephc_pdo_column_table_name", vec![e_this_prop("stmt"), e_var("_i")])),
-                        s_array_push("_natives", e_call("elephc_pdo_column_native_type", vec![e_this_prop("stmt"), e_var("_i")])),
-                        s_array_push("_flags", e_call("elephc_pdo_column_flags", vec![e_this_prop("stmt"), e_var("_i")])),
-                        s_array_push("_lens", e_call("elephc_pdo_column_len", vec![e_this_prop("stmt"), e_var("_i")])),
-                        s_array_push("_decimals", e_call("elephc_pdo_column_precision", vec![e_this_prop("stmt"), e_var("_i")])),
-                    ]),
-                    s_assign("_cells", e_array(vec![])),
-                    s_assign("_rowCount", e_int(0)),
-                    s_assign("_rc", e_this_prop("pendingStep")),
-                    s_while(e_binop(e_var("_rc"), BinOp::Eq, e_int(1)), vec![
-                        s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_var("_cols"))), Some(s_expr(e_post_inc("_i"))), vec![
-                            s_array_push("_cells", e_method_call(e_this(), "columnValue", vec![e_var("_i")])),
-                        ]),
-                        s_assign("_rowCount", e_binop(e_var("_rowCount"), BinOp::Add, e_int(1))),
-                        s_assign("_rc", e_call("elephc_pdo_step", vec![e_this_prop("stmt")])),
-                    ]),
-                    s_prop_assign(e_this(), "hasPending", e_bool(false)),
-                    s_if(
-                        e_binop(e_var("_rc"), BinOp::Lt, e_int(0)),
-                        vec![
-                            s_expr(e_method_call(e_this(), "opFailed", vec![])),
-                            s_return(e_bool(false)),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    // The statement stays alive and rewound, so it can be re-executed.
-                    s_expr(e_call("elephc_pdo_reset", vec![e_this_prop("stmt")])),
-                    s_prop_assign(e_this(), "num_rows", e_var("_rowCount")),
-                    s_prop_assign(e_this(), "affected_rows", e_var("_rowCount")),
-                    s_expr(e_method_call(e_this(), "clearError", vec![])),
-                    s_return(e_static_call("mysqli_result", "__elephcFromDrain", vec![e_var("_cells"), e_var("_rowCount"), e_var("_names"), e_var("_tables"), e_var("_natives"), e_var("_flags"), e_var("_lens"), e_var("_decimals")])),
-                ]),
-        )
-        .method(
-            method("store_result")
-                .returns(TypeExpr::Bool)
-                .body(vec![
-                    s_if(
-                        e_binop(e_this_prop("stmt"), BinOp::Lt, e_int(0)),
-                        vec![
-                            s_expr(e_method_call(e_this(), "syntheticFailure", vec![e_int(2050), e_str("mysqli_stmt object is already closed"), e_str("HY000")])),
-                            s_return(e_bool(false)),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_if(
-                        e_not(e_this_prop("hasPending")),
-                        vec![
-                            // Nothing pending (non-select execute, or already consumed): php-src
-                            // treats this as a successful no-op.
-                            s_return(e_bool(true)),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    // Without bind_result/fetch (see the module preamble) the buffered rows have
-                    // no reader; consume and count them so num_rows is valid.
-                    s_assign("_rowCount", e_int(0)),
-                    s_assign("_rc", e_this_prop("pendingStep")),
-                    s_while(e_binop(e_var("_rc"), BinOp::Eq, e_int(1)), vec![
-                        s_assign("_rowCount", e_binop(e_var("_rowCount"), BinOp::Add, e_int(1))),
-                        s_assign("_rc", e_call("elephc_pdo_step", vec![e_this_prop("stmt")])),
-                    ]),
-                    s_prop_assign(e_this(), "hasPending", e_bool(false)),
-                    s_if(
-                        e_binop(e_var("_rc"), BinOp::Lt, e_int(0)),
-                        vec![
-                            s_return(e_method_call(e_this(), "opFailed", vec![])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_expr(e_call("elephc_pdo_reset", vec![e_this_prop("stmt")])),
-                    s_prop_assign(e_this(), "num_rows", e_var("_rowCount")),
-                    s_prop_assign(e_this(), "affected_rows", e_var("_rowCount")),
-                    s_expr(e_method_call(e_this(), "clearError", vec![])),
-                    s_return(e_bool(true)),
-                ]),
-        )
-        .method(
-            method("reset")
-                .returns(TypeExpr::Bool)
-                .body(vec![
-                    s_if(
-                        e_binop(e_this_prop("stmt"), BinOp::Lt, e_int(0)),
-                        vec![
-                            s_return(e_bool(false)),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_expr(e_call("elephc_pdo_reset", vec![e_this_prop("stmt")])),
-                    s_expr(e_call("elephc_pdo_clear_bindings", vec![e_this_prop("stmt")])),
-                    s_prop_assign(e_this(), "hasPending", e_bool(false)),
-                    s_prop_assign(e_this(), "num_rows", e_int(0)),
-                    s_expr(e_method_call(e_this(), "clearError", vec![])),
-                    s_return(e_bool(true)),
-                ]),
-        )
-        .method(
-            method("close")
-                .returns(TypeExpr::Bool)
-                .body(vec![
-                    s_if(
-                        e_binop(e_this_prop("stmt"), BinOp::GtEq, e_int(0)),
-                        vec![
-                            s_expr(e_call("elephc_pdo_finalize", vec![e_this_prop("stmt")])),
-                            s_prop_assign(e_this(), "stmt", e_neg(e_int(1))),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    // Clear the pending-result flag too: a post-close get_result() /
-                    // store_result() must see a closed statement (and raise the already-closed
-                    // error), not drive the bridge with handle -1.
-                    s_prop_assign(e_this(), "hasPending", e_bool(false)),
-                    s_prop_assign(e_this(), "link", e_null()),
-                    s_return(e_bool(true)),
-                ]),
-        )
-        .method(
-            method("__destruct")
-                .body(vec![
-                    // The bridge ignores an unknown/already-finalized handle, so this is safe even
-                    // when the owning mysqli connection was closed first.
-                    s_if(
-                        e_binop(e_this_prop("stmt"), BinOp::GtEq, e_int(0)),
-                        vec![
-                            s_expr(e_call("elephc_pdo_finalize", vec![e_this_prop("stmt")])),
-                            s_prop_assign(e_this(), "stmt", e_neg(e_int(1))),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_prop_assign(e_this(), "hasPending", e_bool(false)),
-                    s_prop_assign(e_this(), "link", e_null()),
-                ]),
-        )
-        // -- internal helpers ($_-prefixed locals; same checker rule as PDO) --
-        //
-        // Decodes one cell of the statement's current row; same dispatch as the connection's
-        // columnValue (int / float / null / length-counted bytes).
         .method(
             method("columnValue")
                 .private()
@@ -681,8 +1231,6 @@ pub(super) fn decl_class_mysqli_stmt() -> Stmt {
                     s_return(e_str("")),
                 ]),
         )
-        // Records a client-side failure that has no live bridge error state and dispatches
-        // mysqli_report (same contract as mysqli::syntheticFailure).
         .method(
             method("syntheticFailure")
                 .private()
@@ -698,22 +1246,19 @@ pub(super) fn decl_class_mysqli_stmt() -> Stmt {
                     s_expr(e_method_call(e_this(), "report", vec![e_var("message"), e_var("errno"), e_var("sqlstate")])),
                 ]),
         )
-        // Refreshes errno/error/sqlstate from the live statement error state (falling back to the
-        // connection for prepare-level failures), then dispatches mysqli_report. Always returns
-        // false so callers tail-call it.
         .method(
             method("opFailed")
                 .private()
                 .returns(TypeExpr::Bool)
                 .body(vec![
                     s_prop_assign(e_this(), "errno", e_call("elephc_pdo_stmt_errcode", vec![e_this_prop("stmt")])),
-                    s_prop_assign(e_this(), "error", e_call("elephc_pdo_stmt_errmsg", vec![e_this_prop("stmt")])),
+                    s_prop_assign(e_this(), "error", e_static_call("mysqli", "__elephcServerMessage", vec![e_call("elephc_pdo_stmt_errmsg", vec![e_this_prop("stmt")])])),
                     s_prop_assign(e_this(), "sqlstate", e_call("elephc_pdo_stmt_sqlstate", vec![e_this_prop("stmt")])),
                     s_if(
                         e_binop(e_binop(e_this_prop("errno"), BinOp::Eq, e_int(0)), BinOp::And, e_binop(e_this_prop("conn"), BinOp::GtEq, e_int(0))),
                         vec![
                             s_prop_assign(e_this(), "errno", e_call("elephc_pdo_errcode", vec![e_this_prop("conn")])),
-                            s_prop_assign(e_this(), "error", e_call("elephc_pdo_errmsg", vec![e_this_prop("conn")])),
+                            s_prop_assign(e_this(), "error", e_static_call("mysqli", "__elephcServerMessage", vec![e_call("elephc_pdo_errmsg", vec![e_this_prop("conn")])])),
                             s_prop_assign(e_this(), "sqlstate", e_call("elephc_pdo_sqlstate", vec![e_this_prop("conn")])),
                         ],
                         vec![],
@@ -732,7 +1277,6 @@ pub(super) fn decl_class_mysqli_stmt() -> Stmt {
                     s_return(e_bool(false)),
                 ]),
         )
-        // Clears the per-operation error state after a successful operation.
         .method(
             method("clearError")
                 .private()
@@ -744,8 +1288,6 @@ pub(super) fn decl_class_mysqli_stmt() -> Stmt {
                     s_prop_assign(e_this(), "error_list", e_array(vec![])),
                 ]),
         )
-        // mysqli_report dispatch: STRICT throws mysqli_sql_exception, ERROR alone writes to
-        // STDERR, OFF is silent (same contract as mysqli::report).
         .method(
             method("report")
                 .private()
@@ -757,9 +1299,7 @@ pub(super) fn decl_class_mysqli_stmt() -> Stmt {
                     s_if(
                         e_binop(e_binop(e_static_prop("mysqli", "reportMode"), BinOp::BitAnd, e_int(2)), BinOp::NotEq, e_int(0)),
                         vec![
-                            s_assign("_e", e_new("mysqli_sql_exception", vec![e_var("message"), e_var("errno")])),
-                            s_prop_assign(e_var("_e"), "sqlstate", e_var("sqlstate")),
-                            s_throw(e_var("_e")),
+                            s_throw(e_static_call("mysqli_sql_exception", "__elephcCreate", vec![e_var("message"), e_var("errno"), e_var("sqlstate")])),
                         ],
                         vec![],
                         None,

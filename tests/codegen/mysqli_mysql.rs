@@ -700,12 +700,11 @@ $db->query("DROP TABLE md");
     assert_eq!(out, "2|0");
 }
 
-/// Pins the documented bind_param divergence: values are captured at bind
-/// time, so mutating the variable WITHOUT re-binding executes with the value
-/// seen at bind (PHP's references would read the mutated value instead).
+/// `bind_param()` binds REFERENCES (php's semantics): mutating the variable
+/// after binding and WITHOUT re-binding executes with the mutated value.
 #[test]
 #[ignore]
-fn test_mysqli_stmt_bind_param_snapshot_divergence() {
+fn test_mysqli_stmt_bind_param_reads_the_variable_at_execute() {
     let out = compile_and_run(&my_program(
         r#"
 $db->query("DROP TABLE IF EXISTS msnap");
@@ -720,7 +719,7 @@ echo ($r instanceof mysqli_result) ? $r->fetch_column(0) : "no";
 $db->query("DROP TABLE msnap");
 "#,
     ));
-    assert_eq!(out, "Ada");
+    assert_eq!(out, "Ben");
 }
 
 /// Connection information, ping, charset, autocommit, and a commit round-trip
@@ -817,9 +816,9 @@ $sel->execute();
 $r = $sel->get_result();
 if ($r instanceof mysqli_result) {
     $r->fetch_field();
-    echo "|field_tell=", $r->field_tell();
+    echo "|field_tell=", $r->current_field;
     $r->field_seek(0);
-    echo "|after_seek=", $r->field_tell();
+    echo "|after_seek=", $r->current_field;
 }
 $sel->close();
 $db->query("DROP TABLE msi");
@@ -828,5 +827,310 @@ $db->query("DROP TABLE msi");
     assert_eq!(
         out,
         "prep|params=1|stmt_insert_id=1|stmt_affected=1|stmt_sqlstate=00000|charset=utf8mb4|field_tell=1|after_seek=0"
+    );
+}
+
+/// `bind_param()` and `bind_result()` bind BY REFERENCE, exactly like php:
+/// each `execute()` reads the bound variables' CURRENT values, and every
+/// `fetch()` writes the row back into the result variables (`null` once the
+/// set is exhausted). The same statement re-executes with fresh values.
+#[test]
+#[ignore]
+fn test_mysqli_stmt_reference_binding_and_fetch() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("DROP TABLE IF EXISTS msr");
+$db->query("CREATE TABLE msr (id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(20), score DOUBLE)");
+$ins = $db->prepare("INSERT INTO msr (name, score) VALUES (?, ?)");
+$name = "";
+$score = 0.0;
+$ins->bind_param("sd", $name, $score);
+foreach ([["Ada", 1.5], ["Ben", 2.25], ["Cy", 3.0]] as $row) {
+    $name = $row[0];
+    $score = $row[1];
+    $ins->execute();
+}
+echo "last=", $db->insert_id;
+$sel = $db->prepare("SELECT id, name, score FROM msr WHERE id >= ? ORDER BY id");
+echo "|fields=", $sel->field_count;
+$min = 1;
+$sel->bind_param("i", $min);
+$id = null;
+$n = null;
+$s = null;
+$sel->bind_result($id, $n, $s);
+$sel->execute();
+while ($sel->fetch()) {
+    echo "|", $id, ":", $n, ":", $s;
+}
+var_dump($sel->fetch());
+$min = 3;
+$sel->execute();
+$sel->fetch();
+echo "again=", $id, ":", $n;
+$db->query("DROP TABLE msr");
+"#,
+    ));
+    assert_eq!(out, "last=3|fields=3|1:Ada:1.5|2:Ben:2.25|3:Cy:3NULL\nagain=3:Cy");
+}
+
+/// `store_result()` buffers the statement's rows client-side: `num_rows` /
+/// `num_rows()` are exact, `data_seek()` rewinds `fetch()`, and
+/// `result_metadata()` describes the columns before execution.
+#[test]
+#[ignore]
+fn test_mysqli_stmt_store_result_data_seek_and_metadata() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("DROP TABLE IF EXISTS mss");
+$db->query("CREATE TABLE mss (id INT PRIMARY KEY, label VARCHAR(10))");
+$db->query("INSERT INTO mss VALUES (1, 'a'), (2, 'b'), (3, 'c')");
+$stmt = $db->prepare("SELECT id, label FROM mss ORDER BY id");
+$meta = $stmt->result_metadata();
+echo "meta=", $meta->field_count, ":", $meta->fetch_field()->name, ":", $meta->num_rows;
+echo "|id>0=", $stmt->id > 0 ? "y" : "n";
+$stmt->execute();
+$stmt->store_result();
+echo "|rows=", $stmt->num_rows, "/", $stmt->num_rows();
+$id = 0;
+$label = "";
+$stmt->bind_result($id, $label);
+$stmt->data_seek(2);
+$stmt->fetch();
+echo "|seek2=", $id, $label;
+$stmt->data_seek(0);
+$stmt->fetch();
+echo "|seek0=", $id, $label;
+$stmt->free_result();
+$db->query("DROP TABLE mss");
+"#,
+    ));
+    assert_eq!(out, "meta=2:id:0|id>0=y|rows=3/3|seek2=3c|seek0=1a");
+}
+
+/// `send_long_data()` streams a `b` parameter in chunks (sent at the next
+/// `execute()`), a `b` parameter without chunks sends an empty string like
+/// mysqlnd, and php's ArgumentCountError / ValueError argument checks apply.
+#[test]
+#[ignore]
+fn test_mysqli_stmt_long_data_and_argument_errors() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("DROP TABLE IF EXISTS msl");
+$db->query("CREATE TABLE msl (id INT PRIMARY KEY, body BLOB)");
+$stmt = $db->prepare("INSERT INTO msl (id, body) VALUES (?, ?)");
+$id = 1;
+$blob = "ignored";
+$stmt->bind_param("ib", $id, $blob);
+$stmt->send_long_data(1, "hello ");
+$stmt->send_long_data(1, "world");
+$stmt->execute();
+$id = 2;
+$stmt->execute();
+echo $stmt->send_long_data(5, "x") ? "T" : "F", $stmt->errno;
+$r = $db->query("SELECT id, body FROM msl ORDER BY id");
+while ($row = $r->fetch_row()) {
+    echo "|", $row[0], "=", $row[1];
+}
+try {
+    $stmt->bind_param("i", $id);
+} catch (ArgumentCountError $e) {
+    echo "|ace";
+}
+try {
+    $stmt->execute([1]);
+} catch (ValueError $e) {
+    echo "|", $e->getMessage();
+}
+try {
+    $stmt->attr_set(99, 1);
+} catch (ValueError $e) {
+    echo "|attr-ve";
+}
+echo "|", $stmt->attr_set(MYSQLI_STMT_ATTR_UPDATE_MAX_LENGTH, 1) ? "set" : "no";
+echo ":", $stmt->attr_get(MYSQLI_STMT_ATTR_UPDATE_MAX_LENGTH);
+$db->query("DROP TABLE msl");
+"#,
+    ));
+    assert_eq!(
+        out,
+        "F2034|1=hello world|2=|ace|mysqli_stmt::execute(): Argument #1 ($params) must consist of exactly 2 elements, 1 present|attr-ve|set:1"
+    );
+}
+
+/// Warnings come back as a `mysqli_warning` chain (`SHOW WARNINGS`), from the
+/// connection and from a statement; `$info` carries the server's OK-packet
+/// info string; MYSQLI_OPT_INT_AND_FLOAT_NATIVE turns text-protocol numbers into
+/// PHP ints/floats.
+#[test]
+#[ignore]
+fn test_mysqli_warnings_info_and_native_types() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("SELECT CAST('abc' AS SIGNED) AS a, CAST('1x' AS SIGNED) AS b");
+echo "wc=", $db->warning_count;
+$w = $db->get_warnings();
+$codes = [];
+do {
+    $codes[] = $w->errno . "/" . $w->sqlstate;
+} while ($w->next());
+echo "|", implode(",", $codes);
+$db->query("DROP TABLE IF EXISTS msw");
+$db->query("CREATE TABLE msw (v INT)");
+$db->query("INSERT INTO msw VALUES (1), (2)");
+echo "|info=", $db->info;
+$stmt = $db->prepare("SELECT CAST(? AS SIGNED)");
+$text = "9z";
+$stmt->bind_param("s", $text);
+$stmt->execute();
+$stmt->store_result();
+echo "|stmt-warn=", $stmt->get_warnings() instanceof mysqli_warning ? "y" : "n";
+$plain = mysqli_init();
+$plain->options(MYSQLI_OPT_INT_AND_FLOAT_NATIVE, 1);
+$plain->real_connect($host, $user, $pass, $dbname, $port);
+$row = $plain->query("SELECT 7 AS i, 2.5e0 AS f, 1.25 AS d")->fetch_row();
+echo "|", gettype($row[0]), ",", gettype($row[1]), ",", gettype($row[2]);
+$row = $db->query("SELECT 7 AS i")->fetch_row();
+echo "|default=", gettype($row[0]);
+$db->query("DROP TABLE msw");
+"#,
+    ));
+    assert_eq!(
+        out,
+        "wc=2|1292/HY000,1292/HY000|info=Records: 2  Duplicates: 0  Warnings: 0|stmt-warn=y|integer,double,string|default=string"
+    );
+}
+
+/// MYSQLI_ASYNC queries complete on send; `mysqli_poll()` reports links with an
+/// unreaped query as readable and the rest as rejected, and a failing async
+/// query is reported by `reap_async_query()` (where mysqlnd surfaces it).
+#[test]
+#[ignore]
+fn test_mysqli_async_query_poll_and_reap() {
+    let out = compile_and_run(&my_program(
+        r#"
+$other = new mysqli($host, $user, $pass, $dbname, $port);
+echo $db->query("SELECT 41 + 1 AS x", MYSQLI_ASYNC) ? "sent" : "no";
+$read = [$db, $other];
+$error = [$db, $other];
+$reject = [];
+echo "|ready=", mysqli_poll($read, $error, $reject, 1), "|errors=", count($error), "|rejected=", count($reject);
+$result = $db->reap_async_query();
+echo "|", $result->fetch_row()[0];
+$db->query("SELECT * FROM no_such_table_xyz", MYSQLI_ASYNC);
+try {
+    $db->reap_async_query();
+    echo "|no-throw";
+} catch (mysqli_sql_exception $e) {
+    echo "|reap-error=", $e->getCode();
+}
+"#,
+    ));
+    assert_eq!(out, "sent|ready=1|errors=0|rejected=1|42|reap-error=1146");
+}
+
+/// The connection-maintenance API: a real COM_PING, COM_CHANGE_USER (which
+/// resets session state), killing another connection, `refresh()`, the
+/// public `mysqli_result` constructor over a `real_query()`, MYSQLI_USE_RESULT
+/// observability, and the mysqlnd-style statistics.
+#[test]
+#[ignore]
+fn test_mysqli_connection_maintenance_and_stats() {
+    let out = compile_and_run(&my_program(
+        r#"
+echo $db->ping() ? "ping" : "no";
+$db->query("SET @marker = 5");
+echo "|change=", $db->change_user($user, $pass, $dbname) ? "ok" : "no";
+$row = $db->query("SELECT @marker IS NULL AS cleared")->fetch_row();
+echo "|session-reset=", $row[0];
+$victim = new mysqli($host, $user, $pass, $dbname, $port);
+echo "|kill=", $db->kill($victim->thread_id) ? "ok" : "no";
+// FLUSH TABLES needs the RELOAD privilege: either it succeeds or the server's
+// own 1227 "Access denied" comes back (with its plain server text).
+mysqli_report(MYSQLI_REPORT_OFF);
+$refreshed = $db->refresh(MYSQLI_REFRESH_TABLES);
+echo "|refresh=", $refreshed || ($db->errno == 1227 && str_starts_with($db->error, "Access denied")) ? "ok" : "no";
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+$db->real_query("SELECT 1 AS a UNION SELECT 2");
+$result = new mysqli_result($db);
+echo "|ctor=", $result->num_rows, ":", $result->type;
+$unbuffered = $db->query("SELECT 1 AS a UNION SELECT 2", MYSQLI_USE_RESULT);
+echo "|use=", $unbuffered->type, ":", $unbuffered->num_rows;
+try {
+    mysqli_num_rows($unbuffered);
+} catch (Error $e) {
+    echo "|use-num-rows-error";
+}
+while ($unbuffered->fetch_row()) {
+}
+echo "|after=", $unbuffered->num_rows;
+$stats = $db->get_connection_stats();
+echo "|stats=", count($stats), ":", ((int) $stats["com_query"]) > 0 ? "q" : "-", ":", $stats["connect_success"];
+$links = mysqli_get_links_stats();
+echo "|links=", $links["total"] >= 1 ? "y" : "n";
+"#,
+    ));
+    assert_eq!(
+        out,
+        "ping|change=ok|session-reset=1|kill=ok|refresh=ok|ctor=2:0|use=1:0|use-num-rows-error|after=2|stats=163:q:1"
+            .to_string()
+            + "|links=y"
+    );
+}
+
+/// A `CALL` returning several result sets walks them through the statement's
+/// `more_results()` / `next_result()`, like mysqlnd.
+#[test]
+#[ignore]
+fn test_mysqli_stmt_multiple_result_sets() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("DROP PROCEDURE IF EXISTS msp_two");
+$db->multi_query("CREATE PROCEDURE msp_two() BEGIN SELECT 1 AS a; SELECT 2 AS b, 3 AS c; END");
+while ($db->more_results()) {
+    $db->next_result();
+}
+$stmt = $db->prepare("CALL msp_two()");
+$stmt->execute();
+$sets = 0;
+do {
+    $result = $stmt->get_result();
+    if ($result instanceof mysqli_result) {
+        $sets++;
+        echo "set", $sets, "=", implode(",", $result->fetch_row()), ";";
+    }
+} while ($stmt->more_results() && $stmt->next_result());
+echo "sets=", $sets;
+$stmt->close();
+$db->query("DROP PROCEDURE msp_two");
+"#,
+    ));
+    assert_eq!(out, "set1=1;set2=2,3;sets=2");
+}
+
+/// `$error` / `mysqli_error()` carry the server's own message text, like php
+/// (not the bridge's `MySqlError { … }` rendering), on the connection and on a
+/// statement.
+#[test]
+#[ignore]
+fn test_mysqli_error_text_is_the_server_message() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->query("SELECT * FROM no_such_table_err");
+echo $db->errno, "|", $db->sqlstate, "|", $db->error, "\n";
+$stmt = $db->prepare("SELECT * FROM no_such_table_err2");
+echo var_export($stmt, true), "|", mysqli_error($db), "\n";
+mysqli_report(MYSQLI_REPORT_STRICT);
+try {
+    $db->query("SELECT * FROM no_such_table_err3");
+} catch (mysqli_sql_exception $e) {
+    echo $e->getCode(), "|", $e->getSqlState(), "|", $e->getMessage();
+}
+"#,
+    ));
+    assert_eq!(
+        out,
+        "1146|42S02|Table 'testdb.no_such_table_err' doesn't exist\nfalse|Table 'testdb.no_such_table_err2' doesn't exist\n1146|42S02|Table 'testdb.no_such_table_err3' doesn't exist"
     );
 }

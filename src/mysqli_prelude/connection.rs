@@ -1,8 +1,10 @@
 //! Purpose:
-//! The `mysqli` connection class, as an elephc-PHP source fragment: DSN
-//! construction over `elephc_pdo_open_persistent`, connect-time and per-op
-//! error bookkeeping (`connect_errno`/`errno`/`error_list`), `mysqli_report`
-//! dispatch, escaping, charset, `select_db`, ping, and transactions.
+//! The `mysqli` connection class, as an elephc-PHP source fragment (the
+//! parse-parity oracle for `build::connection`): DSN/TLS construction over
+//! `elephc_pdo_open_persistent`, connect-time and per-op error bookkeeping,
+//! `mysqli_report` dispatch, escaping, charset, transactions, change_user,
+//! kill/refresh, MYSQLI_ASYNC queries with `poll()` / `reap_async_query()`,
+//! warnings, and the mysqlnd-style statistics.
 //!
 //! Called from:
 //! - `crate::mysqli_prelude::fragments::source_for_version` (concatenated into
@@ -13,16 +15,17 @@
 //!   `new mysqli()`); a successful `real_connect` stores the bridge handle. The
 //!   DSN prefix is always forced to `mysql:` and a successful open whose
 //!   `elephc_pdo_driver_name` is not "mysql" is rejected (belt-and-braces).
-//! - Failure dispatch follows `mysqli::$reportMode` (see `exception.rs`):
-//!   STRICT throws `mysqli_sql_exception`, ERROR writes to STDERR and the
-//!   caller returns `false`, OFF is silent — mirroring PHP 8.1+'s default.
-//!   `PDOException` is never thrown.
-//! - `real_escape_string` reuses the MySQL branch of `PDO::quote()` minus the
-//!   wrapping quotes and the `_binary` introducer, including the
-//!   `NO_BACKSLASH_ESCAPES` quote-doubling fallback (mysqlnd's own behavior).
-//! - Method-local variables use the `$_` prefix (same checker clash rule as the
-//!   PDO prelude). Public properties are refreshed after operations; writes to
-//!   them stick (documented divergence, no write barriers in v1).
+//! - Failure dispatch follows `mysqli::$reportMode`: STRICT throws
+//!   `mysqli_sql_exception`, ERROR writes to STDERR and the caller returns
+//!   `false`, OFF is silent. `PDOException` is never thrown.
+//! - TLS (`MYSQLI_CLIENT_SSL`, `ssl_set()`) rides the bridge's rustls backend
+//!   through the packed `my_ssl_config`; peer verification follows mysqlnd.
+//! - The bridge is synchronous, so a `MYSQLI_ASYNC` query runs when it is sent
+//!   and its outcome waits for `reap_async_query()`; `poll()` reports such
+//!   links as immediately readable.
+//! - Private `__elephc*` helpers are reached from `mysqli_stmt`,
+//!   `mysqli_result`, and the procedural aliases through the checker's mysqli
+//!   friend channel; they are not part of PHP's surface.
 
 /// The `mysqli` class and its connection-level behavior (fragment without a
 /// `<?php` header).
@@ -31,7 +34,7 @@ pub(super) const SRC: &str = r##"
 
 class mysqli {
     // Opaque elephc_pdo bridge connection handle; -1 = not connected. Not part
-    // of PHP's surface: private, handed to mysqli_stmt through its factory.
+    // of PHP's surface: private, handed to mysqli_stmt through the friend channel.
     private int $conn = -1;
 
     // Process-wide mysqli_report() mode. The literal default is rewritten at
@@ -44,31 +47,50 @@ class mysqli {
     public static int $lastConnectErrno = 0;
     public static string $lastConnectError = "";
 
+    // Process-wide mysqlnd-style client statistics (mysqli_get_client_stats())
+    // and link counters (mysqli_get_links_stats()).
+    public static array $clientStats = [];
+    public static int $openLinks = 0;
+    public static int $openPersistentLinks = 0;
+
     // Public properties refreshed after operations (writes stick; documented
-    // divergence — no write barriers in v1).
+    // divergence — no write barriers).
     public int $affected_rows = 0;
+    public string $client_info = "";
+    public int $client_version = 0;
     public int $connect_errno = 0;
     public ?string $connect_error = null;
     public int $errno = 0;
     public string $error = "";
     public array $error_list = [];
     public int $field_count = 0;
-    public string $client_info = "";
-    public int $client_version = 0;
     public string $host_info = "";
-    public int $protocol_version = 10;
+    public ?string $info = null;
+    public int $insert_id = 0;
     public string $server_info = "";
     public int $server_version = 0;
-    public string $info = "";
-    public int $insert_id = 0;
     public string $sqlstate = "00000";
+    public int $protocol_version = 10;
     public int $thread_id = 0;
     public int $warning_count = 0;
 
-    // mysqli_options() values collected before real_connect applies them.
+    // mysqli_options() / ssl_set() values collected before real_connect applies them.
     private int $optConnectTimeout = 0;
-    private string $optInitCommand = "";
+    private array $optInitCommands = [];
     private string $optCharsetName = "";
+    private int $optLocalInfile = 0;
+    private string $optLocalInfileDir = "";
+    private string $optServerPublicKey = "";
+    private int $optSslVerify = -1;
+    private bool $optIntAndFloatNative = false;
+    private int $optReadTimeout = 0;
+    private bool $sslRequested = false;
+    private string $sslKey = "";
+    private string $sslCert = "";
+    private string $sslCa = "";
+    private string $sslCapath = "";
+    private string $sslCipher = "";
+    private bool $persistent = false;
     // Buffered result produced by real_query() and picked up by store_result()
     // (and, in the multi_query path, by next_result()).
     private ?mysqli_result $pendingResult = null;
@@ -76,6 +98,17 @@ class mysqli {
     // every result set is consumed) and the eager next_rowset probe verdict.
     private int $multiStmt = -1;
     private bool $multiMore = false;
+    // MYSQLI_ASYNC query state: the query runs eagerly when it is sent (the
+    // bridge is synchronous); its outcome waits here until reap_async_query().
+    // 0 = none, 1 = success without a result set, 2 = result buffered,
+    // 3 = failed (the error is replayed and reported at reap time, like mysqlnd).
+    private int $asyncState = 0;
+    private ?mysqli_result $asyncResult = null;
+    private int $asyncErrno = 0;
+    private string $asyncError = "";
+    private string $asyncSqlstate = "";
+    // Per-connection mysqlnd-style statistics (mysqli::get_connection_stats()).
+    private array $connStats = [];
 
     public function __construct(
         ?string $hostname = null,
@@ -103,23 +136,12 @@ class mysqli {
         ?string $socket = null,
         int $flags = 0
     ): bool {
-        if (($flags & 2048) != 0) {
-            // MYSQLI_CLIENT_SSL is declared but unsupported: fail loudly rather
-            // than silently connecting in cleartext.
-            return $this->connectFailure(2054, "elephc mysqli does not support MYSQLI_CLIENT_SSL; use PDO MySQL TLS attributes", "HY000");
-        }
         if ($this->conn >= 0) {
             // php-src reconnect semantics: mysqlnd closes the existing
             // connection before dialing the new one, so a second real_connect
             // never strands the previous bridge handle (or leaves a persistent
             // handle checked out of the pool).
-            $this->multiClose();
-            if (elephc_pdo_in_transaction($this->conn) === 1) {
-                elephc_pdo_rollback($this->conn);
-            }
-            elephc_pdo_release($this->conn, 0);
-            $this->conn = -1;
-            $this->pendingResult = null;
+            $this->releaseConnection();
         }
         $_host = $hostname === null ? "localhost" : $hostname;
         $_persistent = 0;
@@ -155,10 +177,9 @@ class mysqli {
         }
         if ($username !== null) {
             // '%' first, so the '%' introduced by encoding ';' is not itself
-            // re-encoded; the bridge percent-decodes user=/password= DSN values
-            // (F-CORE-02), so a ';' or '%' inside a credential survives the
-            // DSN's split on ';'. An explicitly-passed empty credential is
-            // still transmitted (no !== "" gate).
+            // re-encoded; the bridge percent-decodes user=/password= DSN values,
+            // so a ';' or '%' inside a credential survives the DSN's split on
+            // ';'. An explicitly-passed empty credential is still transmitted.
             $_dsn = $_dsn . ";user=" . str_replace(";", "%3B", str_replace("%", "%25", $username));
         }
         if ($password !== null) {
@@ -167,8 +188,43 @@ class mysqli {
         if ($this->optConnectTimeout > 0) {
             $_dsn = $_dsn . ";connect_timeout=" . $this->optConnectTimeout;
         }
-        // Client flags map onto the bridge's packed driver config (same format
-        // PDO packs for $my_driver_config); FOUND_ROWS rides its own argument.
+        // TLS: MYSQLI_CLIENT_SSL or any ssl_set() value enables it. Peer
+        // verification follows mysqlnd: an explicit VERIFY / DONT_VERIFY client
+        // flag wins, then MYSQLI_OPT_SSL_VERIFY_SERVER_CERT, then the default —
+        // verify when ssl_set() named any key/cert/CA/cipher, otherwise not.
+        $_sslConfig = "";
+        $_sslFiles = $this->sslKey !== "" || $this->sslCert !== "" || $this->sslCa !== ""
+            || $this->sslCapath !== "" || $this->sslCipher !== "";
+        if (($flags & 2048) != 0 || ($flags & 1073741824) != 0 || $this->sslRequested) {
+            // The packed TLS config is split on ';' bridge-side without decoding,
+            // so a path containing ';' could smuggle a second key; reject it.
+            if (strpos($this->sslKey . $this->sslCert . $this->sslCa, ";") !== false) {
+                return $this->connectFailure(2026, "elephc mysqli: ssl_set() paths must not contain ';'", "HY000");
+            }
+            $_verify = $_sslFiles ? 1 : 0;
+            if ($this->optSslVerify >= 0) {
+                $_verify = $this->optSslVerify;
+            }
+            if (($flags & 1073741824) != 0) {
+                $_verify = 1;
+            }
+            if (($flags & 64) != 0) {
+                $_verify = 0;
+            }
+            if ($this->sslCa !== "") {
+                $_sslConfig = $_sslConfig . "ca=" . $this->sslCa . ";";
+            }
+            if ($this->sslCert !== "") {
+                $_sslConfig = $_sslConfig . "cert=" . $this->sslCert . ";";
+            }
+            if ($this->sslKey !== "") {
+                $_sslConfig = $_sslConfig . "key=" . $this->sslKey . ";";
+            }
+            $_sslConfig = $_sslConfig . "verify=" . $_verify . ";";
+        }
+        // Client flags and options map onto the bridge's packed driver config
+        // (the format PDO packs for $my_driver_config); values are
+        // percent-encoded because the bridge decodes them after splitting on ';'.
         $_driverConfig = "";
         if (($flags & 32) != 0) {
             $_driverConfig = $_driverConfig . "compress=1;";
@@ -176,10 +232,31 @@ class mysqli {
         if (($flags & 256) != 0) {
             $_driverConfig = $_driverConfig . "ignore=1;";
         }
+        if ($this->optLocalInfile != 0) {
+            $_driverConfig = $_driverConfig . "local=1;";
+        }
+        if ($this->optLocalInfileDir !== "") {
+            $_driverConfig = $_driverConfig . "dir=" . $this->encodeDriverOption($this->optLocalInfileDir) . ";";
+        }
+        if ($this->sslCapath !== "" && $_sslConfig !== "") {
+            $_driverConfig = $_driverConfig . "capath=" . $this->encodeDriverOption($this->sslCapath) . ";";
+        }
+        if ($this->sslCipher !== "" && $_sslConfig !== "") {
+            $_driverConfig = $_driverConfig . "cipher=" . $this->encodeDriverOption($this->sslCipher) . ";";
+        }
+        if ($this->optServerPublicKey !== "") {
+            $_driverConfig = $_driverConfig . "serverkey=" . $this->encodeDriverOption($this->optServerPublicKey) . ";";
+        }
         $_foundRows = (($flags & 2) != 0) ? 1 : 0;
-        $_conn = elephc_pdo_open_persistent($_dsn, $_persistent, 0, $this->optInitCommand, "", $_foundRows, "", $_driverConfig);
+        // The first MYSQLI_INIT_COMMAND rides the bridge's own init hook; any
+        // further ones (mysqlnd keeps a list) run right after authentication.
+        $_initCommand = "";
+        if (count($this->optInitCommands) > 0) {
+            $_initCommand = (string) $this->optInitCommands[0];
+        }
+        $_conn = elephc_pdo_open_persistent($_dsn, $_persistent, 0, $_initCommand, $_sslConfig, $_foundRows, "", $_driverConfig);
         if ($_conn < 0) {
-            $_message = elephc_pdo_last_open_error();
+            $_message = mysqli::__elephcServerMessage(elephc_pdo_last_open_error());
             $_state = elephc_pdo_last_open_sqlstate();
             if ($_state === "") {
                 // Connect-time network failure default, same class the PDO
@@ -191,6 +268,7 @@ class mysqli {
                 // CR_CONN_HOST_ERROR: generic client-side connect failure.
                 $_code = 2002;
             }
+            $this->bump("connect_failure");
             return $this->connectFailure($_code, $_message, $_state);
         }
         // Cannot happen while the DSN prefix is forced to mysql:, but keep the
@@ -200,25 +278,42 @@ class mysqli {
             return $this->connectFailure(2002, "elephc mysqli opened a non-mysql bridge connection", "HY000");
         }
         $this->conn = $_conn;
+        $this->persistent = $_persistent == 1;
         $this->connect_errno = 0;
         $this->connect_error = null;
         mysqli::$lastConnectErrno = 0;
         mysqli::$lastConnectError = "";
+        mysqli::$openLinks = mysqli::$openLinks + 1;
+        if ($this->persistent) {
+            mysqli::$openPersistentLinks = mysqli::$openPersistentLinks + 1;
+            $this->bump("pconnect_success");
+        }
+        $this->bump("connect_success");
+        $this->bump("active_connections");
+        if ($this->persistent) {
+            $this->bump("active_persistent_connections");
+        }
         $this->clearError();
         // Connection information, refreshed once per connect.
         $this->host_info = elephc_pdo_connection_status($_conn);
         $this->server_info = elephc_pdo_server_version($_conn);
         $this->server_version = $this->versionStringToInt($this->server_info);
-        $this->client_info = elephc_pdo_client_version($_conn);
+        $this->client_info = elephc_pdo_mysql_client_info();
         $this->client_version = $this->versionStringToInt($this->client_info);
-        // Both come from the handshake with ZERO round-trips, like php-src (which
-        // reads them off the handshake packet): the server thread id straight
-        // from the bridge, and the negotiated client charset is utf8mb4 (the
-        // charset the mysql client sends in its handshake response for any server
-        // >= 5.5.3). character_set_name() then answers from this client-side
-        // state without ever issuing a statement (so it stays usable mid-batch).
+        // Both come from the handshake with ZERO round-trips, like php-src: the
+        // server thread id straight from the bridge, and the live charset is
+        // tracked bridge-side so character_set_name() never issues a statement.
         $this->thread_id = elephc_pdo_mysql_thread_id($_conn);
         $this->warning_count = elephc_pdo_warning_count($_conn);
+        $this->info = null;
+        $_n = count($this->optInitCommands);
+        for ($_i = 1; $_i < $_n; $_i++) {
+            if (elephc_pdo_exec($_conn, (string) $this->optInitCommands[$_i]) < 0) {
+                $this->opFailed();
+                $this->releaseConnection();
+                return false;
+            }
+        }
         if ($this->optCharsetName !== "") {
             // MYSQLI_SET_CHARSET_NAME collected before connect applies now.
             $this->set_charset($this->optCharsetName);
@@ -239,30 +334,29 @@ class mysqli {
         return $this->real_connect($hostname, $username, $password, $database, $port, $socket, 0);
     }
 
+    // php 8.1 deprecated: re-initializes an unconnected object; a no-op on a
+    // connected one (mysqlnd keeps the live handle).
+    public function init() {
+        return null;
+    }
+
     public function close(): bool {
+        // php 8: closing a never-connected or already-closed object is an Error
+        // ("mysqli object is already closed") only through the procedural
+        // validation; the method form on an initialized object returns true.
         if ($this->conn >= 0) {
-            // Finalize any live multi_query batch statement before the
-            // connection handle goes back to the bridge.
-            $this->multiClose();
-            // Roll an open transaction back first (matching PHP and keeping a
-            // persistent handle clean when it returns to the pool).
-            if (elephc_pdo_in_transaction($this->conn) === 1) {
-                elephc_pdo_rollback($this->conn);
-            }
-            elephc_pdo_release($this->conn, 0);
-            $this->conn = -1;
-            // An unconsumed buffered result dies with the connection (php-src
-            // frees all pending state on close): without this, a later
-            // real_connect() on the same object — which skips its own cleanup
-            // because $conn is already -1 — would inherit the stale pending
-            // result and raise a spurious 2014 on the first statement.
-            $this->pendingResult = null;
+            $this->bump("explicit_close");
+            $this->bump("com_quit");
+            $this->releaseConnection();
         }
         return true;
     }
 
     public function __destruct() {
-        $this->close();
+        if ($this->conn >= 0) {
+            $this->bump("implicit_close");
+            $this->releaseConnection();
+        }
     }
 
     public function ping(): bool {
@@ -272,13 +366,162 @@ class mysqli {
         if (!$this->requireNoPendingResults()) {
             return false;
         }
-        // A cheap round-trip; see the plan's elephc_pdo_ping escape hatch if
-        // this ever eats a pending multi_query result.
-        if (elephc_pdo_exec($this->conn, "SELECT 1") < 0) {
+        $this->bump("com_ping");
+        // A real COM_PING (no statement, no result set, no status change).
+        if (elephc_pdo_mysql_ping($this->conn) < 0) {
             return $this->opFailed();
         }
         $this->clearError();
         return true;
+    }
+
+    public function change_user(string $username, string $password, ?string $database): bool {
+        if (!$this->requireConnection()) {
+            return false;
+        }
+        if (!$this->requireNoPendingResults()) {
+            return false;
+        }
+        $this->bump("com_change_user");
+        // A real COM_CHANGE_USER: the server re-authenticates this same
+        // connection and resets its session (open transaction rolled back,
+        // temporary tables dropped, session variables and charset reset).
+        $_db = $database === null ? "" : $database;
+        $_hasDb = $database === null ? 0 : 1;
+        if (elephc_pdo_mysql_change_user($this->conn, $username, $password, $_db, $_hasDb) < 0) {
+            return $this->opFailed();
+        }
+        $this->multiClose();
+        $this->pendingResult = null;
+        $this->asyncState = 0;
+        $this->asyncResult = null;
+        $this->thread_id = elephc_pdo_mysql_thread_id($this->conn);
+        $this->affected_rows = 0;
+        $this->insert_id = 0;
+        $this->field_count = 0;
+        $this->warning_count = 0;
+        $this->info = null;
+        $this->clearError();
+        return true;
+    }
+
+    public function kill(int $process_id): bool {
+        if ($process_id <= 0) {
+            throw new ValueError("mysqli::kill(): Argument #1 (\$process_id) must be greater than 0");
+        }
+        if (!$this->requireConnection()) {
+            return false;
+        }
+        if (!$this->requireNoPendingResults()) {
+            return false;
+        }
+        $this->bump("com_process_kill");
+        // COM_PROCESS_KILL is KILL CONNECTION on the wire. Killing our own
+        // connection succeeds even though the server drops the link mid-reply.
+        if (elephc_pdo_exec($this->conn, "KILL CONNECTION " . $process_id) < 0) {
+            if ($process_id == $this->thread_id) {
+                $this->clearError();
+                return true;
+            }
+            return $this->opFailed();
+        }
+        $this->clearError();
+        return true;
+    }
+
+    public function refresh(int $flags): bool {
+        if (!$this->requireConnection()) {
+            return false;
+        }
+        if (!$this->requireNoPendingResults()) {
+            return false;
+        }
+        $this->bump("com_refresh");
+        // COM_REFRESH as its SQL equivalents (the bridge exposes no COM_REFRESH):
+        // GRANT -> FLUSH PRIVILEGES, LOG -> FLUSH LOGS, TABLES, HOSTS, STATUS,
+        // SLAVE/REPLICA -> RESET SLAVE, MASTER -> RESET MASTER. THREADS and
+        // BACKUP_LOG have no SQL spelling and are accepted as no-ops.
+        $_sql = [];
+        if (($flags & 1) != 0) {
+            $_sql[] = "FLUSH PRIVILEGES";
+        }
+        if (($flags & 2) != 0) {
+            $_sql[] = "FLUSH LOGS";
+        }
+        if (($flags & 4) != 0) {
+            $_sql[] = "FLUSH TABLES";
+        }
+        if (($flags & 8) != 0) {
+            $_sql[] = "FLUSH HOSTS";
+        }
+        if (($flags & 16) != 0) {
+            $_sql[] = "FLUSH STATUS";
+        }
+        if (($flags & 64) != 0) {
+            $_sql[] = "RESET SLAVE";
+        }
+        if (($flags & 128) != 0) {
+            $_sql[] = "RESET MASTER";
+        }
+        $_n = count($_sql);
+        for ($_i = 0; $_i < $_n; $_i++) {
+            if (elephc_pdo_exec($this->conn, (string) $_sql[$_i]) < 0) {
+                return $this->opFailed();
+            }
+        }
+        $this->clearError();
+        return true;
+    }
+
+    public function ssl_set(?string $key, ?string $certificate, ?string $ca_certificate, ?string $ca_path, ?string $cipher_algos): bool {
+        // Collected for the next real_connect(), which then negotiates TLS
+        // (mysqlnd enables SSL as soon as ssl_set() ran).
+        $this->sslRequested = true;
+        $this->sslKey = $key === null ? "" : $key;
+        $this->sslCert = $certificate === null ? "" : $certificate;
+        $this->sslCa = $ca_certificate === null ? "" : $ca_certificate;
+        $this->sslCapath = $ca_path === null ? "" : $ca_path;
+        $this->sslCipher = $cipher_algos === null ? "" : $cipher_algos;
+        return true;
+    }
+
+    public function debug(string $options): bool {
+        // mysqlnd debug tracing is compiled out of release builds
+        // (MYSQLI_DEBUG_TRACE_ENABLED is 0), where php ignores the trace
+        // options and just returns true.
+        $_ignoredOptions = $options;
+        return true;
+    }
+
+    public function dump_debug_info(): bool {
+        // COM_DEBUG asks the server to write debug information to its own error
+        // log; nothing is returned to the client. The bridge exposes no COM_DEBUG,
+        // so this only validates the connection (documented).
+        $this->requireInitialized();
+        return true;
+    }
+
+    public function get_connection_stats(): array {
+        $this->requireInitialized();
+        // Values are numeric strings, like php's mysqlnd statistics.
+        $_out = [];
+        foreach (mysqli::__elephcStatKeys() as $_key) {
+            $_name = (string) $_key;
+            $_out[$_name] = (string) ($this->connStats[$_name] ?? 0);
+        }
+        return $_out;
+    }
+
+    public function get_warnings(): mysqli_warning|false {
+        $this->requireInitialized();
+        if ($this->warning_count == 0) {
+            return false;
+        }
+        return $this->__elephcFetchWarnings();
+    }
+
+    public function thread_safe(): bool {
+        return false;
     }
 
     public function select_db(string $database): bool {
@@ -288,6 +531,7 @@ class mysqli {
         if (!$this->requireNoPendingResults()) {
             return false;
         }
+        $this->bump("com_init_db");
         $_ident = str_replace("`", "``", $database);
         if (elephc_pdo_exec($this->conn, "USE `" . $_ident . "`") < 0) {
             return $this->opFailed();
@@ -319,26 +563,20 @@ class mysqli {
 
     public function character_set_name(): string {
         // php 8: an Error on an unconnected object (not "").
-        $this->requireInitialized("mysqli::character_set_name");
+        $this->requireInitialized();
         // The connection's live charset, tracked by the bridge from the
-        // handshake + every SET NAMES (no round-trip); true even after a
-        // MYSQLI_INIT_COMMAND "SET NAMES …" or a reused persistent connection.
+        // handshake + every SET NAMES (no round-trip).
         return elephc_pdo_mysql_charset($this->conn);
     }
 
     public function real_escape_string(string $string): string {
         // php 8: real_escape_string on an unconnected object is an Error.
-        $this->requireInitialized("mysqli::real_escape_string");
+        $this->requireInitialized();
         // SECURITY: charset-aware escaping through the bridge, which uses the
         // connection's OWN tracked charset (never assuming utf8mb4) and its
-        // NO_BACKSLASH_ESCAPES state — pure byte substitution is injectable
-        // under gbk/big5/sjis/cp932/euckr/… (the trailing-byte breakout). The
-        // length-counted read preserves embedded NUL bytes.
+        // NO_BACKSLASH_ESCAPES state. The length-counted read preserves NUL bytes.
         $_len = elephc_pdo_real_escape_string($this->conn, $string, strlen($string));
-        if ($_len < 0) {
-            return "";
-        }
-        if ($_len == 0) {
+        if ($_len <= 0) {
             return "";
         }
         return __elephc_ptr_read_string(elephc_pdo_blob_data_ptr(), $_len);
@@ -348,10 +586,20 @@ class mysqli {
         return $this->real_escape_string($string);
     }
 
+    // -- elephc PHP >= 8.6 mysqli quote_string begin --
+    public function quote_string(string $string): string {
+        // PHP 8.6: the escaped payload wrapped in single quotes, ready to splice
+        // into SQL as a string literal.
+        return "'" . $this->real_escape_string($string) . "'";
+    }
+    // -- elephc PHP >= 8.6 mysqli quote_string end --
+
     public function begin_transaction(int $flags = 0, ?string $name = null): bool {
         // php-src: $name is a SQL COMMENT on START TRANSACTION, never a
-        // savepoint; the empty-name ValueError is raised BEFORE any SQL goes to
-        // the server (unlike the old ordering, which left an open transaction).
+        // savepoint; the ValueErrors are raised BEFORE any SQL goes out.
+        if ($flags < 0) {
+            throw new ValueError("mysqli::begin_transaction(): Argument #1 (\$flags) must be one of the MYSQLI_TRANS_* constants");
+        }
         $_comment = $this->transactionComment("mysqli::begin_transaction", $name, true);
         if (!$this->requireConnection()) {
             return false;
@@ -393,8 +641,7 @@ class mysqli {
         if (!$this->requireNoPendingResults()) {
             return false;
         }
-        // php: COMMIT [AND [NO] CHAIN] [[NO] RELEASE] /*name*/ — a real COMMIT,
-        // never a RELEASE SAVEPOINT (the old code never actually committed).
+        // php: COMMIT [AND [NO] CHAIN] [[NO] RELEASE] /*name*/.
         $_sql = "COMMIT" . $this->transactionCorFlags($flags) . $_comment;
         if (elephc_pdo_exec($this->conn, $_sql) < 0) {
             return $this->opFailed();
@@ -429,7 +676,7 @@ class mysqli {
             return false;
         }
         if ($name === "") {
-            throw new ValueError("mysqli::savepoint(): Argument #1 (\$name) cannot be empty");
+            throw new ValueError("mysqli::savepoint(): Argument #1 (\$name) must not be empty");
         }
         if (elephc_pdo_exec($this->conn, "SAVEPOINT `" . str_replace("`", "``", $name) . "`") < 0) {
             return $this->opFailed();
@@ -447,7 +694,7 @@ class mysqli {
             return false;
         }
         if ($name === "") {
-            throw new ValueError("mysqli::release_savepoint(): Argument #1 (\$name) cannot be empty");
+            throw new ValueError("mysqli::release_savepoint(): Argument #1 (\$name) must not be empty");
         }
         if (elephc_pdo_exec($this->conn, "RELEASE SAVEPOINT `" . str_replace("`", "``", $name) . "`") < 0) {
             return $this->opFailed();
@@ -472,21 +719,61 @@ class mysqli {
     }
 
     public function options(int $option, mixed $value): bool {
-        // The three locked option ids; anything else is unsupported and fails
-        // loudly with `false` (php-src also returns false for unknown options).
+        // mysqlnd's option ids. Connect-time options are collected and applied
+        // by the next real_connect(); unknown ids return false like php-src.
         if ($option == 0) {
             // MYSQLI_OPT_CONNECT_TIMEOUT -> DSN connect_timeout at connect.
             $this->optConnectTimeout = (int) $value;
             return true;
         }
         if ($option == 3) {
-            // MYSQLI_INIT_COMMAND -> $my_init_command at connect.
-            $this->optInitCommand = (string) $value;
+            // MYSQLI_INIT_COMMAND: mysqlnd keeps a LIST; every command runs
+            // after authentication, in order.
+            $this->optInitCommands[] = (string) $value;
             return true;
         }
         if ($option == 7) {
             // MYSQLI_SET_CHARSET_NAME -> SET NAMES after connect.
             $this->optCharsetName = (string) $value;
+            return true;
+        }
+        if ($option == 8) {
+            // MYSQLI_OPT_LOCAL_INFILE -> LOAD DATA LOCAL INFILE allowed.
+            $this->optLocalInfile = ((int) $value) != 0 ? 1 : 0;
+            return true;
+        }
+        if ($option == 43) {
+            // MYSQLI_OPT_LOAD_DATA_LOCAL_DIR -> LOCAL INFILE restricted to a dir.
+            $this->optLocalInfileDir = $value === null ? "" : (string) $value;
+            return true;
+        }
+        if ($option == 21) {
+            // MYSQLI_OPT_SSL_VERIFY_SERVER_CERT.
+            $this->optSslVerify = ((int) $value) != 0 ? 1 : 0;
+            return true;
+        }
+        if ($option == 35) {
+            // MYSQLI_SERVER_PUBLIC_KEY: RSA key file for sha256/caching_sha2 auth.
+            $this->optServerPublicKey = (string) $value;
+            return true;
+        }
+        if ($option == 201) {
+            // MYSQLI_OPT_INT_AND_FLOAT_NATIVE: text-protocol integer and float
+            // columns come back as PHP int / float instead of strings.
+            $this->optIntAndFloatNative = ((int) $value) != 0;
+            return true;
+        }
+        if ($option == 11) {
+            // MYSQLI_OPT_READ_TIMEOUT: recorded (the bridge's client has no
+            // per-read timeout knob; documented).
+            $this->optReadTimeout = (int) $value;
+            return true;
+        }
+        if ($option == 1 || $option == 4 || $option == 5 || $option == 37
+            || $option == 202 || $option == 203) {
+            // MYSQLI_OPT_COMPRESS, READ_DEFAULT_FILE/GROUP (mysqlnd ignores
+            // option files), CAN_HANDLE_EXPIRED_PASSWORDS, and the mysqlnd
+            // network buffer sizes are accepted without effect, like mysqlnd.
             return true;
         }
         return false;
@@ -496,15 +783,21 @@ class mysqli {
         return $this->options($option, $value);
     }
 
-    public function query(string $query, int $resultmode = 0): mysqli_result|bool {
+    public function query(string $query, int $result_mode = 0): mysqli_result|bool {
         if ($query === "") {
             throw new ValueError("mysqli::query(): Argument #1 (\$query) must not be empty");
         }
-        if ($resultmode != 0 && $resultmode != 1) {
-            throw new ValueError("mysqli::query(): Argument #2 (\$result_mode) must be either MYSQLI_STORE_RESULT or MYSQLI_USE_RESULT");
+        // php-src: MYSQLI_USE_RESULT or MYSQLI_STORE_RESULT (optionally with the
+        // deprecated MYSQLI_STORE_RESULT_COPY_DATA), plus the MYSQLI_ASYNC bit.
+        $_base = ($result_mode & 8) != 0 ? $result_mode - 8 : $result_mode;
+        $_storeBase = ($_base & 16) != 0 ? $_base - 16 : $_base;
+        if ($_base != 1 && $_storeBase != 0) {
+            throw new ValueError("mysqli::query(): Argument #2 (\$result_mode) must be either MYSQLI_USE_RESULT or MYSQLI_STORE_RESULT with MYSQLI_ASYNC as an optional bitmask flag");
         }
-        // MYSQLI_USE_RESULT (1) is accepted but still buffered — documented
-        // divergence; true unbuffered use_result is out of scope.
+        if (($result_mode & 8) != 0) {
+            return $this->sendAsyncQuery($query);
+        }
+        // MYSQLI_USE_RESULT is accepted but still buffered (documented divergence).
         $_code = $this->runQuery($query);
         if ($_code == 0) {
             return false;
@@ -517,45 +810,94 @@ class mysqli {
         if ($_result === null) {
             return false;
         }
+        $_result->__elephcSetType($_base == 1 ? 1 : 0);
         return $_result;
     }
 
-    public function prepare(string $query): mysqli_stmt|false {
-        if ($query === "") {
-            throw new ValueError("mysqli::prepare(): Argument #1 (\$query) must not be empty");
+    public function reap_async_query(): mysqli_result|bool {
+        $this->requireInitialized();
+        $_state = $this->asyncState;
+        $this->asyncState = 0;
+        if ($_state == 0) {
+            return false;
         }
+        if ($_state == 3) {
+            // The failure the eager execution recorded is reported now, at
+            // reap time, exactly where mysqlnd surfaces an async query error.
+            $this->syntheticFailure($this->asyncErrno, $this->asyncError, $this->asyncSqlstate);
+            return false;
+        }
+        if ($_state == 1) {
+            return true;
+        }
+        $_result = $this->asyncResult;
+        $this->asyncResult = null;
+        if ($_result === null) {
+            return false;
+        }
+        return $_result;
+    }
+
+    // mysqli::poll(): every MYSQLI_ASYNC query has already completed when it
+    // was sent, so a link with an unreaped query is immediately readable and
+    // every other link is reported in $reject (mysqlnd's "nothing to poll").
+    // Links listed in $error are never in error state at poll time (a failed
+    // async query is reported by reap_async_query()). Returns the number of
+    // readable links.
+    public static function poll(array &$read, array &$error, array &$reject, int $seconds, int $microseconds = 0): int|false {
+        if ($seconds < 0) {
+            throw new ValueError("mysqli::poll(): Argument #4 (\$seconds) must be greater than or equal to 0");
+        }
+        if ($microseconds < 0) {
+            throw new ValueError("mysqli::poll(): Argument #5 (\$microseconds) must be greater than or equal to 0");
+        }
+        $_ready = [];
+        $_rejected = [];
+        foreach ($read as $_link) {
+            if (!($_link instanceof mysqli)) {
+                throw new TypeError("mysqli::poll(): Argument #1 (\$read) must only contain objects of type mysqli");
+            }
+            if ($_link->__elephcAsyncPending()) {
+                $_ready[] = $_link;
+            } else {
+                $_rejected[] = $_link;
+            }
+        }
+        $read = $_ready;
+        $error = [];
+        $reject = $_rejected;
+        return count($_ready);
+    }
+
+    public function prepare(string $query): mysqli_stmt|false {
         if (!$this->requireConnection()) {
             return false;
         }
         if (!$this->requireNoPendingResults()) {
             return false;
         }
-        // Native (non-emulated) prepare: real `?` placeholders on the server.
-        $_handle = elephc_pdo_prepare($this->conn, $query, 0);
-        if ($_handle < 0) {
-            $this->opFailed();
+        $_statement = new mysqli_stmt($this);
+        if (!$_statement->__elephcPrepareOrCopyError($query)) {
             return false;
         }
-        $this->clearError();
-        return mysqli_stmt::__elephcFromPrepare($this, $this->conn, $_handle, $query);
+        return $_statement;
     }
 
-    public function stmt_init(): mysqli_stmt {
+    public function stmt_init(): mysqli_stmt|false {
         // The two-step form: an unprepared statement to be prepared with
         // $stmt->prepare($sql) (or mysqli_stmt_prepare()).
-        $this->requireInitialized("mysqli::stmt_init");
-        return mysqli_stmt::__elephcInit($this, $this->conn);
+        $this->requireInitialized();
+        return new mysqli_stmt($this);
     }
 
     public function get_charset(): mixed {
         // php returns a stdClass describing the connection charset. elephc knows
-        // the negotiated name (utf8mb4 by default / whatever set_charset set);
-        // the numeric collation/state/comment fields the bridge does not expose
-        // are reported as 0 / "" (documented). The common `->charset` read is
-        // exact.
-        $this->requireInitialized("mysqli::get_charset");
+        // the live charset name; the collation/state/comment fields the bridge
+        // does not expose are reported as 0 / "" (documented).
+        $this->requireInitialized();
+        $_charset = elephc_pdo_mysql_charset($this->conn);
         $_info = new stdClass();
-        $_info->{"charset"} = elephc_pdo_mysql_charset($this->conn);
+        $_info->{"charset"} = $_charset;
         $_info->{"collation"} = "";
         $_info->{"dir"} = "";
         $_info->{"min_length"} = 0;
@@ -597,18 +939,12 @@ class mysqli {
     // -- elephc PHP >= 8.2 mysqli execute_query end --
 
     public function real_query(string $query): bool {
-        if ($query === "") {
-            throw new ValueError("mysqli::real_query(): Argument #1 (\$query) must not be empty");
-        }
         // Same drain as query(); a produced result set stays pending until
         // store_result() picks it up.
         return $this->runQuery($query) != 0;
     }
 
     public function multi_query(string $query): bool {
-        if ($query === "") {
-            throw new ValueError("mysqli::multi_query(): Argument #1 (\$query) must not be empty");
-        }
         if (!$this->requireConnection()) {
             return false;
         }
@@ -616,10 +952,10 @@ class mysqli {
             return false;
         }
         // One server round-trip for the whole batch: the bridge's emulated
-        // prepare + step executes the string with multi-statements enabled
-        // (mysqlnd's own default, mirrored by the bridge) and retains every
-        // wire result set for elephc_pdo_next_rowset.
+        // prepare + step executes the string with multi-statements enabled and
+        // retains every wire result set for elephc_pdo_next_rowset.
         $this->multiClose();
+        $this->bump("com_query");
         $_stmt = elephc_pdo_prepare($this->conn, $query, 1);
         if ($_stmt < 0) {
             return $this->opFailed();
@@ -635,10 +971,12 @@ class mysqli {
     }
 
     public function more_results(): bool {
+        $this->requireInitialized();
         return $this->multiMore;
     }
 
     public function next_result(): bool {
+        $this->requireInitialized();
         // The probe in multiDrainCurrent already advanced the statement onto
         // the next retained result set; step its first row and drain it.
         if (!$this->multiMore || $this->multiStmt < 0) {
@@ -655,42 +993,38 @@ class mysqli {
     }
 
     public function store_result(int $mode = 0): mysqli_result|false {
+        $this->requireInitialized();
+        // $mode (MYSQLI_STORE_RESULT_COPY_DATA) has been ignored since PHP 8.1.
+        $_ignoredMode = $mode;
         $_result = $this->pendingResult;
         if ($_result === null) {
             return false;
         }
         $this->pendingResult = null;
+        $_result->__elephcSetType(0);
         return $_result;
     }
 
     public function use_result(): mysqli_result|false {
-        // Alias of store_result: results are always buffered (documented
-        // divergence; true unbuffered streaming is out of scope).
-        return $this->store_result();
+        $this->requireInitialized();
+        // Results are always buffered (documented divergence); the result still
+        // reports MYSQLI_USE_RESULT through its $type property.
+        $_result = $this->pendingResult;
+        if ($_result === null) {
+            return false;
+        }
+        $this->pendingResult = null;
+        $_result->__elephcSetType(1);
+        return $_result;
     }
 
     public function get_server_info(): string {
+        $this->requireInitialized();
         return $this->server_info;
     }
 
     public function get_client_info(): string {
-        return $this->client_info;
-    }
-
-    public function get_host_info(): string {
-        return $this->host_info;
-    }
-
-    public function get_proto_info(): int {
-        return $this->protocol_version;
-    }
-
-    public function get_server_version(): int {
-        return $this->server_version;
-    }
-
-    public function get_client_version(): int {
-        return $this->client_version;
+        return elephc_pdo_mysql_client_info();
     }
 
     public function stat(): string|false {
@@ -700,6 +1034,7 @@ class mysqli {
         if (!$this->requireNoPendingResults()) {
             return false;
         }
+        $this->bump("com_statistics");
         // The bridge's server_info is MySQL's own "Uptime: … Questions: …"
         // statistics line — exactly what mysqli::stat() returns.
         $_stat = elephc_pdo_server_info($this->conn);
@@ -711,10 +1046,161 @@ class mysqli {
 
     // -- internal helpers ($_-prefixed locals; same checker rule as PDO) --
 
+    // Every mysqlnd statistics key php reports, in php's order. Shared by
+    // get_connection_stats() and the procedural mysqli_get_client_stats().
+    private static function __elephcStatKeys(): array {
+        return explode(" ", "bytes_sent bytes_received packets_sent packets_received protocol_overhead_in protocol_overhead_out bytes_received_ok_packet bytes_received_eof_packet bytes_received_rset_header_packet bytes_received_rset_field_meta_packet bytes_received_rset_row_packet bytes_received_prepare_response_packet bytes_received_change_user_packet packets_sent_command packets_received_ok packets_received_eof packets_received_rset_header packets_received_rset_field_meta packets_received_rset_row packets_received_prepare_response packets_received_change_user result_set_queries non_result_set_queries no_index_used bad_index_used slow_queries buffered_sets unbuffered_sets ps_buffered_sets ps_unbuffered_sets flushed_normal_sets flushed_ps_sets ps_prepared_never_executed ps_prepared_once_executed rows_fetched_from_server_normal rows_fetched_from_server_ps rows_buffered_from_client_normal rows_buffered_from_client_ps rows_fetched_from_client_normal_buffered rows_fetched_from_client_normal_unbuffered rows_fetched_from_client_ps_buffered rows_fetched_from_client_ps_unbuffered rows_fetched_from_client_ps_cursor rows_affected_normal rows_affected_ps rows_skipped_normal rows_skipped_ps copy_on_write_saved copy_on_write_performed command_buffer_too_small connect_success connect_failure connection_reused reconnect pconnect_success active_connections active_persistent_connections explicit_close implicit_close disconnect_close in_middle_of_command_close explicit_free_result implicit_free_result explicit_stmt_close implicit_stmt_close mem_emalloc_count mem_emalloc_amount mem_ecalloc_count mem_ecalloc_amount mem_erealloc_count mem_erealloc_amount mem_efree_count mem_efree_amount mem_malloc_count mem_malloc_amount mem_calloc_count mem_calloc_amount mem_realloc_count mem_realloc_amount mem_free_count mem_free_amount mem_estrndup_count mem_strndup_count mem_estrdup_count mem_strdup_count mem_edupl_count mem_dupl_count proto_text_fetched_null proto_text_fetched_bit proto_text_fetched_tinyint proto_text_fetched_short proto_text_fetched_int24 proto_text_fetched_int proto_text_fetched_bigint proto_text_fetched_decimal proto_text_fetched_float proto_text_fetched_double proto_text_fetched_date proto_text_fetched_year proto_text_fetched_time proto_text_fetched_datetime proto_text_fetched_timestamp proto_text_fetched_string proto_text_fetched_blob proto_text_fetched_enum proto_text_fetched_set proto_text_fetched_geometry proto_text_fetched_other proto_binary_fetched_null proto_binary_fetched_bit proto_binary_fetched_tinyint proto_binary_fetched_short proto_binary_fetched_int24 proto_binary_fetched_int proto_binary_fetched_bigint proto_binary_fetched_decimal proto_binary_fetched_float proto_binary_fetched_double proto_binary_fetched_date proto_binary_fetched_year proto_binary_fetched_time proto_binary_fetched_datetime proto_binary_fetched_timestamp proto_binary_fetched_string proto_binary_fetched_json proto_binary_fetched_blob proto_binary_fetched_enum proto_binary_fetched_set proto_binary_fetched_geometry proto_binary_fetched_other init_command_executed_count init_command_failed_count com_quit com_init_db com_query com_field_list com_create_db com_drop_db com_refresh com_shutdown com_statistics com_process_info com_connect com_process_kill com_debug com_ping com_time com_delayed_insert com_change_user com_binlog_dump com_table_dump com_connect_out com_register_slave com_stmt_prepare com_stmt_execute com_stmt_send_long_data com_stmt_close com_stmt_reset com_stmt_set_option com_stmt_fetch com_deamon bytes_received_real_data_normal bytes_received_real_data_ps");
+    }
+
+    // The server's own error text, as php's mysqli_error() reports it: the
+    // bridge renders a server error as "MySqlError { ERROR 1146 (42S02): <text> }",
+    // so the wrapper is peeled off (client-side messages pass through unchanged).
+    private static function __elephcServerMessage(string $message): string {
+        $_prefix = "MySqlError { ERROR ";
+        if (strlen($message) > strlen($_prefix) + 2
+            && substr($message, 0, strlen($_prefix)) === $_prefix
+            && substr($message, -2) === " }") {
+            $_at = strpos($message, "): ");
+            if ($_at !== false) {
+                return substr($message, $_at + 3, strlen($message) - $_at - 5);
+            }
+        }
+        return $message;
+    }
+
+    // Increments one per-connection statistic and its process-wide twin.
+    private function bump(string $key): void {
+        $this->connStats[$key] = ((int) ($this->connStats[$key] ?? 0)) + 1;
+        $_client = mysqli::$clientStats;
+        $_client[$key] = ((int) ($_client[$key] ?? 0)) + 1;
+        mysqli::$clientStats = $_client;
+    }
+
+    // Friend-channel twin of bump() for mysqli_stmt / mysqli_result.
+    private function __elephcBump(string $key): void {
+        $this->bump($key);
+    }
+
+    // Decrements the process-wide active-connection gauge on close.
+    private function dropActive(): void {
+        $_client = mysqli::$clientStats;
+        $_client["active_connections"] = ((int) ($_client["active_connections"] ?? 0)) - 1;
+        if ($this->persistent) {
+            $_client["active_persistent_connections"] = ((int) ($_client["active_persistent_connections"] ?? 0)) - 1;
+        }
+        mysqli::$clientStats = $_client;
+    }
+
+    // Records the connection's live bridge error state WITHOUT reporting it:
+    // mysqli::prepare() copies a failed statement prepare onto the link before
+    // the statement reports it (php's close_stmt_and_copy_errors).
+    private function __elephcAdoptBridgeError(): void {
+        $this->errno = elephc_pdo_errcode($this->conn);
+        $this->error = mysqli::__elephcServerMessage(elephc_pdo_errmsg($this->conn));
+        $this->sqlstate = elephc_pdo_sqlstate($this->conn);
+        if ($this->sqlstate === "") {
+            $this->sqlstate = "HY000";
+        }
+        $this->error_list = [["errno" => $this->errno, "sqlstate" => $this->sqlstate, "error" => $this->error]];
+    }
+
+    // Returns the bridge handle (for mysqli_stmt through the friend channel).
+    private function __elephcConn(): int {
+        return $this->conn;
+    }
+
+    // Whether a MYSQLI_ASYNC query waits to be reaped (mysqli::poll()).
+    private function __elephcAsyncPending(): bool {
+        return $this->asyncState != 0;
+    }
+
+    // Releases the bridge handle and every piece of per-connection state: an
+    // open transaction is rolled back first (keeping a persistent handle clean
+    // for the pool), the multi_query batch is finalized, and unconsumed
+    // results die with the connection (php-src frees all pending state).
+    private function releaseConnection(): void {
+        if ($this->conn < 0) {
+            return;
+        }
+        $this->multiClose();
+        if (elephc_pdo_in_transaction($this->conn) === 1) {
+            elephc_pdo_rollback($this->conn);
+        }
+        elephc_pdo_release($this->conn, 0);
+        $this->conn = -1;
+        $this->pendingResult = null;
+        $this->asyncState = 0;
+        $this->asyncResult = null;
+        mysqli::$openLinks = mysqli::$openLinks - 1;
+        if ($this->persistent) {
+            mysqli::$openPersistentLinks = mysqli::$openPersistentLinks - 1;
+        }
+        $this->dropActive();
+        $this->persistent = false;
+    }
+
+    // Runs a MYSQLI_ASYNC query eagerly and parks its outcome for
+    // reap_async_query(); the query call itself reports only send-time
+    // failures (unconnected / busy link), like mysqlnd's async send.
+    private function sendAsyncQuery(string $query): bool {
+        if (!$this->requireConnection()) {
+            return false;
+        }
+        if (!$this->requireNoPendingResults()) {
+            return false;
+        }
+        // Run with reporting suppressed so a server error is stored, not thrown.
+        $_mode = mysqli::$reportMode;
+        mysqli::$reportMode = 0;
+        $_code = $this->runQuery($query);
+        mysqli::$reportMode = $_mode;
+        if ($_code == 0) {
+            $this->asyncState = 3;
+            $this->asyncErrno = $this->errno;
+            $this->asyncError = $this->error;
+            $this->asyncSqlstate = $this->sqlstate;
+            $this->clearError();
+            return true;
+        }
+        if ($_code == 1) {
+            $this->asyncState = 1;
+            return true;
+        }
+        $this->asyncState = 2;
+        $this->asyncResult = $this->pendingResult;
+        $this->pendingResult = null;
+        return true;
+    }
+
+    // Runs SHOW WARNINGS and wraps its rows in a mysqli_warning chain (false
+    // when the server reports none). Friend channel: mysqli_stmt::get_warnings
+    // uses the statement's connection.
+    private function __elephcFetchWarnings(): mysqli_warning|false {
+        if ($this->conn < 0 || $this->__elephcHasPendingResults()) {
+            return false;
+        }
+        $_stmt = elephc_pdo_prepare($this->conn, "SHOW WARNINGS", 1);
+        if ($_stmt < 0) {
+            return false;
+        }
+        $_codes = [];
+        $_messages = [];
+        $_rc = elephc_pdo_step($_stmt);
+        while ($_rc == 1) {
+            $_codes[] = (int) $this->columnValue($_stmt, 1);
+            $_messages[] = (string) $this->columnValue($_stmt, 2);
+            $_rc = elephc_pdo_step($_stmt);
+        }
+        elephc_pdo_finalize($_stmt);
+        if (count($_codes) == 0) {
+            return false;
+        }
+        return mysqli_warning::__elephcFromRows($_codes, $_messages);
+    }
+
     // Guards statement-issuing operations while multi_query result sets (or a
     // real_query result) remain unconsumed: php-src raises
-    // CR_COMMANDS_OUT_OF_SYNC (2014) there, and silently mixing the pending
-    // batch state with a new statement would corrupt store_result/next_result.
+    // CR_COMMANDS_OUT_OF_SYNC (2014) there.
     private function requireNoPendingResults(): bool {
         if ($this->__elephcHasPendingResults()) {
             $this->syntheticFailure(2014, "Commands out of sync; you can't run this command now", "HY000");
@@ -724,26 +1210,22 @@ class mysqli {
     }
 
     // Read-only pending probe for mysqli_stmt's two-step prepare()/execute()
-    // guard: the stmt records the 2014 on ITS OWN error state (php-src puts a
-    // busy-connection failure on the statement), so it needs the condition,
-    // not requireNoPendingResults' connection-level failure. Private — the
-    // checker's mysqli friend channel exposes it to mysqli_stmt only, keeping
-    // it off PHP's mysqli surface.
+    // guard (the statement records the 2014 on ITS OWN error state).
     private function __elephcHasPendingResults(): bool {
         return $this->multiStmt >= 0 || $this->multiMore || $this->pendingResult !== null;
     }
 
+    // Percent-encodes one packed driver-config value ('%' first, then ';' and
+    // '='), the encoding the bridge decodes after splitting the config.
+    private function encodeDriverOption(string $value): string {
+        return str_replace("=", "%3D", str_replace(";", "%3B", str_replace("%", "%25", $value)));
+    }
+
     // Renders a transaction $name as php-src's ` /*name*/` SQL comment suffix
     // ("" when $name is null). An empty $name is a ValueError ONLY for
-    // begin_transaction ($emptyThrows) — php throws there but for commit /
-    // rollback it does not, sending `COMMIT /**/` / `ROLLBACK /**/` instead.
-    // A non-empty name is STRIPPED to php's allowlist [A-Za-z0-9 -_=] before it
-    // is wrapped: blocklisting `*/` was not enough because a name starting with
-    // `!` (or MariaDB's `M!`) opens an EXECUTABLE `/*! … */` comment whose body
-    // the server runs — a `;` inside it would then execute a second statement,
-    // and this path (exec, not runQuery) never sees the multi-statement guard.
-    // Stripping to the allowlist closes every comment dialect at once, exactly
-    // as php sanitises the name.
+    // begin_transaction ($emptyThrows). A non-empty name is STRIPPED to php's
+    // allowlist [A-Za-z0-9 -_=] before it is wrapped: a name starting with `!`
+    // would otherwise open an EXECUTABLE `/*! … */` comment.
     private function transactionComment(string $context, ?string $name, bool $emptyThrows): string {
         if ($name === null) {
             return "";
@@ -759,25 +1241,18 @@ class mysqli {
         for ($_i = 0; $_i < $_len; $_i++) {
             $_c = substr($name, $_i, 1);
             $_o = ord($_c);
-            // php's kept set (empirically, feeding every printable byte):
-            // space, `-`, 0-9, `=`, A-Z, `_`, a-z. Backslash is NOT kept, though
-            // php's own warning text lists it; the empirical behaviour wins.
-            if (($_o >= 48 && $_o <= 57)          // 0-9
-                || ($_o >= 65 && $_o <= 90)       // A-Z
-                || ($_o >= 97 && $_o <= 122)      // a-z
+            if (($_o >= 48 && $_o <= 57)
+                || ($_o >= 65 && $_o <= 90)
+                || ($_o >= 97 && $_o <= 122)
                 || $_c === " " || $_c === "-" || $_c === "_" || $_c === "=") {
                 $_clean = $_clean . $_c;
             }
         }
-        // php raises an E_WARNING ("Transaction name has been truncated …") when
-        // it drops characters; elephc has no E_WARNING channel, so the stripping
-        // is silent (documented divergence — the security behaviour is identical).
         return " /*" . $_clean . "*/";
     }
 
     // Renders the COMMIT/ROLLBACK completion flags (MYSQLI_TRANS_COR_*), matching
-    // php-src's mysqlnd: AND [NO] CHAIN and [NO] RELEASE, each emitted only when
-    // its bit is set and its opposite is not.
+    // php-src's mysqlnd: AND [NO] CHAIN and [NO] RELEASE.
     private function transactionCorFlags(int $flags): string {
         $_sql = "";
         if (($flags & 1) != 0 && ($flags & 2) == 0) {
@@ -794,34 +1269,28 @@ class mysqli {
     }
 
     // Refreshes the connection status fields from the last command's OK packet,
-    // matching php (which updates them after EVERY command). A control statement
-    // like COMMIT / BEGIN / SET NAMES reports affected_rows = 0, so this resets
-    // the DML count a prior query() left behind — e.g. `$db->affected_rows`
-    // read after commit() is 0, as in php, not the previous statement's count.
+    // matching php (which updates them after EVERY command).
     private function refreshStatus(): void {
         $this->affected_rows = elephc_pdo_changes($this->conn);
         $this->insert_id = elephc_pdo_last_insert_id($this->conn, "");
         $this->warning_count = elephc_pdo_warning_count($this->conn);
+        $_info = elephc_pdo_mysql_info($this->conn);
+        $this->info = $_info === "" ? null : $_info;
     }
 
     // php 8 raises `Error: mysqli object is not fully initialized` for any
     // operation on a `mysqli_init()` / argument-less `new mysqli()` object (or a
-    // failed/closed connection), regardless of mysqli_report mode — it is an
-    // Error, not a connection warning. Throwing here (rather than the old
-    // silent 2006 `false`) closes the divergence where an unconnected
-    // real_escape_string returned a value with no signal at all.
-    private function requireInitialized(string $context): void {
+    // failed/closed connection), regardless of mysqli_report mode.
+    private function requireInitialized(): void {
         if ($this->conn < 0) {
-            throw new Error($context . "(): mysqli object is not fully initialized");
+            throw new Error("mysqli object is not fully initialized");
         }
     }
 
-    // Guards every operation that needs a live connection. An unconnected object
-    // raises the same php Error as requireInitialized; always returns true when
-    // it does not throw so existing `if (!requireConnection())` call sites stay
-    // correct.
+    // Guards every operation that needs a live connection; always returns true
+    // when it does not throw so `if (!requireConnection())` call sites stay valid.
     private function requireConnection(): bool {
-        $this->requireInitialized("mysqli");
+        $this->requireInitialized();
         return true;
     }
 
@@ -853,11 +1322,10 @@ class mysqli {
     }
 
     // Refreshes errno/error/sqlstate/error_list from the live bridge error
-    // state after a failed operation, then dispatches mysqli_report. Always
-    // returns false so callers can tail-call it.
+    // state after a failed operation, then dispatches mysqli_report.
     private function opFailed(): bool {
         $this->errno = elephc_pdo_errcode($this->conn);
-        $this->error = elephc_pdo_errmsg($this->conn);
+        $this->error = mysqli::__elephcServerMessage(elephc_pdo_errmsg($this->conn));
         $this->sqlstate = elephc_pdo_sqlstate($this->conn);
         if ($this->sqlstate === "") {
             $this->sqlstate = "HY000";
@@ -879,9 +1347,7 @@ class mysqli {
     // PDOException), ERROR alone writes the message to STDERR, OFF is silent.
     private function report(string $message, int $errno, string $sqlstate): void {
         if ((mysqli::$reportMode & 2) != 0) {
-            $_e = new mysqli_sql_exception($message, $errno);
-            $_e->sqlstate = $sqlstate;
-            throw $_e;
+            throw mysqli_sql_exception::__elephcCreate($message, $errno, $sqlstate);
         }
         if ((mysqli::$reportMode & 1) != 0) {
             fwrite(STDERR, "mysqli error: " . $message . "\n");
@@ -890,8 +1356,7 @@ class mysqli {
 
     // Executes one statement through the bridge and fully buffers any result
     // set (result identity: a later query must never invalidate an earlier
-    // mysqli_result, so every row is drained and the statement finalized before
-    // this returns). Returns 0 = failure (error state recorded and reported),
+    // mysqli_result). Returns 0 = failure (error state recorded and reported),
     // 1 = success with no result set (DML/DDL: affected_rows/insert_id set),
     // 2 = success with a result buffered into $this->pendingResult.
     private function runQuery(string $query): int {
@@ -902,19 +1367,16 @@ class mysqli {
             return 0;
         }
         // php-src rejects multi-statement strings in mysqli_query (mysqlnd
-        // toggles CLIENT_MULTI_STATEMENTS per multi_query call via
-        // COM_SET_OPTION; the bridge keeps it enabled for the whole
-        // connection), so a classic "1; DROP TABLE …" injection would
-        // otherwise EXECUTE here. The rejection uses the ONE authoritative
-        // bridge scanner (which treats `/*! … */` executable comments as live
-        // SQL, closing the comment-hidden separator bypass); a fast strpos
-        // skips the scan for the overwhelming majority of statements that carry
-        // no ';' at all. multi_query() is the one multi-statement path.
+        // toggles CLIENT_MULTI_STATEMENTS per multi_query call; the bridge keeps
+        // it enabled), so a classic "1; DROP TABLE …" injection would otherwise
+        // EXECUTE here. The rejection uses the ONE authoritative bridge scanner;
+        // a fast strpos skips the scan for statements with no ';' at all.
         if (strpos($query, ";") !== false
             && elephc_pdo_sql_has_multiple_statements($this->conn, $query, strlen($query)) != 0) {
             $this->syntheticFailure(1064, "elephc mysqli does not support multiple statements in mysqli::query(); use mysqli::multi_query()", "42000");
             return 0;
         }
+        $this->bump("com_query");
         $_stmt = elephc_pdo_prepare($this->conn, $query, 1);
         if ($_stmt < 0) {
             $this->opFailed();
@@ -930,55 +1392,97 @@ class mysqli {
         // for emulated prepares that only execute at step time.
         $_columnCount = elephc_pdo_column_count($_stmt);
         if ($_columnCount == 0) {
-            $this->affected_rows = elephc_pdo_changes($this->conn);
-            $this->insert_id = elephc_pdo_last_insert_id($this->conn, "");
+            $this->bump("non_result_set_queries");
+            $this->refreshStatus();
             $this->field_count = 0;
-            $this->warning_count = elephc_pdo_warning_count($this->conn);
             elephc_pdo_finalize($_stmt);
             $this->clearError();
             $this->pendingResult = null;
             return 1;
         }
+        $_result = $this->drainResultSet($_stmt, $_rc, $_columnCount);
+        elephc_pdo_finalize($_stmt);
+        if ($_result === null) {
+            return 0;
+        }
+        $this->pendingResult = $_result;
+        return 2;
+    }
+
+    // Drains the current result set of a bridge statement (whose first step
+    // verdict is $firstStep) into an independent mysqli_result and refreshes
+    // the connection status for a SELECT. Returns null — error recorded and
+    // reported — when a step fails mid-drain.
+    private function drainResultSet(int $stmt, int $firstStep, int $cols): ?mysqli_result {
         $_names = [];
         $_tables = [];
         $_natives = [];
         $_flags = [];
         $_lens = [];
         $_decimals = [];
-        for ($_i = 0; $_i < $_columnCount; $_i++) {
-            $_names[] = elephc_pdo_column_name($_stmt, $_i);
-            $_tables[] = elephc_pdo_column_table_name($_stmt, $_i);
-            $_natives[] = elephc_pdo_column_native_type($_stmt, $_i);
-            $_flags[] = elephc_pdo_column_flags($_stmt, $_i);
-            $_lens[] = elephc_pdo_column_len($_stmt, $_i);
-            $_decimals[] = elephc_pdo_column_precision($_stmt, $_i);
+        for ($_i = 0; $_i < $cols; $_i++) {
+            $_names[] = elephc_pdo_column_name($stmt, $_i);
+            $_tables[] = elephc_pdo_column_table_name($stmt, $_i);
+            $_natives[] = elephc_pdo_column_native_type($stmt, $_i);
+            $_flags[] = elephc_pdo_column_flags($stmt, $_i);
+            $_lens[] = elephc_pdo_column_len($stmt, $_i);
+            $_decimals[] = elephc_pdo_column_precision($stmt, $_i);
         }
-        // Cells are buffered FLAT in row-major order (see mysqli_result): every
-        // buffered value stays a Mixed scalar and fetches build fresh rows.
+        // MYSQLI_OPT_INT_AND_FLOAT_NATIVE: 1 = integer column, 2 = float column.
+        $_native = [];
+        for ($_i = 0; $_i < $cols; $_i++) {
+            $_native[] = $this->optIntAndFloatNative ? $this->nativeKind((string) $_natives[$_i]) : 0;
+        }
+        // Cells are buffered FLAT in row-major order (see mysqli_result).
         $_cells = [];
         $_rowCount = 0;
+        $_rc = $firstStep;
         while ($_rc == 1) {
-            for ($_i = 0; $_i < $_columnCount; $_i++) {
-                $_cells[] = $this->columnValue($_stmt, $_i);
+            for ($_i = 0; $_i < $cols; $_i++) {
+                $_value = $this->columnValue($stmt, $_i);
+                $_kind = (int) $_native[$_i];
+                if ($_value !== null && $_kind == 1) {
+                    $_cells[] = (int) $_value;
+                } elseif ($_value !== null && $_kind == 2) {
+                    $_cells[] = (float) $_value;
+                } else {
+                    $_cells[] = $_value;
+                }
             }
             $_rowCount = $_rowCount + 1;
-            $_rc = elephc_pdo_step($_stmt);
+            $_rc = elephc_pdo_step($stmt);
         }
         if ($_rc < 0) {
             $this->opFailed();
-            elephc_pdo_finalize($_stmt);
-            return 0;
+            return null;
         }
-        elephc_pdo_finalize($_stmt);
+        $this->bump("result_set_queries");
+        $this->bump("buffered_sets");
+        $this->connStats["rows_fetched_from_server_normal"] = ((int) ($this->connStats["rows_fetched_from_server_normal"] ?? 0)) + $_rowCount;
+        $this->connStats["rows_buffered_from_client_normal"] = ((int) ($this->connStats["rows_buffered_from_client_normal"] ?? 0)) + $_rowCount;
         // php-src: for a SELECT, affected_rows mirrors num_rows and insert_id
         // resets to 0 (the statement generated no AUTO_INCREMENT value).
         $this->affected_rows = $_rowCount;
         $this->insert_id = 0;
-        $this->field_count = $_columnCount;
+        $this->field_count = $cols;
         $this->warning_count = elephc_pdo_warning_count($this->conn);
+        $this->info = null;
         $this->clearError();
-        $this->pendingResult = mysqli_result::__elephcFromDrain($_cells, $_rowCount, $_names, $_tables, $_natives, $_flags, $_lens, $_decimals);
-        return 2;
+        return mysqli_result::__elephcFromDrain($_cells, $_rowCount, $_names, $_tables, $_natives, $_flags, $_lens, $_decimals);
+    }
+
+    // Maps a native column type onto MYSQLI_OPT_INT_AND_FLOAT_NATIVE's
+    // conversion: integers (and YEAR) become int, FLOAT/DOUBLE become float,
+    // everything else (DECIMAL included) stays a string, like mysqlnd.
+    private function nativeKind(string $native): int {
+        if ($native === "TINY" || $native === "SHORT" || $native === "LONG"
+            || $native === "LONGLONG" || $native === "INT24" || $native === "YEAR") {
+            return 1;
+        }
+        if ($native === "FLOAT" || $native === "DOUBLE") {
+            return 2;
+        }
+        return 0;
     }
 
     // Drains the CURRENT result set of the active multi_query batch into
@@ -986,57 +1490,23 @@ class mysqli {
     // non-select set), then eagerly probes elephc_pdo_next_rowset so
     // more_results() can answer without consuming; the batch statement is
     // finalized as soon as the probe reports no further set. Returns false —
-    // error recorded, batch closed, nothing buffered — if a step fails
-    // mid-drain (same contract as runQuery's fetch loop; with the bridge's
-    // buffered execution the first step surfaces server errors, so this is
-    // the defensive twin for a mid-stream failure, e.g. a dropped
-    // connection).
+    // error recorded, batch closed, nothing buffered — if a step fails mid-drain.
     private function multiDrainCurrent(int $firstStep): bool {
         $_stmt = $this->multiStmt;
         $_cols = elephc_pdo_column_count($_stmt);
         if ($_cols == 0) {
-            $this->affected_rows = elephc_pdo_changes($this->conn);
-            $this->insert_id = elephc_pdo_last_insert_id($this->conn, "");
+            $this->bump("non_result_set_queries");
+            $this->refreshStatus();
             $this->field_count = 0;
             $this->pendingResult = null;
         } else {
-            $_names = [];
-            $_tables = [];
-            $_natives = [];
-            $_flags = [];
-            $_lens = [];
-            $_decimals = [];
-            for ($_i = 0; $_i < $_cols; $_i++) {
-                $_names[] = elephc_pdo_column_name($_stmt, $_i);
-                $_tables[] = elephc_pdo_column_table_name($_stmt, $_i);
-                $_natives[] = elephc_pdo_column_native_type($_stmt, $_i);
-                $_flags[] = elephc_pdo_column_flags($_stmt, $_i);
-                $_lens[] = elephc_pdo_column_len($_stmt, $_i);
-                $_decimals[] = elephc_pdo_column_precision($_stmt, $_i);
-            }
-            $_cells = [];
-            $_rowCount = 0;
-            $_rc = $firstStep;
-            while ($_rc == 1) {
-                for ($_i = 0; $_i < $_cols; $_i++) {
-                    $_cells[] = $this->columnValue($_stmt, $_i);
-                }
-                $_rowCount = $_rowCount + 1;
-                $_rc = elephc_pdo_step($_stmt);
-            }
-            if ($_rc < 0) {
-                // A step failed mid-set: report the error instead of passing
-                // off the truncated buffer as a complete result, and close
-                // the batch — its remaining sets are not trustworthy.
-                $this->opFailed();
+            $_result = $this->drainResultSet($_stmt, $firstStep, $_cols);
+            if ($_result === null) {
                 $this->multiClose();
                 $this->pendingResult = null;
                 return false;
             }
-            $this->affected_rows = $_rowCount;
-            $this->insert_id = 0;
-            $this->field_count = $_cols;
-            $this->pendingResult = mysqli_result::__elephcFromDrain($_cells, $_rowCount, $_names, $_tables, $_natives, $_flags, $_lens, $_decimals);
+            $this->pendingResult = $_result;
         }
         $this->warning_count = elephc_pdo_warning_count($this->conn);
         $this->clearError();
@@ -1057,10 +1527,8 @@ class mysqli {
         $this->multiMore = false;
     }
 
-    // Decodes one cell of the current row, same type dispatch as
-    // PDOStatement::fetch's columnValue (int / float / null / length-counted
-    // TEXT-or-BLOB copy so embedded NUL bytes survive); mysqli has no
-    // stringify/oracle-nulls modes, so those branches are absent.
+    // Decodes one cell of the current row (int / float / null / length-counted
+    // TEXT-or-BLOB copy so embedded NUL bytes survive).
     private function columnValue(int $stmt, int $index): mixed {
         $_type = elephc_pdo_column_type($stmt, $index);
         if ($_type == 1) {

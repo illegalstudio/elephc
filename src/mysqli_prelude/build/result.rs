@@ -1,27 +1,14 @@
 //! Purpose:
-//! Builds the `mysqli_result` class (plus its foreach iterator) as AST. A result
-//! OWNS its rows: `mysqli::query` drains every row through `elephc_pdo_step`
-//! into PHP arrays and finalizes the statement before the result is handed out,
-//! so a later query on the same connection can never invalidate an earlier
-//! result (`data_seek`, `num_rows`, `foreach` all keep working).
+//! Builds the `mysqli_result` class (and its foreach iterator) as AST. A result
+//! OWNS its rows, so a later query can never invalidate an earlier result.
 //!
 //! Called from:
 //! - `crate::mysqli_prelude::build::mysqli_declarations`.
 //!
 //! Key details:
 //! - TRANSCRIBED from `mysqli_prelude::result::SRC` (`synthetic_class::transcribe`);
-//!   the oracle `built_declarations_match_the_php_for_every_version` compares the
-//!   built classes against that PHP for every profile.
-//! - Rows are stored positionally; assoc/both shapes are derived from the
-//!   captured column-name list at fetch time (duplicate names: last wins, like
-//!   PHP). Field metadata (`name`, `table`, native type, flags, length) is
-//!   captured at drain time because the statement is finalized immediately.
-//! - `fetch_*` return `null` when the cursor is exhausted (`fetch_column`
-//!   returns `false`), matching php-src.
-//! - `fetch_column` is PHP 8.1+; the method is a version conditional here and its
-//!   procedural alias is gated in `build.rs`.
-//! - `getIterator()` yields `fetch_assoc()` rows from position 0 (PHP's
-//!   `mysqli_result` foreach is assoc with integer keys).
+//!   the oracle compares the built class against that PHP for every profile.
+//!   `fetch_column` (8.1+) is the one version conditional.
 
 use crate::php_version::PhpVersion;
 use crate::parser::ast::{BinOp, CastType, TypeExpr, Stmt};
@@ -41,8 +28,11 @@ use crate::synthetic_class::{
     e_new_dynamic,
     e_null,
     e_post_inc,
+    e_prop,
     e_spread,
+    e_static_prop,
     e_str,
+    e_ternary,
     e_this,
     e_this_prop,
     e_var,
@@ -56,6 +46,8 @@ use crate::synthetic_class::{
     s_if,
     s_prop_assign,
     s_return,
+    s_return_void,
+    s_static_prop_assign,
     s_throw,
     s_while,
     t_array,
@@ -68,16 +60,12 @@ use crate::synthetic_class::{
 pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
     class("mysqli_result")
         .implements("IteratorAggregate")
-        .prop("num_rows", TypeExpr::Int, Some(e_int(0)))
+        .prop("current_field", TypeExpr::Int, Some(e_int(0)))
         .prop("field_count", TypeExpr::Int, Some(e_int(0)))
-        // Column byte lengths of the row returned by the most recent fetch, or null before the
-        // first fetch / after exhaustion (php-src's $lengths).
         .prop("lengths", t_nullable(t_array()), Some(e_null()))
-        // Buffered cells and drain-time column metadata. Cells are stored FLAT in row-major order
-        // (row * field_count + column) so every buffered value is a Mixed scalar — a fetch builds
-        // a fresh row array, which keeps the checker's array element typing simple (no
-        // nested-array Mixed unwraps). The bridge statement is already finalized when a result
-        // exists, so everything a fetch needs lives here.
+        .prop("num_rows", TypeExpr::Int, Some(e_int(0)))
+        .prop("type", TypeExpr::Int, Some(e_int(0)))
+        .private_static_prop("fromFactory", TypeExpr::Bool, Some(e_bool(false)))
         .private_prop("cells", t_array(), Some(e_array(vec![])))
         .private_prop("names", t_array(), Some(e_array(vec![])))
         .private_prop("metaTables", t_array(), Some(e_array(vec![])))
@@ -87,10 +75,47 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
         .private_prop("metaDecimals", t_array(), Some(e_array(vec![])))
         .private_prop("rowCount", TypeExpr::Int, Some(e_int(0)))
         .private_prop("pos", TypeExpr::Int, Some(e_int(0)))
-        .private_prop("fieldPos", TypeExpr::Int, Some(e_int(0)))
-        // Internal factory used by mysqli::query's drain (not part of PHP's surface; a user never
-        // constructs mysqli_result directly). `$cells` is the flat row-major cell list described
-        // above.
+        .method(
+            method("__construct")
+                .param("mysql", t_class("mysqli"))
+                .param_default("result_mode", TypeExpr::Int, e_int(0))
+                .body(vec![
+                    s_if(
+                        e_static_prop("mysqli_result", "fromFactory"),
+                        vec![
+                            s_return_void(),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_method_call(e_var("mysql"), "__elephcConn", vec![]), BinOp::Lt, e_int(0)),
+                        vec![
+                            s_throw(e_new("Error", vec![e_str("mysqli object is not fully initialized")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_binop(e_var("result_mode"), BinOp::NotEq, e_int(0)), BinOp::And, e_binop(e_var("result_mode"), BinOp::NotEq, e_int(1))),
+                        vec![
+                            s_throw(e_new("ValueError", vec![e_str("mysqli_result::__construct(): Argument #2 ($result_mode) must be either MYSQLI_STORE_RESULT or MYSQLI_USE_RESULT")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_assign("_source", e_ternary(e_binop(e_var("result_mode"), BinOp::Eq, e_int(1)), e_method_call(e_var("mysql"), "use_result", vec![]), e_method_call(e_var("mysql"), "store_result", vec![]))),
+                    s_if(
+                        e_binop(e_var("_source"), BinOp::StrictEq, e_bool(false)),
+                        vec![
+                            s_return_void(),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_expr(e_method_call(e_var("_source"), "__elephcCopyInto", vec![e_this(), e_var("result_mode")])),
+                ]),
+        )
         .method(
             method("__elephcFromDrain")
                 .private()
@@ -105,7 +130,9 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                 .param("decimals", t_array())
                 .returns(t_class("mysqli_result"))
                 .body(vec![
-                    s_assign("_result", e_new("mysqli_result", vec![])),
+                    s_static_prop_assign("mysqli_result", "fromFactory", e_bool(true)),
+                    s_assign("_result", e_new("mysqli_result", vec![e_new("mysqli", vec![])])),
+                    s_static_prop_assign("mysqli_result", "fromFactory", e_bool(false)),
                     s_prop_assign(e_var("_result"), "cells", e_var("cells")),
                     s_prop_assign(e_var("_result"), "rowCount", e_var("rowCount")),
                     s_prop_assign(e_var("_result"), "names", e_var("names")),
@@ -120,6 +147,36 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                 ]),
         )
         .method(
+            method("__elephcCopyInto")
+                .private()
+                .param("target", t_class("mysqli_result"))
+                .param("mode", TypeExpr::Int)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_prop_assign(e_var("target"), "cells", e_this_prop("cells")),
+                    s_prop_assign(e_var("target"), "names", e_this_prop("names")),
+                    s_prop_assign(e_var("target"), "metaTables", e_this_prop("metaTables")),
+                    s_prop_assign(e_var("target"), "metaNativeTypes", e_this_prop("metaNativeTypes")),
+                    s_prop_assign(e_var("target"), "metaFlags", e_this_prop("metaFlags")),
+                    s_prop_assign(e_var("target"), "metaLens", e_this_prop("metaLens")),
+                    s_prop_assign(e_var("target"), "metaDecimals", e_this_prop("metaDecimals")),
+                    s_prop_assign(e_var("target"), "rowCount", e_this_prop("rowCount")),
+                    s_prop_assign(e_var("target"), "field_count", e_this_prop("field_count")),
+                    s_prop_assign(e_var("target"), "type", e_var("mode")),
+                    s_prop_assign(e_var("target"), "num_rows", e_ternary(e_binop(e_var("mode"), BinOp::Eq, e_int(1)), e_int(0), e_this_prop("rowCount"))),
+                ]),
+        )
+        .method(
+            method("__elephcSetType")
+                .private()
+                .param("type", TypeExpr::Int)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_prop_assign(e_this(), "type", e_var("type")),
+                    s_prop_assign(e_this(), "num_rows", e_ternary(e_binop(e_var("type"), BinOp::Eq, e_int(1)), e_int(0), e_this_prop("rowCount"))),
+                ]),
+        )
+        .method(
             method("fetch_row")
                 .returns(t_nullable(t_array()))
                 .body(vec![
@@ -127,6 +184,14 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                         e_binop(e_this_prop("pos"), BinOp::GtEq, e_this_prop("rowCount")),
                         vec![
                             s_prop_assign(e_this(), "lengths", e_null()),
+                            s_if(
+                                e_binop(e_this_prop("type"), BinOp::Eq, e_int(1)),
+                                vec![
+                                    s_prop_assign(e_this(), "num_rows", e_this_prop("rowCount")),
+                                ],
+                                vec![],
+                                None,
+                            ),
                             s_return(e_null()),
                         ],
                         vec![],
@@ -169,7 +234,6 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                     ),
                     s_assign("_assoc", e_array(vec![])),
                     s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_this_prop("field_count"))), Some(s_expr(e_post_inc("_i"))), vec![
-                        // Duplicate column names: last wins, matching PHP's assoc shape.
                         s_array_assign("_assoc", e_cast(CastType::String, e_index(e_this_prop("names"), e_var("_i"))), e_index(e_var("_row"), e_var("_i"))),
                     ]),
                     s_return(e_var("_assoc")),
@@ -237,12 +301,6 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                         vec![],
                         None,
                     ),
-                    // Two straight-line returns rather than one reassigned local, same reason as
-                    // the PDO prelude's hydrateClassOrStd: the dynamic-new result is Mixed, and
-                    // rebinding a concrete `new stdClass()` into that local would unify Mixed with
-                    // Object(stdClass) in a slot that is about to be dynamic-property-written.
-                    // stdClass also never goes through dynamic allocation (php-src resolves it to
-                    // zend_standard_class_def directly).
                     s_if(
                         e_binop(e_call("strtolower", vec![e_var("class")]), BinOp::StrictEq, e_str("stdclass")),
                         vec![
@@ -256,10 +314,6 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                         vec![],
                         None,
                     ),
-                    // Documented divergence: php-src assigns properties BEFORE calling the
-                    // constructor; elephc constructs first (PDO::FETCH_PROPS_LATE order) so the
-                    // dynamic instantiation goes through the one proven `new $class` path with
-                    // constructor arguments.
                     s_assign("_object", e_new_dynamic(e_var("class"), vec![e_spread(e_var("constructor_args"))])),
                     s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_this_prop("field_count"))), Some(s_expr(e_post_inc("_i"))), vec![
                         s_assign("_n", e_cast(CastType::String, e_index(e_this_prop("names"), e_var("_i")))),
@@ -282,9 +336,6 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                         None,
                     ),
                     s_assign("_all", e_array(vec![])),
-                    // A fresh `$_row` each iteration, narrowed by the `=== null` break, so it is
-                    // never reassigned from the narrowed `array` back to `?array` (which the
-                    // checker rejects inside the narrowed scope).
                     s_while(e_bool(true), vec![
                         s_assign("_row", e_method_call(e_this(), "fetch_array", vec![e_var("mode")])),
                         s_if(
@@ -300,18 +351,24 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                     s_return(e_var("_all")),
                 ]),
         )
-        // `mysqli_result::fetch_column` is PHP 8.1+; under 8.0 the method is ABSENT
-        // (its ValueError text names the method, so a stub would misreport too).
+        // `mysqli_result::fetch_column` is PHP 8.1+; under 8.0 the method is ABSENT.
         .when(php_version >= PhpVersion::Php81, |class| {
-            class.method(
-                method("fetch_column")
+            class.method(method("fetch_column")
                     .param_default("column", TypeExpr::Int, e_int(0))
                     .returns(t_mixed())
                     .body(vec![
                         s_if(
-                            e_binop(e_binop(e_var("column"), BinOp::Lt, e_int(0)), BinOp::Or, e_binop(e_var("column"), BinOp::GtEq, e_this_prop("field_count"))),
+                            e_binop(e_var("column"), BinOp::Lt, e_int(0)),
                             vec![
-                                s_throw(e_new("ValueError", vec![e_str("mysqli_result::fetch_column(): Argument #1 ($column) must be greater than or equal to 0 and less than the number of fields in this result set")])),
+                                s_throw(e_new("ValueError", vec![e_str("mysqli_result::fetch_column(): Argument #1 ($column) must be greater than or equal to 0")])),
+                            ],
+                            vec![],
+                            None,
+                        ),
+                        s_if(
+                            e_binop(e_var("column"), BinOp::GtEq, e_this_prop("field_count")),
+                            vec![
+                                s_throw(e_new("ValueError", vec![e_str("mysqli_result::fetch_column(): Argument #1 ($column) must be less than the number of fields for this result set")])),
                             ],
                             vec![],
                             None,
@@ -327,7 +384,7 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                         ),
                         s_return(e_index(e_var("_row"), e_var("column"))),
                     ]),
-            )
+        )
         })
         .method(
             method("data_seek")
@@ -335,7 +392,23 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                 .returns(TypeExpr::Bool)
                 .body(vec![
                     s_if(
-                        e_binop(e_binop(e_var("offset"), BinOp::Lt, e_int(0)), BinOp::Or, e_binop(e_var("offset"), BinOp::GtEq, e_this_prop("rowCount"))),
+                        e_binop(e_var("offset"), BinOp::Lt, e_int(0)),
+                        vec![
+                            s_throw(e_new("ValueError", vec![e_str("mysqli_result::data_seek(): Argument #1 ($offset) must be greater than or equal to 0")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_this_prop("type"), BinOp::Eq, e_int(1)),
+                        vec![
+                            s_throw(e_new("Error", vec![e_str("mysqli_result::data_seek() cannot be used in MYSQLI_USE_RESULT mode")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("offset"), BinOp::GtEq, e_this_prop("rowCount")),
                         vec![
                             s_return(e_bool(false)),
                         ],
@@ -352,31 +425,22 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                 .returns(t_mixed())
                 .body(vec![
                     s_if(
-                        e_binop(e_binop(e_var("index"), BinOp::Lt, e_int(0)), BinOp::Or, e_binop(e_var("index"), BinOp::GtEq, e_this_prop("field_count"))),
+                        e_binop(e_var("index"), BinOp::Lt, e_int(0)),
                         vec![
-                            s_return(e_bool(false)),
+                            s_throw(e_new("ValueError", vec![e_str("mysqli_result::fetch_field_direct(): Argument #1 ($index) must be greater than or equal to 0")])),
                         ],
                         vec![],
                         None,
                     ),
-                    // Unknown metadata the bridge does not expose stays 0 / "" (documented);
-                    // name/orgname, table/orgtable, type, flags, and length are real.
-                    s_assign("_field", e_new("stdClass", vec![])),
-                    s_expr(e_assign(e_dyn_prop(e_var("_field"), e_str("name")), e_cast(CastType::String, e_index(e_this_prop("names"), e_var("index"))))),
-                    s_expr(e_assign(e_dyn_prop(e_var("_field"), e_str("orgname")), e_cast(CastType::String, e_index(e_this_prop("names"), e_var("index"))))),
-                    s_expr(e_assign(e_dyn_prop(e_var("_field"), e_str("table")), e_cast(CastType::String, e_index(e_this_prop("metaTables"), e_var("index"))))),
-                    s_expr(e_assign(e_dyn_prop(e_var("_field"), e_str("orgtable")), e_cast(CastType::String, e_index(e_this_prop("metaTables"), e_var("index"))))),
-                    s_expr(e_assign(e_dyn_prop(e_var("_field"), e_str("def")), e_str(""))),
-                    s_expr(e_assign(e_dyn_prop(e_var("_field"), e_str("db")), e_str(""))),
-                    s_expr(e_assign(e_dyn_prop(e_var("_field"), e_str("catalog")), e_str("def"))),
-                    s_expr(e_assign(e_dyn_prop(e_var("_field"), e_str("max_length")), e_int(0))),
-                    s_expr(e_assign(e_dyn_prop(e_var("_field"), e_str("length")), e_cast(CastType::Int, e_index(e_this_prop("metaLens"), e_var("index"))))),
-                    s_expr(e_assign(e_dyn_prop(e_var("_field"), e_str("charsetnr")), e_int(0))),
-                    s_expr(e_assign(e_dyn_prop(e_var("_field"), e_str("flags")), e_cast(CastType::Int, e_index(e_this_prop("metaFlags"), e_var("index"))))),
-                    s_expr(e_assign(e_dyn_prop(e_var("_field"), e_str("type")), e_method_call(e_this(), "mysqliTypeFromNative", vec![e_cast(CastType::String, e_index(e_this_prop("metaNativeTypes"), e_var("index")))]))),
-                    // The bridge's column_precision is MySQL's own wire "decimals" byte.
-                    s_expr(e_assign(e_dyn_prop(e_var("_field"), e_str("decimals")), e_cast(CastType::Int, e_index(e_this_prop("metaDecimals"), e_var("index"))))),
-                    s_return(e_var("_field")),
+                    s_if(
+                        e_binop(e_var("index"), BinOp::GtEq, e_this_prop("field_count")),
+                        vec![
+                            s_throw(e_new("ValueError", vec![e_str("mysqli_result::fetch_field_direct(): Argument #1 ($index) must be less than the number of fields for this result set")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_method_call(e_this(), "fieldObject", vec![e_var("index")])),
                 ]),
         )
         .method(
@@ -384,15 +448,15 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                 .returns(t_mixed())
                 .body(vec![
                     s_if(
-                        e_binop(e_this_prop("fieldPos"), BinOp::GtEq, e_this_prop("field_count")),
+                        e_binop(e_this_prop("current_field"), BinOp::GtEq, e_this_prop("field_count")),
                         vec![
                             s_return(e_bool(false)),
                         ],
                         vec![],
                         None,
                     ),
-                    s_assign("_field", e_method_call(e_this(), "fetch_field_direct", vec![e_this_prop("fieldPos")])),
-                    s_prop_assign(e_this(), "fieldPos", e_binop(e_this_prop("fieldPos"), BinOp::Add, e_int(1))),
+                    s_assign("_field", e_method_call(e_this(), "fieldObject", vec![e_this_prop("current_field")])),
+                    s_prop_assign(e_this(), "current_field", e_binop(e_this_prop("current_field"), BinOp::Add, e_int(1))),
                     s_return(e_var("_field")),
                 ]),
         )
@@ -402,42 +466,40 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                 .body(vec![
                     s_assign("_fields", e_array(vec![])),
                     s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_this_prop("field_count"))), Some(s_expr(e_post_inc("_i"))), vec![
-                        s_array_push("_fields", e_method_call(e_this(), "fetch_field_direct", vec![e_var("_i")])),
+                        s_array_push("_fields", e_method_call(e_this(), "fieldObject", vec![e_var("_i")])),
                     ]),
                     s_return(e_var("_fields")),
                 ]),
         )
-        // Moves the fetch_field() cursor. php returns the previous position; elephc returns
-        // true/false (in-range), the mysqli_result::field_seek contract most code relies on.
         .method(
             method("field_seek")
                 .param("index", TypeExpr::Int)
                 .returns(TypeExpr::Bool)
                 .body(vec![
                     s_if(
-                        e_binop(e_binop(e_var("index"), BinOp::Lt, e_int(0)), BinOp::Or, e_binop(e_var("index"), BinOp::Gt, e_this_prop("field_count"))),
+                        e_binop(e_var("index"), BinOp::Lt, e_int(0)),
                         vec![
-                            s_return(e_bool(false)),
+                            s_throw(e_new("ValueError", vec![e_str("mysqli_result::field_seek(): Argument #1 ($index) must be greater than or equal to 0")])),
                         ],
                         vec![],
                         None,
                     ),
-                    s_prop_assign(e_this(), "fieldPos", e_var("index")),
+                    s_if(
+                        e_binop(e_var("index"), BinOp::GtEq, e_this_prop("field_count")),
+                        vec![
+                            s_throw(e_new("ValueError", vec![e_str("mysqli_result::field_seek(): Argument #1 ($index) must be less than the number of fields for this result set")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_prop_assign(e_this(), "current_field", e_var("index")),
                     s_return(e_bool(true)),
-                ]),
-        )
-        .method(
-            method("field_tell")
-                .returns(TypeExpr::Int)
-                .body(vec![
-                    s_return(e_this_prop("fieldPos")),
                 ]),
         )
         .method(
             method("close")
                 .returns(TypeExpr::Void)
                 .body(vec![
-                    // Drop the buffered cells; further fetches see an exhausted cursor.
                     s_prop_assign(e_this(), "cells", e_array(vec![])),
                     s_prop_assign(e_this(), "rowCount", e_int(0)),
                     s_prop_assign(e_this(), "num_rows", e_int(0)),
@@ -466,9 +528,30 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                     s_return(e_new("__ElephcMysqliResultIterator", vec![e_this()])),
                 ]),
         )
-        // php-src type_to_name_native reversed: the bridge reports MySQL's own wire-type names;
-        // map them onto the MYSQLI_TYPE_* integers with MYSQLI_TYPE_STRING as the default for
-        // anything unrecognized.
+        .method(
+            method("fieldObject")
+                .private()
+                .param("index", TypeExpr::Int)
+                .returns(t_class("stdClass"))
+                .body(vec![
+                    s_assign("_type", e_method_call(e_this(), "mysqliTypeFromNative", vec![e_cast(CastType::String, e_index(e_this_prop("metaNativeTypes"), e_var("index")))])),
+                    s_assign("_field", e_new("stdClass", vec![])),
+                    s_expr(e_assign(e_dyn_prop(e_var("_field"), e_str("name")), e_cast(CastType::String, e_index(e_this_prop("names"), e_var("index"))))),
+                    s_expr(e_assign(e_dyn_prop(e_var("_field"), e_str("orgname")), e_cast(CastType::String, e_index(e_this_prop("names"), e_var("index"))))),
+                    s_expr(e_assign(e_dyn_prop(e_var("_field"), e_str("table")), e_cast(CastType::String, e_index(e_this_prop("metaTables"), e_var("index"))))),
+                    s_expr(e_assign(e_dyn_prop(e_var("_field"), e_str("orgtable")), e_cast(CastType::String, e_index(e_this_prop("metaTables"), e_var("index"))))),
+                    s_expr(e_assign(e_dyn_prop(e_var("_field"), e_str("def")), e_str(""))),
+                    s_expr(e_assign(e_dyn_prop(e_var("_field"), e_str("db")), e_str(""))),
+                    s_expr(e_assign(e_dyn_prop(e_var("_field"), e_str("catalog")), e_str("def"))),
+                    s_expr(e_assign(e_dyn_prop(e_var("_field"), e_str("max_length")), e_int(0))),
+                    s_expr(e_assign(e_dyn_prop(e_var("_field"), e_str("length")), e_cast(CastType::Int, e_index(e_this_prop("metaLens"), e_var("index"))))),
+                    s_expr(e_assign(e_dyn_prop(e_var("_field"), e_str("charsetnr")), e_int(0))),
+                    s_expr(e_assign(e_dyn_prop(e_var("_field"), e_str("flags")), e_cast(CastType::Int, e_index(e_this_prop("metaFlags"), e_var("index"))))),
+                    s_expr(e_assign(e_dyn_prop(e_var("_field"), e_str("type")), e_var("_type"))),
+                    s_expr(e_assign(e_dyn_prop(e_var("_field"), e_str("decimals")), e_cast(CastType::Int, e_index(e_this_prop("metaDecimals"), e_var("index"))))),
+                    s_return(e_var("_field")),
+                ]),
+        )
         .method(
             method("mysqliTypeFromNative")
                 .private()
@@ -612,6 +695,14 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                         None,
                     ),
                     s_if(
+                        e_binop(e_var("native"), BinOp::StrictEq, e_str("VECTOR")),
+                        vec![
+                            s_return(e_int(242)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
                         e_binop(e_var("native"), BinOp::StrictEq, e_str("JSON")),
                         vec![
                             s_return(e_int(245)),
@@ -707,8 +798,6 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
 
 /// `__ElephcMysqliResultIterator` — transcribed from the PHP form.
 pub(super) fn decl_class_elephcmysqliresultiterator() -> Stmt {
-    // Iterator behind mysqli_result::getIterator(): assoc rows keyed by position, starting from
-    // row 0 regardless of the fetch cursor (rewind() seeks).
     class("__ElephcMysqliResultIterator")
         .final_()
         .implements("Iterator")
@@ -728,7 +817,14 @@ pub(super) fn decl_class_elephcmysqliresultiterator() -> Stmt {
             method("rewind")
                 .returns(TypeExpr::Void)
                 .body(vec![
-                    s_expr(e_method_call(e_this_prop("result"), "data_seek", vec![e_int(0)])),
+                    s_if(
+                        e_binop(e_prop(e_this_prop("result"), "type"), BinOp::Eq, e_int(0)),
+                        vec![
+                            s_expr(e_method_call(e_this_prop("result"), "data_seek", vec![e_int(0)])),
+                        ],
+                        vec![],
+                        None,
+                    ),
                     s_prop_assign(e_this(), "row", e_method_call(e_this_prop("result"), "fetch_assoc", vec![])),
                     s_prop_assign(e_this(), "position", e_int(0)),
                 ]),

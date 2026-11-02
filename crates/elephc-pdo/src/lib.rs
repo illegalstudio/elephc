@@ -589,6 +589,14 @@ fn mysql_charset_cell() -> &'static LocalKey<RefCell<CString>> {
     &C
 }
 
+/// Per-thread buffer for the most recent `elephc_pdo_mysql_info` result.
+fn mysql_info_cell() -> &'static LocalKey<RefCell<CString>> {
+    thread_local! {
+        static C: RefCell<CString> = RefCell::new(CString::default());
+    }
+    &C
+}
+
 /// Per-thread buffer for the most recent `elephc_pdo_connection_status` result.
 fn connection_status_cell() -> &'static LocalKey<RefCell<CString>> {
     thread_local! {
@@ -2850,6 +2858,85 @@ pub extern "C" fn elephc_pdo_mysql_charset(conn_id: i64) -> *const c_char {
         match guard.get(&conn_id) {
             Some(Conn::Mysql(c)) => store_cstr(mysql_charset_cell(), c.charset()),
             _ => static_cstr(b"\0"),
+        }
+    })
+}
+
+/// Returns the info string of the connection's last OK packet ("Records: 3
+/// Duplicates: 0  Warnings: 0", "Rows matched: 1  Changed: 1  Warnings: 0"), backing
+/// the mysqli surface's `$info` / `mysqli_info()`. Empty for a non-MySQL or unknown
+/// handle, or when the server sent no info.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_info(conn_id: i64) -> *const c_char {
+    ffi_guard(static_cstr(b"\0"), || {
+        let guard = lock_recover(conns());
+        match guard.get(&conn_id) {
+            Some(Conn::Mysql(c)) => store_cstr(mysql_info_cell(), &c.info()),
+            _ => static_cstr(b"\0"),
+        }
+    })
+}
+
+/// Returns the linked MySQL client's implementation/version string with no
+/// connection, backing `mysqli_get_client_info()`, `mysqli::$client_info`, and
+/// `mysqli_driver::$client_info` (php reports the client library, not a server).
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_client_info() -> *const c_char {
+    ffi_guard(static_cstr(b"\0"), || store_cstr(mysql_info_cell(), my::MYSQL_CLIENT_INFO))
+}
+
+/// Sends a real `COM_PING` on a MySQL connection, backing `mysqli::ping()`.
+/// `1` on success, `-1` on failure (error state recorded on the connection) or for
+/// a non-MySQL or unknown handle.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_ping(conn_id: i64) -> i64 {
+    ffi_guard(-1, || {
+        let mut guard = lock_recover(conns());
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Mysql(c)) => c.ping(),
+            _ => -1,
+        }
+    })
+}
+
+/// Sends `COM_CHANGE_USER` on a MySQL connection, backing `mysqli::change_user()`.
+/// `has_db` is `0` for a `null` database (keep none selected) and non-zero to select
+/// `db`. `1` on success, `-1` on failure (error state recorded) or for a non-MySQL
+/// or unknown handle.
+///
+/// # Safety
+/// `user`, `pass`, and `db` must each point to a NUL-terminated string valid for the
+/// duration of the call (or be null, read as `""`).
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_mysql_change_user(
+    conn_id: i64,
+    user: *const c_char,
+    pass: *const c_char,
+    db: *const c_char,
+    has_db: i64,
+) -> i64 {
+    ffi_guard(-1, || {
+        let user = cstr_arg(user).unwrap_or("");
+        let pass = cstr_arg(pass).unwrap_or("");
+        let db = if has_db != 0 { Some(cstr_arg(db).unwrap_or("")) } else { None };
+        let mut guard = lock_recover(conns());
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Mysql(c)) => c.change_user(user, pass, db),
+            _ => -1,
+        }
+    })
+}
+
+/// Returns the server-side id of a natively prepared MySQL statement, backing
+/// `mysqli_stmt::$id`. `0` for an emulated statement, `-1` for a non-MySQL or
+/// unknown statement handle.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_stmt_id(stmt_id: i64) -> i64 {
+    ffi_guard(-1, || {
+        let guard = lock_recover(stmts());
+        match guard.get(&stmt_id) {
+            Some(Stmt::Mysql(s)) => s.server_statement_id(),
+            _ => -1,
         }
     })
 }

@@ -115,10 +115,12 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
     // The mysqli prelude is a second bridge surface built as Rust AST like the others; the
     // gate must cover its `__elephc_*` internal-alias discipline too. The shared `elephc_pdo`
     // extern block declares only symbols and calls nothing, and the PDO build above already
-    // carries it, so it needs no separate entry.
+    // carries it, so it needs no separate entry. The NEWEST profile is audited: the mysqli
+    // surface only ever grows (`mysqli_quote_string` is PHP 8.6+), so it declares every
+    // contracted function.
     built.push((
         "mysqli_prelude",
-        crate::mysqli_prelude::build::mysqli_declarations(crate::php_version::PhpVersion::default()),
+        crate::mysqli_prelude::build::mysqli_declarations(crate::php_version::PhpVersion::Php86),
     ));
     built
 }

@@ -1,42 +1,28 @@
 //! Purpose:
-//! Builds the `mysqli_*` procedural aliases as AST. Every alias is an ordinary
-//! PHP function forwarding to the `mysqli` / `mysqli_result` / `mysqli_stmt`
-//! object, so `function_exists('mysqli_query')` is true once the prelude is
-//! injected.
+//! Builds the `mysqli_*` procedural aliases as AST — ordinary functions
+//! forwarding to the `mysqli` / `mysqli_result` / `mysqli_stmt` objects, so
+//! `function_exists('mysqli_query')` is true once the prelude is injected.
 //!
 //! Called from:
-//! - `crate::mysqli_prelude::build::mysqli_declarations`.
+//! - `crate::mysqli_prelude::build::mysqli_declarations`, which also applies the
+//!   version gates (`mysqli_fetch_column` 8.1+, `mysqli_execute_query` 8.2+,
+//!   `mysqli_quote_string` 8.6+).
 //!
 //! Key details:
 //! - TRANSCRIBED from `mysqli_prelude::procedural::SRC` (`synthetic_class::transcribe`);
-//!   the oracle `built_declarations_match_the_php_for_every_version` compares each
-//!   built function against that PHP for every profile.
-//! - Link/result parameters are declared `mixed` and validated with an inline
-//!   `instanceof` guard that throws `TypeError` (PHP's own runtime behavior).
-//!   This is deliberate: `mysqli_query()` returns `mysqli_result|bool`, and an
-//!   `instanceof`-narrowed union local passed to a typed object PARAMETER is
-//!   miscompiled by the current checker/lowering split (the box is passed, not
-//!   the pointer) — while a narrowed value used as a method RECEIVER lowers
-//!   correctly. Validation helpers therefore cannot RETURN the narrowed object;
-//!   every alias guards inline (instanceof-narrow, throw TypeError otherwise,
-//!   then forward on the narrowed receiver). The guard keeps the classic
-//!   procedural pipeline (`mysqli_query` → `mysqli_num_rows`) working and
-//!   failing loudly.
-//! - elephc always requires the explicit link argument, including under
-//!   `--php-version=8.0` (PHP 8.0's implicit last-link is a documented
-//!   divergence; PHP 8.1+ requires the object anyway).
-//! - `mysqli_connect_errno()` / `mysqli_connect_error()` take no link and read
-//!   the process-wide last-connect statics on `mysqli`, exactly like PHP.
-//! - `mysqli_report()` lives in `exception.rs` next to the flag store; the
-//!   version-gated aliases (`mysqli_fetch_column` 8.1+, `mysqli_execute_query`
-//!   8.2+) are selected by the aggregator in `build.rs`.
+//!   the oracle compares each built node against that PHP.
+//! - Link/result/statement parameters are `mixed` and validated with an inline
+//!   `instanceof` guard that throws `TypeError` (see the PHP fragment).
 
-use crate::parser::ast::{BinOp, TypeExpr, Stmt};
+use crate::parser::ast::{BinOp, CastType, TypeExpr, Stmt};
 use crate::synthetic_class::{
+    closure,
     e_array,
+    e_array_assoc,
     e_binop,
     e_bool,
     e_call,
+    e_cast,
     e_index,
     e_instance_of,
     e_int,
@@ -44,16 +30,21 @@ use crate::synthetic_class::{
     e_new,
     e_not,
     e_null,
+    e_null_coalesce,
     e_post_inc,
     e_prop,
+    e_static_call,
     e_static_prop,
     e_str,
+    e_ternary,
     e_var,
     function,
+    s_array_assign,
     s_array_push,
     s_assign,
     s_expr,
     s_for,
+    s_foreach,
     s_if,
     s_return,
     s_throw,
@@ -75,9 +66,6 @@ pub(super) fn decl_fn_mysqli_connect() -> Stmt {
         .param_default("socket", t_nullable(TypeExpr::Str), e_null())
         .returns(t_union(vec![t_class("mysqli"), TypeExpr::False]))
         .body(vec![
-            // Unlike the argument-less constructor, procedural mysqli_connect() always attempts
-            // the connection (php-src behavior; null arguments take their defaults inside
-            // real_connect).
             s_assign("_link", e_new("mysqli", vec![])),
             s_if(
                 e_method_call(e_var("_link"), "real_connect", vec![e_var("hostname"), e_var("username"), e_var("password"), e_var("database"), e_var("port"), e_var("socket"), e_int(0)]),
@@ -265,6 +253,26 @@ pub(super) fn decl_fn_mysqli_escape_string() -> Stmt {
         .build()
 }
 
+/// `mysqli_quote_string` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_quote_string() -> Stmt {
+    function("mysqli_quote_string")
+        .param("mysql", t_mixed())
+        .param("string", TypeExpr::Str)
+        .returns(TypeExpr::Str)
+        .body(vec![
+            s_if(
+                e_not(e_instance_of(e_var("mysql"), "mysqli")),
+                vec![
+                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_quote_string(): Argument #1 ($mysql) must be of type mysqli, "), BinOp::Concat, e_call("gettype", vec![e_var("mysql")])), BinOp::Concat, e_str(" given"))])),
+                ],
+                vec![],
+                None,
+            ),
+            s_return(e_binop(e_binop(e_str("'"), BinOp::Concat, e_method_call(e_var("mysql"), "real_escape_string", vec![e_var("string")])), BinOp::Concat, e_str("'"))),
+        ])
+        .build()
+}
+
 /// `mysqli_begin_transaction` — transcribed from the PHP form.
 pub(super) fn decl_fn_mysqli_begin_transaction() -> Stmt {
     function("mysqli_begin_transaction")
@@ -430,6 +438,123 @@ pub(super) fn decl_fn_mysqli_set_opt() -> Stmt {
         .build()
 }
 
+/// `mysqli_ssl_set` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_ssl_set() -> Stmt {
+    function("mysqli_ssl_set")
+        .param("mysql", t_mixed())
+        .param("key", t_nullable(TypeExpr::Str))
+        .param("certificate", t_nullable(TypeExpr::Str))
+        .param("ca_certificate", t_nullable(TypeExpr::Str))
+        .param("ca_path", t_nullable(TypeExpr::Str))
+        .param("cipher_algos", t_nullable(TypeExpr::Str))
+        .returns(TypeExpr::Bool)
+        .body(vec![
+            s_if(
+                e_not(e_instance_of(e_var("mysql"), "mysqli")),
+                vec![
+                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_ssl_set(): Argument #1 ($mysql) must be of type mysqli, "), BinOp::Concat, e_call("gettype", vec![e_var("mysql")])), BinOp::Concat, e_str(" given"))])),
+                ],
+                vec![],
+                None,
+            ),
+            s_return(e_method_call(e_var("mysql"), "ssl_set", vec![e_var("key"), e_var("certificate"), e_var("ca_certificate"), e_var("ca_path"), e_var("cipher_algos")])),
+        ])
+        .build()
+}
+
+/// `mysqli_change_user` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_change_user() -> Stmt {
+    function("mysqli_change_user")
+        .param("mysql", t_mixed())
+        .param("username", TypeExpr::Str)
+        .param("password", TypeExpr::Str)
+        .param("database", t_nullable(TypeExpr::Str))
+        .returns(TypeExpr::Bool)
+        .body(vec![
+            s_if(
+                e_not(e_instance_of(e_var("mysql"), "mysqli")),
+                vec![
+                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_change_user(): Argument #1 ($mysql) must be of type mysqli, "), BinOp::Concat, e_call("gettype", vec![e_var("mysql")])), BinOp::Concat, e_str(" given"))])),
+                ],
+                vec![],
+                None,
+            ),
+            s_return(e_method_call(e_var("mysql"), "change_user", vec![e_var("username"), e_var("password"), e_var("database")])),
+        ])
+        .build()
+}
+
+/// `mysqli_kill` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_kill() -> Stmt {
+    function("mysqli_kill")
+        .param("mysql", t_mixed())
+        .param("process_id", TypeExpr::Int)
+        .returns(TypeExpr::Bool)
+        .body(vec![
+            s_if(
+                e_not(e_instance_of(e_var("mysql"), "mysqli")),
+                vec![
+                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_kill(): Argument #1 ($mysql) must be of type mysqli, "), BinOp::Concat, e_call("gettype", vec![e_var("mysql")])), BinOp::Concat, e_str(" given"))])),
+                ],
+                vec![],
+                None,
+            ),
+            s_return(e_method_call(e_var("mysql"), "kill", vec![e_var("process_id")])),
+        ])
+        .build()
+}
+
+/// `mysqli_refresh` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_refresh() -> Stmt {
+    function("mysqli_refresh")
+        .param("mysql", t_mixed())
+        .param("flags", TypeExpr::Int)
+        .returns(TypeExpr::Bool)
+        .body(vec![
+            s_if(
+                e_not(e_instance_of(e_var("mysql"), "mysqli")),
+                vec![
+                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_refresh(): Argument #1 ($mysql) must be of type mysqli, "), BinOp::Concat, e_call("gettype", vec![e_var("mysql")])), BinOp::Concat, e_str(" given"))])),
+                ],
+                vec![],
+                None,
+            ),
+            s_return(e_method_call(e_var("mysql"), "refresh", vec![e_var("flags")])),
+        ])
+        .build()
+}
+
+/// `mysqli_dump_debug_info` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_dump_debug_info() -> Stmt {
+    function("mysqli_dump_debug_info")
+        .param("mysql", t_mixed())
+        .returns(TypeExpr::Bool)
+        .body(vec![
+            s_if(
+                e_not(e_instance_of(e_var("mysql"), "mysqli")),
+                vec![
+                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_dump_debug_info(): Argument #1 ($mysql) must be of type mysqli, "), BinOp::Concat, e_call("gettype", vec![e_var("mysql")])), BinOp::Concat, e_str(" given"))])),
+                ],
+                vec![],
+                None,
+            ),
+            s_return(e_method_call(e_var("mysql"), "dump_debug_info", vec![])),
+        ])
+        .build()
+}
+
+/// `mysqli_debug` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_debug() -> Stmt {
+    function("mysqli_debug")
+        .param("options", TypeExpr::Str)
+        .returns(TypeExpr::Bool)
+        .body(vec![
+            s_assign("_ignoredOptions", e_var("options")),
+            s_return(e_bool(true)),
+        ])
+        .build()
+}
+
 /// `mysqli_get_server_info` — transcribed from the PHP form.
 pub(super) fn decl_fn_mysqli_get_server_info() -> Stmt {
     function("mysqli_get_server_info")
@@ -452,18 +577,41 @@ pub(super) fn decl_fn_mysqli_get_server_info() -> Stmt {
 /// `mysqli_get_client_info` — transcribed from the PHP form.
 pub(super) fn decl_fn_mysqli_get_client_info() -> Stmt {
     function("mysqli_get_client_info")
-        .param("mysql", t_mixed())
+        .param_default("mysql", t_mixed(), e_null())
         .returns(TypeExpr::Str)
         .body(vec![
             s_if(
-                e_not(e_instance_of(e_var("mysql"), "mysqli")),
+                e_binop(e_binop(e_var("mysql"), BinOp::StrictNotEq, e_null()), BinOp::And, e_not(e_instance_of(e_var("mysql"), "mysqli"))),
                 vec![
-                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_get_client_info(): Argument #1 ($mysql) must be of type mysqli, "), BinOp::Concat, e_call("gettype", vec![e_var("mysql")])), BinOp::Concat, e_str(" given"))])),
+                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_get_client_info(): Argument #1 ($mysql) must be of type ?mysqli, "), BinOp::Concat, e_call("gettype", vec![e_var("mysql")])), BinOp::Concat, e_str(" given"))])),
                 ],
                 vec![],
                 None,
             ),
-            s_return(e_method_call(e_var("mysql"), "get_client_info", vec![])),
+            s_return(e_call("elephc_pdo_mysql_client_info", vec![])),
+        ])
+        .build()
+}
+
+/// `mysqli_get_client_version` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_get_client_version() -> Stmt {
+    function("mysqli_get_client_version")
+        .returns(TypeExpr::Int)
+        .body(vec![
+            s_assign("_version", e_call("elephc_pdo_mysql_client_info", vec![])),
+            s_if(
+                e_call("str_starts_with", vec![e_var("_version"), e_str("mysql ")]),
+                vec![
+                    s_assign("_version", e_call("substr", vec![e_var("_version"), e_int(6)])),
+                ],
+                vec![],
+                None,
+            ),
+            s_assign("_parts", e_call("explode", vec![e_str("."), e_var("_version")])),
+            s_assign("_major", e_cast(CastType::Int, e_index(e_var("_parts"), e_int(0)))),
+            s_assign("_minor", e_ternary(e_binop(e_call("count", vec![e_var("_parts")]), BinOp::Gt, e_int(1)), e_cast(CastType::Int, e_index(e_var("_parts"), e_int(1))), e_int(0))),
+            s_assign("_patch", e_ternary(e_binop(e_call("count", vec![e_var("_parts")]), BinOp::Gt, e_int(2)), e_cast(CastType::Int, e_index(e_var("_parts"), e_int(2))), e_int(0))),
+            s_return(e_binop(e_binop(e_binop(e_var("_major"), BinOp::Mul, e_int(10000)), BinOp::Add, e_binop(e_var("_minor"), BinOp::Mul, e_int(100))), BinOp::Add, e_var("_patch"))),
         ])
         .build()
 }
@@ -482,7 +630,7 @@ pub(super) fn decl_fn_mysqli_get_host_info() -> Stmt {
                 vec![],
                 None,
             ),
-            s_return(e_method_call(e_var("mysql"), "get_host_info", vec![])),
+            s_return(e_prop(e_var("mysql"), "host_info")),
         ])
         .build()
 }
@@ -501,7 +649,7 @@ pub(super) fn decl_fn_mysqli_get_proto_info() -> Stmt {
                 vec![],
                 None,
             ),
-            s_return(e_method_call(e_var("mysql"), "get_proto_info", vec![])),
+            s_return(e_prop(e_var("mysql"), "protocol_version")),
         ])
         .build()
 }
@@ -520,26 +668,75 @@ pub(super) fn decl_fn_mysqli_get_server_version() -> Stmt {
                 vec![],
                 None,
             ),
-            s_return(e_method_call(e_var("mysql"), "get_server_version", vec![])),
+            s_return(e_prop(e_var("mysql"), "server_version")),
         ])
         .build()
 }
 
-/// `mysqli_get_client_version` — transcribed from the PHP form.
-pub(super) fn decl_fn_mysqli_get_client_version() -> Stmt {
-    function("mysqli_get_client_version")
+/// `mysqli_get_connection_stats` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_get_connection_stats() -> Stmt {
+    function("mysqli_get_connection_stats")
         .param("mysql", t_mixed())
-        .returns(TypeExpr::Int)
+        .returns(t_array())
         .body(vec![
             s_if(
                 e_not(e_instance_of(e_var("mysql"), "mysqli")),
                 vec![
-                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_get_client_version(): Argument #1 ($mysql) must be of type mysqli, "), BinOp::Concat, e_call("gettype", vec![e_var("mysql")])), BinOp::Concat, e_str(" given"))])),
+                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_get_connection_stats(): Argument #1 ($mysql) must be of type mysqli, "), BinOp::Concat, e_call("gettype", vec![e_var("mysql")])), BinOp::Concat, e_str(" given"))])),
                 ],
                 vec![],
                 None,
             ),
-            s_return(e_method_call(e_var("mysql"), "get_client_version", vec![])),
+            s_assign("_out", e_array(vec![])),
+            s_foreach(e_method_call(e_var("mysql"), "get_connection_stats", vec![]), Some("_key"), "_value", vec![
+                s_array_assign("_out", e_cast(CastType::String, e_var("_key")), e_cast(CastType::String, e_var("_value"))),
+            ]),
+            s_return(e_var("_out")),
+        ])
+        .build()
+}
+
+/// `mysqli_get_client_stats` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_get_client_stats() -> Stmt {
+    function("mysqli_get_client_stats")
+        .returns(t_array())
+        .body(vec![
+            s_assign("_counters", e_static_prop("mysqli", "clientStats")),
+            s_assign("_out", e_array(vec![])),
+            s_foreach(e_static_call("mysqli", "__elephcStatKeys", vec![]), None, "_key", vec![
+                s_assign("_name", e_cast(CastType::String, e_var("_key"))),
+                s_array_assign("_out", e_var("_name"), e_cast(CastType::String, e_null_coalesce(e_index(e_var("_counters"), e_var("_name")), e_int(0)))),
+            ]),
+            s_return(e_var("_out")),
+        ])
+        .build()
+}
+
+/// `mysqli_get_links_stats` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_get_links_stats() -> Stmt {
+    function("mysqli_get_links_stats")
+        .returns(t_array())
+        .body(vec![
+            s_return(e_array_assoc(vec![(e_str("total"), e_static_prop("mysqli", "openLinks")), (e_str("active_plinks"), e_static_prop("mysqli", "openPersistentLinks")), (e_str("cached_plinks"), e_int(0))])),
+        ])
+        .build()
+}
+
+/// `mysqli_get_warnings` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_get_warnings() -> Stmt {
+    function("mysqli_get_warnings")
+        .param("mysql", t_mixed())
+        .returns(t_union(vec![t_class("mysqli_warning"), TypeExpr::False]))
+        .body(vec![
+            s_if(
+                e_not(e_instance_of(e_var("mysql"), "mysqli")),
+                vec![
+                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_get_warnings(): Argument #1 ($mysql) must be of type mysqli, "), BinOp::Concat, e_call("gettype", vec![e_var("mysql")])), BinOp::Concat, e_str(" given"))])),
+                ],
+                vec![],
+                None,
+            ),
+            s_return(e_method_call(e_var("mysql"), "get_warnings", vec![])),
         ])
         .build()
 }
@@ -776,14 +973,6 @@ pub(super) fn decl_fn_mysqli_info() -> Stmt {
                 vec![],
                 None,
             ),
-            s_if(
-                e_binop(e_prop(e_var("mysql"), "info"), BinOp::StrictEq, e_str("")),
-                vec![
-                    s_return(e_null()),
-                ],
-                vec![],
-                None,
-            ),
             s_return(e_prop(e_var("mysql"), "info")),
         ])
         .build()
@@ -927,6 +1116,40 @@ pub(super) fn decl_fn_mysqli_use_result() -> Stmt {
         .build()
 }
 
+/// `mysqli_reap_async_query` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_reap_async_query() -> Stmt {
+    function("mysqli_reap_async_query")
+        .param("mysql", t_mixed())
+        .returns(t_union(vec![t_class("mysqli_result"), TypeExpr::Bool]))
+        .body(vec![
+            s_if(
+                e_not(e_instance_of(e_var("mysql"), "mysqli")),
+                vec![
+                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_reap_async_query(): Argument #1 ($mysql) must be of type mysqli, "), BinOp::Concat, e_call("gettype", vec![e_var("mysql")])), BinOp::Concat, e_str(" given"))])),
+                ],
+                vec![],
+                None,
+            ),
+            s_return(e_method_call(e_var("mysql"), "reap_async_query", vec![])),
+        ])
+        .build()
+}
+
+/// `mysqli_poll` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_poll() -> Stmt {
+    function("mysqli_poll")
+        .param_by_ref("read", Some(t_array()))
+        .param_by_ref("error", Some(t_array()))
+        .param_by_ref("reject", Some(t_array()))
+        .param("seconds", TypeExpr::Int)
+        .param_default("microseconds", TypeExpr::Int, e_int(0))
+        .returns(t_union(vec![TypeExpr::Int, TypeExpr::False]))
+        .body(vec![
+            s_return(e_static_call("mysqli", "poll", vec![e_var("read"), e_var("error"), e_var("reject"), e_var("seconds"), e_var("microseconds")])),
+        ])
+        .build()
+}
+
 /// `mysqli_fetch_assoc` — transcribed from the PHP form.
 pub(super) fn decl_fn_mysqli_fetch_assoc() -> Stmt {
     function("mysqli_fetch_assoc")
@@ -1060,6 +1283,14 @@ pub(super) fn decl_fn_mysqli_num_rows() -> Stmt {
                 vec![],
                 None,
             ),
+            s_if(
+                e_binop(e_prop(e_var("result"), "type"), BinOp::Eq, e_int(1)),
+                vec![
+                    s_throw(e_new("Error", vec![e_str("mysqli_num_rows() cannot be used in MYSQLI_USE_RESULT mode")])),
+                ],
+                vec![],
+                None,
+            ),
             s_return(e_prop(e_var("result"), "num_rows")),
         ])
         .build()
@@ -1162,6 +1393,73 @@ pub(super) fn decl_fn_mysqli_fetch_field_direct() -> Stmt {
         .build()
 }
 
+/// `mysqli_fetch_lengths` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_fetch_lengths() -> Stmt {
+    function("mysqli_fetch_lengths")
+        .param("result", t_mixed())
+        .returns(t_union(vec![t_array(), TypeExpr::False]))
+        .body(vec![
+            s_if(
+                e_not(e_instance_of(e_var("result"), "mysqli_result")),
+                vec![
+                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_fetch_lengths(): Argument #1 ($result) must be of type mysqli_result, "), BinOp::Concat, e_call("gettype", vec![e_var("result")])), BinOp::Concat, e_str(" given"))])),
+                ],
+                vec![],
+                None,
+            ),
+            s_assign("_lengths", e_prop(e_var("result"), "lengths")),
+            s_if(
+                e_binop(e_var("_lengths"), BinOp::StrictEq, e_null()),
+                vec![
+                    s_return(e_bool(false)),
+                ],
+                vec![],
+                None,
+            ),
+            s_return(e_var("_lengths")),
+        ])
+        .build()
+}
+
+/// `mysqli_field_seek` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_field_seek() -> Stmt {
+    function("mysqli_field_seek")
+        .param("result", t_mixed())
+        .param("index", TypeExpr::Int)
+        .returns(TypeExpr::Bool)
+        .body(vec![
+            s_if(
+                e_not(e_instance_of(e_var("result"), "mysqli_result")),
+                vec![
+                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_field_seek(): Argument #1 ($result) must be of type mysqli_result, "), BinOp::Concat, e_call("gettype", vec![e_var("result")])), BinOp::Concat, e_str(" given"))])),
+                ],
+                vec![],
+                None,
+            ),
+            s_return(e_method_call(e_var("result"), "field_seek", vec![e_var("index")])),
+        ])
+        .build()
+}
+
+/// `mysqli_field_tell` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_field_tell() -> Stmt {
+    function("mysqli_field_tell")
+        .param("result", t_mixed())
+        .returns(TypeExpr::Int)
+        .body(vec![
+            s_if(
+                e_not(e_instance_of(e_var("result"), "mysqli_result")),
+                vec![
+                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_field_tell(): Argument #1 ($result) must be of type mysqli_result, "), BinOp::Concat, e_call("gettype", vec![e_var("result")])), BinOp::Concat, e_str(" given"))])),
+                ],
+                vec![],
+                None,
+            ),
+            s_return(e_prop(e_var("result"), "current_field")),
+        ])
+        .build()
+}
+
 /// `mysqli_free_result` — transcribed from the PHP form.
 pub(super) fn decl_fn_mysqli_free_result() -> Stmt {
     function("mysqli_free_result")
@@ -1222,6 +1520,25 @@ pub(super) fn decl_fn_mysqli_execute_query() -> Stmt {
         .build()
 }
 
+/// `mysqli_stmt_init` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_stmt_init() -> Stmt {
+    function("mysqli_stmt_init")
+        .param("mysql", t_mixed())
+        .returns(t_union(vec![t_class("mysqli_stmt"), TypeExpr::False]))
+        .body(vec![
+            s_if(
+                e_not(e_instance_of(e_var("mysql"), "mysqli")),
+                vec![
+                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_stmt_init(): Argument #1 ($mysql) must be of type mysqli, "), BinOp::Concat, e_call("gettype", vec![e_var("mysql")])), BinOp::Concat, e_str(" given"))])),
+                ],
+                vec![],
+                None,
+            ),
+            s_return(e_method_call(e_var("mysql"), "stmt_init", vec![])),
+        ])
+        .build()
+}
+
 /// `mysqli_stmt_bind_param` — transcribed from the PHP form.
 pub(super) fn decl_fn_mysqli_stmt_bind_param() -> Stmt {
     function("mysqli_stmt_bind_param")
@@ -1238,16 +1555,48 @@ pub(super) fn decl_fn_mysqli_stmt_bind_param() -> Stmt {
                 vec![],
                 None,
             ),
-            // Same bind-time value capture as the method (forwarding `...$vars` into bind_param is
-            // rejected: a by-ref variadic cannot take spread arguments); the checker's mysqli
-            // friend channel lets this alias reach the private helper. See statement.rs for the
-            // documented divergence from PHP's read-at-execute reference semantics.
-            s_assign("_values", e_array(vec![])),
-            s_assign("_given", e_call("count", vec![e_var("vars")])),
-            s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_var("_given"))), Some(s_expr(e_post_inc("_i"))), vec![
-                s_array_push("_values", e_index(e_var("vars"), e_var("_i"))),
-            ]),
-            s_return(e_method_call(e_var("statement"), "__elephcBindParamValues", vec![e_var("types"), e_var("_values")])),
+            s_return(e_method_call(e_var("statement"), "__elephcBindParamReader", vec![e_str("mysqli_stmt_bind_param"), e_int(2), e_var("types"), e_call("count", vec![e_var("vars")]), closure()
+                .captures_ref("vars")
+                .returns(t_array())
+                .body(vec![
+                    s_assign("_values", e_array(vec![])),
+                    s_assign("_n", e_call("count", vec![e_var("vars")])),
+                    s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_var("_n"))), Some(s_expr(e_post_inc("_i"))), vec![
+                        s_array_push("_values", e_index(e_var("vars"), e_var("_i"))),
+                    ]),
+                    s_return(e_var("_values")),
+                ])
+                .build()])),
+        ])
+        .build()
+}
+
+/// `mysqli_stmt_bind_result` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_stmt_bind_result() -> Stmt {
+    function("mysqli_stmt_bind_result")
+        .param("statement", t_mixed())
+        .variadic_by_ref("vars", Some(t_mixed()))
+        .returns(TypeExpr::Bool)
+        .body(vec![
+            s_if(
+                e_not(e_instance_of(e_var("statement"), "mysqli_stmt")),
+                vec![
+                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_stmt_bind_result(): Argument #1 ($statement) must be of type mysqli_stmt, "), BinOp::Concat, e_call("gettype", vec![e_var("statement")])), BinOp::Concat, e_str(" given"))])),
+                ],
+                vec![],
+                None,
+            ),
+            s_return(e_method_call(e_var("statement"), "__elephcBindResultWriter", vec![e_call("count", vec![e_var("vars")]), closure()
+                .param("row", t_array())
+                .captures_ref("vars")
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_assign("_n", e_call("count", vec![e_var("vars")])),
+                    s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_var("_n"))), Some(s_expr(e_post_inc("_i"))), vec![
+                        s_array_assign("vars", e_var("_i"), e_index(e_var("row"), e_var("_i"))),
+                    ]),
+                ])
+                .build()])),
         ])
         .build()
 }
@@ -1268,6 +1617,65 @@ pub(super) fn decl_fn_mysqli_stmt_execute() -> Stmt {
                 None,
             ),
             s_return(e_method_call(e_var("statement"), "execute", vec![e_var("params")])),
+        ])
+        .build()
+}
+
+/// `mysqli_execute` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_execute() -> Stmt {
+    function("mysqli_execute")
+        .param("statement", t_mixed())
+        .param_default("params", t_nullable(t_array()), e_null())
+        .returns(TypeExpr::Bool)
+        .body(vec![
+            s_if(
+                e_not(e_instance_of(e_var("statement"), "mysqli_stmt")),
+                vec![
+                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_execute(): Argument #1 ($statement) must be of type mysqli_stmt, "), BinOp::Concat, e_call("gettype", vec![e_var("statement")])), BinOp::Concat, e_str(" given"))])),
+                ],
+                vec![],
+                None,
+            ),
+            s_return(e_method_call(e_var("statement"), "execute", vec![e_var("params")])),
+        ])
+        .build()
+}
+
+/// `mysqli_stmt_prepare` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_stmt_prepare() -> Stmt {
+    function("mysqli_stmt_prepare")
+        .param("statement", t_mixed())
+        .param("query", TypeExpr::Str)
+        .returns(TypeExpr::Bool)
+        .body(vec![
+            s_if(
+                e_not(e_instance_of(e_var("statement"), "mysqli_stmt")),
+                vec![
+                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_stmt_prepare(): Argument #1 ($statement) must be of type mysqli_stmt, "), BinOp::Concat, e_call("gettype", vec![e_var("statement")])), BinOp::Concat, e_str(" given"))])),
+                ],
+                vec![],
+                None,
+            ),
+            s_return(e_method_call(e_var("statement"), "prepare", vec![e_var("query")])),
+        ])
+        .build()
+}
+
+/// `mysqli_stmt_fetch` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_stmt_fetch() -> Stmt {
+    function("mysqli_stmt_fetch")
+        .param("statement", t_mixed())
+        .returns(t_nullable(TypeExpr::Bool))
+        .body(vec![
+            s_if(
+                e_not(e_instance_of(e_var("statement"), "mysqli_stmt")),
+                vec![
+                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_stmt_fetch(): Argument #1 ($statement) must be of type mysqli_stmt, "), BinOp::Concat, e_call("gettype", vec![e_var("statement")])), BinOp::Concat, e_str(" given"))])),
+                ],
+                vec![],
+                None,
+            ),
+            s_return(e_method_call(e_var("statement"), "fetch", vec![])),
         ])
         .build()
 }
@@ -1310,6 +1718,164 @@ pub(super) fn decl_fn_mysqli_stmt_store_result() -> Stmt {
         .build()
 }
 
+/// `mysqli_stmt_result_metadata` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_stmt_result_metadata() -> Stmt {
+    function("mysqli_stmt_result_metadata")
+        .param("statement", t_mixed())
+        .returns(t_union(vec![t_class("mysqli_result"), TypeExpr::False]))
+        .body(vec![
+            s_if(
+                e_not(e_instance_of(e_var("statement"), "mysqli_stmt")),
+                vec![
+                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_stmt_result_metadata(): Argument #1 ($statement) must be of type mysqli_stmt, "), BinOp::Concat, e_call("gettype", vec![e_var("statement")])), BinOp::Concat, e_str(" given"))])),
+                ],
+                vec![],
+                None,
+            ),
+            s_return(e_method_call(e_var("statement"), "result_metadata", vec![])),
+        ])
+        .build()
+}
+
+/// `mysqli_stmt_data_seek` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_stmt_data_seek() -> Stmt {
+    function("mysqli_stmt_data_seek")
+        .param("statement", t_mixed())
+        .param("offset", TypeExpr::Int)
+        .returns(TypeExpr::Void)
+        .body(vec![
+            s_if(
+                e_not(e_instance_of(e_var("statement"), "mysqli_stmt")),
+                vec![
+                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_stmt_data_seek(): Argument #1 ($statement) must be of type mysqli_stmt, "), BinOp::Concat, e_call("gettype", vec![e_var("statement")])), BinOp::Concat, e_str(" given"))])),
+                ],
+                vec![],
+                None,
+            ),
+            s_expr(e_method_call(e_var("statement"), "data_seek", vec![e_var("offset")])),
+        ])
+        .build()
+}
+
+/// `mysqli_stmt_more_results` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_stmt_more_results() -> Stmt {
+    function("mysqli_stmt_more_results")
+        .param("statement", t_mixed())
+        .returns(TypeExpr::Bool)
+        .body(vec![
+            s_if(
+                e_not(e_instance_of(e_var("statement"), "mysqli_stmt")),
+                vec![
+                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_stmt_more_results(): Argument #1 ($statement) must be of type mysqli_stmt, "), BinOp::Concat, e_call("gettype", vec![e_var("statement")])), BinOp::Concat, e_str(" given"))])),
+                ],
+                vec![],
+                None,
+            ),
+            s_return(e_method_call(e_var("statement"), "more_results", vec![])),
+        ])
+        .build()
+}
+
+/// `mysqli_stmt_next_result` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_stmt_next_result() -> Stmt {
+    function("mysqli_stmt_next_result")
+        .param("statement", t_mixed())
+        .returns(TypeExpr::Bool)
+        .body(vec![
+            s_if(
+                e_not(e_instance_of(e_var("statement"), "mysqli_stmt")),
+                vec![
+                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_stmt_next_result(): Argument #1 ($statement) must be of type mysqli_stmt, "), BinOp::Concat, e_call("gettype", vec![e_var("statement")])), BinOp::Concat, e_str(" given"))])),
+                ],
+                vec![],
+                None,
+            ),
+            s_return(e_method_call(e_var("statement"), "next_result", vec![])),
+        ])
+        .build()
+}
+
+/// `mysqli_stmt_send_long_data` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_stmt_send_long_data() -> Stmt {
+    function("mysqli_stmt_send_long_data")
+        .param("statement", t_mixed())
+        .param("param_num", TypeExpr::Int)
+        .param("data", TypeExpr::Str)
+        .returns(TypeExpr::Bool)
+        .body(vec![
+            s_if(
+                e_not(e_instance_of(e_var("statement"), "mysqli_stmt")),
+                vec![
+                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_stmt_send_long_data(): Argument #1 ($statement) must be of type mysqli_stmt, "), BinOp::Concat, e_call("gettype", vec![e_var("statement")])), BinOp::Concat, e_str(" given"))])),
+                ],
+                vec![],
+                None,
+            ),
+            s_return(e_method_call(e_var("statement"), "send_long_data", vec![e_var("param_num"), e_var("data")])),
+        ])
+        .build()
+}
+
+/// `mysqli_stmt_attr_get` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_stmt_attr_get() -> Stmt {
+    function("mysqli_stmt_attr_get")
+        .param("statement", t_mixed())
+        .param("attribute", TypeExpr::Int)
+        .returns(TypeExpr::Int)
+        .body(vec![
+            s_if(
+                e_not(e_instance_of(e_var("statement"), "mysqli_stmt")),
+                vec![
+                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_stmt_attr_get(): Argument #1 ($statement) must be of type mysqli_stmt, "), BinOp::Concat, e_call("gettype", vec![e_var("statement")])), BinOp::Concat, e_str(" given"))])),
+                ],
+                vec![],
+                None,
+            ),
+            s_return(e_method_call(e_var("statement"), "attr_get", vec![e_var("attribute")])),
+        ])
+        .build()
+}
+
+/// `mysqli_stmt_attr_set` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_stmt_attr_set() -> Stmt {
+    function("mysqli_stmt_attr_set")
+        .param("statement", t_mixed())
+        .param("attribute", TypeExpr::Int)
+        .param("value", TypeExpr::Int)
+        .returns(TypeExpr::Bool)
+        .body(vec![
+            s_if(
+                e_not(e_instance_of(e_var("statement"), "mysqli_stmt")),
+                vec![
+                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_stmt_attr_set(): Argument #1 ($statement) must be of type mysqli_stmt, "), BinOp::Concat, e_call("gettype", vec![e_var("statement")])), BinOp::Concat, e_str(" given"))])),
+                ],
+                vec![],
+                None,
+            ),
+            s_return(e_method_call(e_var("statement"), "attr_set", vec![e_var("attribute"), e_var("value")])),
+        ])
+        .build()
+}
+
+/// `mysqli_stmt_get_warnings` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_stmt_get_warnings() -> Stmt {
+    function("mysqli_stmt_get_warnings")
+        .param("statement", t_mixed())
+        .returns(t_union(vec![t_class("mysqli_warning"), TypeExpr::False]))
+        .body(vec![
+            s_if(
+                e_not(e_instance_of(e_var("statement"), "mysqli_stmt")),
+                vec![
+                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_stmt_get_warnings(): Argument #1 ($statement) must be of type mysqli_stmt, "), BinOp::Concat, e_call("gettype", vec![e_var("statement")])), BinOp::Concat, e_str(" given"))])),
+                ],
+                vec![],
+                None,
+            ),
+            s_return(e_method_call(e_var("statement"), "get_warnings", vec![])),
+        ])
+        .build()
+}
+
 /// `mysqli_stmt_reset` — transcribed from the PHP form.
 pub(super) fn decl_fn_mysqli_stmt_reset() -> Stmt {
     function("mysqli_stmt_reset")
@@ -1344,6 +1910,25 @@ pub(super) fn decl_fn_mysqli_stmt_close() -> Stmt {
                 None,
             ),
             s_return(e_method_call(e_var("statement"), "close", vec![])),
+        ])
+        .build()
+}
+
+/// `mysqli_stmt_free_result` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_stmt_free_result() -> Stmt {
+    function("mysqli_stmt_free_result")
+        .param("statement", t_mixed())
+        .returns(TypeExpr::Void)
+        .body(vec![
+            s_if(
+                e_not(e_instance_of(e_var("statement"), "mysqli_stmt")),
+                vec![
+                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_stmt_free_result(): Argument #1 ($statement) must be of type mysqli_stmt, "), BinOp::Concat, e_call("gettype", vec![e_var("statement")])), BinOp::Concat, e_str(" given"))])),
+                ],
+                vec![],
+                None,
+            ),
+            s_expr(e_method_call(e_var("statement"), "free_result", vec![])),
         ])
         .build()
 }
@@ -1405,6 +1990,25 @@ pub(super) fn decl_fn_mysqli_stmt_error() -> Stmt {
         .build()
 }
 
+/// `mysqli_stmt_error_list` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_stmt_error_list() -> Stmt {
+    function("mysqli_stmt_error_list")
+        .param("statement", t_mixed())
+        .returns(t_array())
+        .body(vec![
+            s_if(
+                e_not(e_instance_of(e_var("statement"), "mysqli_stmt")),
+                vec![
+                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_stmt_error_list(): Argument #1 ($statement) must be of type mysqli_stmt, "), BinOp::Concat, e_call("gettype", vec![e_var("statement")])), BinOp::Concat, e_str(" given"))])),
+                ],
+                vec![],
+                None,
+            ),
+            s_return(e_prop(e_var("statement"), "error_list")),
+        ])
+        .build()
+}
+
 /// `mysqli_stmt_num_rows` — transcribed from the PHP form.
 pub(super) fn decl_fn_mysqli_stmt_num_rows() -> Stmt {
     function("mysqli_stmt_num_rows")
@@ -1419,7 +2023,7 @@ pub(super) fn decl_fn_mysqli_stmt_num_rows() -> Stmt {
                 vec![],
                 None,
             ),
-            s_return(e_prop(e_var("statement"), "num_rows")),
+            s_return(e_method_call(e_var("statement"), "num_rows", vec![])),
         ])
         .build()
 }
@@ -1439,25 +2043,6 @@ pub(super) fn decl_fn_mysqli_stmt_param_count() -> Stmt {
                 None,
             ),
             s_return(e_prop(e_var("statement"), "param_count")),
-        ])
-        .build()
-}
-
-/// `mysqli_stmt_sqlstate` — transcribed from the PHP form.
-pub(super) fn decl_fn_mysqli_stmt_sqlstate() -> Stmt {
-    function("mysqli_stmt_sqlstate")
-        .param("statement", t_mixed())
-        .returns(TypeExpr::Str)
-        .body(vec![
-            s_if(
-                e_not(e_instance_of(e_var("statement"), "mysqli_stmt")),
-                vec![
-                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_stmt_sqlstate(): Argument #1 ($statement) must be of type mysqli_stmt, "), BinOp::Concat, e_call("gettype", vec![e_var("statement")])), BinOp::Concat, e_str(" given"))])),
-                ],
-                vec![],
-                None,
-            ),
-            s_return(e_prop(e_var("statement"), "sqlstate")),
         ])
         .build()
 }
@@ -1500,157 +2085,21 @@ pub(super) fn decl_fn_mysqli_stmt_insert_id() -> Stmt {
         .build()
 }
 
-/// `mysqli_stmt_error_list` — transcribed from the PHP form.
-pub(super) fn decl_fn_mysqli_stmt_error_list() -> Stmt {
-    function("mysqli_stmt_error_list")
+/// `mysqli_stmt_sqlstate` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_stmt_sqlstate() -> Stmt {
+    function("mysqli_stmt_sqlstate")
         .param("statement", t_mixed())
-        .returns(t_array())
+        .returns(TypeExpr::Str)
         .body(vec![
             s_if(
                 e_not(e_instance_of(e_var("statement"), "mysqli_stmt")),
                 vec![
-                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_stmt_error_list(): Argument #1 ($statement) must be of type mysqli_stmt, "), BinOp::Concat, e_call("gettype", vec![e_var("statement")])), BinOp::Concat, e_str(" given"))])),
+                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_stmt_sqlstate(): Argument #1 ($statement) must be of type mysqli_stmt, "), BinOp::Concat, e_call("gettype", vec![e_var("statement")])), BinOp::Concat, e_str(" given"))])),
                 ],
                 vec![],
                 None,
             ),
-            s_return(e_prop(e_var("statement"), "error_list")),
-        ])
-        .build()
-}
-
-/// `mysqli_stmt_free_result` — transcribed from the PHP form.
-pub(super) fn decl_fn_mysqli_stmt_free_result() -> Stmt {
-    function("mysqli_stmt_free_result")
-        .param("statement", t_mixed())
-        .returns(TypeExpr::Void)
-        .body(vec![
-            s_if(
-                e_not(e_instance_of(e_var("statement"), "mysqli_stmt")),
-                vec![
-                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_stmt_free_result(): Argument #1 ($statement) must be of type mysqli_stmt, "), BinOp::Concat, e_call("gettype", vec![e_var("statement")])), BinOp::Concat, e_str(" given"))])),
-                ],
-                vec![],
-                None,
-            ),
-            s_expr(e_method_call(e_var("statement"), "free_result", vec![])),
-        ])
-        .build()
-}
-
-/// `mysqli_stmt_prepare` — transcribed from the PHP form.
-pub(super) fn decl_fn_mysqli_stmt_prepare() -> Stmt {
-    function("mysqli_stmt_prepare")
-        .param("statement", t_mixed())
-        .param("query", TypeExpr::Str)
-        .returns(TypeExpr::Bool)
-        .body(vec![
-            s_if(
-                e_not(e_instance_of(e_var("statement"), "mysqli_stmt")),
-                vec![
-                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_stmt_prepare(): Argument #1 ($statement) must be of type mysqli_stmt, "), BinOp::Concat, e_call("gettype", vec![e_var("statement")])), BinOp::Concat, e_str(" given"))])),
-                ],
-                vec![],
-                None,
-            ),
-            s_return(e_method_call(e_var("statement"), "prepare", vec![e_var("query")])),
-        ])
-        .build()
-}
-
-// Deprecated php alias of mysqli_stmt_execute (no $params form in the old API).
-/// `mysqli_execute` — transcribed from the PHP form.
-pub(super) fn decl_fn_mysqli_execute() -> Stmt {
-    function("mysqli_execute")
-        .param("statement", t_mixed())
-        .returns(TypeExpr::Bool)
-        .body(vec![
-            s_if(
-                e_not(e_instance_of(e_var("statement"), "mysqli_stmt")),
-                vec![
-                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_execute(): Argument #1 ($statement) must be of type mysqli_stmt, "), BinOp::Concat, e_call("gettype", vec![e_var("statement")])), BinOp::Concat, e_str(" given"))])),
-                ],
-                vec![],
-                None,
-            ),
-            s_return(e_method_call(e_var("statement"), "execute", vec![e_null()])),
-        ])
-        .build()
-}
-
-/// `mysqli_stmt_init` — transcribed from the PHP form.
-pub(super) fn decl_fn_mysqli_stmt_init() -> Stmt {
-    function("mysqli_stmt_init")
-        .param("mysql", t_mixed())
-        .returns(t_union(vec![t_class("mysqli_stmt"), TypeExpr::False]))
-        .body(vec![
-            s_if(
-                e_not(e_instance_of(e_var("mysql"), "mysqli")),
-                vec![
-                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_stmt_init(): Argument #1 ($mysql) must be of type mysqli, "), BinOp::Concat, e_call("gettype", vec![e_var("mysql")])), BinOp::Concat, e_str(" given"))])),
-                ],
-                vec![],
-                None,
-            ),
-            s_return(e_method_call(e_var("mysql"), "stmt_init", vec![])),
-        ])
-        .build()
-}
-
-/// `mysqli_fetch_lengths` — transcribed from the PHP form.
-pub(super) fn decl_fn_mysqli_fetch_lengths() -> Stmt {
-    function("mysqli_fetch_lengths")
-        .param("result", t_mixed())
-        .returns(t_nullable(t_array()))
-        .body(vec![
-            s_if(
-                e_not(e_instance_of(e_var("result"), "mysqli_result")),
-                vec![
-                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_fetch_lengths(): Argument #1 ($result) must be of type mysqli_result, "), BinOp::Concat, e_call("gettype", vec![e_var("result")])), BinOp::Concat, e_str(" given"))])),
-                ],
-                vec![],
-                None,
-            ),
-            s_return(e_prop(e_var("result"), "lengths")),
-        ])
-        .build()
-}
-
-/// `mysqli_field_seek` — transcribed from the PHP form.
-pub(super) fn decl_fn_mysqli_field_seek() -> Stmt {
-    function("mysqli_field_seek")
-        .param("result", t_mixed())
-        .param("index", TypeExpr::Int)
-        .returns(TypeExpr::Bool)
-        .body(vec![
-            s_if(
-                e_not(e_instance_of(e_var("result"), "mysqli_result")),
-                vec![
-                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_field_seek(): Argument #1 ($result) must be of type mysqli_result, "), BinOp::Concat, e_call("gettype", vec![e_var("result")])), BinOp::Concat, e_str(" given"))])),
-                ],
-                vec![],
-                None,
-            ),
-            s_return(e_method_call(e_var("result"), "field_seek", vec![e_var("index")])),
-        ])
-        .build()
-}
-
-/// `mysqli_field_tell` — transcribed from the PHP form.
-pub(super) fn decl_fn_mysqli_field_tell() -> Stmt {
-    function("mysqli_field_tell")
-        .param("result", t_mixed())
-        .returns(TypeExpr::Int)
-        .body(vec![
-            s_if(
-                e_not(e_instance_of(e_var("result"), "mysqli_result")),
-                vec![
-                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_field_tell(): Argument #1 ($result) must be of type mysqli_result, "), BinOp::Concat, e_call("gettype", vec![e_var("result")])), BinOp::Concat, e_str(" given"))])),
-                ],
-                vec![],
-                None,
-            ),
-            s_return(e_method_call(e_var("result"), "field_tell", vec![])),
+            s_return(e_prop(e_var("statement"), "sqlstate")),
         ])
         .build()
 }
@@ -1674,7 +2123,6 @@ pub(super) fn decl_fn_mysqli_get_charset() -> Stmt {
         .build()
 }
 
-// The client library is not thread-safe in this build; php returns a bool.
 /// `mysqli_thread_safe` — transcribed from the PHP form.
 pub(super) fn decl_fn_mysqli_thread_safe() -> Stmt {
     function("mysqli_thread_safe")

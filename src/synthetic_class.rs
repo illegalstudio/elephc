@@ -2355,6 +2355,25 @@ impl ClassBuilder {
         self
     }
 
+    /// Marks the most recently added property as PHP 8.4 hooked: `get` / `set` say
+    /// which hooks exist and `uses_backing_slot` whether a hook body touches the
+    /// property's own storage (a virtual property when it does not). The hook
+    /// bodies themselves are the class's `__propget_*` / `__propset_*` methods, as
+    /// the parser produces them. Panics when no property was added yet.
+    pub fn hooked(mut self, get: bool, set: bool, uses_backing_slot: bool) -> Self {
+        let property = self
+            .properties
+            .last_mut()
+            .expect("hooked() needs a property to mark");
+        property.hooks = PropertyHooks {
+            get,
+            set,
+            get_by_ref: false,
+            uses_backing_slot,
+        };
+        self
+    }
+
     /// Adds a `public` property with a declared type and an optional default.
     pub fn prop(self, name: &str, ty: TypeExpr, default: Option<Expr>) -> Self {
         self.property(name, Some(ty), default, Visibility::Public)
