@@ -154,13 +154,16 @@ pub(in crate::interpreter) fn with_eval_call_arguments<V: RuntimeValueOps>(
         Vec<EvaluatedCallArg>, &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V,
     ) -> Result<RuntimeCellHandle, EvalStatus>,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let arguments = eval_owned_call_arg_values(args, context, scope, values)?;
+    let (arguments, receiver_owners) = eval_owned_call_arg_values(args, context, scope, values)?;
     let borrowed_arguments = arguments.iter().cloned().map(|mut argument| {
         argument.value = argument.value.borrowed();
         argument
     }).collect();
     let result = consume(borrowed_arguments, context, scope, values);
-    finish_eval_argument_values(result, arguments.into_iter().map(|argument| argument.value), context, values)
+    let result = finish_eval_argument_values(
+        result, arguments.into_iter().map(|argument| argument.value), context, values,
+    );
+    finish_synthesized_method_arguments(result, receiver_owners, context, values)
 }
 
 /// Retains borrowed returns before releasing argument owners, preserving the original call error.

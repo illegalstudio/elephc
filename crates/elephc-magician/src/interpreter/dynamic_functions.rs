@@ -9,6 +9,7 @@
 //! - PHP source evaluation order is preserved before argument binding.
 //! - Static locals are persisted through `ElephcEvalContext` after function execution.
 
+mod argument_owners;
 mod closure_execution;
 mod function_binding;
 mod function_staging;
@@ -18,6 +19,7 @@ pub(in crate::interpreter) mod builtin_arguments;
 
 use super::*;
 
+pub(in crate::interpreter) use argument_owners::eval_owned_call_arg_values;
 pub(in crate::interpreter) use closure_execution::*;
 pub(in crate::interpreter) use function_binding::*;
 pub(in crate::interpreter) use function_staging::{
@@ -37,86 +39,6 @@ pub(in crate::interpreter) fn eval_dynamic_function(
     with_eval_call_arguments(args, context, caller_scope, values, |arguments, context, _, values| {
         eval_dynamic_function_with_evaluated_args(function, arguments, context, values)
     })
-}
-
-/// Acquires each argument before later argument side effects can replace its source storage.
-pub(in crate::interpreter) fn eval_owned_call_arg_values(
-    args: &[EvalCallArg],
-    context: &mut ElephcEvalContext,
-    caller_scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
-    let mut evaluated_args = Vec::with_capacity(args.len());
-    let mut saw_named = false;
-
-    let evaluated = (|| {
-        for arg in args {
-            if arg.is_spread() {
-                if saw_named {
-                    return Err(EvalStatus::RuntimeFatal);
-                }
-                let spread = eval_expr(arg.value(), context, caller_scope, values)?;
-                let unpacked = (|| {
-                    if !values.is_array_like(spread)? {
-                        return Err(EvalStatus::RuntimeFatal);
-                    }
-                    let first_unpacked = evaluated_args.len();
-                    append_unpacked_call_arg_values(
-                        spread, &mut evaluated_args, &mut saw_named, context, values,
-                    )?;
-                    for argument in &mut evaluated_args[first_unpacked..] {
-                        if argument.value.is_borrowed() {
-                            argument.value = values.retain(argument.value)?;
-                        }
-                    }
-                    Ok(())
-                })();
-                let released = release_expr_result(spread, context, values);
-                unpacked.and(released)?;
-                continue;
-            }
-
-            if let Some(name) = arg.name() {
-                saw_named = true;
-                let (value, ref_target) =
-                    eval_call_arg_value(arg.value(), context, caller_scope, values)?;
-                let value = if value.is_borrowed() {
-                    values.retain(value)?
-                } else {
-                    value
-                };
-                evaluated_args.push(EvaluatedCallArg {
-                    name: Some(name.to_string()),
-                    value,
-                    ref_target,
-                });
-                continue;
-            }
-
-            if saw_named {
-                return Err(EvalStatus::RuntimeFatal);
-            }
-            let (value, ref_target) = eval_call_arg_value(arg.value(), context, caller_scope, values)?;
-            let value = if value.is_borrowed() {
-                values.retain(value)?
-            } else {
-                value
-            };
-            evaluated_args.push(EvaluatedCallArg {
-                name: None,
-                value,
-                ref_target,
-            });
-        }
-        Ok(())
-    })();
-    if let Err(status) = evaluated {
-        for argument in evaluated_args {
-            let _ = release_expr_result(argument.value, context, values);
-        }
-        return Err(status);
-    }
-    Ok(evaluated_args)
 }
 
 /// Captures owned builtin inputs, using shared reference modes when a contract is supplied.
@@ -264,31 +186,19 @@ pub(in crate::interpreter) fn eval_call_arg_value(
         EvalExpr::PropertyGet { object, property } => {
             let access_scope = context.execution_scope();
             let object = eval_expr(object, context, caller_scope, values)?;
-            let value = eval_property_get_result(object, property, context, values)?;
-            validate_property_ref_target(object, property, context, values)?;
-            Ok((
-                value,
-                Some(EvalReferenceTarget::ObjectProperty {
-                    object,
-                    property: property.clone(),
-                    access_scope,
-                }),
-            ))
+            eval_property_call_arg_value(object, property.clone(), access_scope, context, values)
         }
         EvalExpr::DynamicPropertyGet { object, property } => {
             let access_scope = context.execution_scope();
             let object = eval_expr(object, context, caller_scope, values)?;
-            let property = eval_dynamic_member_name(property, context, caller_scope, values)?;
-            let value = eval_property_get_result(object, &property, context, values)?;
-            validate_property_ref_target(object, &property, context, values)?;
-            Ok((
-                value,
-                Some(EvalReferenceTarget::ObjectProperty {
-                    object,
-                    property,
-                    access_scope,
-                }),
-            ))
+            let property = match eval_dynamic_member_name(property, context, caller_scope, values) {
+                Ok(property) => property,
+                Err(status) => {
+                    let _ = release_expr_result(object, context, values);
+                    return Err(status);
+                }
+            };
+            eval_property_call_arg_value(object, property, access_scope, context, values)
         }
         EvalExpr::StaticPropertyGet {
             class_name,
@@ -337,6 +247,22 @@ pub(in crate::interpreter) fn eval_call_arg_value(
         }
         _ => eval_expr(expr, context, caller_scope, values).map(|value| (value, None)),
     }
+}
+
+/// Keeps a temporary property receiver for successful writeback and retires it on failed reads.
+fn eval_property_call_arg_value(
+    object: RuntimeCellHandle, property: String, access_scope: ElephcEvalExecutionScope,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
+    let result = eval_property_get_result(object, &property, context, values).and_then(|value| {
+        if let Err(status) = validate_property_ref_target(object, &property, context, values) {
+            let _ = release_expr_result(value, context, values);
+            return Err(status);
+        }
+        Ok((value, Some(EvalReferenceTarget::ObjectProperty { object, property, access_scope })))
+    });
+    if result.is_err() { let _ = release_expr_result(object, context, values); }
+    result
 }
 
 /// Evaluates an array element whose array expression is itself a writable caller target.

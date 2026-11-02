@@ -14,6 +14,7 @@ mod review_programs;
 mod review_writes;
 mod review_type_boundaries;
 mod eval_bundles;
+mod eval_argument_receivers;
 mod write_contracts;
 mod typed_empty;
 mod opaque_unset;
