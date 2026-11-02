@@ -42,12 +42,14 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # source. Under four-way non-codegen sharding they crossed 60 seconds without hanging.
 # The split constructorless factory probes also lower the entire opaque-eval catalog: x86 CI
 # measured 55-60 seconds for passing copies and terminated sibling targets at 60 seconds.
+# Boundary fixtures moved out of simplexml_targets but still lower the full eval catalog.
+# Preserve their original three-period integration budget under the new namespace.
 [[profile.default.overrides]]
-filter = 'test(/^ir_lower::tests::simplexml_targets::simplexml_target_/) or test(/^ir_lower::tests::simplexml_targets::simplexml_constructorless_factories_probe_active_eval_classes::/) or test(/^ir_lower::tests::reference_return_boundaries::protected_nullable_object_reference_returns_use_dynamic_slot_state::/)'
+filter = 'test(/^ir_lower::tests::simplexml_targets::simplexml_target_/) or test(/^ir_lower::tests::simplexml_target_corpora::simplexml_target_boundaries::/) or test(/^ir_lower::tests::simplexml_targets::simplexml_constructorless_factories_probe_active_eval_classes::/) or test(/^ir_lower::tests::reference_return_boundaries::protected_nullable_object_reference_returns_use_dynamic_slot_state::/)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.ci.overrides]]
-filter = 'test(/^ir_lower::tests::simplexml_targets::simplexml_target_/) or test(/^ir_lower::tests::simplexml_targets::simplexml_constructorless_factories_probe_active_eval_classes::/) or test(/^ir_lower::tests::reference_return_boundaries::protected_nullable_object_reference_returns_use_dynamic_slot_state::/)'
+filter = 'test(/^ir_lower::tests::simplexml_targets::simplexml_target_/) or test(/^ir_lower::tests::simplexml_target_corpora::simplexml_target_boundaries::/) or test(/^ir_lower::tests::simplexml_targets::simplexml_constructorless_factories_probe_active_eval_classes::/) or test(/^ir_lower::tests::reference_return_boundaries::protected_nullable_object_reference_returns_use_dynamic_slot_state::/)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 # These BCMath probes compile dynamic-eval hosts and exceeded 60s under local load.

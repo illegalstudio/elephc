@@ -6,7 +6,7 @@
 //!
 //! Key details:
 //! - Preserves every fixture formerly appended to the core XML/DOM target program.
-//! - Smaller class catalogs bound each emitter invocation without increasing CI timeouts.
+//! - Separate corpora bound emission size; boundaries retain the original integration timeout budget.
 
 /// Lowers one complete corpus with the same frontend and target pipeline as the core probes.
 fn lower_corpus(source: &str, target: &str) -> crate::ir::Module {
