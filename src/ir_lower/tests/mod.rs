@@ -134,6 +134,7 @@ mod reference_return_boundaries;
 mod reference_return_siblings;
 mod reference_override_results;
 mod callable_operand_owners;
+mod late_string_argument_owners;
 mod capture_view_owners;
 mod static_properties;
 mod nested_append_review;

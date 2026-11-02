@@ -533,6 +533,24 @@ pub(super) fn root_user_call_operands(
                     roots.push((index, pin.slot));
                 }
             }
+            // A later eval barrier can widen a PHP string local after this call is lowered.
+            // Its eventual load then owns a cast copy, although the eager claim above saw a
+            // borrowed string. Lease a separate payload and leave the provisional source
+            // release to finalization, which prunes it when the local keeps string storage.
+            let value = LoweredValue { value: *operand, ir_type: ctx.builder.value_type(*operand) };
+            if !repeated
+                && !ctx.has_call_argument_guard(*operand)
+                && !roots.iter().any(|(owner_index, _)| *owner_index == index)
+                && ctx.builder.value_php_type(*operand).codegen_repr() == PhpType::Str
+                && matches!(ctx.builder.value_defining_op(*operand), Some(Op::LoadLocal | Op::LoadStaticLocal))
+                && ctx.value_needs_release_after_use(value)
+            {
+                let lease = crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(
+                    ctx, value, Some(span),
+                );
+                crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+                *operand = lease.value;
+            }
             // Source-order evaluation can already have acquired a borrowed string. Its
             // evaluation slot was handed to this call, so keep that lease visible when
             // an alias-capable callee throws before the ordinary post-call release.

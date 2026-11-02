@@ -20,6 +20,7 @@ mod owned_tostring;
 mod borrowed_string_reads;
 mod global_return_owners;
 mod native_raw_property_guards;
+mod late_string_arguments;
 #[path = "runtime_gc/ref_local_append.rs"]
 mod ref_local_append;
 #[path = "runtime_gc/string_offset_lifetime.rs"]
