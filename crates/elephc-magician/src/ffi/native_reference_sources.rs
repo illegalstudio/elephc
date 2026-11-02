@@ -10,7 +10,7 @@
 //! - Enumeration copies records before PHP re-entry; retired tokens cannot revive on address reuse.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::Bound::{Excluded, Unbounded};
 
 /// Borrowed native addresses copied across the C ABI without inspecting their payloads.
@@ -27,6 +27,9 @@ pub struct NativeReferenceTypeSource {
 struct NativeReferenceTypeSources {
     bindings: HashMap<usize, u64>,
     sources: BTreeMap<u64, NativeReferenceTypeSource>,
+    cells: HashMap<usize, BTreeSet<u64>>,
+    cell_references: HashMap<usize, usize>,
+    references: HashMap<usize, BTreeSet<u64>>,
     next_token: u64,
     epoch: u64,
 }
@@ -34,7 +37,9 @@ struct NativeReferenceTypeSources {
 impl Default for NativeReferenceTypeSources {
     /// Starts nonzero so zero can report an ABI failure without masquerading as a live epoch.
     fn default() -> Self {
-        Self { bindings: HashMap::new(), sources: BTreeMap::new(), next_token: 1, epoch: 1 }
+        Self { bindings: HashMap::new(), sources: BTreeMap::new(),
+            cells: HashMap::new(), cell_references: HashMap::new(), references: HashMap::new(),
+            next_token: 1, epoch: 1 }
     }
 }
 
@@ -48,8 +53,14 @@ impl NativeReferenceTypeSources {
         let token = self.next_token;
         let next_token = token.checked_add(1)?;
         let epoch = self.epoch.checked_add(1)?;
-        if let Some(previous) = self.bindings.insert(binding, token) { self.sources.remove(&previous); }
+        let reference = self.cell_references.get(&cell).copied();
+        if let Some(previous) = self.bindings.insert(binding, token) { self.remove_source(previous); }
         self.sources.insert(token, NativeReferenceTypeSource { token, binding, cell, validator });
+        self.cells.entry(cell).or_default().insert(token);
+        if let Some(reference) = reference {
+            self.cell_references.insert(cell, reference);
+            self.references.entry(reference).or_default().insert(token);
+        }
         self.next_token = next_token;
         self.epoch = epoch;
         Some(token)
@@ -60,7 +71,7 @@ impl NativeReferenceTypeSources {
         let Some(token) = self.bindings.get(&binding).copied() else { return Some(()); };
         let epoch = self.epoch.checked_add(1)?;
         self.bindings.remove(&binding);
-        self.sources.remove(&token);
+        self.remove_source(token);
         self.epoch = epoch;
         Some(())
     }
@@ -70,11 +81,61 @@ impl NativeReferenceTypeSources {
         self.sources.range((Excluded(after), Unbounded)).next().map(|(_, source)| *source)
     }
 
+    /// Removes one token from every weak index, dropping address metadata with the last source.
+    fn remove_source(&mut self, token: u64) {
+        let Some(source) = self.sources.remove(&token) else { return; };
+        if let Some(reference) = self.cell_references.get(&source.cell).copied() {
+            if let Some(tokens) = self.references.get_mut(&reference) {
+                tokens.remove(&token);
+                if tokens.is_empty() { self.references.remove(&reference); }
+            }
+        }
+        if let Some(tokens) = self.cells.get_mut(&source.cell) {
+            tokens.remove(&token);
+            if tokens.is_empty() {
+                self.cells.remove(&source.cell);
+                self.cell_references.remove(&source.cell);
+            }
+        }
+    }
+
+    /// Records a native-authenticated physical transition without inspecting the cell or wrapper.
+    fn set_reference(&mut self, cell: usize, reference: usize) -> Option<()> {
+        if cell == 0 { return None; }
+        let Some(tokens) = self.cells.get(&cell) else { return Some(()); };
+        let old_reference = self.cell_references.get(&cell).copied();
+        if old_reference.unwrap_or(0) == reference { return Some(()); }
+        let epoch = self.epoch.checked_add(1)?;
+        if let Some(old) = old_reference {
+            if let Some(index) = self.references.get_mut(&old) {
+                for token in tokens { index.remove(token); }
+                if index.is_empty() { self.references.remove(&old); }
+            }
+        }
+        if reference == 0 {
+            self.cell_references.remove(&cell);
+        } else {
+            self.cell_references.insert(cell, reference);
+            self.references.entry(reference).or_default().extend(tokens.iter().copied());
+        }
+        self.epoch = epoch;
+        Some(())
+    }
+
+    /// Copies one matching record without scanning properties attached to other native cells.
+    fn next_indexed(&self, index: Option<&BTreeSet<u64>>, after: u64) -> Option<NativeReferenceTypeSource> {
+        let token = index?.range((Excluded(after), Unbounded)).next()?;
+        self.sources.get(token).copied()
+    }
+
     /// Clears a retiring worker arena while keeping old tokens permanently invalid.
     fn reset(&mut self) -> Option<()> {
         let epoch = self.epoch.checked_add(1)?;
         self.bindings.clear();
         self.sources.clear();
+        self.cells.clear();
+        self.cell_references.clear();
+        self.references.clear();
         self.epoch = epoch;
         Some(())
     }
@@ -98,6 +159,54 @@ pub extern "C" fn __elephc_reference_sources_unbind_v1(binding: usize) -> i32 {
     match std::panic::catch_unwind(|| SOURCES.with(|sources| sources.borrow_mut().unbind(binding))) {
         Ok(Some(())) => 0,
         _ => -1,
+    }
+}
+
+/// Indexes a native-authenticated canonical wrapper, or clears it when `reference` is zero.
+/// Unknown cells retain no address metadata; callers bind before reporting their current shape.
+#[no_mangle]
+pub extern "C" fn __elephc_reference_sources_set_reference_v1(cell: usize, reference: usize) -> i32 {
+    match std::panic::catch_unwind(|| SOURCES.with(|sources| sources.borrow_mut().set_reference(cell, reference))) {
+        Ok(Some(())) => 0,
+        _ => -1,
+    }
+}
+
+/// Copies the next source for an exact native cell without borrowing metadata across callbacks.
+///
+/// # Safety
+/// `output` must point to writable storage for one complete `NativeReferenceTypeSource`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_reference_sources_next_cell_v1(
+    cell: usize, after: u64, output: *mut NativeReferenceTypeSource,
+) -> i32 {
+    unsafe { next_indexed_source(cell, after, output, false) }
+}
+
+/// Copies the next source attached to a canonical PHP reference through any native cell.
+///
+/// # Safety
+/// `output` must point to writable storage for one complete `NativeReferenceTypeSource`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_reference_sources_next_reference_v1(
+    reference: usize, after: u64, output: *mut NativeReferenceTypeSource,
+) -> i32 {
+    unsafe { next_indexed_source(reference, after, output, true) }
+}
+
+/// Reads one weak index and ends its RefCell borrow before copying the result to native storage.
+unsafe fn next_indexed_source(
+    identity: usize, after: u64, output: *mut NativeReferenceTypeSource, reference_index: bool,
+) -> i32 {
+    if output.is_null() || identity == 0 { return -1; }
+    match std::panic::catch_unwind(|| SOURCES.with(|sources| {
+        let sources = sources.borrow();
+        let index = if reference_index { sources.references.get(&identity) } else { sources.cells.get(&identity) };
+        sources.next_indexed(index, after)
+    })) {
+        Ok(Some(source)) => { unsafe { output.write(source); } 1 }
+        Ok(None) => 0,
+        Err(_) => -1,
     }
 }
 
@@ -220,5 +329,87 @@ mod tests {
         assert_eq!(sources.bind(10, 200, 1000), None);
         assert_eq!(sources.epoch, epoch);
         assert_eq!(sources.next(0).unwrap().token, first);
+    }
+
+    /// Separate cells sharing a wrapper contribute all of their independent property constraints.
+    #[test]
+    fn native_reference_sources_index_shared_wrappers_across_cells() {
+        let mut sources = NativeReferenceTypeSources::default();
+        let first = sources.bind(10, 100, 1000).unwrap();
+        let cloned = sources.bind(20, 100, 1000).unwrap();
+        let other_cell = sources.bind(30, 200, 2000).unwrap();
+        sources.bind(40, 300, 3000).unwrap();
+        sources.set_reference(100, 500).unwrap();
+        sources.set_reference(200, 500).unwrap();
+        sources.set_reference(300, 600).unwrap();
+        assert_eq!(sources.next_indexed(sources.cells.get(&100), 0).unwrap().token, first);
+        assert_eq!(sources.next_indexed(sources.cells.get(&100), first).unwrap().token, cloned);
+        assert!(sources.next_indexed(sources.cells.get(&100), cloned).is_none());
+        assert_eq!(sources.references[&500], BTreeSet::from([first, cloned, other_cell]));
+        sources.unbind(10).unwrap();
+        assert_eq!(sources.references[&500], BTreeSet::from([cloned, other_cell]));
+        sources.unbind(20).unwrap();
+        assert!(!sources.cells.contains_key(&100));
+        assert!(!sources.cell_references.contains_key(&100));
+        assert_eq!(sources.references[&500], BTreeSet::from([other_cell]));
+    }
+
+    /// Cell retirement cannot leave a wrapper association that an allocator's reused address inherits.
+    #[test]
+    fn native_reference_source_indexes_do_not_revive_recycled_addresses() {
+        let mut sources = NativeReferenceTypeSources::default();
+        sources.set_reference(100, 500).unwrap();
+        assert!(sources.cell_references.is_empty(), "unknown cells retain no weak addresses");
+        let first = sources.bind(10, 100, 1000).unwrap();
+        sources.set_reference(100, 500).unwrap();
+        let changed_validator = sources.bind(10, 100, 2000).unwrap();
+        assert!(changed_validator > first);
+        assert_eq!(sources.references[&500], BTreeSet::from([changed_validator]));
+        sources.unbind(10).unwrap();
+        assert!(sources.references.is_empty());
+        let recycled = sources.bind(10, 100, 1000).unwrap();
+        assert!(recycled > changed_validator);
+        assert!(sources.cell_references.is_empty());
+        assert!(sources.next_indexed(sources.references.get(&500), 0).is_none());
+        sources.set_reference(100, 500).unwrap();
+        sources.reset().unwrap();
+        assert!(sources.references.is_empty() && sources.cells.is_empty()
+            && sources.cell_references.is_empty());
+    }
+
+    /// A callback can detach a pending source and attach an older unmatched source to this wrapper.
+    #[test]
+    fn native_reference_source_index_requires_rescan_after_physical_reentry() {
+        let mut sources = NativeReferenceTypeSources::default();
+        let initially_unmatched = sources.bind(10, 100, 1000).unwrap();
+        let first_match = sources.bind(20, 200, 2000).unwrap();
+        let removed_match = sources.bind(30, 300, 3000).unwrap();
+        sources.set_reference(200, 500).unwrap();
+        sources.set_reference(300, 500).unwrap();
+        let copied = sources.next_indexed(sources.references.get(&500), 0).unwrap();
+        assert_eq!(copied.token, first_match);
+        let epoch = sources.epoch;
+        sources.set_reference(100, 500).unwrap();
+        sources.set_reference(300, 0).unwrap();
+        assert!(sources.epoch > epoch);
+        assert!(sources.sources.contains_key(&removed_match), "detaching a wrapper does not unset its property");
+        assert!(sources.next_indexed(sources.references.get(&500), copied.token).is_none());
+        assert_eq!(sources.next_indexed(sources.references.get(&500), 0).unwrap().token, initially_unmatched,
+            "a writer must restart its scan after PHP, preserving only already matched coercion results");
+    }
+
+    /// Failed shape publication leaves both indexes and their convergence epoch intact.
+    #[test]
+    fn native_reference_source_index_failure_preserves_current_shape() {
+        let mut sources = NativeReferenceTypeSources::default();
+        let token = sources.bind(10, 100, 1000).unwrap();
+        sources.set_reference(100, 500).unwrap();
+        sources.epoch = u64::MAX;
+        assert_eq!(sources.set_reference(100, 600), None);
+        assert_eq!(sources.set_reference(100, 0), None);
+        assert_eq!(sources.cell_references[&100], 500);
+        assert_eq!(sources.references[&500], BTreeSet::from([token]));
+        assert_eq!(sources.set_reference(0, 500), None);
+        assert_eq!(sources.set_reference(100, 500), Some(()), "an unchanged shape needs no new epoch");
     }
 }

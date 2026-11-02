@@ -601,6 +601,14 @@ dereference no receiver, cell, value or validator address. Binding hooks must
 remove each source after the receiver destructor and before releasing its cell;
 ordinary reference parameters add no property source. Publisher and lifecycle
 wiring is required before this registry can enforce typed canonical references.
+Weak indexes select sources by exact native cell or canonical PHP wrapper. Several
+cells may name one wrapper, and each physical property still contributes its own
+source token. Native hooks bind a property before reporting its authenticated
+wrapper shape. An unknown cell retains no address association, and removing its
+last binding clears that association before allocator reuse. Shape changes update
+the metadata epoch. After a callback, iteration restarts so an older source that
+just joined the target wrapper is visited; only already matched coercion results
+can be reused by their still-live source token.
 An unchanged metadata epoch does not prove that a native cell stayed raw across
 PHP re-entry; callers must recheck physical shape and previously unmatched cells.
 
