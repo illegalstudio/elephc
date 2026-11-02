@@ -366,10 +366,6 @@ impl Checker {
                     // against the original indexed representation.
                     let promotes_to_hash =
                         *value_by_ref && matches!(&array.kind, ExprKind::Variable(_));
-                    if let Some(k) = key_var {
-                        env.insert(k.clone(), key_ty.clone());
-                        self.clear_foreach_callable_metadata(k);
-                    }
                     // A fresh by-reference binding is null when an empty source never enters the
                     // body, and later writes through the live reference may change its PHP type.
                     // Preserve an existing binding's stricter write-through contract, but give a
@@ -379,8 +375,10 @@ impl Checker {
                     } else {
                         *elem_ty.clone()
                     };
-                    env.insert(value_var.clone(), value_ty.clone());
+                    self.bind_foreach_iteration(array, value_var, value_ty.clone(),
+                        key_var.as_deref().map(|name| (name, key_ty)), env);
                     self.update_foreach_callable_metadata(value_var, array, &value_ty);
+                    if let Some(k) = key_var { self.clear_foreach_callable_metadata(k); }
                     if promotes_to_hash {
                         if let ExprKind::Variable(source_name) = &array.kind {
                             env.insert(
@@ -393,10 +391,6 @@ impl Checker {
                         }
                     }
                 } else if let PhpType::AssocArray { key, value } = &arr_ty {
-                    if let Some(k) = key_var {
-                        env.insert(k.clone(), *key.clone());
-                        self.clear_foreach_callable_metadata(k);
-                    }
                     // Associative foreach-by-reference converts every entry to boxed Mixed
                     // storage. Reflect that in a simple source local so post-loop reads do not
                     // reinterpret boxed-cell pointers as the old concrete payload type. The
@@ -407,8 +401,10 @@ impl Checker {
                     } else {
                         *value.clone()
                     };
-                    env.insert(value_var.clone(), value_ty.clone());
+                    self.bind_foreach_iteration(array, value_var, value_ty.clone(),
+                        key_var.as_deref().map(|name| (name, *key.clone())), env);
                     self.update_foreach_callable_metadata(value_var, array, &value_ty);
+                    if let Some(k) = key_var { self.clear_foreach_callable_metadata(k); }
                     if *value_by_ref {
                         if let ExprKind::Variable(source_name) = &array.kind {
                             env.insert(
@@ -432,22 +428,18 @@ impl Checker {
                     }
                     let (key_ty, value_ty) =
                         self.foreach_object_key_value_types(class_name, array);
-                    if let Some(k) = key_var {
-                        env.insert(k.clone(), key_ty);
-                        self.clear_foreach_callable_metadata(k);
-                    }
-                    env.insert(value_var.clone(), value_ty);
+                    self.bind_foreach_iteration(array, value_var, value_ty,
+                        key_var.as_deref().map(|name| (name, key_ty)), env);
                     self.clear_foreach_callable_metadata(value_var);
+                    if let Some(k) = key_var { self.clear_foreach_callable_metadata(k); }
                 } else if matches!(
                     arr_ty,
                     PhpType::Iterable | PhpType::Mixed | PhpType::Union(_)
                 ) {
-                    if let Some(k) = key_var {
-                        env.insert(k.clone(), PhpType::Mixed);
-                        self.clear_foreach_callable_metadata(k);
-                    }
-                    env.insert(value_var.clone(), PhpType::Mixed);
+                    self.bind_foreach_iteration(array, value_var, PhpType::Mixed,
+                        key_var.as_deref().map(|name| (name, PhpType::Mixed)), env);
                     self.clear_foreach_callable_metadata(value_var);
+                    if let Some(k) = key_var { self.clear_foreach_callable_metadata(k); }
                 } else if let Some(type_name) = non_iterable_foreach_argument_name(&arr_ty) {
                     // php-src does NOT reject this: `ZEND_FE_RESET_R` raises
                     // `foreach() argument must be of type array|object, <type> given`

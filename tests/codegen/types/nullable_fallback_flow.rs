@@ -9,6 +9,28 @@
 
 use super::*;
 
+/// The production CLI refuses a stale subclass contract before native property access.
+#[test]
+fn test_nullable_fallback_flow_r51_foreach_retirement_cli_refusal() {
+    /// Owns compiler artifacts from this source-level refusal regression.
+    struct FixtureDirectory(std::path::PathBuf);
+    impl Drop for FixtureDirectory {
+        /// Removes this fixture after a successful assertion or an unwind.
+        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+    }
+    let directory = FixtureDirectory(make_cli_test_dir("elephc_foreach_retirement_refusal"));
+    let path = directory.0.join("main.php");
+    std::fs::write(&path, "<?php class Base {} class D extends Base { public int $n = 5; public function __destruct() { throw new Exception('d'); } } function needD(D $x): void { echo $x->n; } function run(): void { $e = new D(); try { foreach ([new Base()] as $e) { break; } } catch (Exception $c) { needD($e); } } run();").unwrap();
+    for mode in ["on", "off"] {
+        let output = elephc_cli_command(&directory.0).arg(format!("--ir-opt={mode}"))
+            .arg(&path).output().unwrap();
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "stale subclass property access was accepted");
+        assert!(error.contains("expects D") && error.contains("Base"), "{error}");
+        assert!(!error.contains("EIR backend error"), "{error}");
+    }
+}
+
 /// A first catch binding in a loop publishes before retiring the previous iteration's value.
 #[test]
 fn test_nullable_fallback_flow_r49_loop_catch_publication_runtime() {

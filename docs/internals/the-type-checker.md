@@ -800,6 +800,8 @@ Loop reads and storage writes are joined separately. `loop_flow.rs` saves number
 
 Incoming references, explicit aliases and previously created by-reference captures keep fixed tagged cells. Their checked integer updates stay `int` on normal continuation and diagnose overflow, so the checker retains their nullable reference contract. Captures are recorded in source order and scoped to the current binding; a later capture does not change the storage of an earlier update.
 
+The foreach checker records binding-retirement exceptions after publishing the value and then the key through `stmt_check/foreach_bindings.rs`. These edges exist even when a `break` or `return` prevents a back edge. Their snapshots mark the published names as present, while the ordinary loop-entry presence is preserved for a source that executes zero iterations. Literal-empty arrays add no binding-retirement edge; iterator-protocol exceptions retain their separate pre-binding state.
+
 #### Lazy initialization (the singleton shape)
 
 A completed `$this->p = <non-null>` or `self::$p = <non-null>` write re-establishes the fact for that place, recorded as the property's *declared* type minus `null` (never the assigned expression's type — a declared property coerces what it stores). When a single guarded clause both falls through and wrote its guarded place, the type after the `if` is the union of the then-branch exit fact and the guard complement instead of the pre-`if` type. Together those make PHP's lazy-initialization idiom check:

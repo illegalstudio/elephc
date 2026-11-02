@@ -9,6 +9,18 @@
 
 use crate::ir::{Immediate, IrHeapKind, IrType, Op};
 
+/// Every target rejects the obsolete subclass view on a foreach retirement edge.
+#[test]
+fn test_nullable_fallback_flow_r51_foreach_retirement_all_targets() {
+    let source = "<?php class Base {} class D extends Base { public int $n = 5; public function __destruct() { throw new Exception('d'); } } function needD(D $x): void { echo $x->n; } function run(): void { $e = new D(); try { foreach ([new Base()] as $e) { break; } } catch (Exception $c) { needD($e); } }";
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = crate::codegen::platform::Target::parse(name).unwrap();
+        let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+        let error = crate::types::check_with_target(&program, target).err().expect("stale subclass");
+        assert!(error.to_string().contains("expects D"), "{name}: {error}");
+    }
+}
+
 /// Every supported target emits loop-first catch replacements and their outer reads.
 #[test]
 fn test_nullable_fallback_flow_r49_loop_catch_all_targets() {

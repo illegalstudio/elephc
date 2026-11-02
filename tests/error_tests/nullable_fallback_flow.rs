@@ -9,6 +9,36 @@
 
 use super::*;
 
+/// Foreach binding retirement cannot expose an obsolete object type in an outer handler.
+#[test]
+fn test_nullable_fallback_flow_r51_foreach_retirement_admission() {
+    for (params, iteration) in [
+        ("", "foreach ([1] as $e) { break; }"),
+        ("", "foreach ([7 => 'v'] as $e => $v) { break; }"),
+        ("array $xs", "foreach ($xs as $e) { return; }"),
+        ("", "$xs = [1]; foreach ($xs as &$e) { break; }"),
+    ] {
+        let source = format!("<?php class D {{ public function __destruct() {{ throw new Exception('d'); }} }} function need(D $x): void {{}} function run({params}): void {{ $e = new D(); try {{ {iteration} }} catch (Exception $c) {{ need($e); }} }}");
+        expect_error(&source, "expects D");
+    }
+    expect_error("<?php class Base {} class D extends Base { public int $n = 5; public function __destruct() { throw new Exception('d'); } } function needD(D $x): void { echo $x->n; } function run(): void { $e = new D(); try { foreach ([new Base()] as $e) { break; } } catch (Exception $c) { needD($e); } }", "expects D");
+    expect_error("<?php class D { public function __destruct() { throw new Exception('d'); } } function need(D $x): void {} $e = new D(); try { foreach ([1] as $e) { break; } } catch (Exception $c) { need($e); }", "expects D");
+    expect_error("<?php class D { public function __destruct() { throw new Exception('d'); } } function need(int $x): void {} function run(): void { $key = new D(); $value = 5; try { foreach ([7 => 'v'] as $key => $value) { break; } } catch (Exception $c) { need($value); } }", "expects int");
+    expect_error("<?php function need(int $x): void {} function run(): void { foreach (['key' => 7] as $e => $e) { need($e); } }", "expects int");
+}
+
+/// Empty foreach sources and non-heap displaced values add no retirement exits.
+#[test]
+fn test_nullable_fallback_flow_r51_foreach_retirement_precision() {
+    for (declarations, initial, source) in [
+        ("class Cold { public function __destruct() { throw new Exception('d'); } } function need(int $x): void {}", "$e = 1;", "['x']"),
+        ("class D { public function __destruct() { throw new Exception('d'); } } function need(D $x): void {}", "$e = new D();", "[]"),
+    ] {
+        let source = format!("<?php {declarations} function run(): void {{ {initial} try {{ foreach ({source} as $e) {{ break; }} }} catch (Exception $c) {{ need($e); }} }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+}
+
 /// Recursive loop values stay bounded when catch reachability requests retirement facts.
 #[test]
 fn test_nullable_fallback_flow_r48_recursive_retirement_completion() {

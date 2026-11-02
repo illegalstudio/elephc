@@ -11,6 +11,7 @@
 
 mod assignments;
 mod control_flow;
+mod foreach_bindings;
 mod loop_entry;
 mod loop_catches;
 mod switch_storage;
