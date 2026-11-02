@@ -34,10 +34,9 @@ pub(super) fn lower_arg_with_signature(
     if sig.ref_params.get(index).copied().unwrap_or(false)
         && is_native_selection_reference_argument(ctx, arg)
     {
-        let mut selection = arg;
-        while let ExprKind::NamedArg { value, .. } = &selection.kind { selection = value; }
-        let lowered = property_access::lower_property_write_receiver(ctx, selection);
-        return coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value;
+        let alias = stage_native_selection_reference(ctx, arg);
+        let variable = Expr::new(ExprKind::Variable(alias), arg.span);
+        return lower_arg_with_signature(ctx, sig, index, &variable);
     }
     if sig.ref_params.get(index).copied().unwrap_or(false)
         && matches!(&arg.kind, ExprKind::ArrayAccess { array, .. }
@@ -115,6 +114,20 @@ pub(super) fn is_native_selection_reference_argument(
         .and_then(Option::as_ref).unwrap_or(&source);
     crate::types::param_binding::native_selection_reference_receiver_type(checked, ctx.classes)
         || is_native_selection_reference_argument(ctx, receiver)
+}
+
+/// Moves the selected view into a scoped reference cell so no old-value lease spans the call.
+pub(super) fn stage_native_selection_reference(
+    ctx: &mut LoweringContext<'_, '_>, arg: &Expr,
+) -> String {
+    let mut selection = arg;
+    while let ExprKind::NamedArg { value, .. } = &selection.kind { selection = value; }
+    let lowered = property_access::lower_property_reference_receiver(ctx, selection);
+    let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
+    store_value_into_temp(ctx, &alias, PhpType::Mixed, lowered, arg.span);
+    ctx.promote_local_mixed_ref_cell(&alias, Some(arg.span));
+    publish_scoped_ref_receiver_alias(ctx, &alias, arg.span);
+    alias
 }
 
 /// Records a local passed to a pointer by-reference parameter for the final storage check.

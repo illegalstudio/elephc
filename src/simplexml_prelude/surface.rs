@@ -244,6 +244,12 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         return __elephc_simplexml_wrap($selected, get_class($this));
     }
     final public function __elephc_property_write_fetch(string $name): static {
+        return $this->__elephc_property_write_select($name, true);
+    }
+    final public function __elephc_property_reference_fetch(string $name): static {
+        return $this->__elephc_property_write_select($name, false);
+    }
+    final public function __elephc_property_write_select(string $name, bool $keepTemporary): static {
         if ($name === '') { throw new ValueError('Cannot create element with an empty name'); }
         $handle = $this->__elephc_handle;
         $view = elephc_xml_sx_select($handle, 2, $name, '', 0, 0);
@@ -260,7 +266,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
             }
         }
         $selected = __elephc_simplexml_wrap($view, get_class($this));
-        if ($persist) { $this->__elephc_write_tmp = $selected; }
+        if ($persist && $keepTemporary) { $this->__elephc_write_tmp = $selected; }
         return $selected;
     }
     final public function __elephc_property_set(string $name, mixed $value): void {

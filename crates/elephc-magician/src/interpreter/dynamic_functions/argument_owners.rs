@@ -106,7 +106,8 @@ pub(super) fn eval_call_argument_receiver(
     scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if !by_reference { return eval_expr(expr, context, scope, values); }
-    let (value, mut target) = eval_call_arg_value_with_mode(expr, true, context, scope, values)?;
+    let (value, mut target) = eval_call_arg_value_with_selection(expr,
+        Some(elephc_builtin_contract::ObjectProperty::WriteSelect), context, scope, values)?;
     let value = promote_borrowed_result(value, values);
     let mut owners = Vec::new();
     capture_abandoned_reference_owners(target.as_mut(), &mut owners);

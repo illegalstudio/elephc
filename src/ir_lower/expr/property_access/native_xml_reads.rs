@@ -24,15 +24,18 @@ pub(super) fn lower(
     )
 }
 
-/// Keeps named ordinary-object hooks when selecting a boxed native write receiver.
-pub(super) fn select(
-    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, expr: &Expr,
+/// Uses the shared native contract for assignment and independently owned reference selections.
+pub(super) fn select_operation(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str,
+    operation: elephc_builtin_contract::ObjectProperty, expr: &Expr,
 ) -> LoweredValue {
     let name = Expr::new(ExprKind::StringLiteral(property.into()), expr.span);
+    let method = elephc_builtin_contract::lookup_class("SimpleXMLElement").and_then(|class| class.operators)
+        .and_then(|operators| operators.property_method(operation)).expect("XML selection adapter is catalogued");
     dispatch(
         ctx, object, expr, PhpType::Mixed, false,
         |ctx, receiver| lower_method_call_with_receiver_direct(
-            ctx, receiver, "__elephc_property_write_fetch", &[name.clone()], Op::MethodCall, expr,
+            ctx, receiver, method, &[name.clone()], Op::MethodCall, expr,
         ),
         |ctx, receiver| lower_property_get_without_native_dispatch(ctx, receiver, property, Op::PropGet, expr),
     )
@@ -72,13 +75,17 @@ pub(super) fn probe(
 /// Retains an evaluated dynamic name and preserves any non-null native source-type hint.
 pub(super) fn dynamic(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: LoweredValue,
-    mode: PropertyFetchMode, known_native: bool, write_select: bool, expr: &Expr,
+    mode: PropertyFetchMode, known_native: bool,
+    selection: Option<elephc_builtin_contract::ObjectProperty>, expr: &Expr,
 ) -> LoweredValue {
     let temp = ctx.declare_owned_hidden_temp(PhpType::Str);
     store_value_into_temp(ctx, &temp, PhpType::Str, property, expr.span);
     let slot = ctx.local_slots[&temp];
     register_owned_call_operand(ctx, slot, expr.span);
-    let method = if write_select { "__elephc_property_write_fetch" }
+    let method = if let Some(operation) = selection {
+        elephc_builtin_contract::lookup_class("SimpleXMLElement").and_then(|class| class.operators)
+            .and_then(|operators| operators.property_method(operation)).expect("XML selection adapter is catalogued")
+    }
         else if mode == PropertyFetchMode::Read { "__elephc_property_get" }
         else if mode == PropertyFetchMode::Isset { "__elephc_property_presence" }
         else { "__elephc_property_probe" };

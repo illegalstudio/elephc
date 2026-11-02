@@ -248,6 +248,10 @@ pub(super) fn lower_variadic_tail_source_value(
         if let Some(value) = prelowered {
             return lowered_value_from_id(ctx, value);
         }
+        if is_native_selection_reference_argument(ctx, expr) {
+            let alias = stage_native_selection_reference(ctx, expr);
+            return lower_invoker_ref_variadic_arg_marker(ctx, &alias, expr.span);
+        }
         if let ExprKind::Variable(name) = &expr.kind {
             if ctx.boxed_reference_promotion_is_authorized(name, expr.span)
                 && !ctx.is_ref_bound_local(name)

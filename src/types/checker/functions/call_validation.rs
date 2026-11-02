@@ -254,6 +254,9 @@ impl Checker {
             ExprKind::NamedArg { value, .. } => value.as_ref(),
             _ => arg,
         };
+        if self.is_native_selection_reference_argument(storage_arg, caller_env)? {
+            return Ok(());
+        }
         if matches!(storage_arg.kind, ExprKind::ArrayAccess { .. }) {
             let detail = if descriptor_invocation {
                 "through callable descriptor dispatch"

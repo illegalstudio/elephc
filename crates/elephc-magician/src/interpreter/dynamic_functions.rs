@@ -157,6 +157,17 @@ fn eval_call_arg_value_with_mode(
     expr: &EvalExpr, by_reference: bool, context: &mut ElephcEvalContext,
     caller_scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
+    eval_call_arg_value_with_selection(expr,
+        by_reference.then_some(elephc_builtin_contract::ObjectProperty::ReferenceSelect), context, caller_scope, values)
+}
+
+/// Keeps intermediate write receivers cached while the final reference view has one owner.
+fn eval_call_arg_value_with_selection(
+    expr: &EvalExpr, selection: Option<elephc_builtin_contract::ObjectProperty>,
+    context: &mut ElephcEvalContext, caller_scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
+    let by_reference = selection.is_some();
     match expr {
         EvalExpr::LoadVar(name) => {
             let value = visible_scope_cell(context, caller_scope, name)
@@ -175,14 +186,14 @@ fn eval_call_arg_value_with_mode(
         EvalExpr::PropertyGet { object, property } => {
             let access_scope = context.execution_scope();
             let object = eval_call_argument_receiver(object, by_reference, context, caller_scope, values)?;
-            eval_property_call_arg_value(object, property.clone(), access_scope, by_reference, context, values)
+            eval_property_call_arg_value(object, property.clone(), access_scope, selection, context, values)
         }
         EvalExpr::DynamicPropertyGet { object, property } => {
             let access_scope = context.execution_scope();
             if by_reference && matches!(object.as_ref(), EvalExpr::LoadVar(_)) {
                 let property = eval_dynamic_member_name(property, context, caller_scope, values)?;
                 let object = eval_call_argument_receiver(object, true, context, caller_scope, values)?;
-                return eval_property_call_arg_value(object, property, access_scope, true, context, values);
+                return eval_property_call_arg_value(object, property, access_scope, selection, context, values);
             }
             let object = eval_call_argument_receiver(object, by_reference, context, caller_scope, values)?;
             let property = match eval_dynamic_member_name(property, context, caller_scope, values) {
@@ -192,7 +203,7 @@ fn eval_call_arg_value_with_mode(
                     return Err(status);
                 }
             };
-            eval_property_call_arg_value(object, property, access_scope, by_reference, context, values)
+            eval_property_call_arg_value(object, property, access_scope, selection, context, values)
         }
         EvalExpr::StaticPropertyGet {
             class_name,
@@ -246,13 +257,13 @@ fn eval_call_arg_value_with_mode(
 /// Keeps ordinary reference receivers while XML selections become independent temporary targets.
 fn eval_property_call_arg_value(
     object: RuntimeCellHandle, property: String, access_scope: ElephcEvalExecutionScope,
-    by_reference: bool,
+    selection: Option<elephc_builtin_contract::ObjectProperty>,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
     let selected = (|| {
-        if by_reference {
+        if let Some(operation) = selection {
             if let Some(value) = runtime_ops::simplexml_properties::invoke(values, object, &property,
-                elephc_builtin_contract::ObjectProperty::WriteSelect, None)?
+                operation, None)?
             { return Ok(value); }
         }
         eval_property_get_result(object, &property, context, values)
@@ -290,7 +301,8 @@ fn eval_nested_array_element_call_arg_value(
     array: &EvalExpr, index: &EvalExpr, by_reference: bool, context: &mut ElephcEvalContext,
     caller_scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
-    let (array, mut array_target) = eval_call_arg_value_with_mode(array, by_reference, context, caller_scope, values)?;
+    let (array, mut array_target) = eval_call_arg_value_with_selection(array,
+        by_reference.then_some(elephc_builtin_contract::ObjectProperty::WriteSelect), context, caller_scope, values)?;
     let mut index_owner = None;
     let result = (|| {
         let index = eval_expr(index, context, caller_scope, values)?;

@@ -32,7 +32,7 @@ passErasedTargetXmlSelections($xml);
     let function = module.functions.iter().find(|function| function.name == "passTargetXmlSelections").unwrap();
     assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::MethodCall
         && matches!(inst.immediate, Some(crate::ir::Immediate::Data(id))
-            if module.data.strings[id.as_raw() as usize] == "__elephc_property_write_fetch")),
+            if module.data.strings[id.as_raw() as usize] == "__elephc_property_reference_fetch")),
         "{target}: reference binding must select in write context");
     assert!(!function.instructions.iter().any(|inst| inst.op == crate::ir::Op::PropSet),
         "{target}: replacing an independent reference must not write the XML property back");

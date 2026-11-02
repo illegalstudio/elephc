@@ -55,7 +55,7 @@ pub(super) fn lower_static_settype(
             PhpType::Bool => CastType::Bool,
             _ => unreachable!("static settype targets are scalar"),
         };
-        let selection = property_access::lower_property_write_receiver(ctx, &var_arg);
+        let selection = property_access::lower_property_reference_receiver(ctx, &var_arg);
         let converted = super::ternary_cast::lower_scalar_cast_value(ctx, &target, selection, expr);
         crate::ir_lower::ownership::release_if_owned(ctx, converted, Some(expr.span));
         return Some(emit_bool_literal(ctx, true, Some(expr.span)));

@@ -95,7 +95,7 @@ pub(super) fn lower_enum_interface_call(
                 ctx, callable, descriptor_invoker_result_type(signature.as_ref()), expr.span,
             );
             let arguments = lower_descriptor_invoker_arg_container_for_call_user_func(
-                ctx, args, signature.as_ref(), expr.span,
+                ctx, args, signature.as_ref(), true, expr.span,
             );
             emit_callable_descriptor_invoke(ctx, callable, arguments, expr.span)
         } else {

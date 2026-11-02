@@ -325,7 +325,7 @@ pub(super) fn lower_descriptor_invoker_arg_array_for_call_user_func_array(
     );
     let owner = publish_constructed_container(ctx, array, span);
     for (index, item) in items.iter().enumerate() {
-        let value = lower_signature_invoker_ref_arg_marker(ctx, sig, index, item)
+        let value = lower_signature_invoker_ref_arg_marker(ctx, sig, index, item, false)
             .unwrap_or_else(|| {
                 let value = lower_expr(ctx, item);
                 coerce_variadic_tail_value(ctx, value, &array_ty, item.span)
@@ -474,8 +474,10 @@ pub(super) fn lower_call_user_func_descriptor_invoke_from_value(
 ) -> LoweredValue {
     let result_type = descriptor_invoker_result_type(sig);
     let callback = root_descriptor_callback(ctx, callback, result_type, expr.span);
+    let native_references = !matches!(&expr.kind, ExprKind::FunctionCall { name, .. }
+        if php_symbol_key(name.as_str().trim_start_matches('\\')) == "call_user_func");
     let arg_container =
-        lower_descriptor_invoker_arg_container_for_call_user_func(ctx, args, sig, expr.span);
+        lower_descriptor_invoker_arg_container_for_call_user_func(ctx, args, sig, native_references, expr.span);
     emit_callable_descriptor_invoke(ctx, callback, arg_container, expr.span)
 }
 

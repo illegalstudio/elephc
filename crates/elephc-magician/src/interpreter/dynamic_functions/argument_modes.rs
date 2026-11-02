@@ -71,7 +71,9 @@ impl CallArgumentModes {
     pub(in crate::interpreter) fn for_class_method(
         class: &str, method: &str, is_static: bool, context: &ElephcEvalContext,
     ) -> Self {
-        if let Some((owner, method)) = eval_dynamic_method_for_call(class, method, context) {
+        let dynamic = if is_static { eval_dynamic_static_method_for_call(class, method, context) }
+            else { eval_dynamic_method_for_call(class, method, context) };
+        if let Some((owner, method)) = dynamic {
             if validate_eval_member_access(&owner, method.visibility(), context).is_ok() {
                 return Self { names: method.params().to_vec(), references: method.parameter_is_by_ref().to_vec(),
                     variadic: method.parameter_is_variadic().iter().position(|flag| *flag) };

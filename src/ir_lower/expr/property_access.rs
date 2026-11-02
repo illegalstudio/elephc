@@ -16,6 +16,7 @@ pub(crate) use write_dimensions::{lower_native_dimension_write_select, may_have_
 pub(crate) use write_dimensions::lower_native_dimension_incdec_select_from_values;
 pub(super) mod write_select;
 pub(crate) use write_select::lower_property_write_receiver;
+pub(crate) use write_select::lower_property_reference_receiver;
 pub(crate) use write_select::defer_native_property_write_receiver;
 pub(super) use write_select::lower_property_write_prelude;
 
@@ -1162,7 +1163,8 @@ pub(super) fn lower_dynamic_property_fetch_or_select(
         || singular_object_class(&ty).is_some_and(|(class, _)|
             crate::types::builtin_classes::has_native_dimensions(class, ctx.classes));
     if ctx.classes.contains_key("SimpleXMLElement") && may_be_native {
-        return native_xml_reads::dynamic(ctx, object, property, mode, known_native, write_select, expr);
+        return native_xml_reads::dynamic(ctx, object, property, mode, known_native,
+            write_select.then_some(elephc_builtin_contract::ObjectProperty::WriteSelect), expr);
     }
     lower_dynamic_property_fetch_without_native(ctx, object, property, result_type, mode, expr)
 }

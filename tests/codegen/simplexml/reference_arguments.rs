@@ -45,8 +45,16 @@ echo (int)isset($xml->ctor), (int)isset($xml->method), (int)isset($xml->stat), (
     (int)isset($xml->bound), (int)isset($xml->boundStatic), (int)isset($xml->closure), '|';
 function readMissingXmlSelection($value): void { echo get_debug_type($value), '|'; }
 readMissingXmlSelection($xml->unread); echo (int)isset($xml->unread), '|';
+function replaceMissingVariadicXmlSelection(&...$values): void {
+    if (array_key_exists('slot', $values)) { $values['slot'] = 'replacement'; }
+    else { $values[0] = 'replacement'; }
+}
+replaceMissingVariadicXmlSelection($xml->tail);
+replaceMissingVariadicXmlSelection($xml->tail[0]);
+$callback = replaceMissingVariadicXmlSelection(...); $callback(slot: $xml->namedTail);
+echo (int)isset($xml->tail), (int)isset($xml->namedTail), '|';
 "#;
-    let expected = "SimpleXMLElement:first|SimpleXMLElement:created|SimpleXMLElement:name|1:1:1|::|1:4|1111111|SimpleXMLElement|0|";
+    let expected = "SimpleXMLElement:first|SimpleXMLElement:created|SimpleXMLElement:name|1:1:1|::|1:4|1111111|SimpleXMLElement|0|11|";
     let native = format!("<?php {body}");
     let encoded = body.replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("<?php $xmlCapability = new SimpleXMLElement('<r/>'); unset($xmlCapability); $code = $argc > 0 ? '{encoded}' : ''; eval($code); unset($code);");
@@ -74,6 +82,10 @@ function escapeReferenceSelection(&$value): callable {
 }
 function touchReferenceSelection(&$value): void { $value["id"] = "kept"; }
 function throwReferenceSelection(&$value): void { $value = "throw"; throw new RuntimeException("stop"); }
+function referenceSelectionWarning(int $severity, string $message): bool {
+    if (!str_contains($message, 'must be passed by reference')) { throw new RuntimeException($message); }
+    return true;
+}
 function exerciseReferenceSelection(SimpleXMLElement $root): void {
     replaceReferenceSelection($root->p); echo (string)$root->p, "|";
     $references = escapeReferenceSelection($root->p);
@@ -87,6 +99,11 @@ function exerciseReferenceSelection(SimpleXMLElement $root): void {
     touchReferenceSelection($root->p); echo (string)$root->p["id"], "|";
     try { throwReferenceSelection($root->p); }
     catch (RuntimeException $error) { echo $error->getMessage(), ":", (string)$root->p, "|"; unset($error); }
+    set_error_handler(referenceSelectionWarning(...));
+    call_user_func('replaceReferenceSelection', $root->readOnlyCall);
+    call_user_func_array('replaceReferenceSelection', [$root->readOnlyArray]);
+    restore_error_handler();
+    echo (int)isset($root->readOnlyCall), ':', (int)isset($root->readOnlyArray), '|';
     unset($references);
 }
 $base = new SimpleXMLElement("<r><p>old</p><q>4</q><a><b>8</b></a></r>");
@@ -101,12 +118,21 @@ function makeReferenceSelection(): ReferenceSelectionDestructorXml {
 }
 function consumeReferenceSelection(&$value): void { echo "call|"; $value = "new"; echo "tail|"; }
 consumeReferenceSelection(makeReferenceSelection()->p);
+$keptReferenceRoot = new ReferenceSelectionDestructorXml('<r/>');
+consumeReferenceSelection($keptReferenceRoot->p);
+echo 'after|'; unset($keptReferenceRoot); echo 'end|';
+$keptReferenceRoot = new ReferenceSelectionDestructorXml('<r/>');
+consumeReferenceSelection($keptReferenceRoot->a->b);
+echo 'after|'; unset($keptReferenceRoot); echo 'end|';
+$keptReferenceRoot = new ReferenceSelectionDestructorXml('<r/>');
+$referenceName = 'p'; consumeReferenceSelection($keptReferenceRoot->{$referenceName});
+echo 'after|'; unset($keptReferenceRoot); echo 'end|';
 "#;
     let native = format!("<?php {body}");
     let encoded = body.replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("<?php $capability = new SimpleXMLElement('<r/>'); unset($capability); $source = $argc > 0 ? '{encoded}' : ''; eval($source); unset($source);");
-    let row = "old|changed|changed|changed|8|changed|1:4|1:8|kept|stop:changed|";
-    let expected = row.repeat(2) + "drop:r|call|drop:p|tail|";
+    let row = "old|changed|changed|changed|8|changed|1:4|1:8|kept|stop:changed|0:0|";
+    let expected = row.repeat(2) + "drop:r|call|drop:p|tail|call|drop:p|tail|after|drop:r|end|call|drop:b|tail|after|drop:r|drop:a|end|call|drop:p|tail|after|drop:r|end|";
     for (mode, source) in [native, eval].iter().enumerate() {
         let (out, assembly) = compile_and_run_with_heap_debug_and_asm(source);
         preserve_stdout_mismatches(source, &assembly, std::slice::from_ref(&out), &[&expected]);

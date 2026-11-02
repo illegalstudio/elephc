@@ -43,28 +43,44 @@ fn deferred_storage_chain(expr: &Expr) -> bool {
 pub(crate) fn lower_property_write_receiver(
     ctx: &mut LoweringContext<'_, '_>, expr: &Expr,
 ) -> LoweredValue {
+    lower_receiver(ctx, expr, elephc_builtin_contract::ObjectProperty::WriteSelect)
+}
+
+/// Creates reference selections without storing a second owner in the parent's write cache.
+pub(crate) fn lower_property_reference_receiver(
+    ctx: &mut LoweringContext<'_, '_>, expr: &Expr,
+) -> LoweredValue {
+    lower_receiver(ctx, expr, elephc_builtin_contract::ObjectProperty::ReferenceSelect)
+}
+
+/// Resolves each receiver hop using its enclosing selection's ownership protocol.
+fn lower_receiver(
+    ctx: &mut LoweringContext<'_, '_>, expr: &Expr,
+    operation: elephc_builtin_contract::ObjectProperty,
+) -> LoweredValue {
+    let parent_operation = elephc_builtin_contract::ObjectProperty::WriteSelect;
     match &expr.kind {
         ExprKind::PropertyAccess { object, property } => {
-            let object = lower_property_write_receiver(ctx, object);
-            select_named(ctx, object, property, expr)
+            let object = lower_receiver(ctx, object, parent_operation);
+            select_named_operation(ctx, object, property, operation, expr)
         }
         ExprKind::DynamicPropertyAccess { object, property } => {
             let (object, property) = if matches!(object.kind, ExprKind::Variable(_)) {
                 let name = super::super::super::scoped_writes::property_name(ctx, property, expr.span)
                     .unwrap_or_else(|| { let name = lower_expr(ctx, property); coerce_runtime_property_name(ctx, name, expr.span) });
-                (lower_property_write_receiver(ctx, object), name)
+                (lower_receiver(ctx, object, parent_operation), name)
             } else {
-                let object = lower_property_write_receiver(ctx, object);
+                let object = lower_receiver(ctx, object, parent_operation);
                 let pins = pin_in_flight_owners(ctx, &[object.value], expr.span);
                 let name = super::super::super::scoped_writes::property_name(ctx, property, expr.span)
                     .unwrap_or_else(|| { let name = lower_expr(ctx, property); coerce_runtime_property_name(ctx, name, expr.span) });
                 unpin_in_flight_owners(ctx, pins, expr.span);
                 (object, name)
             };
-            select_dynamic(ctx, object, property, expr)
+            select_dynamic_operation(ctx, object, property, operation, expr)
         }
         ExprKind::ArrayAccess { array, index } => {
-            let array = lower_property_write_receiver(ctx, array);
+            let array = lower_receiver(ctx, array, parent_operation);
             lower_native_dimension_write_select(ctx, array, index, expr)
         }
         _ => lower_expr(ctx, expr),
@@ -75,11 +91,18 @@ pub(crate) fn lower_property_write_receiver(
 pub(in crate::ir_lower::expr) fn select_named(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, expr: &Expr,
 ) -> LoweredValue {
+    select_named_operation(ctx, object, property, elephc_builtin_contract::ObjectProperty::WriteSelect, expr)
+}
+
+/// Dispatches named native selections while keeping the ordinary getter fallback unchanged.
+fn select_named_operation(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str,
+    operation: elephc_builtin_contract::ObjectProperty, expr: &Expr,
+) -> LoweredValue {
     crate::ir_lower::stmt::property_write_receiver::guard_mixed_write_hop(ctx, object, property, expr.span);
     let object = refine_member_receiver(ctx, object, expr);
     let object = box_opaque_property_receiver(ctx, object, expr.span);
-    if let Some(method) = native_property_method_for_value(ctx, object.value, property,
-        elephc_builtin_contract::ObjectProperty::WriteSelect)
+    if let Some(method) = native_property_method_for_value(ctx, object.value, property, operation)
     {
         let name = Expr::new(ExprKind::StringLiteral(property.into()), expr.span);
         return lower_method_call_with_receiver(ctx, object, method, &[name], Op::MethodCall, expr);
@@ -88,7 +111,7 @@ pub(in crate::ir_lower::expr) fn select_named(
     if !property.starts_with("__elephc_") && ctx.classes.contains_key("SimpleXMLElement")
         && matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
     {
-        return native_xml_reads::select(ctx, object, property, expr);
+        return native_xml_reads::select_operation(ctx, object, property, operation, expr);
     }
     lower_property_get_from_value(ctx, object, property, Op::PropGet, expr)
 }
@@ -127,12 +150,17 @@ pub(in crate::ir_lower::expr) fn lower_property_write_prelude(
     true
 }
 
-/// Selects with an evaluated name through the same native/ordinary ownership boundary.
-pub(super) fn select_dynamic(
-    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, name: LoweredValue, expr: &Expr,
+/// Preserves the ownership protocol for a native selection with an evaluated property name.
+fn select_dynamic_operation(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, name: LoweredValue,
+    operation: elephc_builtin_contract::ObjectProperty, expr: &Expr,
 ) -> LoweredValue {
     crate::ir_lower::stmt::property_write_receiver::guard_mixed_dynamic_write_hop(ctx, object, name, expr.span);
     let object = refine_member_receiver(ctx, object, expr);
+    if operation == elephc_builtin_contract::ObjectProperty::ReferenceSelect {
+        let object = box_opaque_property_receiver(ctx, object, expr.span);
+        return native_xml_reads::dynamic(ctx, object, name, PropertyFetchMode::Read, false, Some(operation), expr);
+    }
     let property = match &expr.kind {
         ExprKind::DynamicPropertyAccess { property, .. } => property.as_ref().clone(),
         ExprKind::PropertyAccess { property, .. } => Expr::new(ExprKind::StringLiteral(property.clone()), expr.span),

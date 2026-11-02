@@ -69,6 +69,7 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
                 ctx,
                 args,
                 descriptor_signature.as_ref(),
+                true,
                 expr.span,
             )
         } else {
