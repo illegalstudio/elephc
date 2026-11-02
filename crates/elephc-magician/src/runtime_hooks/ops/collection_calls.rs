@@ -180,12 +180,11 @@ macro_rules! impl_collection_call_ops {
 
     /// Retains an eligible native property's persistent reference without copying its value.
     fn property_reference(
-        &mut self, object: RuntimeCellHandle, property: &str,
+        &mut self, object: RuntimeCellHandle, property: &str, scope: &str,
     ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-        let (scope_ptr, scope_len) = self.current_class_scope_abi();
         let reference = unsafe {
             __elephc_eval_value_property_reference(object.as_ptr(), property.as_ptr(),
-                property.len() as u64, scope_ptr, scope_len)
+                property.len() as u64, scope.as_ptr(), scope.len() as u64)
         };
         if reference.is_null() { Ok(None) } else { Self::handle(reference).map(Some) }
     }
@@ -314,16 +313,16 @@ macro_rules! impl_collection_call_ops {
         &mut self,
         class_name: &str,
         property: &str,
+        scope: &str,
     ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-        let (scope_ptr, scope_len) = self.current_class_scope_abi();
         let ptr = unsafe {
             __elephc_eval_value_static_property_reference(
                 class_name.as_ptr(),
                 class_name.len() as u64,
                 property.as_ptr(),
                 property.len() as u64,
-                scope_ptr,
-                scope_len,
+                scope.as_ptr(),
+                scope.len() as u64,
             )
         };
         if ptr.is_null() {

@@ -74,7 +74,7 @@ pub(in crate::interpreter) fn eval_native_property_reference_for_access(
     if validate_eval_member_access(&owner, visibility, context).is_err() {
         return eval_throw_property_access_error(&owner, property, visibility, context, values);
     }
-    eval_with_native_bridge_scope(&owner, context, || values.property_reference(object, property))
+    eval_with_native_bridge_scope(&owner, context, || values.property_reference(object, property, &owner))
 }
 
 /// Reads a native property through its getter, or its backing storage when no getter exists.

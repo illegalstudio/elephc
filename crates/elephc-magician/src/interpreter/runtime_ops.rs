@@ -476,9 +476,9 @@ pub trait RuntimeValueOps {
         property: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
-    /// Returns an owned persistent reference when native property storage supports one.
+    /// Returns an owned native reference in the declaring scope authorized by the interpreter.
     fn property_reference(
-        &mut self, _object: RuntimeCellHandle, _property: &str,
+        &mut self, _object: RuntimeCellHandle, _property: &str, _scope: &str,
     ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
         Ok(None)
     }
@@ -549,7 +549,7 @@ pub trait RuntimeValueOps {
 
     /// Retains an eligible native static property's persistent PHP reference when supported.
     fn static_property_reference(
-        &mut self, _class_name: &str, _property: &str,
+        &mut self, _class_name: &str, _property: &str, _scope: &str,
     ) -> Result<Option<RuntimeCellHandle>, EvalStatus> { Ok(None) }
 
     /// Checks whether a generated/AOT static property is initialized.

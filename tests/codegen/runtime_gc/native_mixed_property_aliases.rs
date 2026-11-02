@@ -98,6 +98,7 @@ class NativeProtectedMixedParent {
     public function writeValue(mixed $next): void { $this->value = $next; }
     public function __destruct() { echo 'retired|'; }
 }
+function bindNativeMixedThroughForeignContext(mixed $object): callable { return $object->bind(); }
 function exerciseNativeMixedScopes(bool $run): void {
     $child = new NativeHiddenMixedChild();
     $raw = new NativeHiddenRawChild();
@@ -124,15 +125,16 @@ class EvalProtectedMixedChild extends NativeProtectedMixedParent {
 }
 $protected = new EvalProtectedMixedChild();
 $escapedProtected = $protected->bind();
+$foreignProtected = bindNativeMixedThroughForeignContext($protected);
 $protected->writeValue("native");
-echo $escapedProtected(false), "|";
+echo $escapedProtected(false), "|", $foreignProtected(false), "|";
 $escapedProtected(true, "eval");
-echo $protected->readValue(), "|";
+echo $protected->readValue(), "|", $foreignProtected(false), "|";
 try { captureNativeScopedMixed($protected->value); } catch (Error $error) { echo "protected|"; }
 unset($protected);
 $escapedProtected(true, "survived");
-echo $escapedProtected(false), "|";
-unset($escapedProtected);
+echo $escapedProtected(false), "|", $foreignProtected(false), "|";
+unset($escapedProtected, $foreignProtected);
 ' : '';
     eval($code);
     unset($code);
@@ -141,7 +143,7 @@ exerciseNativeMixedScopes($argc > 0);
 "#;
     let output = compile_and_run_with_heap_debug(source);
     assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
-    assert_eq!(output.stdout, "first:child|second:raw|third|shared:child|native|eval|protected|retired|survived|");
+    assert_eq!(output.stdout, "first:child|second:raw|third|shared:child|native|native|eval|eval|protected|retired|survived|survived|");
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
     assert!(!output.stderr.contains("Warning:"), "{}", output.stderr);
 }
