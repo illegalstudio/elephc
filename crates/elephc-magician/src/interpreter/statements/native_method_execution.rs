@@ -9,29 +9,6 @@
 
 use super::*;
 
-/// Calls one generated/AOT instance method from already evaluated positional values.
-///
-/// Internal eval operations still have to pass through the native argument binder. The binder
-/// materializes compiler-internal physical slots, including the hidden argument collector, while
-/// keeping the supplied runtime values borrowed from their caller.
-pub(in crate::interpreter) fn eval_native_method_with_positional_values(
-    object: RuntimeCellHandle,
-    method_name: &str,
-    values_args: Vec<RuntimeCellHandle>,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let class_name = eval_runtime_object_class_name(object, values)?;
-    eval_native_method_with_evaluated_args(
-        object,
-        &class_name,
-        method_name,
-        positional_native_method_args(values_args),
-        context,
-        values,
-    )
-}
-
 /// Calls one generated/AOT method from positional values and a prevalidated bridge scope.
 pub(in crate::interpreter) fn eval_native_method_with_positional_values_unchecked_bridge_scope(
     object: RuntimeCellHandle,
