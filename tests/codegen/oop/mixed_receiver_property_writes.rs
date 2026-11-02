@@ -12,6 +12,33 @@
 
 use super::*;
 
+/// An inherited constructor and compound write retain the parent's private array and its COW.
+#[test]
+fn test_indexed_private_ancestor_storage_keeps_descendant_dynamic_entries_separate() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+#[AllowDynamicProperties]
+class PrivateIndexedStorageBase {
+    private array $items = [];
+    public function __construct(array $options) {
+        foreach ($options as $key => $value) { $this->items[$key] = $value; }
+    }
+    public function change(): void { $this->items[2] += 1; }
+    public function snapshot(): array { return $this->items; }
+}
+class PrivateIndexedStorageChild extends PrivateIndexedStorageBase {}
+function privateIndexedStorageExternal(mixed $object): void { $object->items[0] += 1; }
+$child = new PrivateIndexedStorageChild([2 => 2, 1005 => 1, 1002 => true]);
+$snapshot = $child->snapshot();
+$child->items = [99]; privateIndexedStorageExternal($child);
+$child->change();
+echo json_encode($snapshot), '|', json_encode($child->snapshot()), '|', json_encode($child->items);
+unset($snapshot, $child);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "{\"2\":2,\"1005\":1,\"1002\":true}|{\"2\":3,\"1005\":1,\"1002\":true}|[100]");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Issue #1094's own repro: the write is not landing in a copy, it is not landing at all, so the
 /// callee's own read-back is already wrong.
 #[test]

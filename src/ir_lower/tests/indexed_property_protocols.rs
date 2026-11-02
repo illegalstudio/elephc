@@ -32,3 +32,26 @@ indexedProtocolWrite(new IndexedProtocolDynamic());
 }
 
 supported_target_cases!(indexed_property_protocols, verify_indexed_property_protocols);
+
+/// Parent-private array writes must stay on their declared slot for a dynamic-capable child.
+fn verify_indexed_private_ancestor_storage(target: &str) {
+    let source = r#"<?php
+#[AllowDynamicProperties]
+class IndexedPrivateBase {
+    private array $items = [];
+    public function __construct(array $options) {
+        foreach ($options as $key => $value) { $this->items[$key] = $value; }
+    }
+}
+class IndexedPrivateChild extends IndexedPrivateBase {}
+$child = new IndexedPrivateChild([2 => 2, 1005 => 1]);
+"#;
+    let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+        std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+    let constructor = module.class_methods.iter().find(|function| function.name == "IndexedPrivateBase::__construct").unwrap();
+    assert!(!constructor.instructions.iter().any(|inst| inst.op == Op::RuntimeCall
+        && inst.immediate == Some(Immediate::RuntimeCall(RuntimeCallTarget::PropertyHashFetchForWrite))),
+        "{target}: lexical private array writes must not enter a descendant's dynamic property hash");
+}
+
+supported_target_cases!(indexed_private_ancestor_storage, verify_indexed_private_ancestor_storage);

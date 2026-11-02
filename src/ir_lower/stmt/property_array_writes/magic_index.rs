@@ -96,6 +96,12 @@ pub(super) fn lower(
 fn kind(ctx: &LoweringContext<'_, '_>, class: &str, info: &crate::types::ClassInfo, property: &str) -> Option<Kind> {
     if info.property_hooks.get(property).is_some_and(|hooks| hooks.any())
         || crate::types::builtin_classes::has_native_dimensions(class, ctx.classes) { return None; }
+    // A parent's lexical scope keeps its private slot on every descendant. Its
+    // physical metadata must not turn that slot into the child's dynamic hash.
+    if matches!(crate::types::resolve_property_name(ctx.classes, class, property, ctx.current_class.as_deref()),
+        crate::types::PropertyNameResolution::Visible | crate::types::PropertyNameResolution::ScopePrivate { .. }) {
+        return None;
+    }
     if magic_append::is_candidate(ctx, class, info, property) {
         let hash = info.visible_property(property).is_none() && property.parse::<i64>().is_err()
             && (crate::types::checker::builtin_stdclass::is_stdclass(class)
