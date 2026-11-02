@@ -16,12 +16,18 @@ fn lower_corpus(source: &str, target: &str) -> crate::ir::Module {
 
 /// Object argument, return and property boundaries retain their guarded native ABI.
 fn verify_simplexml_target_boundaries(target: &str) {
+    let started = std::time::Instant::now();
+    eprintln!("SimpleXML boundary corpus {target}: frontend and EIR start");
     let module = lower_corpus(include_str!("../../../tests/fixtures/simplexml/typed_object_boundaries.php"), target);
+    eprintln!("SimpleXML boundary corpus {target}: EIR complete after {:?}, {} functions, {} methods, {} closures",
+        started.elapsed(), module.functions.len(), module.class_methods.len(), module.closures.len());
     let reference_parameter = module.functions.iter().find(|function| function.name == "acceptRefBoundaryXml")
         .expect("typed object references must keep their callee-entry validator");
     assert!(reference_parameter.instructions.iter().any(|instruction| instruction.op == crate::ir::Op::InstanceOf),
         "{target}: by-reference object parameters need a nominal class guard");
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    eprintln!("SimpleXML boundary corpus {target}: assembly complete after {:?}, {} bytes",
+        started.elapsed(), assembly.len());
     for message in [
         "acceptBoundaryXml(): Argument #1 ($node) must be of type SimpleXMLElement, null given",
         "returnBoundaryXml(): Return value must be of type SimpleXMLElement, null returned",
