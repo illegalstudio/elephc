@@ -47,6 +47,7 @@ mod property_foreach_owners;
 mod property_unset_owners;
 mod native_property_read_leases;
 mod runtime_property_setters;
+mod callable_argument_labels;
 mod global_return_owners;
 mod conditional_assignment_owners;
 mod borrowed_string_reads;

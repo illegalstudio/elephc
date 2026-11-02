@@ -10,6 +10,35 @@
 
 use crate::support::*;
 
+/// Caller-side nullable guards retain closure and first-class function diagnostic names.
+#[test]
+fn test_simplexml_callable_argument_guards_keep_source_labels() {
+    if skip_without_xml_native("test_simplexml_callable_argument_guards_keep_source_labels") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function callableLabelMaybe(bool $present): ?SimpleXMLElement {
+    return $present ? new SimpleXMLElement('<r/>') : null;
+}
+function callableLabelFunction(SimpleXMLElement $node): void { echo 'unexpected|'; }
+function callableLabelReport(TypeError $error): void {
+    $message = explode(', called in ', $error->getMessage())[0];
+    echo str_starts_with($message, '{closure:') ? 'closure|' : 'function|';
+    echo substr($message, strpos($message, 'Argument #')), '|';
+}
+$missing = callableLabelMaybe($argc < 0);
+$plain = function(SimpleXMLElement $node): void { echo 'unexpected|'; };
+$generator = function(SimpleXMLElement $node): Generator { yield 1; };
+$function = callableLabelFunction(...);
+try { $plain($missing); } catch (TypeError $error) { callableLabelReport($error); }
+try { $generator($missing); } catch (TypeError $error) { callableLabelReport($error); }
+try { $function($missing); } catch (TypeError $error) { callableLabelReport($error); }
+foreach ($generator(new SimpleXMLElement('<r/>')) as $number) { echo $number; }
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    let argument = "Argument #1 ($node) must be of type SimpleXMLElement, null given|";
+    assert_eq!(out.stdout, format!("closure|{argument}closure|{argument}function|{argument}1"));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 const ARITHMETIC: &str = include_str!("../../fixtures/simplexml/iterator_arithmetic.php");
 const ARITHMETIC_EVAL: &str = include_str!("../../fixtures/simplexml/iterator_arithmetic_eval.php");
 const BOUNDARIES: &str = include_str!("../../fixtures/simplexml/typed_object_boundaries.php");

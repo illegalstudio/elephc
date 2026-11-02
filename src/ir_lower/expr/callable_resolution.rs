@@ -65,7 +65,9 @@ pub(super) fn lower_static_callable_call(
                 ctx, sig.as_ref(), &return_alias, &php_type, expr.span,
             );
             begin_call_argument_evaluation(ctx);
+            let previous_description = ctx.call_description.replace(function_name.clone());
             let mut operands = lower_args_with_signature(ctx, sig.as_ref(), callback_args);
+            ctx.call_description = previous_description;
             let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
             let roots = root_user_call_operands(
                 ctx, &mut operands, sig.as_ref(), &return_alias, &php_type, expr.span,
@@ -188,7 +190,13 @@ pub(super) fn lower_static_callable_call(
                 expr.span,
             );
             begin_call_argument_evaluation(ctx);
+            let label = ctx.closure_function(&name).and_then(|function| function.display_name.clone())
+                .or_else(|| (ctx.builder.function().name == name)
+                    .then(|| ctx.builder.function().display_name.clone()).flatten())
+                .unwrap_or_else(|| "{closure}".to_string());
+            let previous_description = ctx.call_description.replace(label);
             let mut arg_values = lower_args_with_signature(ctx, Some(&signature), callback_args);
+            ctx.call_description = previous_description;
             let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
             let roots = root_user_call_operands(
                 ctx, &mut arg_values, Some(&signature), &return_alias, &php_type, expr.span,
