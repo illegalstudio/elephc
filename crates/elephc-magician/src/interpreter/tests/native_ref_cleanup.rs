@@ -632,6 +632,7 @@ fn native_reference_staging_keeps_duplicate_persistent_aliases_shared() {
     for index in 0..2 {
         function.set_param_type(index, EvalParameterType::new(vec![EvalParameterTypeVariant::Array], false));
         function.set_param_by_ref(index, true);
+        function.set_param_boxed_ref(index, true);
     }
     let mut arguments = Vec::new();
     for name in ["a", "b"] {
