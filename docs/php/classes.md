@@ -606,7 +606,7 @@ $counter->value = 3;
 echo $value;           // 3
 ```
 
-By-reference promoted parameters may also have defaults. If no argument is passed, elephc creates a private reference cell for the default value; if a variable is passed, the promoted property aliases that variable. `readonly` by-reference promoted properties are rejected at compile time because construction would have to bind an indirect mutable alias to a readonly slot.
+By-reference promoted parameters may also have defaults. If no argument is passed, elephc creates a private reference cell for the default value; if a variable is passed, the promoted property aliases that variable. Exact `mixed` promoted references own their shared storage, so the object can outlive the caller's local scope. Native and eval aliases of these Mixed properties preserve writes across inherited constructors, clone and unset. `readonly` by-reference promoted properties are rejected at compile time because construction would have to bind an indirect mutable alias to a readonly slot.
 
 ## Instance methods and $this
 Virtual dispatch for overrides.

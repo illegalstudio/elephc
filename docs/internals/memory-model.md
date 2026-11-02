@@ -546,7 +546,11 @@ propagating. This applies both to explicit retirement and function epilogues.
 Object-owned property reference cells use heap kind `8`, with their payload type
 in header bits `8..14`. Their two payload words remain the value's low word and
 its high word or string length. Class GC descriptor tag `11` identifies these
-owned cells; constructor-promoted borrowed reference addresses stay non-owning.
+owned cells. Exact `mixed` constructor-promoted references acquire an object owner
+for the actual caller cell. Borrowed eval argument slots first share a persistent
+PHP reference wrapper with a new owned native cell. The constructor publishes the
+retained binding before releasing its allocation-time placeholder. Other typed
+constructor reference payloads retain their separate borrowed representation.
 Each alias owns the cell separately from the contained value. Rebinding acquires
 the new cell before retiring the previous local, which may own the source object.
 Cloning separates a singleton cell and shares one with live aliases, excluding
