@@ -52,6 +52,7 @@ mod nested_scalar_writes;
 mod static_false_parent;
 mod array_write_storage;
 mod typed_foreach;
+mod foreach_bindings;
 mod switches;
 mod includes;
 mod exceptions;

@@ -9,6 +9,18 @@
 
 use crate::ir::{Immediate, IrHeapKind, IrType, Op};
 
+/// Every supported target emits fetched-operand unwind roots and precise reference retirement.
+#[test]
+fn test_nullable_fallback_flow_r53_foreach_protocol_all_targets() {
+    let source = "<?php class Payload { public function __destruct() { echo 'drop'; } } class Items implements Iterator { public function rewind(): void {} public function valid(): bool { return true; } public function current(): Payload { return new Payload(); } public function key(): int { throw new Exception('key'); } public function next(): void {} } function walk(Iterator $items): void { $value = 5; try { foreach ($items as $key => $value) { break; } } catch (Exception $c) { var_dump($value); } } class D { public function __destruct() { throw new Exception('delem'); } } function needInt(int $v): void { echo $v; } $e = 1; $xs = [7 => new D()]; try { foreach ($xs as $e => &$e) {} } catch (Exception $c) { needInt($e); } walk(new Items());";
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = crate::codegen::platform::Target::parse(name).unwrap();
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), target);
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// All supported targets emit same-name and throwing-retirement foreach bindings.
 #[test]
 fn test_nullable_fallback_flow_r52_foreach_binding_publication_all_targets() {

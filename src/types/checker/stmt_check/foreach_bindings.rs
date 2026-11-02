@@ -34,7 +34,7 @@ impl Checker {
     /// Binds one iteration in PHP order without making its names present on a skipped loop.
     pub(super) fn bind_foreach_iteration(
         &mut self, array: &Expr, value_name: &str, value_type: PhpType,
-        key: Option<(&str, PhpType)>, env: &mut TypeEnv,
+        key: Option<(&str, PhpType)>, retired: PhpType, env: &mut TypeEnv,
     ) {
         let value_was_present = self.definitely_bound_locals.contains(value_name);
         let key_was_present = key.as_ref().is_some_and(|(name, _)| self.definitely_bound_locals.contains(*name));
@@ -44,7 +44,6 @@ impl Checker {
             ExprKind::ArrayLiteralMixed(values) => !values.is_empty(),
             _ => true,
         };
-        let retired = self.binding_retirement_type(value_name, env);
         env.insert(value_name.to_string(), value_type);
         self.definitely_bound_locals.insert(value_name.to_string());
         if can_iterate { self.record_binding_retirement_exception_flow(&retired, env); }

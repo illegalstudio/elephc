@@ -336,16 +336,21 @@ impl Checker {
                 // checker rejects became one that miscompiles. Marking `$v` here is the same
                 // permanent marking a `=&` target receives, and restores the hard error.
                 //
-                // Recorded before the iterable is inferred so an iterable that fails to type is
-                // still treated as aliased.
+                // The source container is aliased before inference. Capture the displaced
+                // value after source effects and before this statement creates its new alias.
                 if *value_by_ref {
                     self.record_reference_alias_root(array);
+                }
+                let value_was_bound = env.contains_key(value_var);
+                let arr_ty = self.infer_type_with_assignment_effects(array, env);
+                let retired_value = self.binding_retirement_type(value_var, env);
+                if *value_by_ref {
+                    // Retain the permanent alias even when source inference reports an error.
                     self.ref_aliased_locals.insert(value_var.clone());
                     self.non_builtin_ref_aliased_locals
                         .insert(value_var.clone());
                 }
-                let value_was_bound = env.contains_key(value_var);
-                let arr_ty = self.infer_type_with_assignment_effects(array, env)?;
+                let arr_ty = arr_ty?;
                 self.record_foreach_entry_exception_flow(stmt, &arr_ty, env);
                 if *value_by_ref {
                     widen_by_ref_foreach_source_storage(self, array, env)?;
@@ -376,7 +381,7 @@ impl Checker {
                         *elem_ty.clone()
                     };
                     self.bind_foreach_iteration(array, value_var, value_ty.clone(),
-                        key_var.as_deref().map(|name| (name, key_ty)), env);
+                        key_var.as_deref().map(|name| (name, key_ty)), retired_value, env);
                     self.update_foreach_callable_metadata(value_var, array, &value_ty);
                     if let Some(k) = key_var { self.clear_foreach_callable_metadata(k); }
                     if promotes_to_hash {
@@ -402,7 +407,7 @@ impl Checker {
                         *value.clone()
                     };
                     self.bind_foreach_iteration(array, value_var, value_ty.clone(),
-                        key_var.as_deref().map(|name| (name, *key.clone())), env);
+                        key_var.as_deref().map(|name| (name, *key.clone())), retired_value, env);
                     self.update_foreach_callable_metadata(value_var, array, &value_ty);
                     if let Some(k) = key_var { self.clear_foreach_callable_metadata(k); }
                     if *value_by_ref {
@@ -429,7 +434,7 @@ impl Checker {
                     let (key_ty, value_ty) =
                         self.foreach_object_key_value_types(class_name, array);
                     self.bind_foreach_iteration(array, value_var, value_ty,
-                        key_var.as_deref().map(|name| (name, key_ty)), env);
+                        key_var.as_deref().map(|name| (name, key_ty)), retired_value, env);
                     self.clear_foreach_callable_metadata(value_var);
                     if let Some(k) = key_var { self.clear_foreach_callable_metadata(k); }
                 } else if matches!(
@@ -437,7 +442,7 @@ impl Checker {
                     PhpType::Iterable | PhpType::Mixed | PhpType::Union(_)
                 ) {
                     self.bind_foreach_iteration(array, value_var, PhpType::Mixed,
-                        key_var.as_deref().map(|name| (name, PhpType::Mixed)), env);
+                        key_var.as_deref().map(|name| (name, PhpType::Mixed)), retired_value, env);
                     self.clear_foreach_callable_metadata(value_var);
                     if let Some(k) = key_var { self.clear_foreach_callable_metadata(k); }
                 } else if let Some(type_name) = non_iterable_foreach_argument_name(&arr_ty) {

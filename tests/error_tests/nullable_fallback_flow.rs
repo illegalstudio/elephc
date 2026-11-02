@@ -9,6 +9,16 @@
 
 use super::*;
 
+/// Creating a foreach reference cannot make the displaced proven scalar destructible.
+#[test]
+fn test_nullable_fallback_flow_r53_foreach_reference_retirement_precision() {
+    let source = "<?php class D { public function __destruct() { throw new Exception('delem'); } } function needInt(int $v): void {} $e = 1; $xs = [7 => new D()]; try { foreach ($xs as $e => &$e) {} } catch (Exception $c) { needInt($e); }";
+    check_source(source).unwrap_or_else(|error| panic!("{error}"));
+    // An alias that predates this statement still prevents a scalar retirement proof.
+    let aliased = source.replace("$e = 1;", "$e = 1; $alias = &$e;");
+    expect_error(&aliased, "expects int");
+}
+
 /// A concrete scalar array cannot throw before publishing its iteration bindings.
 #[test]
 fn test_nullable_fallback_flow_r52_foreach_entry_precision() {

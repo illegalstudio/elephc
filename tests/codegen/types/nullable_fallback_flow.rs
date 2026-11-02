@@ -9,6 +9,75 @@
 
 use super::*;
 
+/// Iterator callbacks precede publication and fetched owners survive a throwing key callback.
+#[test]
+fn test_nullable_fallback_flow_r53_foreach_protocol_runtime() {
+    let source = r#"<?php
+class R53Probe implements Iterator {
+    private bool $valid = true;
+    public function rewind(): void {}
+    public function valid(): bool { return $this->valid; }
+    public function current(): string { echo "current\n"; return 'v'; }
+    public function key(): int {
+        global $protocolValue;
+        echo 'key sees ', gettype($protocolValue), "\n";
+        return 7;
+    }
+    public function next(): void { $this->valid = false; }
+}
+class R53InterfaceProbe extends R53Probe {
+    public function key(): int {
+        global $interfaceValue;
+        echo 'key sees ', gettype($interfaceValue), "\n";
+        return 7;
+    }
+}
+class R53Payload { public function __destruct() { echo "drop\n"; } }
+class R53ThrowKey implements Iterator {
+    public function rewind(): void {}
+    public function valid(): bool { return true; }
+    public function current(): R53Payload { echo "current\n"; return new R53Payload(); }
+    public function key(): int { echo "key\n"; throw new Exception('key'); }
+    public function next(): void {}
+}
+function throughR53Interface(Iterator $items): void {
+    global $interfaceValue;
+    foreach ($items as $key => $interfaceValue) { echo $key, ':', $interfaceValue, "\n"; }
+}
+function r53ExistingKeyReference(): void {
+    $key = 0;
+    $alias = &$key;
+    foreach ([7 => 'v'] as $key => $value) { echo $key, ':', $value, "\n"; break; }
+    var_dump($alias);
+}
+$protocolValue = 5;
+foreach (new R53Probe() as $key => $protocolValue) { echo $key, ':', $protocolValue, "\n"; }
+$interfaceValue = 5;
+throughR53Interface(new R53InterfaceProbe());
+$throwValue = 5;
+try { foreach (new R53ThrowKey() as $throwKey => $throwValue) { break; } }
+catch (Exception $c) { echo 'catch ', gettype($throwValue), "\n"; }
+echo "end\n";
+r53ExistingKeyReference();
+"#;
+    assert_nullable_flow_cli_heap_output(source,
+        "current\nkey sees integer\n7:v\ncurrent\nkey sees integer\n7:v\ncurrent\nkey\ndrop\ncatch integer\nend\n7:v\nint(7)\n");
+}
+
+/// A same-name reference retires its element only after publishing the key into that cell.
+#[test]
+fn test_nullable_fallback_flow_r53_foreach_reference_retirement_runtime() {
+    let source = r#"<?php
+class R53Element { public function __destruct() { throw new Exception('delem'); } }
+function needR53Int(int $value): void { echo 'need ', $value, "\n"; }
+$e = 1;
+$xs = [7 => new R53Element()];
+try { foreach ($xs as $e => &$e) { echo "body\n"; } }
+catch (Exception $c) { echo 'C e=', $e, ' xs=', $xs[7], "\n"; needR53Int($e); }
+"#;
+    assert_nullable_flow_cli_heap_output(source, "C e=7 xs=7\nneed 7\n");
+}
+
 /// Foreach publishes value then key before retiring the displaced owner in both IR modes.
 #[test]
 fn test_nullable_fallback_flow_r52_foreach_binding_publication_runtime() {
