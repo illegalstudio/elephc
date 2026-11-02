@@ -2004,3 +2004,32 @@ var_dump($runtime->p);
         "int(5)\nCannot assign string to property TypedSlot::$p of type int\nint(1)\nint(7)\n"
     );
 }
+
+/// Typed and erased runtime names invoke ordinary set hooks without loading XML classes.
+#[test]
+fn test_runtime_name_set_hooks_without_xml() {
+    let source = r#"<?php
+class OrdinaryRuntimeSetHook {
+    public string $value = 'start' {
+        get { return $this->value; }
+        set { echo 'set:', $value, '|'; $this->value = $value; }
+    }
+}
+function typedRuntimeSetHook(OrdinaryRuntimeSetHook $object, string $name, mixed $value): void {
+    $object->{$name} = $value;
+}
+function erasedRuntimeSetHook(mixed $object, string $name, mixed $value): void {
+    $object->{$name} = $value;
+}
+$object = new OrdinaryRuntimeSetHook();
+typedRuntimeSetHook($object, 'value', 'typed'); echo $object->value, '|';
+erasedRuntimeSetHook($object, 'value', 'erased'); echo $object->value, '|';
+typedRuntimeSetHook($object, 'value', 9); echo $object->value, '|';
+"#;
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(source);
+    let expected = "set:typed|typed|set:erased|erased|set:9|9|";
+    preserve_stdout_mismatches(source, &assembly, std::slice::from_ref(&out), &[expected]);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, expected);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

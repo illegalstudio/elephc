@@ -7,6 +7,7 @@
 //! Key details:
 //! - A boxed receiver is tested once, and both branches share the existing receiver lease.
 //! - Native arguments are boxed, pinned during the call, and retired independently.
+//! - Ordinary runtime-name set hooks remain available without the XML capability.
 
 use super::*;
 
@@ -105,10 +106,16 @@ pub(super) fn lower_dynamic(
             emit_set_name(ctx, object, name, value, method, span);
             return true;
         }
-        if !class.is_empty() && !ctx.interfaces.contains_key(&class) { return false; }
+        if !class.is_empty() && !ctx.interfaces.contains_key(&class) {
+            super::runtime_set_hooks::lower_dynamic(ctx, object, name, value, span);
+            return true;
+        }
     }
-    if !opaque_receiver(ctx, &ty)
-        || !ctx.classes.contains_key("SimpleXMLElement") { return false; }
+    if !opaque_receiver(ctx, &ty) { return false; }
+    if !ctx.classes.contains_key("SimpleXMLElement") {
+        super::runtime_set_hooks::lower_dynamic(ctx, object, name, value, span);
+        return true;
+    }
     let class = ctx.intern_class_name("SimpleXMLElement");
     let condition = ctx.emit_value(Op::InstanceOf, vec![object.value], Some(Immediate::Data(class)),
         PhpType::Bool, Op::InstanceOf.default_effects(), Some(span));
