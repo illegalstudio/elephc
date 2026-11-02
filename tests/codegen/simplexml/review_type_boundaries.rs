@@ -175,10 +175,34 @@ fn test_simplexml_review_type_boundaries_bundle() {
 #[test]
 fn test_simplexml_type_boundaries_native_bundle() {
     if skip_without_xml_native("test_simplexml_type_boundaries_native_bundle") { return; }
-    let source = format!("{BOUNDARIES}\n{}\n{}",
+    let marker = "$box = new BoundaryXmlBox();";
+    assert_eq!(BOUNDARIES.matches(marker).count(), 1);
+    let boundaries = BOUNDARIES.replace(marker, &format!("if ($argc === 2) {{ return; }}\n{marker}"));
+    let source = format!("{boundaries}\nif ($argc === 3) {{ return; }}\n{}\nif ($argc === 4) {{ return; }}\n{}",
         REFERENCES.strip_prefix("<?php").unwrap(), GENERATORS.strip_prefix("<?php").unwrap());
-    let expected = format!("{BOUNDARIES_EXPECTED}{REFERENCES_EXPECTED}{GENERATORS_EXPECTED}");
-    assert_independent_boundary_program(&source, &expected);
+    let arguments = BOUNDARIES_EXPECTED.split_once("Cannot assign null").unwrap().0.to_string();
+    let expected = [
+        format!("{BOUNDARIES_EXPECTED}{REFERENCES_EXPECTED}{GENERATORS_EXPECTED}"),
+        arguments,
+        BOUNDARIES_EXPECTED.to_string(),
+        format!("{BOUNDARIES_EXPECTED}{REFERENCES_EXPECTED}"),
+    ];
+    let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(
+        &source, &[&[], &["arguments"], &["properties", "checkpoint"], &["references", "checkpoint", "checkpoint"]],
+    );
+    let expected = expected.iter().map(String::as_str).collect::<Vec<_>>();
+    preserve_stdout_mismatches(&source, &assembly, &runs, &expected);
+    let mut failures = Vec::new();
+    for ((output, expected), checkpoint) in runs.iter().zip(expected).zip(["complete", "arguments", "properties", "references"]) {
+        if !output.success || output.stdout != expected
+            || !output.stderr.contains("HEAP DEBUG: leak summary: clean")
+            || output.stderr.contains("Warning:")
+        {
+            failures.push(format!("checkpoint={checkpoint}: stdout={} stderr={}", output.stdout, output.stderr));
+        }
+    }
+    assert_eq!(runs.len(), 4);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 /// Isolates eval boundary owners without dropping the original shared native/eval regression.
