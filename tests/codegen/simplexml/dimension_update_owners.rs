@@ -36,11 +36,28 @@ function coalesceOwnerProgram(): void {
     unset($root);
 }
 coalesceOwnerProgram();
+class CoalesceOwnerThrowChild {
+    public function __isset(string $name): bool { return false; }
+    public function __get(string $name): mixed { return null; }
+    public function __set(string $name, mixed $value): void { throw new RuntimeException('setter'); }
+}
+function coalesceOwnerStringName(): string { return str_repeat('child', 1); }
+function coalesceOwnerThrowProgram(bool $null): void {
+    $root = new stdClass();
+    $root->child = $null ? null : new CoalesceOwnerThrowChild();
+    try { $root->{coalesceOwnerStringName()}->value ??= 2; }
+    catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
+    catch (Error $error) { echo 'null|'; }
+    unset($error, $root);
+}
+for ($iteration = 0; $iteration < 3; $iteration++) {
+    coalesceOwnerThrowProgram(false); coalesceOwnerThrowProgram(true);
+}
 "#;
     let out = compile_and_run_with_heap_debug(source);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, concat!("value|name|drop|name|drop|name|drop|name|drop|",
-        "name|value|name|drop|name|drop|name|drop|4|"));
+        "name|value|name|drop|name|drop|name|drop|4|setter|null|setter|null|setter|null|"));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
     assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
 }

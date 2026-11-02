@@ -503,12 +503,14 @@ foreach ([new PrefixStorageString(), new PrefixStorageInt(), new PrefixStorageFl
 }
 unset($object);
 "#;
-    let out = compile_and_run_with_heap_debug(source);
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(source);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, concat!(
+    let expected = concat!(
         "string(1) \"6\"\nstring(1) \"5\"\nint(6)\nint(5)\nfloat(6)\nfloat(5)\n",
         "int(6)\nint(5)\nstring(1) \"6\"\nstring(1) \"5\"\nget|set|get|set|int(6)\nint(4)\n",
         "hook-get|hook-set|hook-get|hook-set|int(6)\nint(5)\n",
-    ));
+    );
+    preserve_stdout_mismatches(source, &assembly, std::slice::from_ref(&out), &[expected]);
+    assert_eq!(out.stdout, expected);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
