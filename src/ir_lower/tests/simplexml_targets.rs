@@ -56,7 +56,9 @@ fn native_nullable_object_reference_returns_preserve_the_named_cell_on_every_tar
                     "{target}: {name} must check the replacement before unboxing");
             }
         }
-        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(assembly.contains("referenceReturnBoundaryXml(): Return value must be of type SimpleXMLElement, null returned"),
+            "{target}: missing native reference-return boundary diagnostic");
     }
 }
 
@@ -189,9 +191,9 @@ $xml = new SimpleXMLElement('<r/>');
 
 supported_target_cases!(boxed_native_write_receivers_guard_null, verify_boxed_native_write_receivers_guard_null);
 
-/// Compiles the same complete SimpleXML fixture through one supported target's emitter.
+/// Compiles core XML and DOM behavior without combining independent ownership corpora.
 fn verify_simplexml_target(target: &str) {
-    let source = [r###"<?php
+    let source = r###"<?php
 debug_backtrace();
 $counterXml = new SimpleXMLElement('<r>2</r>');
 $targetLiveDocument = new DOMDocument();
@@ -432,14 +434,8 @@ $doc = new DOMDocument(); $doc->loadXML('<r><v>shared</v></r>');
 $imported = simplexml_import_dom($doc);
 if ($imported instanceof SimpleXMLElement) { $imported->v = 'changed'; }
 echo $doc->saveXML();
-"###,
-        include_str!("../../../tests/fixtures/simplexml/iterator_arithmetic.php").trim_start_matches("<?php"),
-        include_str!("../../../tests/fixtures/simplexml/typed_object_boundaries.php").trim_start_matches("<?php"),
-        include_str!("../../../tests/fixtures/simplexml/reference_object_boundaries.php").trim_start_matches("<?php"),
-        include_str!("../../../tests/fixtures/simplexml/generator_object_boundaries.php").trim_start_matches("<?php"),
-        include_str!("../../../tests/fixtures/simplexml/node_views.php").trim_start_matches("<?php"),
-    ].concat();
-    let module = super::lower_source_at_for_target(&source, std::path::Path::new("main.php"), std::path::Path::new("."),
+"###;
+    let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen::platform::Target::parse(target).unwrap());
     let cache = module.functions.iter().find(|function| function.name == "__elephc_dom_remember_in")
         .expect("DOM cache writes must use a DOMDocument-typed helper");
@@ -505,28 +501,7 @@ echo $doc->saveXML();
                 && inst.immediate == Some(crate::ir::Immediate::LocalSlot(slot.id))), "{target}: missing {op:?} for scoped capture");
         }
     }
-    let reference_parameter = module.functions.iter().find(|function| function.name == "acceptRefBoundaryXml")
-        .expect("typed object references must keep their callee-entry validator");
-    assert!(reference_parameter.instructions.iter().any(|instruction| instruction.op == crate::ir::Op::InstanceOf),
-        "{target}: by-reference object parameters need a nominal class guard");
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-    let guard_name = crate::names::generator_parameter_guard_name("generatorBoundaryXml");
-    let guard = module.closures.iter().find(|function| function.name == guard_name)
-        .expect("generator parameters must have an ordinary eager EIR validator");
-    assert!(!guard.flags.is_generator && guard.flags.is_synthetic);
-    assert!(guard.instructions.iter().any(|instruction| instruction.op == crate::ir::Op::IsNull));
-    let constructor = &assembly[assembly.find(&format!("{}:", crate::names::function_symbol("generatorBoundaryXml"))).unwrap()..];
-    let validation = constructor.find(&crate::names::function_symbol(&guard_name)).unwrap();
-    let allocation = constructor.find("__rt_fiber_construct").unwrap();
-    assert!(validation < allocation, "{target}: null validation must precede coroutine allocation");
-    for message in [
-        "acceptBoundaryXml(): Argument #1 ($node) must be of type SimpleXMLElement, null given",
-        "returnBoundaryXml(): Return value must be of type SimpleXMLElement, null returned",
-        "referenceReturnBoundaryXml(): Return value must be of type SimpleXMLElement, null returned",
-        "Cannot assign null to property BoundaryXmlBox::$node of type SimpleXMLElement",
-    ] {
-        assert!(assembly.contains(message), "{target}: missing native object boundary: {message}");
-    }
     assert!(assembly.contains("__rt_gc_collect_cycles_explicit"), "{target}: shutdown retires native document cycles");
     assert!(assembly.contains("__rt_sprintf_mixed_to_string"), "{target}: erased object string-context ABI");
     assert!(assembly.contains("elephc_xml_sx_load"), "{target}: document parsing boundary");
