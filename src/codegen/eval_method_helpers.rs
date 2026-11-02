@@ -2039,12 +2039,13 @@ fn emit_aarch64_ref_arg_cells(
     for slot in &mut ref_slots {
         emit_aarch64_load_eval_arg(module, emitter, slot.param_index, arg_array_frame_offset, fail_label);
         emitter.instruction("ldr x0, [x29, #-16]");                             // reload the original eval Mixed cell for by-reference writeback
-        abi::emit_call_label(emitter, "__rt_mixed_deref");                    // write through the concrete child without destroying PHP reference identity
+        if slot.param_ty.codegen_repr() != PhpType::Mixed {
+            abi::emit_call_label(emitter, "__rt_mixed_deref");
+        }
         abi::emit_push_result_value(emitter, &PhpType::Mixed);
         if matches!(slot.param_ty.codegen_repr(), PhpType::Mixed) {
             slot.raw_refcounted_owned = true;
             emitter.instruction("ldr x0, [x29, #-16]");                         // seed the mutable by-reference Mixed slot with the original cell
-            abi::emit_call_label(emitter, "__rt_mixed_deref");                // give the native activation the concrete child cell
             abi::emit_push_result_value(emitter, &PhpType::Mixed);
         } else {
             let arg_label = format!("{}_ref_arg_{}", label_prefix, slot.param_index);
@@ -2082,12 +2083,13 @@ fn emit_x86_64_ref_arg_cells(
     for slot in &mut ref_slots {
         emit_x86_64_load_eval_arg(module, emitter, slot.param_index, fail_label);
         emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                   // reload the original eval Mixed cell for by-reference writeback
-        abi::emit_call_label(emitter, "__rt_mixed_deref");                    // write through the concrete child without destroying PHP reference identity
+        if slot.param_ty.codegen_repr() != PhpType::Mixed {
+            abi::emit_call_label(emitter, "__rt_mixed_deref");
+        }
         abi::emit_push_result_value(emitter, &PhpType::Mixed);
         if matches!(slot.param_ty.codegen_repr(), PhpType::Mixed) {
             slot.raw_refcounted_owned = true;
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // seed the mutable by-reference Mixed slot with the original cell
-            abi::emit_call_label(emitter, "__rt_mixed_deref");                // give the native activation the concrete child cell
             abi::emit_push_result_value(emitter, &PhpType::Mixed);
         } else {
             let arg_label = format!("{}_ref_arg_{}", label_prefix, slot.param_index);
@@ -3217,7 +3219,7 @@ mod reference_argument_tests {
         emitter.output()
     }
 
-    /// Method writeback targets the concrete child without destroying PHP reference identity.
+    /// Raw method references target the concrete child; Mixed references preserve the live wrapper.
     #[test]
     fn method_reference_arguments_dereference_original_cells_on_every_target() {
         for name in SUPPORTED_TARGETS {
@@ -3230,7 +3232,8 @@ mod reference_argument_tests {
                         "mov rax, QWORD PTR [rbp - 40]\n    call __rt_mixed_deref"
                     }
                 };
-                assert!(asm.contains(sequence), "{name} {param_ty:?}: {asm}");
+                assert_eq!(asm.contains(sequence), param_ty != PhpType::Mixed,
+                    "{name} {param_ty:?}: {asm}");
             }
         }
     }

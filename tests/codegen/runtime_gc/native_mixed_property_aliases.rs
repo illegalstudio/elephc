@@ -170,6 +170,10 @@ function makePrivateOwnedPromotedMixed(string $class): PrivateOwnedPromotedMixed
 class ThrowingPromotedMixed {
     public function __construct(public mixed &$value) { throw new Exception('constructor'); }
 }
+class OwnedPromotedMixedFactory {
+    public function make(mixed &$value): OwnedPromotedMixed { return new OwnedPromotedMixed($value); }
+    public static function makeStatic(mixed &$value): OwnedPromotedMixed { return new OwnedPromotedMixed($value); }
+}
 function makeOwnedPromotedMixed(): OwnedPromotedMixedChild {
     $value = ['stage' => 'frame'];
     return new OwnedPromotedMixedChild($value);
@@ -229,7 +233,16 @@ $evalNativeValue = ["stage" => "eval-new"];
 $evalObject = new OwnedPromotedMixed($evalNativeValue);
 $evalNativeValue = ["stage" => "eval-updated"];
 echo json_encode($evalObject->value), "|";
-unset($evalObject, $evalNativeValue);
+$evalFactory = new OwnedPromotedMixedFactory();
+$evalMethodObject = $evalFactory->make($evalNativeValue);
+$evalStaticObject = OwnedPromotedMixedFactory::makeStatic($evalNativeValue);
+$evalNativeValue = ["stage" => "eval-shared"];
+echo json_encode($evalObject->value), ":", json_encode($evalMethodObject->value), ":", json_encode($evalStaticObject->value), "|";
+try { $evalFailed = new ThrowingPromotedMixed($evalNativeValue); }
+catch (Exception $evalError) { echo $evalError->getMessage(), "|"; }
+$evalNativeValue = ["stage" => "eval-after-throw"];
+echo json_encode($evalObject->value), "|";
+unset($evalObject, $evalMethodObject, $evalStaticObject, $evalFactory, $evalNativeValue, $evalError);
 ' : '';
     eval($code);
     unset($value, $incoming, $survivor, $default, $fresh, $unsetValue, $dynamic, $class,
@@ -239,7 +252,7 @@ exerciseOwnedPromotedMixed($argc > 0);
 "#;
     let output = compile_and_run_with_heap_debug(source);
     assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
-    assert_eq!(output.stdout, "{\"stage\":\"caller\"}:{\"stage\":\"caller\"}|{\"stage\":\"method\"}|{\"value\":{\"stage\":\"new\"}}:{\"value\":{\"stage\":\"method\"}}|{\"stage\":\"escaped\"}|{\"value\":{\"stage\":\"survived\"}}|default|null|{\"stage\":\"fresh\"}|{\"stage\":\"dynamic\"}|inherited|updated:after:{\"value\":\"shadow\"}|constructor|{\"stage\":\"eval-updated\"}|");
+    assert_eq!(output.stdout, "{\"stage\":\"caller\"}:{\"stage\":\"caller\"}|{\"stage\":\"method\"}|{\"value\":{\"stage\":\"new\"}}:{\"value\":{\"stage\":\"method\"}}|{\"stage\":\"escaped\"}|{\"value\":{\"stage\":\"survived\"}}|default|null|{\"stage\":\"fresh\"}|{\"stage\":\"dynamic\"}|inherited|updated:after:{\"value\":\"shadow\"}|constructor|{\"stage\":\"eval-updated\"}|{\"stage\":\"eval-shared\"}:{\"stage\":\"eval-shared\"}:{\"stage\":\"eval-shared\"}|constructor|{\"stage\":\"eval-after-throw\"}|");
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
     assert!(!output.stderr.contains("Warning:"), "{}", output.stderr);
 }
