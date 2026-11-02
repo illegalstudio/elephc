@@ -5,7 +5,7 @@
 //! - The all-target AST-to-EIR regression suite.
 //!
 //! Key details:
-//! - Static closure calls can reject an argument before entering the closure body.
+//! - Runtime argument containers reach native object guards after static checking.
 //! - The emitted diagnostic must identify that closure or first-class function.
 
 /// Every target retains callable labels before argument coercion emits an exception.
@@ -15,11 +15,15 @@ function labelMaybe(bool $present): mixed {
     return $present ? new SimpleXMLElement('<r/>') : null;
 }
 function labelFunction(SimpleXMLElement $node): void {}
+function labelArguments(mixed $node): array { return [$node]; }
 $missing = labelMaybe($argc < 0);
 $plain = function(SimpleXMLElement $node): void {};
 $generator = function(SimpleXMLElement $node): Generator { yield 1; };
 $function = labelFunction(...);
-$plain($missing); $generator($missing); $function($missing);
+$arguments = labelArguments($missing);
+call_user_func_array($plain, $arguments);
+call_user_func_array($generator, $arguments);
+call_user_func_array($function, $arguments);
 "#, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen::platform::Target::parse(target).unwrap());
     let labels = &module.data.strings;

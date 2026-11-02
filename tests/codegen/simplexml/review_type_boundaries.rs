@@ -74,6 +74,7 @@ function callableLabelMaybe(bool $present): mixed {
     return $present ? new SimpleXMLElement('<r/>') : null;
 }
 function callableLabelFunction(SimpleXMLElement $node): void { echo 'unexpected|'; }
+function callableLabelArguments(mixed $node): array { return [$node]; }
 function callableLabelReport(TypeError $error): void {
     $message = explode(', called in ', $error->getMessage())[0];
     echo str_starts_with($message, '{closure:') ? 'closure|' : 'function|';
@@ -83,9 +84,10 @@ $missing = callableLabelMaybe($argc < 0);
 $plain = function(SimpleXMLElement $node): void { echo 'unexpected|'; };
 $generator = function(SimpleXMLElement $node): Generator { yield 1; };
 $function = callableLabelFunction(...);
-try { $plain($missing); } catch (TypeError $error) { callableLabelReport($error); }
-try { $generator($missing); } catch (TypeError $error) { callableLabelReport($error); }
-try { $function($missing); } catch (TypeError $error) { callableLabelReport($error); }
+$arguments = callableLabelArguments($missing);
+try { call_user_func_array($plain, $arguments); } catch (TypeError $error) { callableLabelReport($error); }
+try { call_user_func_array($generator, $arguments); } catch (TypeError $error) { callableLabelReport($error); }
+try { call_user_func_array($function, $arguments); } catch (TypeError $error) { callableLabelReport($error); }
 foreach ($generator(new SimpleXMLElement('<r/>')) as $number) { echo $number; }
 "#);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
