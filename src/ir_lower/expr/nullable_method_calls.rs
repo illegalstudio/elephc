@@ -566,8 +566,11 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
                         }
                         continue;
                     }
-                    let comparable = matches!(arg_repr, PhpType::Mixed | PhpType::Union(_))
-                        && matches!(result_repr, PhpType::Mixed | PhpType::Union(_));
+                    let comparable = (matches!(arg_repr, PhpType::Mixed | PhpType::Union(_))
+                        && matches!(result_repr, PhpType::Mixed | PhpType::Union(_)))
+                        // Callable descriptors also have a single pointer identity. A new
+                        // binding owns its captures independently of the source descriptor.
+                        || arg_repr == PhpType::Callable && result_repr == PhpType::Callable;
                     if comparable {
                         ctx.emit_void(
                             Op::ReleaseUnlessAliases,

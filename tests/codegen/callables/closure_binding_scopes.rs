@@ -10,6 +10,29 @@
 
 use crate::support::*;
 
+/// A callable argument lease transfers on identity returns and retires for a fresh binding.
+#[test]
+fn test_dynamic_scoped_bind_conditional_identity_argument_owners() {
+    let source = r#"<?php
+class ConditionalBindOwner { private string $value = "kept"; }
+function conditionalBindOwner(callable $reader, bool $same): callable {
+    if ($same) { return $reader; }
+    return Closure::bind($reader, new ConditionalBindOwner(), ConditionalBindOwner::class);
+}
+$reader = function () { return $this->value; };
+$bound = conditionalBindOwner($reader, false);
+$same = conditionalBindOwner($bound, $argc > 0);
+$different = conditionalBindOwner($bound, $argc < 0);
+echo $bound(), "|", $same(), "|", $different(), "|", (int)($bound === $same), ":", (int)($bound === $different);
+unset($different, $same, $bound, $reader);
+"#;
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(source);
+    preserve_stdout_mismatches(source, &assembly, std::slice::from_ref(&out), &["kept|kept|kept|1:0"]);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "kept|kept|kept|1:0");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Integral and fractional keys preserve an unchanged closure's requested private scope.
 #[test]
 fn test_dynamic_scoped_bind_after_unset_key_diagnostic() {
