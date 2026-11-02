@@ -10,6 +10,7 @@
 //! - The caller holds receiver, name and computed value throughout this non-callback selection.
 
 use super::*;
+use crate::ir::RuntimeCallTarget;
 
 /// Reads the successfully stored scalar only when its declaration can coerce the prefix value.
 pub(super) fn lower(
