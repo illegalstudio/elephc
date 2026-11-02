@@ -123,7 +123,7 @@ impl CallArgumentModes {
                     Some(signature) => Self { names: signature.parameters.iter().map(|parameter| parameter.name.clone()).collect(),
                         references: signature.parameters.iter().map(|parameter| parameter.by_ref).collect(),
                         native_boxed_references: signature.parameters.iter().map(|parameter|
-                            parameter.by_ref && matches!(parameter.type_tag, 4 | 5 | 6 | 7)).collect(),
+                            parameter.by_ref && matches!(parameter.type_tag, 4 | 5 | 7)).collect(),
                         variadic: signature.variadic_index },
                     None => Self::default(),
                 }

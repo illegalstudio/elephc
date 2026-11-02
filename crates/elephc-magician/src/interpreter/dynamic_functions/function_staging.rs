@@ -19,7 +19,10 @@ use super::*;
 pub(super) fn native_reference_uses_boxed_staging(
     param_type: Option<&EvalParameterType>, tagged_scalar: bool,
 ) -> bool {
-    !tagged_scalar && native_function_raw_ref_kind(param_type).is_none()
+    let raw_object = param_type.is_some_and(|ty| !ty.allows_null() && !ty.is_intersection()
+        && ty.variants().len() == 1 && matches!(ty.variants().first(),
+            Some(EvalParameterTypeVariant::Class(_) | EvalParameterTypeVariant::Object)));
+    !tagged_scalar && !raw_object && native_function_raw_ref_kind(param_type).is_none()
 }
 
 /// Transfers value arguments or prepares reference markers, rolling back partial staging on errors.
@@ -197,9 +200,10 @@ pub(in crate::interpreter) fn stage_native_function_ref_arg(
             Ok((marker, BoundNativeFunctionRefSlot::OwnedRawWord { original, slot, target }))
         }
         None => {
-            // Generic local contracts are checked at writeback, and by-value calls have no
-            // destination. Both need detached storage. Ordinary references remain live.
-            let retained = if guarded_writeback && values.is_reference(original)? {
+            // Generic contracts and raw object adapters need a concrete detached value.
+            // Only physically boxed parameters can preserve a live PHPRef in this slot.
+            let detached = guarded_writeback || !native_reference_uses_boxed_staging(param_type, false);
+            let retained = if detached && values.is_reference(original)? {
                 values.copy_value(original)?
             } else { values.retain(original)? };
             let mut slot = Box::new(retained.as_ptr());
@@ -229,8 +233,8 @@ fn native_function_raw_ref_kind(param_type: Option<&EvalParameterType>) -> Optio
         return None;
     }
     match param_type.variants().first()? {
-        // AOT object references use Mixed cells even though eval retains the declared
-        // class type for argument validation. A raw object pointer would be read as a box.
+        // Object parameters stage a concrete box that the invoker adapts to a raw object
+        // payload address. A PHPRef wrapper needs the future canonical typed adapter.
         EvalParameterTypeVariant::Class(_)
         | EvalParameterTypeVariant::Object => None,
         EvalParameterTypeVariant::Iterable => Some(NativeFunctionRawRefKind::OwnedHeap),
