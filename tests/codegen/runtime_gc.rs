@@ -18,6 +18,7 @@ mod print_r_capture;
 mod owned_tostring;
 #[path = "runtime_gc/borrowed_string_reads.rs"]
 mod borrowed_string_reads;
+mod shared_property_reads;
 mod global_return_owners;
 mod native_raw_property_guards;
 mod late_string_arguments;

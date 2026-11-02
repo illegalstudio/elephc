@@ -317,6 +317,10 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
     object: ValueId,
     property_value: ValueId,
 ) -> Result<()> {
+    if let Some(label) = crate::codegen::shared_property_read::helper_label(ctx, inst) {
+        crate::codegen::shared_property_read::emit_call(ctx, object, property_value, &label)?;
+        return store_if_result(ctx, inst);
+    }
     ensure_runtime_dynamic_property_name(ctx, property_value, inst)?;
     ensure_dynamic_property_miss_supported(inst)?;
     let mode = property_fetch_mode(inst);

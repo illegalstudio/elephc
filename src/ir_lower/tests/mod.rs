@@ -157,6 +157,7 @@ mod simplexml_targets;
 mod simplexml_target_corpora;
 mod instance_dimension_incdec;
 mod native_property_child_probes;
+mod shared_property_reads;
 
 /// Runs frontend, type checking, optimization, and EIR lowering for a source string.
 fn lower_source(source: &str) -> crate::ir::Module {

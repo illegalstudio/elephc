@@ -54,6 +54,8 @@ pub(crate) struct SharedCodegenState {
     mixed_string_sharing: [Option<bool>; 2],
     /// Memoized "does this module share the `count()` countable guard", for the same reason.
     count_guard_sharing: Option<bool>,
+    /// Runtime-name Mixed property ladders shared by lexical scope and fetch mode.
+    pub(super) property_read_helpers: Option<Vec<super::shared_property_read::ReadHelper>>,
     /// `--counters`: every non-synthetic PHP function prologue increments a BSS slot.
     pub(super) counters: bool,
     /// `--instrument`: every non-synthetic PHP function calls
