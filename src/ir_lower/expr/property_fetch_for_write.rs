@@ -82,7 +82,7 @@ pub(crate) fn lower_static_property_write_chain_with_operands(
     }
     let ExprKind::PropertyAccess { object, property } = &expr.kind else {
         let value = lower_expr(ctx, expr);
-        return PropertyWriteReceiver::new(ctx, value, span);
+        return PropertyWriteReceiver::new(ctx, value, span).into_runtime_interface_view(ctx, span);
     };
     let mut parent = lower_static_property_write_chain_with_operands(ctx, object, operands, span);
     parent.narrow_for_array(ctx, property, operands, span);
@@ -106,7 +106,7 @@ fn capture_static_write_child(
     let child = if ctx.value_is_owning_temporary(child) { child } else {
         crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, child, Some(span))
     };
-    parent.handoff(ctx, child, span)
+    parent.handoff(ctx, child, span).into_runtime_interface_view(ctx, span)
 }
 
 /// Lowers the source of a by-reference `foreach` whose receiver is an object property.
@@ -135,6 +135,15 @@ pub(crate) fn by_ref_foreach_property_source_is_addressable(
     object: &Expr,
     property: &str,
 ) -> bool {
+    container_property_slot_is_addressable(ctx, object, property)
+        && receiver_is_stable_backing_storage(ctx, object)
+}
+
+/// Checks a native container slot independently of the lifetime of its object expression.
+/// Callers that hold a scoped object owner may use the slot even for a temporary receiver.
+pub(crate) fn container_property_slot_is_addressable(
+    ctx: &LoweringContext<'_, '_>, object: &Expr, property: &str,
+) -> bool {
     let Some((class_name, nullable)) = instance_callable_object_class_and_nullability(ctx, object)
     else {
         return false;
@@ -154,7 +163,6 @@ pub(crate) fn by_ref_foreach_property_source_is_addressable(
         return false;
     }
     property_is_splittable_container_slot(ctx, &class_name, property, false)
-        && receiver_is_stable_backing_storage(ctx, object)
 }
 
 /// Separates and republishes a fixed Mixed property before mutating its nested array payload.

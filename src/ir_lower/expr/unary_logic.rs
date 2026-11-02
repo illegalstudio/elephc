@@ -77,6 +77,11 @@ pub(super) fn int_unary_result_type(ir_type: IrType) -> PhpType {
 /// Lowers an integer unary operation.
 pub(super) fn lower_int_unary(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, op: Op, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
+    if op == Op::IBitNot {
+        if let Some(result) = object_operators::lower_object_bitnot(ctx, value, expr) {
+            return result;
+        }
+    }
     let result_ty = int_unary_result_type(value.ir_type);
     if value.ir_type == IrType::I64 {
         ctx.emit_value(op, vec![value.value], None, result_ty, op.default_effects(), Some(expr.span))
@@ -119,7 +124,7 @@ pub(super) fn lower_not(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &
     )
 }
 
-/// Lowers throw used as an expression and returns a placeholder null value.
+/// Lowers throw used as an expression and returns a boxed placeholder for unreachable consumers.
 pub(super) fn lower_throw_expr(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
     // Match statement-form `throw`: transfer owning temps, but retain loads that
@@ -138,7 +143,7 @@ pub(super) fn lower_throw_expr(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, 
         Op::ThrowException.default_effects(),
         Some(expr.span),
     );
-    lower_null(ctx, expr)
+    lower_boxed_null(ctx, expr)
 }
 
 /// Lowers an error-suppressed expression.

@@ -98,6 +98,7 @@ pub(super) fn eval_reflection_parameters_from_names_and_type_flags(
             let is_callable_type =
                 eval_reflection_parameter_has_named_type(type_metadata.as_ref(), "callable");
             EvalReflectionParameterMetadata {
+                native_default_factory: None,
                 name: name.clone(),
                 declaring_class_name: declaring_class_name.map(str::to_string),
                 declaring_function: declaring_function.cloned(),
@@ -266,6 +267,14 @@ pub(super) fn eval_reflection_parameter_type_metadata(
             ),
         });
     }
+    // PHP prints a union from its type mask, not in declaration order, and the compiled path
+    // orders its members the same way. Both surfaces have to agree: reflecting one class from
+    // inside `eval()` and from compiled code must not answer `int|string` and `string|int`
+    // (issues #1118, #1117). The table is shared rather than copied for the same reason.
+    let mut types = types;
+    types.sort_by_key(|member| {
+        elephc_builtin_contract::reflection_format::union_member_rank(&member.name)
+    });
     Some(EvalReflectionParameterTypeMetadata {
         kind: EvalReflectionParameterTypeKind::Union(EvalReflectionUnionTypeMetadata {
             types,

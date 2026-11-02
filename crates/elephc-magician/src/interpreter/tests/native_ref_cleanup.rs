@@ -11,6 +11,37 @@
 use super::super::*;
 use super::support::*;
 
+/// Deferred default trees retire allocated prefixes and restore lexical scope on every failure.
+#[test]
+fn native_default_expression_releases_partial_arrays_and_restores_scope() {
+    let default = NativeCallableDefault::Expression {
+        expression: Box::new(EvalExpr::Array(vec![
+            EvalArrayElement::Value(EvalExpr::Const(EvalConst::String("prefix".into()))),
+            EvalArrayElement::KeyValue {
+                key: EvalExpr::Const(EvalConst::String("key".into())),
+                value: EvalExpr::Array(vec![
+                    EvalArrayElement::Value(EvalExpr::Const(EvalConst::String("nested".into()))),
+                    EvalArrayElement::Value(EvalExpr::DeferredDefaultError("missing parent".into())),
+                ]),
+            },
+        ])),
+        lexical_class: "Probe".into(),
+        // This deliberately unusable native descriptor must never be invoked by Rust binding.
+        reflection_factory: Some(usize::MAX),
+    };
+    let mut context = ElephcEvalContext::new();
+    context.push_class_scope("Outer");
+    let mut values = FakeOps::default();
+    for _ in 0..8 {
+        assert_eq!(materialize_native_callable_default(&default, &mut context, &mut values),
+            Err(EvalStatus::UncaughtThrowable));
+        assert_eq!(context.current_class_scope(), Some("Outer"));
+        let error = context.take_pending_throw().expect("owned default error");
+        eval_release_value(&mut context, &mut values, error).unwrap();
+        assert_eq!(values.cell_owners.values().sum::<usize>(), 0);
+    }
+}
+
 /// PHP array reference declarations stage the box itself, matching the native packed-or-hash ABI.
 #[test]
 fn native_array_reference_staging_owns_a_boxed_slot() {

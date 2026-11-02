@@ -2,7 +2,7 @@
 title: "fsync() - internals"
 description: "Compiler internals for fsync(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 329
+  order: 337
 ---
 
 ## `fsync()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fsync.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fsync.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

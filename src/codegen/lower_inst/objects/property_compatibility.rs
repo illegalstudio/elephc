@@ -35,6 +35,24 @@ pub(super) fn ensure_property_type_supported(php_type: &PhpType, inst: &Instruct
     }
 }
 
+/// Returns whether `value_ty` addresses a record a nested packed field of `slot_ty` can copy.
+///
+/// A nested packed field is assigned as a whole by copying the record's bytes, so the source
+/// must be the address of a record of the same packed class: a buffer element or another nested
+/// field (`packed T`) or a typed pointer (`ptr<T>`).
+pub(super) fn packed_record_copy_source(slot_ty: &PhpType, value_ty: &PhpType) -> bool {
+    let PhpType::Packed(record) = slot_ty else {
+        return false;
+    };
+    let record = record.trim_start_matches('\\');
+    match value_ty.codegen_repr() {
+        PhpType::Packed(source) | PhpType::Pointer(Some(source)) => {
+            source.trim_start_matches('\\').eq_ignore_ascii_case(record)
+        }
+        _ => false,
+    }
+}
+
 /// Verifies the assigned value already has the property storage representation.
 pub(super) fn ensure_property_value_supported(
     ctx: &FunctionContext<'_>,
@@ -44,6 +62,9 @@ pub(super) fn ensure_property_value_supported(
     inst: &Instruction,
 ) -> Result<()> {
     if value_ty == &slot.php_type {
+        return Ok(());
+    }
+    if slot.is_packed && packed_record_copy_source(&slot.php_type, value_ty) {
         return Ok(());
     }
     if can_store_assoc_array_with_same_value_type(value_ty, &slot.php_type) {
@@ -101,6 +122,12 @@ pub(super) fn ensure_property_value_supported(
     if property_values::can_unbox_mixed_to_object_property(value_ty, &slot.php_type) {
         return Ok(());
     }
+    if can_store_pointer_in_pointer_property(value_ty, &slot.php_type) {
+        return Ok(());
+    }
+    if can_store_pointer_array_in_pointer_array_property(value_ty, &slot.php_type) {
+        return Ok(());
+    }
     Err(CodegenIrError::unsupported(format!(
         "{} assigning PHP type {:?} to {}::${} with PHP type {:?}",
         inst.op.name(),
@@ -109,6 +136,38 @@ pub(super) fn ensure_property_value_supported(
         slot.property,
         slot.php_type
     )))
+}
+
+/// Returns true when an array of pointer words fills an array property of pointer words.
+///
+/// `array<ptr<T>>` and `array<?ptr<T>>` share one storage: every element is a raw pointer word
+/// and null is the word 0, so the element types differ only in what a read may return.
+fn can_store_pointer_array_in_pointer_array_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
+    match (value_ty.codegen_repr(), slot_ty.codegen_repr()) {
+        (PhpType::Array(value_elem), PhpType::Array(slot_elem)) => matches!(
+            (value_elem.codegen_repr(), slot_elem.codegen_repr()),
+            (PhpType::Pointer(_), PhpType::Pointer(_))
+        ),
+        (PhpType::AssocArray { value: value_elem, .. }, PhpType::AssocArray { value: slot_elem, .. }) => {
+            matches!(
+                (value_elem.codegen_repr(), slot_elem.codegen_repr()),
+                (PhpType::Pointer(_), PhpType::Pointer(_))
+            )
+        }
+        _ => false,
+    }
+}
+
+/// Returns true when a pointer value fills a pointer-typed property.
+///
+/// Every pointer is one raw machine word whatever its target tag, and the checker already applied
+/// the pointer assignability rule (any pointer fits any pointer slot), so an untyped `ptr` or
+/// `ptr_null()` value can fill a `ptr<T>` property without a conversion.
+pub(super) fn can_store_pointer_in_pointer_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
+    matches!(
+        (value_ty.codegen_repr(), slot_ty.codegen_repr()),
+        (PhpType::Pointer(_), PhpType::Pointer(_))
+    )
 }
 
 /// Returns true when a concrete object value is assignable to an object-typed property.
@@ -229,13 +288,20 @@ pub(super) fn can_store_boxed_value_for_mixed_property(value_ty: &PhpType, slot_
         && matches!(slot_ty.codegen_repr(), PhpType::Mixed)
 }
 
-/// Returns true when a boxed Mixed value can be coerced before a scalar typed-property store.
+/// Returns true when a boxed Mixed value can be coerced before a scalar or `?ptr<T>`
+/// typed-property store.
+///
+/// A `?ptr<T>` slot casts the value like an int, so PHP null becomes address 0; it held a Mixed
+/// cell before it became a pointer word, and `ReflectionProperty::setValue()` dispatches a Mixed
+/// write over every declared property. A plain `ptr<T>` slot stays refused at compile time
+/// (`test_declared_types_without_a_runtime_shaped_write_are_refused_at_compile_time`).
 pub(super) fn can_coerce_mixed_to_scalar_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
     matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
-        && matches!(
-            slot_ty.codegen_repr(),
-            PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str
-        )
+        && (crate::types::is_nullable_pointer_type(slot_ty)
+            || matches!(
+                slot_ty.codegen_repr(),
+                PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str
+            ))
 }
 
 /// Returns true when a concrete value satisfies a declared `iterable` property.

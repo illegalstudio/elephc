@@ -4,7 +4,7 @@
 //! PHP's numeric-string / perl-style-alphanumeric rules, and returns the new value already
 //! boxed into a Mixed cell (the operator can change the value's type, so the result is
 //! always dynamically tagged). `__rt_mixed_inc_dec` is the boxed entry point: it routes a
-//! string payload here and everything else to the existing numeric helper.
+//! string payload here, preserves null decrements, and routes numeric updates to the shared helper.
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via
@@ -517,9 +517,10 @@ fn emit_str_inc_dec_linux_x86_64(emitter: &mut Emitter) {
 /// Emits `__rt_mixed_inc_dec`, the boxed entry point for PHP's `++` / `--`.
 ///
 /// A string payload is routed to [`emit_str_inc_dec`]'s helper so PHP's string rules apply;
-/// every other payload keeps the pre-existing numeric behavior by boxing the delta and
-/// reusing `__rt_mixed_numeric_add` (adding `-1` is `- 1` for both the integer and the
-/// float paths, so one helper covers `++` and `--`).
+/// a null decrement returns a fresh null cell. Other payloads lend a stack integer
+/// delta to `__rt_mixed_numeric_add`.
+/// Adding `-1` is `- 1` for both integer and float paths, so the numeric helper
+/// preserves the existing coercions and overflow promotion without a heap delta box.
 ///
 /// # ABI
 /// - **AArch64**: `x0` = borrowed boxed Mixed cell, `x1` = delta → `x0` = owned Mixed cell.
@@ -534,12 +535,23 @@ pub fn emit_mixed_inc_dec(emitter: &mut Emitter) {
     emitter.comment("--- runtime: mixed_inc_dec (PHP ++/-- on a boxed value) ---");
     emitter.label_global("__rt_mixed_inc_dec");
 
-    emitter.instruction("sub sp, sp, #48");                                     // reserve the helper frame for the operand, the delta, and the temporaries
-    emitter.instruction("stp x29, x30, [sp, #32]");                             // preserve the caller frame pointer and return address across nested calls
-    emitter.instruction("add x29, sp, #32");                                    // establish the helper frame pointer above the saved state
+    emitter.instruction("sub sp, sp, #32");                                     // reserve the input slots and saved frame without a heap-delta temporary
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // preserve the caller frame pointer and return address across nested calls
+    emitter.instruction("add x29, sp, #16");                                    // establish the helper frame pointer above the input slots
     emitter.instruction("str x0, [sp, #0]");                                    // save the borrowed operand cell for the numeric path
     emitter.instruction("str x1, [sp, #8]");                                    // save the +1/-1 delta for both result paths
     emitter.instruction("bl __rt_mixed_unbox");                                 // read the operand's runtime tag and payload words
+    // -- preserve null decrement before string and numeric dispatch --
+    emitter.instruction("cmp x0, #8");                                          // recognize PHP null before numeric decrement coercion
+    emitter.instruction("b.ne __rt_mid_dispatch");                              // non-null values keep their ordinary runtime dispatch
+    emitter.instruction("ldr x9, [sp, #8]");                                    // inspect the saved delta without disturbing the unboxed payload
+    emitter.instruction("cmp x9, #0");                                          // only decrement preserves null rather than incrementing to one
+    emitter.instruction("b.ge __rt_mid_dispatch");                              // null increment continues through numeric addition
+    emitter.instruction("mov x1, xzr");                                         // a fresh null cell has no low payload
+    emitter.instruction("mov x2, xzr");                                         // a fresh null cell has no high payload
+    emitter.instruction("bl __rt_mixed_from_value");                            // return an independent null owner without consuming the operand
+    emitter.instruction("b __rt_mid_return");                                   // retire the helper frame through the common epilogue
+    emitter.label("__rt_mid_dispatch");
     emitter.instruction("cmp x0, #1");                                          // does the boxed operand hold a string payload?
     emitter.instruction("b.ne __rt_mid_numeric");                               // every other payload keeps the existing numeric behavior
     emitter.instruction("ldr x3, [sp, #8]");                                    // reload the delta as the string helper's third argument
@@ -547,22 +559,14 @@ pub fn emit_mixed_inc_dec(emitter: &mut Emitter) {
     emitter.instruction("b __rt_mid_return");                                   // share the epilogue with the numeric path
 
     emitter.label("__rt_mid_numeric");
-    emitter.instruction("ldr x1, [sp, #8]");                                    // the delta becomes the right-hand operand of the numeric addition
-    emitter.instruction("mov x2, xzr");                                         // integer payloads do not use a second word
-    emitter.instruction("mov x0, #0");                                          // runtime tag 0 = int
-    emitter.instruction("bl __rt_mixed_from_value");                            // box the delta so the shared numeric helper can consume it
-    emitter.instruction("str x0, [sp, #16]");                                   // keep the boxed delta so it can be released afterwards
-    emitter.instruction("mov x1, x0");                                          // pass the boxed delta as the right-hand operand
+    // -- borrow the integer delta without creating a temporary heap owner --
+    emitter.instruction("ldr x1, [sp, #8]");                                    // pass the original integer delta in the numeric RHS register
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the borrowed operand cell as the left-hand operand
-    emitter.instruction("bl __rt_mixed_numeric_add");                           // reuse PHP's boxed numeric addition, including overflow promotion
-    emitter.instruction("str x0, [sp, #24]");                                   // preserve the boxed result while the delta temporary is released
-    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the boxed delta temporary
-    emitter.instruction("bl __rt_decref_mixed");                                // release the temporary so the increment does not leak one cell per use
-    emitter.instruction("ldr x0, [sp, #24]");                                   // restore the boxed result for the caller
+    assert!(abi::emit_mixed_numeric_integer_rhs_call(emitter, crate::ir::MixedNumericOp::Add));
 
     emitter.label("__rt_mid_return");
-    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore the caller frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                     // release the helper frame
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore the caller frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the helper frame after the integer loan has ended
     emitter.instruction("ret");                                                 // return the boxed Mixed result in x0
 }
 
@@ -577,10 +581,20 @@ fn emit_mixed_inc_dec_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before nested runtime calls
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the helper locals
-    emitter.instruction("sub rsp, 48");                                         // reserve aligned slots for the operand, the delta, and the temporaries
+    emitter.instruction("sub rsp, 32");                                         // reserve aligned input slots without a heap-delta temporary
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the borrowed operand cell for the numeric path
     emitter.instruction("mov QWORD PTR [rbp - 16], rdi");                       // save the +1/-1 delta for both result paths
     emitter.instruction("call __rt_mixed_unbox");                               // read the operand's runtime tag and payload words
+    // -- preserve null decrement before string and numeric dispatch --
+    emitter.instruction("cmp rax, 8");                                          // recognize PHP null before numeric decrement coercion
+    emitter.instruction("jne __rt_mid_dispatch_x86");                           // non-null values keep their ordinary runtime dispatch
+    emitter.instruction("cmp QWORD PTR [rbp - 16], 0");                         // inspect the saved delta without disturbing the unboxed payload
+    emitter.instruction("jge __rt_mid_dispatch_x86");                           // null increment continues through numeric addition
+    emitter.instruction("xor edi, edi");                                        // a fresh null cell has no low payload
+    emitter.instruction("xor esi, esi");                                        // a fresh null cell has no high payload
+    emitter.instruction("call __rt_mixed_from_value");                          // return an independent null owner without consuming the operand
+    emitter.instruction("jmp __rt_mid_return_x86");                             // retire the helper frame through the common epilogue
+    emitter.label("__rt_mid_dispatch_x86");
     emitter.instruction("cmp rax, 1");                                          // does the boxed operand hold a string payload?
     emitter.instruction("jne __rt_mid_numeric_x86");                            // every other payload keeps the existing numeric behavior
     emitter.instruction("mov rax, rdi");                                        // the unboxed payload low word is the string pointer the helper expects in rax
@@ -589,18 +603,10 @@ fn emit_mixed_inc_dec_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_mid_return_x86");                             // share the epilogue with the numeric path
 
     emitter.label("__rt_mid_numeric_x86");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // the delta becomes the right-hand operand of the numeric addition
-    emitter.instruction("xor esi, esi");                                        // integer payloads do not use a second word
-    emitter.instruction("xor eax, eax");                                        // runtime tag 0 = int
-    emitter.instruction("call __rt_mixed_from_value");                          // box the delta so the shared numeric helper can consume it
-    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // keep the boxed delta so it can be released afterwards
-    emitter.instruction("mov rdi, rax");                                        // pass the boxed delta as the right-hand operand
+    // -- borrow the integer delta without creating a temporary heap owner --
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // pass the original integer delta in the numeric RHS register
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the borrowed operand cell as the left-hand operand
-    emitter.instruction("call __rt_mixed_numeric_add");                         // reuse PHP's boxed numeric addition, including overflow promotion
-    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // preserve the boxed result while the delta temporary is released
-    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the boxed delta temporary
-    emitter.instruction("call __rt_decref_mixed");                              // release the temporary so the increment does not leak one cell per use
-    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // restore the boxed result for the caller
+    assert!(abi::emit_mixed_numeric_integer_rhs_call(emitter, crate::ir::MixedNumericOp::Add));
 
     emitter.label("__rt_mid_return_x86");
     emitter.instruction("mov rsp, rbp");                                        // release every helper-local slot

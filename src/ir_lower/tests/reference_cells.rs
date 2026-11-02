@@ -46,12 +46,21 @@ echo $items["key"];
             .split_once("@endfn name=main")
             .expect("main end marker")
             .0;
+        let (construction, arguments) = main.split_once("op=load_array_elem_ref_cell")
+            .expect("managed element lookup follows source-array construction");
+        for operation in ["publish", "detach"] {
+            let marker = format!("{operation} temporary call operand owner");
+            assert_eq!(construction.matches(&marker).count(), 1,
+                "{name}: source-array construction has one balanced owner");
+        }
         assert_eq!(
-            main.matches("detach temporary call operand owner").count(),
+            arguments.matches("detach temporary call operand owner").count(),
             2,
             "{name}: evaluation handoff and EIR retirement only"
         );
-        assert!(main.contains("__rt_reference_cell_release"), "{name}");
+        assert_eq!(arguments.matches("publish temporary call operand owner").count(), 2,
+            "{name}: evaluation and final EIR roots have matching retirements");
+        assert!(arguments.contains("__rt_reference_cell_release"), "{name}");
     }
 }
 

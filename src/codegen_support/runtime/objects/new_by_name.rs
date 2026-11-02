@@ -89,6 +89,12 @@ pub fn emit_new_by_name(emitter: &mut Emitter) {
     emitter.instruction("ldr x13, [x10, #24]");                                 // obj_size
     emitter.instruction("str x12, [sp, #32]");                                  // save class_id across the heap call
     emitter.instruction("str x13, [sp, #40]");                                  // save obj_size across the heap call
+    abi::emit_symbol_address(emitter, "x10", "_class_initcheck_ptrs");
+    emitter.instruction("ldr x10, [x10, x12, lsl #3]");                         // preallocation default-error thunk
+    emitter.instruction("cbz x10, __rt_nbn_initcheck_ok");                      // valid defaults need no early check
+    emitter.instruction("mov x0, #0");                                          // invalid thunk never uses a this operand
+    emitter.instruction("blr x10");                                             // raise the EIR default error before allocating
+    emitter.label("__rt_nbn_initcheck_ok");
     emit_runtime_managed_match_aarch64(emitter);
 
     // -- allocate the object payload --
@@ -187,6 +193,13 @@ fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [r10 + 24]");                       // obj_size
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // stash class_id
     emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // stash obj_size
+    abi::emit_symbol_address(emitter, "r10", "_class_initcheck_ptrs");
+    emitter.instruction("mov r10, QWORD PTR [r10 + rcx*8]");                    // preallocation default-error thunk
+    emitter.instruction("test r10, r10");                                       // valid defaults need no early check
+    emitter.instruction("jz __rt_nbn_initcheck_ok_x86");                        // skip the absent error thunk
+    emitter.instruction("xor edi, edi");                                        // invalid thunk never uses a this operand
+    emitter.instruction("call r10");                                            // raise the EIR default error before allocating
+    emitter.label("__rt_nbn_initcheck_ok_x86");
     emit_runtime_managed_match_x86_64(emitter);
 
     // -- allocate the object payload --

@@ -10,6 +10,40 @@
 use super::super::*;
 use super::support::*;
 
+/// Class-level native failures preserve visibility precedence and retire every pending Error.
+#[test]
+fn native_class_default_error_static_access_preserves_owners_and_visibility() {
+    let mut context = ElephcEvalContext::new();
+    assert!(context.define_class(EvalClass::new("Probe", vec![
+        EvalClassProperty::with_visibility_and_static("good", EvalVisibility::Public, true, None),
+        EvalClassProperty::with_visibility_and_static("secret", EvalVisibility::Private, true, None),
+    ], Vec::new())));
+    assert!(context.define_native_class_default_error("Probe", "class initialization".into()));
+    assert!(context.define_native_property_default("Probe", "good", NativeCallableDefault::Int(7)));
+    let mut values = FakeOps::default();
+    for operation in 0..4 {
+        let input = values.int(9).unwrap();
+        let result = match operation {
+            0 => eval_static_property_get_result("Probe", "good", &mut context, &mut values).map(|_| ()),
+            1 => eval_static_property_set_result("Probe", "good", input, &mut context, &mut values),
+            2 => eval_static_property_isset_result("Probe", "good", &mut context, &mut values).map(|_| ()),
+            _ => eval_static_property_get_result("Probe", "secret", &mut context, &mut values).map(|_| ()),
+        };
+        eval_release_value(&mut context, &mut values, input).unwrap();
+        assert_eq!(result, Err(EvalStatus::UncaughtThrowable));
+        let error = context.take_pending_throw().unwrap();
+        let message = values.property_get(error, "message").unwrap();
+        let expected = if operation == 3 { "Cannot access private property Probe::$secret" }
+            else { "class initialization" };
+        assert_eq!(values.get(message), FakeValue::String(expected.into()));
+        eval_release_value(&mut context, &mut values, error).unwrap();
+        assert_eq!(values.cell_owners.values().sum::<usize>(), 0);
+    }
+    assert_eq!(eval_static_property_isset_result("Probe", "secret", &mut context, &mut values), Ok(false));
+    assert_eq!(context.native_property_default("Probe", "good"), Some(NativeCallableDefault::Int(7)));
+    assert!(context.static_property("Probe", "good").is_none());
+}
+
 /// Verifies static properties persist and can be read and written through static methods.
 #[test]
 fn execute_program_reads_writes_eval_static_members() {

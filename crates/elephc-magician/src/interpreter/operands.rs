@@ -55,7 +55,7 @@ pub(in crate::interpreter) fn eval_unary_expr(
                 let truthy = values.truthy(args[0])?;
                 values.bool_value(!truthy)
             }
-            EvalUnaryOp::BitNot => values.bit_not(args[0]),
+            EvalUnaryOp::BitNot => values.bit_not_dispatch(args[0]),
         }
     })
 }

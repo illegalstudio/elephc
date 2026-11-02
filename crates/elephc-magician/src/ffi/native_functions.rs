@@ -26,3 +26,4 @@ mod registration;
 
 pub use public_abi::*;
 use registration::*;
+pub(in crate::ffi) use registration::register_native_function_param_default_inner;

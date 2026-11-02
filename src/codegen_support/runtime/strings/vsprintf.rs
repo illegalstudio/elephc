@@ -84,6 +84,12 @@ pub fn emit_vsprintf(emitter: &mut Emitter) {
     // int (0) / float (2) / bool (3): one payload word, tag == value_type
     emitter.instruction("ldr x16, [x15]");                                      // payload = the typed slot value
     emitter.instruction("mov x17, x11");                                        // record tag = value_type (0/2/3 map 1:1)
+    // -- a raw ?ptr<T> word: 0 packs like PHP null (an empty string), any address as an int --
+    emitter.instruction(&format!("cmp x17, #{}", crate::codegen_support::sentinels::POINTER_ARRAY_VALUE_TYPE)); // is this slot a raw ?ptr<T> word?
+    emitter.instruction("b.ne __rt_vsprintf_push");                             // other value types push as they are
+    emitter.instruction("mov x17, #0");                                         // a live address is an integer operand
+    emitter.instruction("cbnz x16, __rt_vsprintf_push");                        // push the live address
+    emitter.instruction("mov x17, #1");                                         // tag 1 with length 0 = the empty string a null operand renders as
     emitter.instruction("b __rt_vsprintf_push");                                // push the record
     emitter.label("__rt_vsprintf_str");
     emitter.instruction("ldr x16, [x15]");                                      // string pointer payload
@@ -183,6 +189,13 @@ fn emit_vsprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_vsprintf_str_x86");                            // build a string record
     emitter.instruction("mov rsi, QWORD PTR [rax]");                            // payload = the typed slot value
     emitter.instruction("mov rcx, r11");                                        // record tag = value_type (0/2/3 map 1:1)
+    // -- a raw ?ptr<T> word: 0 packs like PHP null (an empty string), any address as an int --
+    emitter.instruction(&format!("cmp rcx, {}", crate::codegen_support::sentinels::POINTER_ARRAY_VALUE_TYPE)); // is this slot a raw ?ptr<T> word?
+    emitter.instruction("jne __rt_vsprintf_push_x86");                          // other value types push as they are
+    emitter.instruction("xor ecx, ecx");                                        // a live address is an integer operand
+    emitter.instruction("test rsi, rsi");                                       // is this slot the null pointer word?
+    emitter.instruction("jnz __rt_vsprintf_push_x86");                          // push the live address
+    emitter.instruction("mov rcx, 1");                                          // tag 1 with length 0 = the empty string a null operand renders as
     emitter.instruction("jmp __rt_vsprintf_push_x86");                          // push the record
     emitter.label("__rt_vsprintf_str_x86");
     emitter.instruction("mov rsi, QWORD PTR [rax]");                            // string pointer payload

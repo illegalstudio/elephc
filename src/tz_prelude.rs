@@ -82,6 +82,14 @@ fn t_datetimezone() -> TypeExpr {
     crate::synthetic_class::t_class("DateTimeZone")
 }
 
+/// Whether `program` uses this prelude's surface: the same test `inject_if_used` applies.
+///
+/// Also run by `crate::autoload::prelude_probe` over the autoload closure, whose files are only
+/// loaded after this prelude has been decided.
+pub(crate) fn program_uses_surface(program: &[crate::parser::ast::Stmt]) -> bool {
+    detect::program_uses_tz_introspection(program)
+}
+
 /// Prepends the timezone-introspection prelude to `program` when it references the
 /// introspection surface, so the `elephc_tz` externs and helper functions compile
 /// through the normal pipeline only for programs that use them. The prelude is

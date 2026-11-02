@@ -195,6 +195,9 @@ pub(super) fn lower(
                     "__rt_strncmp",
                 )
         }),
+        RuntimeFnId::StripTags => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_strip_tags(ctx, inst)
+        }),
         RuntimeFnId::Stripos => Some({
             crate::codegen::lower_inst::builtins::strings::lower_string_position(
                     ctx,

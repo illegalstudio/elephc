@@ -20,8 +20,10 @@ pub(super) mod collection_builder;
 mod core;
 #[cfg(feature = "curl")]
 mod curl;
+mod fileinfo;
 mod filesystem;
 mod formatting;
+mod gmp;
 mod hooks;
 mod json;
 mod math;
@@ -39,14 +41,17 @@ mod symbols;
 mod time;
 mod types;
 mod xml;
+mod tokenizer;
 
 pub(super) use array::*;
 pub(super) use class_metadata::*;
 pub(super) use core::*;
 #[cfg(feature = "curl")]
 pub(super) use curl::*;
+pub(super) use fileinfo::*;
 pub(super) use filesystem::*;
 pub(super) use formatting::*;
+pub(super) use gmp::*;
 pub(super) use json::*;
 pub(super) use math::*;
 pub(super) use network_env::*;
@@ -61,4 +66,5 @@ pub(super) use string::*;
 pub(super) use symbols::*;
 pub(super) use time::*;
 pub(super) use xml::*;
+pub(super) use tokenizer::*;
 pub(super) use types::*;

@@ -8,6 +8,7 @@
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
 //! - Descriptor invokers bind raw user arguments; the hidden argc/count prefixes are
 //!   synthesized inside the invoker body, never passed by the caller.
+//! - Hidden invocation profiles preserve weak legacy scope ids and encode strict scope as -id-3.
 
 use super::*;
 
@@ -255,6 +256,31 @@ fn build_runtime_call_wrapper_function(
     kind: RuntimeCallWrapperKind,
 ) -> Result<Function> {
     if let RuntimeCallWrapperKind::Builtin { strict_php } = kind {
+        // GMP's homes lower through the prelude helper graph, which first-class callable
+        // wrappers must reproduce. Other EIR-graph homes already build their own callable
+        // body through the generic wrapper path, so widening this predicate would duplicate
+        // their allocation graph (for example `gc_status`).
+        let prepared_eir_lowering = crate::builtins::registry::lookup(name).is_some_and(|def| {
+            def.spec.semantics.runtime_functions
+                == crate::builtins::semantics::BuiltinRuntimeFunctions::None
+                && matches!(
+                    def.spec.semantics.lowering,
+                    crate::builtins::semantics::BuiltinLowering::Eir(_)
+                )
+                && elephc_builtin_contract::lookup(name)
+                    .is_some_and(|contract| contract.module == elephc_builtin_contract::PhpModule::Gmp)
+        });
+        if prepared_eir_lowering || crate::builtins::registry::lookup(name).is_some_and(|def| matches!(
+            def.spec.semantics.argument_lowering,
+            crate::builtins::semantics::BuiltinArgumentLowering::WeakStringUnion { .. }
+        )) {
+            let function = crate::ir_lower::lower_prepared_builtin_callable(
+                module, label, name, sig, strict_php,
+            );
+            crate::ir::validate_function(&function).map_err(|error|
+                CodegenIrError::invalid_module(format!("prepared builtin callable: {error:?}")))?;
+            return Ok(function);
+        }
         let packed_merge = crate::builtins::registry::lookup(name).is_some_and(|def| {
             def.spec.semantics.runtime_functions
                 == crate::builtins::semantics::BuiltinRuntimeFunctions::One(crate::ir::RuntimeFnId::ArrayMerge)
@@ -325,11 +351,12 @@ fn build_runtime_call_wrapper_function(
     builder.position_at_end(entry);
     let mut operands = wrapper_param_operands(&mut builder, sig);
     if carries_invocation_scope {
-        operands.push(builder.emit_load_local(
+        let profile = builder.emit_load_local(
             LocalSlotId::from_raw(sig.params.len() as u32),
             IrType::I64,
             PhpType::Int,
-        ));
+        );
+        operands.push(decode_invocation_scope(&mut builder, profile));
     }
     let result = match kind {
         RuntimeCallWrapperKind::Builtin { strict_php } => {
@@ -384,6 +411,27 @@ fn build_runtime_call_wrapper_function(
     };
     builder.terminate(Terminator::Return { value: result });
     Ok(function)
+}
+
+/// Removes source strictness before the clone wrapper consumes its lexical class id.
+fn decode_invocation_scope(builder: &mut Builder<'_>, profile: ValueId) -> ValueId {
+    let global = builder.emit_const_i64(-1);
+    let strict = builder.emit(Op::ICmp, vec![profile, global],
+        Some(Immediate::CmpPredicate(crate::ir::CmpPredicate::Slt)),
+        IrType::I64, PhpType::Bool, Ownership::NonHeap).unwrap();
+    let decode = builder.create_named_block("scope.strict", Vec::new());
+    let merge = builder.create_named_block("scope.decoded", vec![(IrType::I64, PhpType::Int)]);
+    builder.terminate(Terminator::CondBr {
+        cond: strict, then_target: decode, then_args: Vec::new(),
+        else_target: merge, else_args: vec![profile],
+    });
+    builder.position_at_end(decode);
+    let base = builder.emit_const_i64(-3);
+    let decoded = builder.emit(Op::ISub, vec![base, profile], None,
+        IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+    builder.terminate(Terminator::Br { target: merge, args: vec![decoded] });
+    builder.position_at_end(merge);
+    builder.block_param(merge, 0)
 }
 
 /// Maps a builtin's shared ownership contract onto its synthetic wrapper result.

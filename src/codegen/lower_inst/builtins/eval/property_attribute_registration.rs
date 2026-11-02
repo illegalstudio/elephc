@@ -9,13 +9,35 @@
 
 use super::*;
 
+/// Publishes class-initialization failures independently of per-property Reflection metadata.
+pub(super) fn register_eval_native_class_default_errors(ctx: &mut FunctionContext<'_>, context_source: EvalContextSource) {
+    let mut errors: Vec<_> = ctx.module.class_infos.iter().filter_map(|(name, class)|
+        class.deferred_property_default_error.as_ref().map(|error| (name.clone(), error.clone())))
+        .collect();
+    errors.sort();
+    for (name, message) in errors {
+        load_eval_context_source_to_arg(ctx, context_source, 0);
+        for (argument, value) in [(1, name), (3, message)] {
+            let (label, len) = ctx.data.add_string(value.as_bytes());
+            abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, argument), &label);
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, argument + 1), len as i64);
+        }
+        let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_register_native_class_default_error");
+        abi::emit_call_label(ctx.emitter, &symbol);
+        let registered = ctx.next_label("eval_native_class_default_registered");
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &registered);
+        super::status::emit_eval_fatal_message(ctx, "Fatal error: eval() native class default registration failed\n");
+        ctx.emitter.label(&registered);
+    }
+}
+
 /// Emits one native property-default metadata registration call into the eval context.
 pub(super) fn register_eval_native_property_default(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     registration: &EvalNativePropertyDefaultRegistration,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     let property_key = format!(
         "{}::{}",
         registration.class_name, registration.property_name
@@ -31,7 +53,18 @@ pub(super) fn register_eval_native_property_default(
         abi::int_arg_reg_name(ctx.emitter.target, 2),
         property_key_len as i64,
     );
-    let symbol = match &registration.default {
+    let default = match &registration.default {
+        EvalNativePropertyDefault::Value(default) => default,
+        EvalNativePropertyDefault::DeferredError(message) => {
+            let (label, len) = ctx.data.add_string(message.as_bytes());
+            abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 3), &label);
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 4), len as i64);
+            let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_register_native_property_default_error");
+            abi::emit_call_label(ctx.emitter, &symbol);
+            return;
+        }
+    };
+    let symbol = match default {
         EvalNativeCallableDefault::Scalar { kind, payload } => {
             abi::emit_load_int_immediate(
                 ctx.emitter,
@@ -48,7 +81,8 @@ pub(super) fn register_eval_native_property_default(
                 .extern_symbol("__elephc_eval_register_native_property_default_scalar")
         }
         EvalNativeCallableDefault::String(value) => {
-            let (default_label, default_len) = ctx.data.add_string(value.as_bytes());
+            let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
+            let (default_label, default_len) = ctx.data.add_string(&bytes);
             abi::emit_symbol_address(
                 ctx.emitter,
                 abi::int_arg_reg_name(ctx.emitter.target, 3),
@@ -64,7 +98,7 @@ pub(super) fn register_eval_native_property_default(
                 .extern_symbol("__elephc_eval_register_native_property_default_string")
         }
         EvalNativeCallableDefault::Array(_) => {
-            let spec = encode_eval_native_array_default(&registration.default);
+            let spec = encode_eval_native_array_default(default);
             let (default_label, default_len) = ctx.data.add_string(&spec);
             abi::emit_symbol_address(
                 ctx.emitter,
@@ -88,10 +122,10 @@ pub(super) fn register_eval_native_property_default(
 /// Emits one native member-attribute metadata registration call into the eval context.
 pub(super) fn register_eval_native_member_attribute(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     registration: &EvalNativeMemberAttributeRegistration,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     let record = eval_native_member_attribute_record(registration);
     let (record_label, record_len) = ctx.data.add_string(&record);
     abi::emit_symbol_address(
@@ -117,7 +151,8 @@ pub(super) fn eval_native_member_attribute_record(
 ) -> Vec<u8> {
     let mut record = Vec::new();
     record.push(registration.owner_kind);
-    let member_key = if registration.owner_kind == NATIVE_MEMBER_ATTRIBUTE_CLASS {
+    let member_key = if matches!(registration.owner_kind,
+        NATIVE_MEMBER_ATTRIBUTE_CLASS | NATIVE_MEMBER_ATTRIBUTE_FUNCTION) {
         registration.class_name.clone()
     } else {
         format!("{}::{}", registration.class_name, registration.member_name)

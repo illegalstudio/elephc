@@ -8,13 +8,15 @@
 //! Key details:
 //! - Conversion transfers existing slot ownership into Mixed boxes and stamps the
 //!   indexed array with value_type tag 7.
+//! - The `POINTER_ARRAY_VALUE_TYPE` mode boxes a 0 pointer word as PHP null and any other word as
+//!   its integer address, as a `?ptr<T>` element reads.
 //! - The pending-append entry converts an already selected shared payload in place, because
 //!   a callback-retained PHP copy must observe the write that began before separation.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::sentinels::{
-    emit_branch_if_null_container, TAGGED_SCALAR_ARRAY_VALUE_TYPE,
+    emit_branch_if_null_container, POINTER_ARRAY_VALUE_TYPE, TAGGED_SCALAR_ARRAY_VALUE_TYPE,
 };
 
 
@@ -74,6 +76,11 @@ pub fn emit_array_to_mixed(emitter: &mut Emitter) {
     emitter.instruction("add x13, x11, #24");                                   // compute the pointer-sized source payload base
     emitter.instruction("ldr x1, [x13, x9, lsl #3]");                           // load the low payload word from the source slot
     emitter.instruction("mov x2, xzr");                                         // pointer-sized and scalar slots do not use a high payload word
+    emitter.instruction(&format!("cmp x12, #{}", POINTER_ARRAY_VALUE_TYPE));    // do source slots hold raw pointer words?
+    emitter.instruction("b.ne __rt_array_to_mixed_box");                        // every other slot keeps its source value tag
+    emitter.instruction("mov x14, #8");                                         // runtime tag 8 = PHP null for a null pointer word
+    emitter.instruction("cmp x1, #0");                                          // is this slot the null pointer word?
+    emitter.instruction("csel x12, x14, xzr, eq");                              // box a null word as PHP null and any address as an integer
     emitter.instruction("b __rt_array_to_mixed_box");                           // allocate a Mixed box for the loaded payload
 
     emitter.label("__rt_array_to_mixed_load_tagged_scalar");
@@ -212,6 +219,12 @@ fn emit_array_to_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_array_to_mixed_x86_load_string");              // string slots need a 16-byte load
     emitter.instruction("mov rdi, QWORD PTR [r11 + 24 + r10 * 8]");             // load the low payload word from the source slot
     emitter.instruction("xor rsi, rsi");                                        // pointer-sized and scalar slots do not use a high payload word
+    emitter.instruction(&format!("cmp rax, {}", POINTER_ARRAY_VALUE_TYPE));     // do source slots hold raw pointer words?
+    emitter.instruction("jne __rt_array_to_mixed_x86_box");                     // every other slot keeps its source value tag
+    emitter.instruction("xor eax, eax");                                        // runtime tag 0 = integer for a live pointer address
+    emitter.instruction("mov r8, 8");                                           // runtime tag 8 = PHP null for a null pointer word
+    emitter.instruction("test rdi, rdi");                                       // is this slot the null pointer word?
+    emitter.instruction("cmovz rax, r8");                                       // box a null word as PHP null
     emitter.instruction("jmp __rt_array_to_mixed_x86_box");                     // allocate a Mixed box for the loaded payload
 
     emitter.label("__rt_array_to_mixed_x86_load_tagged_scalar");

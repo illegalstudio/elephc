@@ -17,8 +17,8 @@ use crate::span::Span;
 use super::super::params::parse_type_expr;
 use super::super::{expect_semicolon, expect_token};
 
-/// Handle ++$var; or --$var; as standalone statements. Also handles ++A::$x and --A::$x
-/// (prefix increment/decrement on static properties) by desugaring to a compound assignment.
+/// Handles discarded prefix increments/decrements on locals, scoped properties and array places.
+/// Complex storage shares the postfix read-modify-write lowering and index snapshots.
 pub(in crate::parser::stmt) fn parse_incdec_stmt(
     tokens: &[SpannedToken],
     pos: &mut usize,

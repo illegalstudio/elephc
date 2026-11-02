@@ -45,7 +45,8 @@ pub struct TypeParam {
 /// Under monomorphization `Box<Dog>` and `Box<Animal>` are two real classes, so it is a
 /// statement about two of them — and it holds only where they share storage, which is why
 /// `Box<Dog>` may widen to `Box<Animal>` (both fields are pointers) while `Box<int>` may not
-/// widen to `Box<mixed>` (a register against a boxed tagged cell). See `.plans/generics.md`.
+/// widen to `Box<mixed>` (a register against a boxed tagged cell). See
+/// `docs/beyond-php/generics.md` for the storage-compatible variance contract.
 pub enum Variance {
     /// The default: `Box<Dog>` and `Box<Animal>` are unrelated.
     #[default]

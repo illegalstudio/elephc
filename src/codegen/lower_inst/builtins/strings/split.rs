@@ -319,41 +319,8 @@ pub(crate) fn lower_implode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         Arch::AArch64 => lower_implode_aarch64(ctx, inst, array_index)?,
         Arch::X86_64 => lower_implode_x86_64(ctx, inst, array_index)?,
     }
-    let Some(value_ty) = normalized_copy else {
-        abi::emit_call_label(ctx.emitter, runtime_label);
-        abi::emit_call_label(ctx.emitter, "__rt_str_persist");
-        return store_if_result(ctx, inst);
-    };
-    // Normalization produces an owned dense array. Its cleanup record must remain
-    // visible when a Mixed element invokes a PHP string conversion that throws.
-    let array_reg = implode_array_argument_reg(ctx);
-    abi::emit_push_reg(ctx.emitter, array_reg);
-    let owner_address = abi::tertiary_scratch_reg(ctx.emitter);
-    abi::emit_temporary_stack_address(ctx.emitter, owner_address, 0);
-    abi::emit_push_call_operand_owner(ctx.emitter, owner_address, false);
-    abi::emit_call_label(ctx.emitter, runtime_label);
-    // Stabilize the scratch result before releasing values whose destructors may
-    // reenter string rendering. All implode paths now return one owned string.
-    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
-    abi::emit_pop_call_operand_owner(ctx.emitter);
-    abi::emit_push_result_value(ctx.emitter, &PhpType::Str);
-    abi::emit_temporary_stack_address(ctx.emitter, owner_address, 0);
-    abi::emit_push_call_operand_owner(ctx.emitter, owner_address, false);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 64);
-    abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Array(Box::new(value_ty)));
-    abi::emit_pop_call_operand_owner(ctx.emitter);
-    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-    abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
-    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    super::implode_owners::emit_owned_implode(ctx, runtime_label, normalized_copy);
     store_if_result(ctx, inst)
-}
-
-/// The register the implode ABI leaves the array argument in, per target.
-fn implode_array_argument_reg(ctx: &FunctionContext<'_>) -> &'static str {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => "x3",
-        Arch::X86_64 => "rdx",
-    }
 }
 /// Materializes delimiter/payload string pairs plus the optional `$limit` for `explode()`.
 pub(super) fn load_split_pair_args(
@@ -632,7 +599,7 @@ fn implode_element_runtime_label(elem_ty: &PhpType) -> Result<&'static str> {
 /// same extraction `array_values()` uses. Boxed packed values are widened to Mixed slots;
 /// potentially promoted Mixed arrays are retained or copied after checking their heap kind.
 /// Every normalization result must be released once the join has read it.
-fn implode_normalized_value_type(
+pub(super) fn implode_normalized_value_type(
     ctx: &FunctionContext<'_>,
     inst: &Instruction,
     array_index: usize,
@@ -699,7 +666,7 @@ pub(super) fn lower_implode_x86_64(
 }
 
 /// Loads or normalizes an array into the dense payload required by the join renderers.
-fn load_implode_array(ctx: &mut FunctionContext<'_>, array: ValueId) -> Result<()> {
+pub(super) fn load_implode_array(ctx: &mut FunctionContext<'_>, array: ValueId) -> Result<()> {
     ctx.load_value_to_result(array)?;
     match ctx.value_php_type(array)?.codegen_repr() {
         PhpType::Mixed | PhpType::Union(_) => emit_boxed_implode_array_source(ctx),

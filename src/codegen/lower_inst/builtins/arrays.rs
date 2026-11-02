@@ -36,6 +36,7 @@ mod shift;
 mod unshift;
 pub(in crate::codegen::lower_inst::builtins) mod values;
 mod basic;
+mod push;
 mod boxed_map_callback;
 mod boxed_merge;
 mod boxed_membership;
@@ -52,6 +53,7 @@ mod map_dispatch;
 mod map_results;
 mod reduce_sets;
 mod misc_dispatch;
+mod mixed_array_argument_guard;
 mod callback_builtins;
 mod multisort;
 mod sort_dispatch;
@@ -89,11 +91,12 @@ use in_array_coercions::*;
 use in_array_strings::*;
 
 pub(crate) use basic::{
-    lower_call_user_func_builtin_escape, lower_array_sum, lower_array_product, lower_array_push,
+    lower_call_user_func_builtin_escape, lower_array_sum, lower_array_product,
     lower_array_chunk, lower_array_pad, lower_array_fill, lower_array_fill_keys,
     lower_array_combine, lower_array_column, lower_array_flip, lower_array_reverse,
     lower_array_unique,
 };
+pub(crate) use push::lower_array_push;
 pub(crate) use filter::{
     lower_array_filter,
 };
@@ -114,7 +117,8 @@ pub(crate) use misc_dispatch::{
     lower_rsort, lower_asort, lower_arsort, lower_ksort,
     lower_krsort, lower_natsort, lower_natcasesort, lower_shuffle,
     lower_usort, lower_uksort, lower_uasort, lower_array_key_exists,
-    lower_array_is_list, lower_array_key_first, lower_array_key_last, lower_array_replace,
+    lower_array_is_list, lower_array_key_first, lower_array_key_last, lower_array_first,
+    lower_array_last, lower_array_replace,
     lower_array_replace_recursive, lower_array_diff_assoc, lower_array_intersect_assoc, lower_array_merge_recursive,
 };
 pub(crate) use callback_builtins::{
@@ -568,6 +572,13 @@ fn lower_hash_link_sort_with_flags(
     let array = expect_operand(inst, 0)?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
     if !hash_sort_source_is_published_mixed_cell(ctx, array)? {
+        // A miss-read receiver holds the in-band null-container sentinel; PHP raises a TypeError
+        // for it rather than relinking a null table.
+        boxed_mutation::require_non_null_hash_receiver(
+            ctx,
+            array,
+            helper.trim_start_matches("__rt_hash_"),
+        )?;
         receiver.require_writable("hash link sort")?;
         receiver.prepare_consuming_storeback(ctx, array)?;
         ensure_unique_hash_sort_source(ctx, array)?;

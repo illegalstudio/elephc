@@ -11,7 +11,7 @@
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
-use crate::ir::{CmpPredicate, Immediate, Instruction};
+use crate::ir::{CmpPredicate, Immediate, InstId, Instruction};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
@@ -64,6 +64,95 @@ pub(super) fn lower_float_compare(
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Emits a fused floating-point compare for a following `cond_br` and returns its predicate.
+///
+/// x86_64 swaps the operands of `<` and `<=`, making every fused ordered predicate use `ja` or
+/// `jae`. Their direct forms reject unordered operands and their inverses include unordered,
+/// which preserves PHP's NaN behavior without materializing a boolean.
+pub(in crate::codegen) fn emit_fused_float_compare(
+    ctx: &mut FunctionContext<'_>,
+    inst_id: InstId,
+) -> Result<CmpPredicate> {
+    let inst = ctx
+        .function
+        .instruction(inst_id)
+        .cloned()
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst_id.as_raw()))?;
+    let lhs = expect_operand(&inst, 0)?;
+    let rhs = expect_operand(&inst, 1)?;
+    let predicate = expect_cmp_predicate(&inst)?;
+    let lhs_reg = secondary_float_reg(ctx.emitter.target.arch);
+    let rhs_reg = abi::float_result_reg(ctx.emitter);
+    require_float(ctx.load_value_to_reg(lhs, lhs_reg)?, &inst)?;
+    require_float(ctx.load_value_to_reg(rhs, rhs_reg)?, &inst)?;
+    ctx.emitter.comment("-- compare floats for a fused conditional branch --");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("fcmp d1, d0");                             // set flags for the ordered float branch
+        }
+        Arch::X86_64
+            if matches!(
+                predicate,
+                CmpPredicate::Slt
+                    | CmpPredicate::Sle
+                    | CmpPredicate::Olt
+                    | CmpPredicate::Ole
+            ) =>
+        {
+            ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // swap operands so below becomes ordered above
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("ucomisd xmm1, xmm0");                      // set flags for the ordered float branch
+        }
+    }
+    Ok(predicate)
+}
+
+/// Returns the target branch suffix for a fused PHP float predicate or its exact negation.
+///
+/// `inverted` means logical negation, not the opposite ordered comparison: unordered NaN
+/// operands must take every inverted relational condition.
+pub(in crate::codegen) fn float_branch_condition_suffix(
+    arch: Arch,
+    predicate: CmpPredicate,
+    inverted: bool,
+) -> Result<&'static str> {
+    match (arch, predicate, inverted) {
+        (Arch::AArch64, CmpPredicate::Slt | CmpPredicate::Olt, false) => Ok("mi"),
+        (Arch::AArch64, CmpPredicate::Slt | CmpPredicate::Olt, true) => Ok("pl"),
+        (Arch::AArch64, CmpPredicate::Sle | CmpPredicate::Ole, false) => Ok("ls"),
+        (Arch::AArch64, CmpPredicate::Sle | CmpPredicate::Ole, true) => Ok("hi"),
+        (Arch::AArch64, CmpPredicate::Sgt | CmpPredicate::Ogt, false) => Ok("gt"),
+        (Arch::AArch64, CmpPredicate::Sgt | CmpPredicate::Ogt, true) => Ok("le"),
+        (Arch::AArch64, CmpPredicate::Sge | CmpPredicate::Oge, false) => Ok("ge"),
+        (Arch::AArch64, CmpPredicate::Sge | CmpPredicate::Oge, true) => Ok("lt"),
+        (
+            Arch::X86_64,
+            CmpPredicate::Slt | CmpPredicate::Olt | CmpPredicate::Sgt | CmpPredicate::Ogt,
+            false,
+        ) => Ok("a"),
+        (
+            Arch::X86_64,
+            CmpPredicate::Slt | CmpPredicate::Olt | CmpPredicate::Sgt | CmpPredicate::Ogt,
+            true,
+        ) => Ok("be"),
+        (
+            Arch::X86_64,
+            CmpPredicate::Sle | CmpPredicate::Ole | CmpPredicate::Sge | CmpPredicate::Oge,
+            false,
+        ) => Ok("ae"),
+        (
+            Arch::X86_64,
+            CmpPredicate::Sle | CmpPredicate::Ole | CmpPredicate::Sge | CmpPredicate::Oge,
+            true,
+        ) => Ok("b"),
+        _ => Err(CodegenIrError::unsupported(format!(
+            "fused float comparison predicate {:?}",
+            predicate
+        ))),
+    }
 }
 
 /// Returns the AArch64 condition for PHP float comparisons, excluding unordered NaN cases.

@@ -348,7 +348,7 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             "floatval" | "floor" | "ceil" | "round" | "sqrt" | "pow" | "fmod" | "sin" | "cos"
             | "tan" | "asin" | "acos" | "atan" | "atan2" | "sinh" | "cosh" | "tanh" | "log"
             | "log2" | "log10" | "exp" | "hypot" | "pi" | "deg2rad" | "rad2deg" => PhpType::Float,
-            "ptr" | "ptr_null" => PhpType::Pointer(None),
+            "ptr" | "ptr_null" | "buffer_ptr" => PhpType::Pointer(None),
             "ptr_offset" => {
                 if let Some(first_arg) = args.first() {
                     match infer_expr_type_syntactic(first_arg) {
@@ -359,10 +359,9 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                     PhpType::Pointer(None)
                 }
             }
-            "ptr_is_null" | "define" | "json_validate" | "flock" | "symlink" | "link" => {
-                PhpType::Bool
-            }
-            "ptr_sizeof" | "ptr_get" | "ptr_read8" | "ptr_read32" => PhpType::Int,
+            "ptr_is_null" | "__elephc_ptr_is_null" | "define" | "json_validate" | "flock" | "symlink"
+            | "link" => PhpType::Bool,
+            "ptr_sizeof" | "ptr_get" | "__elephc_ptr_get" | "ptr_read8" | "ptr_read32" => PhpType::Int,
             _ => PhpType::Int,
         },
         ExprKind::NullCoalesce { value, default } => {
@@ -544,6 +543,9 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             _ => PhpType::Int,
         },
         ExprKind::InstanceOf { .. } => PhpType::Bool,
+        // `!` always yields a bool, as the checker and `lower_not` type it; the `int` default
+        // made a merge of `!$flag` with an int collapse into an int slot.
+        ExprKind::Not(_) => PhpType::Bool,
         _ => PhpType::Int,
     }
 }

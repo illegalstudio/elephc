@@ -184,10 +184,16 @@ pub(super) fn collect_declared_trait_methods(
                         .enumerate()
                         .map(|(declaration_order, method)| {
                             let method_key = php_symbol_key(&method.name);
+                            let mut signature = function::method_signature_from_ast(method);
+                            let source_defaults = signature.defaults.clone();
+                            crate::types::checker::normalize_signature_default_receivers(
+                                &mut signature, name, None,
+                            );
                             let info = TraitMethodInfo {
                                 declared_name: method.name.clone(),
                                 declaration_order,
-                                signature: function::method_signature_from_ast(method),
+                                signature,
+                                source_defaults,
                                 visibility: method.visibility.clone(),
                                 is_static: method.is_static,
                                 is_final: method.is_final,
@@ -438,4 +444,39 @@ pub(super) fn value_or_void_ir_type(php_type: &PhpType) -> IrType {
         PhpType::Void | PhpType::Never => IrType::Void,
         other => IrType::from_php(other),
     }
+}
+
+/// Retains trait origin by comparing composed declarations with the owner's direct source methods.
+/// This also handles aliases and nested trait uses without matching spans or method bodies.
+pub(super) fn collect_imported_trait_method_names(
+    program: &Program, classes: &HashMap<String, ClassInfo>,
+) -> HashMap<String, HashSet<String>> {
+    let mut imported = HashMap::new();
+    for statement in program {
+        match &statement.kind {
+            StmtKind::ClassDecl { name, methods, .. } | StmtKind::EnumDecl { name, methods, .. } => {
+                if let Some(info) = classes.get(name).filter(|info| !info.used_traits.is_empty()) {
+                    let direct: HashSet<_> = methods.iter().map(|method| php_symbol_key(&method.name)).collect();
+                    imported.insert(name.clone(), info.method_decls.iter()
+                        .map(|method| php_symbol_key(&method.name))
+                        .filter(|key| !direct.contains(key)).collect());
+                }
+            }
+            StmtKind::NamespaceBlock { body, .. } | StmtKind::Synthetic(body)
+            | StmtKind::IncludeOnceGuard { body, .. } => {
+                imported.extend(collect_imported_trait_method_names(body, classes));
+            }
+            StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
+                imported.extend(collect_imported_trait_method_names(then_body, classes));
+                for (_, body) in elseif_clauses {
+                    imported.extend(collect_imported_trait_method_names(body, classes));
+                }
+                if let Some(body) = else_body {
+                    imported.extend(collect_imported_trait_method_names(body, classes));
+                }
+            }
+            _ => {}
+        }
+    }
+    imported
 }

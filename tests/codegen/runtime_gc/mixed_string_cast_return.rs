@@ -16,6 +16,67 @@
 
 use crate::support::*;
 
+/// Returning a static property's boxed value transfers an owner without retiring its source slot.
+#[test]
+fn test_fileinfo_static_property_returns_keep_independent_owners() {
+    let (out, _) = compile_and_run_with_heap_debug_and_asm(r#"<?php
+class FileinfoStaticReturnOwner {
+    public static mixed $slot = null;
+    public function value(): mixed { return FileinfoStaticReturnOwner::$slot; }
+    public static function staticValue(): mixed { return FileinfoStaticReturnOwner::$slot; }
+}
+$holder = new FileinfoStaticReturnOwner();
+FileinfoStaticReturnOwner::$slot = str_repeat("x", 40);
+$a = $holder->value(); unset($a);
+echo strlen(FileinfoStaticReturnOwner::$slot), "\n";
+$b = FileinfoStaticReturnOwner::staticValue();
+FileinfoStaticReturnOwner::$slot = null;
+echo strlen($b), "\n"; unset($b);
+$stream = fopen("php://memory", "w+b");
+FileinfoStaticReturnOwner::$slot = $stream;
+$c = $holder->value(); unset($c);
+$d = FileinfoStaticReturnOwner::staticValue();
+FileinfoStaticReturnOwner::$slot = null;
+fwrite($d, "alive"); rewind($stream); echo stream_get_contents($stream), "\n";
+fclose($stream); unset($d, $stream, $holder);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "40\n40\nalive\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Boxed conditional user returns retire fresh raw-string call and cast arguments on both branches.
+#[test]
+fn test_fileinfo_boxed_string_returns_release_raw_argument_temporaries() {
+    let (out, _) = compile_and_run_with_heap_debug_and_asm(r#"<?php
+function fileinfoLeaseResult(string $data, bool $fresh): string|false {
+    if ($fresh) { return str_repeat("y", 9); }
+    return $data;
+}
+function fileinfoLeaseBox(): mixed { return "box"; }
+class FileinfoLeaseMethods {
+    public function result(string $data, bool $fresh): string|false {
+        if ($fresh) { return str_repeat("z", 9); }
+        return $data;
+    }
+}
+$lease = new FileinfoLeaseMethods();
+for ($i = 0; $i < 40; $i++) {
+    $a = fileinfoLeaseResult(str_repeat("a", 40), $argc > 0);
+    $b = fileinfoLeaseResult(str_repeat("b", 40), $argc < 0);
+    $c = $lease->result(str_repeat("c", 40), $argc > 0);
+    $d = $lease->result(str_repeat("d", 40), $argc < 0);
+    $e = fileinfoLeaseResult((string)fileinfoLeaseBox(), $argc > 0);
+    $f = $lease->result((string)fileinfoLeaseBox(), $argc < 0);
+}
+echo strlen($a), ":", strlen($b), ":", strlen($c), ":", strlen($d), ":", strlen($e), ":", strlen($f), "\n";
+unset($a, $b, $c, $d, $e, $f, $lease);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "9:40:9:40:9:3\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Verifies the issue's own reproducer is heap-clean.
 #[test]
 fn test_mixed_string_cast_return_is_heap_clean() {

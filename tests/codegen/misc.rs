@@ -160,6 +160,128 @@ echo describe(200);
     assert_eq!(out, "big");
 }
 
+/// Regression for task b4024b9a: an int and a bool merged by `??`, `?:` or a ternary keep their
+/// own PHP types, so an int `0` still echoes `0` and `false` echoes nothing, also when the merge
+/// is the source of an `(array)` cast inside an array literal.
+#[test]
+fn test_merges_keep_int_and_bool_apart() {
+    let out = compile_and_run(
+        r#"<?php
+function coalesce(?int $n, bool $flag): void { echo $n ?? $flag, "|"; }
+function choose(bool $first, int $n, bool $flag): void { echo $first ? $n : $flag, "|"; }
+coalesce(0, false);
+coalesce(2, false);
+coalesce(null, true);
+coalesce(null, false);
+choose(true, 0, true);
+choose(false, 0, true);
+echo "\n";
+function cast_rows(?int $n, bool $flag): void {
+    $rows = [(array)($n ?? $flag)];
+    echo $rows[0][0], ":", gettype($rows[0][0]), "|";
+}
+cast_rows(0, false);
+cast_rows(null, false);
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "0|2|1||0|1|\n0:integer|:boolean|\n");
+}
+
+/// Regression for task b4024b9a: an int/bool `??`, `?:` or `match` nested in an outer ternary,
+/// match or array literal keeps its boxed result, so `false` is not cast to integer 0 by an
+/// enclosing temp or element stamp predicted from the syntactic `int`.
+#[test]
+fn test_nested_and_literal_merges_keep_int_and_bool_apart() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(bool $take, ?int $n, bool $flag): void {
+    $v = $take ? ($n ?? $flag) : 0;
+    echo $v, ":", gettype($v), "|";
+    $m = match ($take) { true => ($n ?? $flag), default => 0 };
+    echo $m, ":", gettype($m), "|";
+}
+pick(true, null, false);
+pick(true, 5, false);
+echo "\n";
+function rows(?int $n, bool $flag): void {
+    $list = [$n ?? $flag];
+    echo $list[0], ":", gettype($list[0]), "|";
+    $map = ["k" => $n ?? $flag];
+    echo $map["k"], ":", gettype($map["k"]), "|";
+}
+rows(null, false);
+rows(4, false);
+echo "\n";
+function short(int $n, bool $flag): void {
+    $list = [$n ?: $flag];
+    echo $list[0], ":", gettype($list[0]), "|";
+    $map = ["k" => $n ?: $flag];
+    echo $map["k"], ":", gettype($map["k"]), "|";
+}
+short(0, false);
+short(7, false);
+echo "\n";
+$v = [match ($argc) { 1 => 42, default => true }];
+echo $v[0], ":", gettype($v[0]);
+$w = ["k" => match ($argc) { 1 => 42, default => true }];
+echo "|", $w["k"], ":", gettype($w["k"]), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        ":boolean|:boolean|5:integer|5:integer|\n\
+         :boolean|:boolean|4:integer|4:integer|\n\
+         :boolean|:boolean|7:integer|7:integer|\n\
+         42:integer|42:integer\n"
+    );
+}
+
+/// Regression for task b4024b9a: a `!` arm merged with an int (ternary, match, `?:`) and a bare
+/// `!` literal element keep the boolean.
+#[test]
+fn test_negation_keeps_bool_in_merges_and_literals() {
+    let out = compile_and_run(
+        r#"<?php
+function show(bool $flag): void {
+    $v = $flag ? !$flag : 0;
+    echo $v, ":", gettype($v), "|";
+    $m = match (true) { true => !$flag, default => 0 };
+    echo $m, ":", gettype($m), "|";
+    $list = [!$flag];
+    echo gettype($list[0]), "|";
+    $s = !$flag ?: 0;
+    echo $s, ":", gettype($s), "\n";
+}
+show(true);
+show(false);
+"#,
+    );
+    assert_eq!(out, ":boolean|:boolean|boolean|0:integer\n0:integer|1:boolean|boolean|1:boolean\n");
+}
+
+/// Regression for task b4024b9a: an assignment expression used as a ternary arm or an array
+/// literal element is typed from the value it evaluates to, so `($tmp = false)` merged with an
+/// int stays `false`, and `[$x = "a", "k" => $y = 2.5]` stores the string and the float instead
+/// of their raw words stamped as integers.
+#[test]
+fn test_assignment_expressions_keep_their_type_in_merges_and_literals() {
+    let out = compile_and_run(
+        r#"<?php
+function show(bool $flag, int $argc): void {
+    echo ($argc > 0) ? ($tmp = $flag) : 0, ":";
+    echo gettype(($argc > 0) ? ($tmp = $flag) : 0), "|";
+    $list = [$tmp = $flag];
+    echo $list[0], ":", gettype($list[0]), "|";
+    $mixed = [$x = "a", "k" => $y = 2.5];
+    echo $mixed[0], ":", $mixed["k"], "\n";
+}
+show(false, $argc);
+"#,
+    );
+    assert_eq!(out, ":boolean|:boolean|a:2.5\n");
+}
+
 /// Verifies null-coalescing a null variable with a string literal default allocates the string
 /// and does not evaluate the default eagerly.
 #[test]

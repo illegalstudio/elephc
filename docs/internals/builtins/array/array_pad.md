@@ -2,7 +2,7 @@
 title: "array_pad() - internals"
 description: "Compiler internals for array_pad(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 27
+  order: 29
 ---
 
 ## `array_pad()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_pad.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_pad.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

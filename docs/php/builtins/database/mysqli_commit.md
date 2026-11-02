@@ -2,7 +2,7 @@
 title: "mysqli_commit()"
 description: "Commits the open transaction."
 sidebar:
-  order: 104
+  order: 107
 ---
 
 ## mysqli_commit()

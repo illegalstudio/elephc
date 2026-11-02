@@ -24,6 +24,7 @@ pub fn emit_buffer_use_after_free(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: buffer_use_after_free ---");
     emitter.label_global("__rt_buffer_use_after_free");
+    if emitter.phpext_output { abi::emit_cdylib_exit_escape(emitter); }
     abi::emit_symbol_address(emitter, "x1", "_buffer_uaf_msg");                 // load the error message page
     emitter.instruction("mov x2, #47");                                         // byte length of the use-after-free error message
     emitter.instruction("mov x0, #2");                                          // write diagnostics to stderr
@@ -40,6 +41,7 @@ fn emit_buffer_use_after_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: buffer_use_after_free ---");
     emitter.label_global("__rt_buffer_use_after_free");
+    if emitter.phpext_output { abi::emit_cdylib_exit_escape(emitter); }
     emitter.instruction("mov edi, 2");                                          // write diagnostics to the Linux stderr file descriptor
     abi::emit_symbol_address(emitter, "rsi", "_buffer_uaf_msg");
     emitter.instruction("mov edx, 47");                                         // byte length of the fixed buffer use-after-free error message

@@ -62,7 +62,7 @@ pub fn emit_decref_array(emitter: &mut Emitter) {
     emitter.instruction("str w9, [x0, #-12]");                                  // store decremented refcount
     emitter.instruction("b.eq __rt_decref_array_free");                         // zero refcount means the array can be freed immediately
 
-    emitter.instruction("b __rt_decref_array_skip");                            // non-zero refcount stays alive until an explicit GC safe point
+    emitter.instruction("b __rt_gc_note_candidate");                            // non-zero refcount stays alive until an explicit GC safe point
 
     // -- refcount reached zero: deep free the array --
     emitter.label("__rt_decref_array_free");
@@ -105,7 +105,7 @@ fn emit_decref_array_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r10d, 1");                                         // decrement the refcount for the array owner that is going away
     emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // persist the decremented array refcount in the uniform heap header
     emitter.instruction("jz __rt_decref_array_free");                           // zero refcount means the indexed array can be deep-freed immediately
-    emitter.instruction("jmp __rt_decref_array_skip");                          // non-zero refcount stays alive until an explicit GC safe point
+    emitter.instruction("jmp __rt_gc_note_candidate");                          // non-zero refcount stays alive until an explicit GC safe point
 
     emitter.label("__rt_decref_array_free");
     emitter.instruction("jmp __rt_array_free_deep");                            // tail-call into the indexed-array deep-free helper so nested heap-backed elements are released too

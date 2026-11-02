@@ -2,7 +2,7 @@
 title: "mysqli_real_connect()"
 description: "Connects an object created by mysqli_init(), with the full option set."
 sidebar:
-  order: 148
+  order: 151
 ---
 
 ## mysqli_real_connect()

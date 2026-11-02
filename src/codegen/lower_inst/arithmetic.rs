@@ -1,6 +1,6 @@
 //! Purpose:
-//! Lowers integer arithmetic, bitwise, shift, and integer-to-float division EIR
-//! opcodes for the Phase 04 stack-slot backend.
+//! Lowers integer, float and boxed arithmetic, bitwise operations and shifts.
+//! Keeps scalar operands and temporary numeric cells consistent with the runtime ABI.
 //!
 //! Called from:
 //! - `crate::codegen::lower_inst::lower_instruction()`.
@@ -8,10 +8,12 @@
 //! Key details:
 //! - The lowering preserves PHP scalar semantics and keeps all target
 //!   register choices behind ABI helpers where shared helpers exist.
+//! - Only exact integer constants may use the borrowed stack-cell RHS path.
+//! - Checked result cells use frame storage only after a complete nonescaping lifetime proof.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
-use crate::ir::{Immediate, Instruction, MixedNumericOp, ValueId};
+use crate::ir::{Function, Immediate, Instruction, IrHeapKind, IrType, MixedNumericOp, Op, ValueDef, ValueId};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
@@ -19,6 +21,12 @@ use super::{
     expect_operand, require_float, require_integer_like, secondary_float_reg, store_if_result,
 };
 use crate::codegen::{CodegenIrError, Result};
+
+#[cfg(test)]
+#[path = "arithmetic/borrowed_integer_rhs_tests.rs"]
+mod borrowed_integer_rhs_tests;
+
+pub(super) mod stack_cell;
 
 /// Lowers a two-operand integer arithmetic or bitwise instruction.
 pub(super) fn lower_int_binop(
@@ -82,6 +90,9 @@ pub(super) fn lower_int_checked_binop(
     inst: &Instruction,
     helper: &str,
 ) -> Result<()> {
+    if let Some(offset) = inst.result.and_then(|value| ctx.numeric_cell_offsets.get(&value).copied()) {
+        return stack_cell::lower(ctx, inst, offset);
+    }
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
     let lhs_reg = abi::int_result_reg(ctx.emitter);
@@ -368,11 +379,29 @@ pub(super) fn lower_mixed_numeric_binop(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
+    if let Some(offset) = inst.result.and_then(|value| ctx.numeric_cell_offsets.get(&value).copied()) {
+        return stack_cell::lower_mixed(ctx, inst, offset);
+    }
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
     let op = expect_mixed_numeric_op(inst)?;
     let lhs_ty = ctx.value_php_type(lhs)?;
     let rhs_ty = ctx.value_php_type(rhs)?;
+    if matches!(op, MixedNumericOp::Add | MixedNumericOp::Sub | MixedNumericOp::Mul)
+        && is_mixed_like(&lhs_ty)
+        && ctx.value_ir_type(lhs)? == IrType::Heap(IrHeapKind::Mixed)
+    {
+        if let Some(integer) = integer_rhs_constant(ctx.function, rhs) {
+            ctx.load_value_to_result(lhs)?;
+            let rhs_reg = match ctx.emitter.target.arch {
+                Arch::AArch64 => "x1",
+                Arch::X86_64 => "rdi",
+            };
+            abi::emit_load_int_immediate(ctx.emitter, rhs_reg, integer);
+            assert!(abi::emit_mixed_numeric_integer_rhs_call(ctx.emitter, op));
+            return store_if_result(ctx, inst);
+        }
+    }
     let left_box_temp = !is_mixed_like(&lhs_ty);
     let right_box_temp = !is_mixed_like(&rhs_ty);
 
@@ -401,6 +430,20 @@ pub(super) fn lower_mixed_numeric_binop(
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     abi::emit_release_temporary_stack(ctx.emitter, 32);
     store_if_result(ctx, inst)
+}
+
+/// Requires an actual PHP integer constant, excluding bool/null values sharing I64 storage.
+fn integer_rhs_constant(function: &Function, value: ValueId) -> Option<i64> {
+    let metadata = function.value(value)?;
+    if metadata.php_type != PhpType::Int || metadata.ir_type != IrType::I64 {
+        return None;
+    }
+    let ValueDef::Instruction { inst, .. } = metadata.def else { return None };
+    let definition = function.instruction(inst)?;
+    match (&definition.op, &definition.immediate) {
+        (Op::ConstI64, Some(Immediate::I64(integer))) => Some(*integer),
+        _ => None,
+    }
 }
 
 /// Returns true when a PHP type is already represented as a boxed Mixed pointer.

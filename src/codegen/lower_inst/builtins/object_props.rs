@@ -135,7 +135,7 @@ fn emit_object_and_index_arguments(
 /// A statically typed object operand is already a pointer. A `Mixed` operand is
 /// unboxed and only a tag-6 payload survives; every other shape — including PHP
 /// null — collapses to 0, which the runtime helpers read as "no object".
-fn emit_object_pointer_from_operand(
+pub(super) fn emit_object_pointer_from_operand(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
 ) -> Result<()> {

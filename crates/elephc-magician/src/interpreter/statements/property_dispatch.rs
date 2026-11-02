@@ -51,6 +51,7 @@ pub(super) fn execute_property_stmt(
             with_eval_void_operands(&[object], context, scope, values, |receiver, context, scope, values| {
                 let property = eval_dynamic_member_name(property, context, scope, values)?;
                 with_eval_void_operands(&[value], context, scope, values, |args, context, _, values| {
+                    validate_reflection_public_mirror_direct_write(receiver[0], &property, context, values)?;
                     eval_property_set_result(receiver[0], &property, args[0], context, values)
                 })
             })?;
@@ -109,6 +110,7 @@ pub(super) fn execute_property_stmt(
             value,
         } => {
             with_eval_void_operands(&[object, value], context, scope, values, |args, context, _, values| {
+                validate_reflection_public_mirror_direct_write(args[0], property, context, values)?;
                 eval_property_set_result(args[0], property, args[1], context, values)
             })?;
             Ok(EvalControl::None)

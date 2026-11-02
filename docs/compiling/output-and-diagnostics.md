@@ -1,6 +1,6 @@
 ---
 title: "Output formats and diagnostics"
-description: "Choosing what the compiler produces (executable, cdylib, assembly, IR) and the flags that inspect or instrument a compile."
+description: "Choosing what the compiler produces (executable, PHP module, C library, assembly, IR) and the flags that inspect or instrument a compile."
 sidebar:
   order: 6
 ---
@@ -17,6 +17,7 @@ Selects the kind of artifact to produce.
 
 ```bash
 elephc --emit executable app.php   # default: a native binary
+elephc --emit phpext module.php    # a module loaded by real PHP 8.5
 elephc --emit cdylib lib.php       # a C-ABI shared library
 elephc --emit staticlib lib.php    # a C-ABI static archive
 ```
@@ -26,13 +27,17 @@ Accepted values and aliases:
 | Value | Aliases | Produces |
 |---|---|---|
 | `executable` | `exe`, `bin` | A standalone native binary. |
+| `phpext` | - | A PHP 8.5 module (`.so`) loaded with `extension=...`. |
 | `cdylib` | `dylib`, `shared` | A C-ABI shared library (`.dylib`/`.so`). |
 | `staticlib` | `static`, `lib` | A C-ABI static archive (`.a`). |
 
 The inline forms such as `--emit=cdylib` also work. `--emit lib` is an alias of
-`staticlib`, not `cdylib`. Both library kinds emit the same C-ABI exports and
-generated header; see [Shared Libraries (cdylib)](../beyond-php/cdylib.md) for
-the boundary contract and the static-linking distinction.
+`staticlib`, not `cdylib`. The `cdylib` and `staticlib` forms emit the same
+C-ABI exports and generated header; see
+[Shared Libraries (cdylib)](../beyond-php/cdylib.md) for the boundary contract
+and the static-linking distinction. `phpext` instead emits Zend handlers and no
+header; see [PHP extensions](../beyond-php/phpext.md) for its host SDK and type
+contract.
 
 ### `--emit-asm`
 
@@ -111,6 +116,25 @@ On an interactive terminal, each compilation phase starts as a spinner. When
 the phase finishes, elephc keeps its action-oriented label with a checkmark and
 elapsed time, then starts the next phase on a new line. Non-interactive output
 and `--quiet` keep the compact plain output without progress lines.
+
+### Diagnostic locations
+
+Errors and warnings name the physical file, line and column they come from:
+
+```text
+error[main.php:3:1]: Undefined variable: $x
+error[main.php:2:1]: Required file not found: 'missing.php'
+warning[src/Helpers.php:14:9]: Unreachable code
+```
+
+The file is the entry file as given on the command line, or the included or
+autoloaded file that holds the statement, so a diagnostic in a large autoloaded
+tree points at the right file. The entry path is registered before frontend and
+autoload processing, so early autoload warnings name it too. A position whose
+source file is not known (a compiler-synthesized node) prints `kind[line:col]`,
+and a diagnostic with no source position at all (some whole-program checks)
+prints `kind: message`.
+Profile `note[…]` lines keep their `note[line:col]` form.
 
 ### `--quiet` / `-q`
 

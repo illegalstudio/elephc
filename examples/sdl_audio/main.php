@@ -4,10 +4,10 @@
 // elephc -l SDL2 -L /opt/homebrew/lib examples/sdl_audio/main.php
 
 extern "SDL2" {
-    function SDL_Init(int $flags): int;
+    function SDL_Init(u32 $flags): i32;
     function SDL_Quit(): void;
-    function SDL_GetNumAudioDrivers(): int;
-    function SDL_GetAudioDriver(int $index): string;
+    function SDL_GetNumAudioDrivers(): i32;
+    function SDL_GetAudioDriver(i32 $index): string;
     function SDL_GetCurrentAudioDriver(): string;
     function SDL_GetError(): string;
 }

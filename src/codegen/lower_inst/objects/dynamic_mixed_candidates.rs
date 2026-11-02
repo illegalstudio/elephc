@@ -474,20 +474,22 @@ pub(super) fn emit_dynamic_new_mixed_candidate(
     )?;
     let object_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, object_reg);
-    let object_base_reg = abi::secondary_scratch_reg(ctx.emitter);
-    for default in &candidate.property_defaults {
-        abi::emit_load_temporary_stack_slot(ctx.emitter, object_base_reg, 0);
-        emit_property_default(ctx, object_base_reg, default)?;
-    }
+    let needs_construction_guard =
+        candidate.constructor_impl.is_some() || candidate.property_initialization.uses_thunk();
+    let construction_guard_bytes = if needs_construction_guard {
+        callable_guards::begin_unconstructed_object(ctx.emitter)
+    } else {
+        0
+    };
+    emit_stacked_property_initialization(
+        ctx,
+        construction_guard_bytes,
+        &candidate.property_initialization,
+    )?;
     if super::super::is_throwable_like_class(ctx, &candidate.class_name) {
-        abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, construction_guard_bytes);
         emit_regular_throwable_creation_line(ctx, result, object_reg, candidate.class_id);
     }
-    let construction_guard_bytes = candidate
-        .constructor_impl
-        .as_ref()
-        .map(|_| callable_guards::begin_unconstructed_object(ctx.emitter))
-        .unwrap_or(0);
     if let Some(constructor) = &candidate.constructor_impl {
         if let Some(arg_container) = constructor_arg_container {
             emit_dynamic_new_mixed_constructor_container_call_at_offset(
@@ -507,6 +509,8 @@ pub(super) fn emit_dynamic_new_mixed_candidate(
                 construction_guard_bytes,
             )?;
         }
+    }
+    if needs_construction_guard {
         callable_guards::end_unconstructed_object(ctx.emitter, construction_guard_bytes);
     }
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
@@ -534,10 +538,14 @@ pub(super) fn emit_dynamic_new_without_constructor_mixed_candidate(
     )?;
     let object_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, object_reg);
-    let object_base_reg = abi::secondary_scratch_reg(ctx.emitter);
-    for default in &candidate.property_defaults {
-        abi::emit_load_temporary_stack_slot(ctx.emitter, object_base_reg, 0);
-        emit_property_default(ctx, object_base_reg, default)?;
+    let guard_bytes = if candidate.property_initialization.uses_thunk() {
+        callable_guards::begin_unconstructed_object(ctx.emitter)
+    } else {
+        0
+    };
+    emit_stacked_property_initialization(ctx, guard_bytes, &candidate.property_initialization)?;
+    if guard_bytes > 0 {
+        callable_guards::end_unconstructed_object(ctx.emitter, guard_bytes);
     }
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
     abi::emit_release_temporary_stack(ctx.emitter, 16);

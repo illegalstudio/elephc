@@ -107,6 +107,17 @@ pub(super) fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
             {
                 emit_unbox_mixed_to_owned_refcounted_result(ctx, &result_ty);
             }
+            // A pointer element contract converts boxed slots instead of refusing them: a null or
+            // integer cell is exactly what a `?ptr<T>` word encodes, so `ReflectionProperty::
+            // setValue()` or any Mixed array bound to `array<ptr<T>|null>` keeps working.
+            // `__rt_array_to_pointer_words` consumes the owned unbox and returns the owner.
+            PhpType::Array(ref elem) if matches!(elem.codegen_repr(), PhpType::Pointer(_)) => {
+                emit_unbox_mixed_to_owned_refcounted_result(ctx, &result_ty);
+                if ctx.emitter.target.arch == Arch::X86_64 {
+                    ctx.emitter.instruction("mov rdi, rax");                    // pass the owned array to the pointer-word conversion
+                }
+                abi::emit_call_label(ctx.emitter, "__rt_array_to_pointer_words");
+            }
             // A TYPED element contract is met by unboxing only when the payload's slots are
             // already raw, and whether they are is a RUNTIME property — the array's own
             // value_type tag — not something the types here can decide.

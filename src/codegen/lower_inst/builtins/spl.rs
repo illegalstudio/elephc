@@ -982,14 +982,15 @@ fn emit_count_loaded_traversable_object(ctx: &mut FunctionContext<'_>) -> Result
 
     ctx.emitter.label(&direct_case);
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    emit_count_loaded_iterator_object(ctx)?;
+    emit_count_loaded_iterator_object(ctx, false)?;
     abi::emit_jump(ctx.emitter, &done);
 
     ctx.emitter.label(&aggregate_case);
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     move_result_to_receiver_arg(ctx);
     iterators::emit_interface_dispatch_call(ctx, "IteratorAggregate", "getiterator", None)?;
-    emit_count_loaded_iterator_object(ctx)?;
+    // getIterator() hands back an owned iterator: released once drained.
+    emit_count_loaded_iterator_object(ctx, true)?;
 
     ctx.emitter.label(&done);
     Ok(())
@@ -1042,23 +1043,27 @@ fn emit_apply_loaded_traversable_object(
 
     ctx.emitter.label(&direct_case);
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    emit_apply_loaded_iterator_object(ctx, callback)?;
+    emit_apply_loaded_iterator_object(ctx, callback, false)?;
     abi::emit_jump(ctx.emitter, &done);
 
     ctx.emitter.label(&aggregate_case);
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     move_result_to_receiver_arg(ctx);
     iterators::emit_interface_dispatch_call(ctx, "IteratorAggregate", "getiterator", None)?;
-    emit_apply_loaded_iterator_object(ctx, callback)?;
+    // getIterator() hands back an owned iterator: released once drained.
+    emit_apply_loaded_iterator_object(ctx, callback, true)?;
 
     ctx.emitter.label(&done);
     Ok(())
 }
 
 /// Drives Iterator and invokes the selected callback once for each valid position.
+/// `owns_iterator` releases the iterator afterwards (see
+/// `emit_to_array_loaded_iterator_object`).
 fn emit_apply_loaded_iterator_object(
     ctx: &mut FunctionContext<'_>,
     callback: &IteratorApplyCallback,
+    owns_iterator: bool,
 ) -> Result<()> {
     let receiver_reg = abi::nested_call_reg(ctx.emitter);
     let save_receiver = format!(
@@ -1095,6 +1100,9 @@ fn emit_apply_loaded_iterator_object(
     abi::emit_jump(ctx.emitter, &loop_start);
 
     ctx.emitter.label(&loop_end);
+    if owns_iterator {
+        emit_release_saved_iterator(ctx);
+    }
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     Ok(())
@@ -1192,14 +1200,15 @@ fn emit_to_array_loaded_traversable_object(
 
     ctx.emitter.label(&direct_case);
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    emit_to_array_loaded_iterator_object(ctx, preserve_keys)?;
+    emit_to_array_loaded_iterator_object(ctx, preserve_keys, false)?;
     abi::emit_jump(ctx.emitter, &done);
 
     ctx.emitter.label(&aggregate_case);
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     move_result_to_receiver_arg(ctx);
     iterators::emit_interface_dispatch_call(ctx, "IteratorAggregate", "getiterator", None)?;
-    emit_to_array_loaded_iterator_object(ctx, preserve_keys)?;
+    // getIterator() hands back an owned iterator: released once drained.
+    emit_to_array_loaded_iterator_object(ctx, preserve_keys, true)?;
 
     ctx.emitter.label(&done);
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
@@ -1207,9 +1216,12 @@ fn emit_to_array_loaded_traversable_object(
 }
 
 /// Drives the Iterator protocol and appends each current value to the saved result container.
+/// `owns_iterator` releases the iterator once drained: true for the one an
+/// `IteratorAggregate::getIterator()` call returned, which nothing else holds.
 fn emit_to_array_loaded_iterator_object(
     ctx: &mut FunctionContext<'_>,
     preserve_keys: bool,
+    owns_iterator: bool,
 ) -> Result<()> {
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     reload_saved_iterator_receiver(ctx);
@@ -1233,8 +1245,25 @@ fn emit_to_array_loaded_iterator_object(
     abi::emit_jump(ctx.emitter, &loop_start);
 
     ctx.emitter.label(&loop_end);
+    if owns_iterator {
+        emit_release_saved_iterator(ctx);
+    }
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     Ok(())
+}
+
+/// Drops the reference the saved iterator receiver (top temporary slot) holds;
+/// the last one runs its destructor, as PHP does when a drained iterator goes.
+fn emit_release_saved_iterator(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x0, [sp]");                            // reload the owned iterator for release
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // reload the owned iterator for release
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_decref_object");                   // release getIterator()'s result
 }
 
 /// Appends the current Iterator value to the saved indexed result array.
@@ -1299,7 +1328,7 @@ fn emit_insert_current_with_iterator_key(ctx: &mut FunctionContext<'_>) -> Resul
 }
 
 /// Counts a loaded Iterator object by driving rewind(), valid(), and next().
-fn emit_count_loaded_iterator_object(ctx: &mut FunctionContext<'_>) -> Result<()> {
+fn emit_count_loaded_iterator_object(ctx: &mut FunctionContext<'_>, owns_iterator: bool) -> Result<()> {
     let receiver_reg = abi::nested_call_reg(ctx.emitter);
     let save_receiver = format!(
         "mov {}, {}",
@@ -1334,6 +1363,9 @@ fn emit_count_loaded_iterator_object(ctx: &mut FunctionContext<'_>) -> Result<()
     abi::emit_jump(ctx.emitter, &loop_start);
 
     ctx.emitter.label(&loop_end);
+    if owns_iterator {
+        emit_release_saved_iterator(ctx);
+    }
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     Ok(())

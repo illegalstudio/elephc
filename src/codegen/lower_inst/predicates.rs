@@ -35,7 +35,19 @@ pub(in crate::codegen::lower_inst) fn emit_value_truthiness(
     op_name: &str,
 ) -> Result<()> {
     match ctx.raw_value_php_type(value)? {
-        PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Pointer(_) => {
+        // A packed record address (buffer element or nested record) is one pointer word, and so
+        // is a `?ptr<T>` (null is 0); its union must not reach the Mixed cell arm below. A buffer
+        // handle is one word too: every issued handle is nonzero, and the invalid handle 0 that a
+        // missed array read answers is falsy, as `empty()` and `??` already treat it.
+        ty if matches!(
+            ty,
+            PhpType::Bool
+                | PhpType::False
+                | PhpType::Int
+                | PhpType::Pointer(_)
+                | PhpType::Packed(_)
+                | PhpType::Buffer(_)
+        ) || crate::types::is_nullable_pointer_type(&ty) => {
             ctx.load_value_to_result(value)?;
             emit_int_result_nonzero_bool(ctx);
         }
@@ -47,7 +59,9 @@ pub(in crate::codegen::lower_inst) fn emit_value_truthiness(
             emit_float_result_nonzero_bool(ctx);
         }
         PhpType::Str => emit_string_truthiness(ctx, value)?,
-        PhpType::TaggedScalar => emit_tagged_scalar_truthiness(ctx, value)?,
+        ty if ty.codegen_repr() == PhpType::TaggedScalar => {
+            emit_tagged_scalar_truthiness(ctx, value)?;
+        }
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
             emit_array_truthiness(ctx, value)?;
         }
@@ -140,8 +154,21 @@ pub(super) fn lower_is_null(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 
 /// Emits an `is_null` boolean result for static nulls and boxed Mixed payloads.
 pub(super) fn emit_is_null_result(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    // A `?ptr<T>` is one pointer word where 0 is null.
+    if crate::types::is_nullable_pointer_type(&ctx.raw_value_php_type(value)?) {
+        ctx.load_value_to_result(value)?;
+        super::builtins::emit_int_result_zero_bool(ctx);
+        return Ok(());
+    }
     match ctx.value_php_type(value)? {
         PhpType::Mixed | PhpType::Union(_) => emit_mixed_tag_eq(ctx, value, 8),
+        // A buffer handle is one raw word and 0 is never issued: a missed element or key read
+        // and an empty `array_pop()`/`array_shift()` answer it, so `??` takes its default.
+        PhpType::Buffer(_) => {
+            ctx.load_value_to_result(value)?;
+            super::builtins::emit_int_result_zero_bool(ctx);
+            Ok(())
+        }
         PhpType::Void | PhpType::Never => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
             Ok(())
@@ -288,22 +315,33 @@ pub(super) fn emit_mixed_tag_eq(
     tag: u8,
 ) -> Result<()> {
     let ty = ctx.load_value_to_result(value)?;
-    if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
-        return Err(CodegenIrError::unsupported(format!(
-            "mixed tag predicate for PHP type {:?}",
-            ty
-        )));
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    // An inline tagged scalar already carries its runtime tag in the second word; the tag
+    // space is the Mixed one (int 0, null 8), so the comparison is the same after reading the
+    // register instead of unboxing a cell (#1999).
+    let tag_reg = match ty.codegen_repr() {
+        PhpType::TaggedScalar => {
+            crate::codegen_support::sentinels::tagged_scalar_tag_reg(ctx.emitter).to_string()
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            abi::int_result_reg(ctx.emitter).to_string()
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "mixed tag predicate for PHP type {:?}",
+                other
+            )))
+        }
+    };
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp x0, #{}", tag));              // compare the unboxed Mixed runtime tag against the expected tag
-            ctx.emitter.instruction("cset x0, eq");                             // materialize the Mixed tag predicate as boolean 1 on match
+            ctx.emitter.instruction(&format!("cmp {}, #{}", tag_reg, tag));     // compare the runtime tag against the expected tag
+            ctx.emitter.instruction("cset x0, eq");                             // materialize the tag predicate as boolean 1 on match
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp rax, {}", tag));              // compare the unboxed Mixed runtime tag against the expected tag
-            ctx.emitter.instruction("sete al");                                 // materialize the Mixed tag predicate in the low byte
-            ctx.emitter.instruction("movzx rax, al");                           // widen the Mixed tag predicate byte into the integer result register
+            ctx.emitter.instruction(&format!("cmp {}, {}", tag_reg, tag));      // compare the runtime tag against the expected tag
+            ctx.emitter.instruction("sete al");                                 // materialize the tag predicate in the low byte
+            ctx.emitter.instruction("movzx rax, al");                           // widen the tag predicate byte into the integer result register
         }
     }
     Ok(())
@@ -318,23 +356,33 @@ pub(super) fn emit_mixed_tag_membership(
     true_tags: &[u8],
 ) -> Result<()> {
     let ty = ctx.load_value_to_result(value)?;
-    if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
-        return Err(CodegenIrError::unsupported(format!(
-            "mixed kind predicate for PHP type {:?}",
-            ty
-        )));
-    }
+    // See `emit_mixed_tag_eq`: an inline tagged scalar's tag is already in the second word and
+    // shares the Mixed tag space (#1999).
+    let tag_reg = match ty.codegen_repr() {
+        PhpType::TaggedScalar => {
+            crate::codegen_support::sentinels::tagged_scalar_tag_reg(ctx.emitter).to_string()
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            abi::int_result_reg(ctx.emitter).to_string()
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "mixed kind predicate for PHP type {:?}",
+                other
+            )))
+        }
+    };
     let true_label = ctx.next_label("mixed_kind_true");
     let done_label = ctx.next_label("mixed_kind_done");
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     for &tag in true_tags {
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction(&format!("cmp x0, #{}", tag));          // compare the unboxed Mixed runtime tag against an accepted kind
+                ctx.emitter.instruction(&format!("cmp {}, #{}", tag_reg, tag)); // compare the runtime tag against an accepted kind
                 ctx.emitter.instruction(&format!("b.eq {}", true_label));       // accept the value when its runtime tag matches this kind
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction(&format!("cmp rax, {}", tag));          // compare the unboxed Mixed runtime tag against an accepted kind
+                ctx.emitter.instruction(&format!("cmp {}, {}", tag_reg, tag));  // compare the runtime tag against an accepted kind
                 ctx.emitter.instruction(&format!("je {}", true_label));         // accept the value when its runtime tag matches this kind
             }
         }

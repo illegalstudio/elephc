@@ -341,7 +341,9 @@ fn lower_finally_with_pending_exception(
     ctx.emit_void(
         Op::RuntimeCall,
         vec![escaped.value, pending.value],
-        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ExceptionChain)),
+        Some(Immediate::RuntimeCall(
+            crate::ir::RuntimeCallTarget::ExceptionFinallyChain,
+        )),
         crate::ir::Effects::all(),
         Some(span),
     );
@@ -450,6 +452,17 @@ pub(super) fn lower_catch_bind(ctx: &mut LoweringContext<'_, '_>, catch: &CatchC
         None,
         php_type.clone(),
         Op::CatchBind.default_effects(),
+        Some(span),
+    );
+    // Only a matched user catch consumes a replacement here. Internal CatchBind users rethrow
+    // after cleanup and must preserve the pending host predecessor automatically.
+    ctx.emit_void(
+        Op::RuntimeCall,
+        vec![caught.value],
+        Some(Immediate::RuntimeCall(
+            crate::ir::RuntimeCallTarget::ExceptionCatchHostReplacement,
+        )),
+        crate::ir::Effects::all(),
         Some(span),
     );
     ctx.store_local(&variable, caught, php_type, Some(span));

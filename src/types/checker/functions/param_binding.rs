@@ -106,6 +106,7 @@ impl Checker {
                 self.register_bound_callable_param_sig(owner, sig);
                 Ok(())
             }
+            ParamBinding::ObjectGuard => Ok(()),
             ParamBinding::Deprecated(detail)
             | ParamBinding::TypeError(detail)
             | ParamBinding::NeedsRuntimeCheck(detail) => Err(Self::param_binding_error(

@@ -104,8 +104,27 @@ pub unsafe extern "C" fn __elephc_eval_execute(
     code_len: u64,
     out: *mut ElephcEvalResult,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe { execute_eval_inner(ctx, scope, code_ptr, code_len, out) })
+    std::panic::catch_unwind(|| unsafe { execute_eval_inner(ctx, scope, code_ptr, code_len, out, false) })
         .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
+}
+
+/// Executes generated eval code with the conservative deferred-catalog capability.
+///
+/// Existing users of `__elephc_eval_execute` retain eager global-class synchronization.
+///
+/// # Safety
+/// Uses the same valid-handle and source lifetime requirements as `__elephc_eval_execute`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_execute_with_deferred_catalog(
+    ctx: *mut ElephcEvalContext,
+    scope: *mut ElephcEvalScope,
+    code_ptr: *const u8,
+    code_len: u64,
+    out: *mut ElephcEvalResult,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        execute_eval_inner(ctx, scope, code_ptr, code_len, out, true)
+    }).unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
 }
 
 /// Runs the eval ABI body after the exported wrapper has installed a panic boundary.
@@ -119,6 +138,7 @@ unsafe fn execute_eval_inner(
     code_ptr: *const u8,
     code_len: u64,
     out: *mut ElephcEvalResult,
+    allow_deferred_catalog: bool,
 ) -> i32 {
     if !ctx.is_null() && (*ctx).abi_version() != ABI_VERSION {
         return EvalStatus::AbiMismatch.code();
@@ -136,7 +156,7 @@ unsafe fn execute_eval_inner(
     };
     let program = parse_cache::parse_fragment_cached(code).map_err(|error| error.status());
     clear_result(out);
-    execute_parsed_eval(ctx, scope, program.as_deref().map_err(|status| *status), out)
+    execute_parsed_eval(ctx, scope, program.as_deref().map_err(|status| *status), out, allow_deferred_catalog)
 }
 
 /// Executes a parsed eval program in production builds using elephc runtime hooks.
@@ -149,6 +169,7 @@ unsafe fn execute_parsed_eval(
     scope: *mut ElephcEvalScope,
     program: Result<&eval_ir::EvalProgram, EvalStatus>,
     out: *mut ElephcEvalResult,
+    allow_deferred_catalog: bool,
 ) -> i32 {
     let mut fallback_context;
     let context = if let Some(ctx) = ctx.as_mut() {
@@ -164,10 +185,22 @@ unsafe fn execute_parsed_eval(
         fallback_scope = ElephcEvalScope::new();
         &mut fallback_scope
     };
-    context.sync_global_eval_classes();
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     let submission = crate::repl::take_submission_request();
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+    // Numeric-only execution cannot observe global class metadata. Postponing this import
+    // preserves the native-first declaration order when the same context is later upgraded.
+    let globals = context.global_scope_ptr().filter(|ptr| *ptr != scope as *mut ElephcEvalScope)
+        .and_then(|ptr| unsafe { ptr.as_ref() });
+    let numeric_without_catalog = allow_deferred_catalog && !context.native_catalog_is_ready()
+        && !context.eval_scope_sync_requires_full()
+        && program.as_ref().is_ok_and(|program| super::native_catalog::metadata_free_fragment(
+            program, scope, globals, |cell| values.type_tag(cell).ok()));
+    if numeric_without_catalog {
+        context.record_native_catalog_deferral();
+    } else {
+        context.sync_global_eval_classes();
+    }
     let outcome = program.and_then(|program| {
         context.push_eval_backtrace_boundary();
         let outcome = interpreter::execute_program_outcome_with_context(context, program, scope, &mut values);
@@ -253,6 +286,7 @@ unsafe fn execute_parsed_eval(
     _scope: *mut ElephcEvalScope,
     program: Result<&eval_ir::EvalProgram, EvalStatus>,
     _out: *mut ElephcEvalResult,
+    _allow_deferred_catalog: bool,
 ) -> i32 {
     program.map_or_else(|status| status.code(), |_| EvalStatus::UnsupportedConstruct.code())
 }

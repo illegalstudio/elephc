@@ -9,20 +9,20 @@
 // Every argument to an `extern` call is first materialized into a plain local
 // variable. The compiler marshals plain variables into the C ABI reliably.
 
-extern function socket(int $domain, int $type, int $protocol): int;
-extern function setsockopt(int $fd, int $level, int $optname, ptr $optval, int $optlen): int;
-extern function bind(int $fd, ptr $addr, int $addrlen): int;
-extern function listen(int $fd, int $backlog): int;
-extern function accept(int $fd, ptr $addr, ptr $addrlen): int;
-extern function poll(ptr $fds, int $nfds, int $timeout): int;
-extern function fcntl(int $fd, int $cmd, int $arg): int;
-extern function read(int $fd, ptr $buf, int $count): int;
-extern function write(int $fd, string $buf, int $count): int;
-extern function close(int $fd): int;
-extern function htons(int $hostshort): int;
-extern function malloc(int $size): ptr;
+extern function socket(i32 $domain, i32 $type, i32 $protocol): i32;
+extern function setsockopt(i32 $fd, i32 $level, i32 $optname, ptr $optval, u32 $optlen): i32;
+extern function bind(i32 $fd, ptr $addr, u32 $addrlen): i32;
+extern function listen(i32 $fd, i32 $backlog): i32;
+extern function accept(i32 $fd, ptr $addr, ptr $addrlen): i32;
+extern function poll(ptr $fds, u64 $nfds, i32 $timeout): i32;
+extern function fcntl(i32 $fd, i32 $cmd, i32 $arg): i32;
+extern function read(i32 $fd, ptr $buf, u64 $count): int;
+extern function write(i32 $fd, string $buf, u64 $count): int;
+extern function close(i32 $fd): i32;
+extern function htons(u16 $hostshort): u16;
+extern function malloc(u64 $size): ptr;
 extern function free(ptr $p): void;
-extern function memset(ptr $dest, int $byte, int $count): ptr;
+extern function memset(ptr $dest, i32 $byte, u64 $count): ptr;
 
 // Socket constants gathered into one table. AF_INET, SOCK_STREAM and the
 // fcntl commands are identical on every target; SOL_SOCKET, SO_REUSEADDR and

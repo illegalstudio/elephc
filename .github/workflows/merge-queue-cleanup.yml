@@ -1,0 +1,35 @@
+name: Merge queue cleanup
+
+# When the merge queue fast-forwards main, cancel the queue runs of the entries that landed
+# with it but are still running. Their commits are already on main, and nothing else stops
+# them; see scripts/ci/cancel_superseded_queue_runs.sh.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  cancel-superseded:
+    name: Cancel superseded merge queue runs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # The only write this workflow makes: cancelling runs of ci.yml and pdo-live.yml.
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts/ci
+          sparse-checkout-cone-mode: true
+          persist-credentials: false
+
+      - name: Cancel the runs of commits already on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          WORKFLOW_FILES: ci.yml pdo-live.yml
+        run: bash scripts/ci/cancel_superseded_queue_runs.sh

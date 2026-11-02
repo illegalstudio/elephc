@@ -336,6 +336,9 @@ impl ExceptionHierarchy {
     /// term; anything unproven keeps the caller on the conservative program-wide destructor
     /// summary.
     pub(super) fn class_owns_no_destructible_storage(&self, class_name: &str) -> bool {
+        if matches!(php_symbol_key(class_name).as_str(), "fiber" | "generator") {
+            return false;
+        }
         if self.flattened_storage_proofs {
             return self
                 .scalar_only_storage_classes
@@ -392,6 +395,7 @@ fn php_type_is_non_destructible(php_type: &PhpType) -> bool {
         | PhpType::False
         | PhpType::Void
         | PhpType::Never
+        | PhpType::Narrow(_)
         | PhpType::TaggedScalar => true,
         PhpType::Union(members) => members.iter().all(php_type_is_non_destructible),
         PhpType::Object(_)

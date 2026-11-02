@@ -5,9 +5,8 @@
 //! - `crate::interpreter::builtins::hooks`.
 //!
 //! Key details:
-//! - Reads the logical element count from an AOT-shaped buffer header.
-
-use std::ptr;
+//! - Resolves the handle through the eval buffer registry, so a freed buffer or a stale
+//!   alias dies with the compiled-code use-after-free fatal instead of reading freed memory.
 
 use super::super::super::*;
 
@@ -44,12 +43,11 @@ pub(in crate::interpreter) fn eval_buffer_len_values_result(
     eval_buffer_len_result(*buffer, values)
 }
 
-/// Reads the logical element count from an AOT-shaped buffer header.
+/// Answers the logical element count of a live eval buffer.
 fn eval_buffer_len_result(
     buffer: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let header = super::ptr::eval_non_null_pointer(buffer, values)?.cast::<usize>();
-    let length = unsafe { ptr::read(header) };
+    let length = super::buffer_registry::eval_buffer_resolve(buffer, values)?.length;
     values.int(i64::try_from(length).map_err(|_| EvalStatus::RuntimeFatal)?)
 }

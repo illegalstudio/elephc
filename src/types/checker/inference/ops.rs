@@ -158,10 +158,17 @@ impl Checker {
                     is_numeric_operand_type(self, &lt) && is_numeric_operand_type(self, &rt);
                 let datetime_ok =
                     is_datetime_family_object(&lt) && is_datetime_family_object(&rt);
-                if !numeric_ok && !datetime_ok {
+                // Two strings order by PHP's own rule — numeric comparison when BOTH sides
+                // are numeric strings, byte comparison otherwise — which
+                // `__rt_php_compare`'s two-string leg already implements. Rejecting them
+                // made the ordinary character-range idiom (`$c >= '0' && $c <= '9'`) a
+                // compile error and pushed callers onto `ord()` (issue #507).
+                let strings_ok = orders_as_strings(&lt, &rt);
+                let object_null = crate::types::object_operators::null_comparison_allowed(&lt, &rt);
+                if !numeric_ok && !datetime_ok && !strings_ok && !object_null {
                     return Err(CompileError::new(
                         expr.span,
-                        "Comparison operators require numeric operands",
+                        "Comparison operators require numeric or string operands",
                     ));
                 }
                 Ok(PhpType::Bool)
@@ -188,10 +195,15 @@ impl Checker {
                     is_numeric_operand_type(self, &lt) && is_numeric_operand_type(self, &rt);
                 let datetime_ok =
                     is_datetime_family_object(&lt) && is_datetime_family_object(&rt);
-                if !numeric_ok && !datetime_ok {
+                // `<=>` is the same ordering as `<` and `>`, only reported as -1/0/1, so it
+                // accepts the same two-string pair rather than leaving `"a" <=> "b"` a
+                // compile error while `"a" < "b"` works (issue #507).
+                let strings_ok = orders_as_strings(&lt, &rt);
+                let object_null = crate::types::object_operators::null_comparison_allowed(&lt, &rt);
+                if !numeric_ok && !datetime_ok && !strings_ok && !object_null {
                     return Err(CompileError::new(
                         expr.span,
-                        "Spaceship operator requires numeric operands",
+                        "Spaceship operator requires numeric or string operands",
                     ));
                 }
                 Ok(PhpType::Int)
@@ -493,12 +505,20 @@ impl Checker {
             }
         }
         closure_ref_params.extend(capture_refs.iter().cloned());
+        let ref_assign_captures: Vec<String> = capture_refs.iter()
+            .filter(|capture| self.ref_assign_aliased_locals.contains(*capture))
+            .cloned().collect();
         // A `use (&$x)` capture aliases the ENCLOSING body's local: the closure can outlive
         // this statement and write through the reference, so `$x` is aliased there from here
         // on. Recorded before entering the closure scope, which saves and restores the
         // enclosing set.
         for capture in capture_refs {
             self.ref_aliased_locals.insert(capture.clone());
+            self.non_builtin_ref_aliased_locals.insert(capture.clone());
+            if expr.span.identifies_a_node() {
+                self.array_push_capture_sites.entry(capture.clone())
+                    .or_default().insert(expr.span);
+            }
         }
         // Every closure parameter is bound unconditionally on entry, so all of them are
         // recorded at binding depth 0. A `use ($x)` CAPTURE is deliberately absent: it is
@@ -522,8 +542,7 @@ impl Checker {
             &previous_loop_storage_scope,
             expr.span,
         );
-        self.loop_storage_types
-            .retain(|(scope, _), _| scope != &loop_storage_scope);
+        self.clear_loop_storage_scope(&loop_storage_scope);
         self.current_loop_storage_scope = loop_storage_scope;
         // The storage this closure's frame ALREADY holds on entry: its by-VALUE captures, each
         // with the type it arrives with, read from the ENCLOSING environment. Deliberately not
@@ -543,6 +562,10 @@ impl Checker {
             pre_bound_own_storage,
             body,
             |checker| {
+                checker.boxed_parameter_locals.extend(params.iter()
+                    .filter(|(_, annotation, _, _)| annotation.is_none())
+                    .map(|(name, _, _, _)| name.clone()));
+                checker.ref_assign_aliased_locals.extend(ref_assign_captures);
                 for stmt in body {
                     checker.check_stmt(stmt, &mut closure_sig.env)?;
                 }
@@ -1537,6 +1560,11 @@ impl Checker {
         Ok(sig)
     }
 
+    /// Shares the nullsafe selection-chain check with by-reference receiver validation.
+    pub(crate) fn reference_receiver_uses_nullsafe(receiver: &Expr) -> bool {
+        expr_contains_nullsafe_member(receiver)
+    }
+
     /// Returns `true` if `callee_ty` is a union containing both `Callable` and
     /// `Void` and the callee expression contains a nullsafe member access.
     fn is_nullable_callable_from_nullsafe_chain(callee: &Expr, callee_ty: &PhpType) -> bool {
@@ -1607,12 +1635,24 @@ fn is_numeric_operand_type(checker: &Checker, ty: &PhpType) -> bool {
     ) || checker.is_union_with_mixed_numeric_dispatch(ty)
 }
 
+/// Returns `true` when an ordering comparison (`<`, `<=`, `>`, `>=`, `<=>`) of `lt` and `rt`
+/// takes the string leg: two strings, or a string beside a `mixed` value, whose run-time
+/// kind `__rt_php_compare` resolves as it does for `mixed` beside a number. A string beside a
+/// concrete number stays a type error.
+fn orders_as_strings(lt: &PhpType, rt: &PhpType) -> bool {
+    matches!(
+        (lt, rt),
+        (PhpType::Str, PhpType::Str) | (PhpType::Str, PhpType::Mixed) | (PhpType::Mixed, PhpType::Str)
+    )
+}
+
 /// Returns `true` if `ty` is a valid operand type for arithmetic operators (`+ - * / % **`).
 ///
 /// This is the numeric-operand set plus `PhpType::Str`: PHP 8 coerces numeric and
 /// leading-numeric strings in arithmetic. Relational comparison and the spaceship operator
-/// deliberately keep the stricter `is_numeric_operand_type`, so `"a" < 1` and `"a" <=> "b"`
-/// remain type errors. A fully non-numeric string *literal* is still rejected in
+/// also accept two strings with PHP's numeric-string or byte ordering, but mixed
+/// string-versus-number pairs such as `"a" < 1` remain type errors.
+/// A fully non-numeric string *literal* is still rejected in
 /// `Checker::check_arithmetic_string_operands`.
 fn is_arithmetic_operand_type(checker: &Checker, ty: &PhpType) -> bool {
     is_numeric_operand_type(checker, ty) || matches!(ty, PhpType::Str)

@@ -119,9 +119,12 @@ fn spl_pulls_in_every_exception(spl_surface_registered: bool) -> bool {
 /// it against the codegen list.
 ///
 /// THREE THINGS REGISTER EVERYTHING, and each names its class somewhere no static walk can read.
-/// `eval` resolves names at runtime, and `codegen::eval_constructor_helpers::
-/// BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES` emits a constructor bridge for all twenty-five for
-/// exactly that reason. `unserialize` reads its class name out of its DATA. And `new $c` with a
+/// A runtime-sourced or unparsable `eval` resolves names at runtime, and
+/// `codegen::eval_constructor_helpers::BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES` emits a
+/// constructor bridge for all twenty-five for exactly that reason; a parsable literal fragment
+/// is scanned as inline code instead and registers only the throwables its source names, unless
+/// it carries a dynamic hazard of its own. `unserialize` reads its class name out of its DATA.
+/// And `new $c` with a
 /// computed name reaches every entry in
 /// `codegen_support::dynamic_new::supported_dynamic_new_builtin_class_names`, which contains all
 /// of these. It widens even when a literal assigned the variable earlier, because at the `new`
@@ -345,8 +348,10 @@ mod tests {
         assert!(wanted.contains("ReflectionException"));
     }
 
-    /// The three cases where the class name is somewhere no static walk can read it: resolved at
-    /// runtime by eval, carried in unserialize's payload, or computed into a `new $c`.
+    /// The cases where the class name is somewhere no static walk can read it: resolved at
+    /// runtime by an eval whose source is itself only known at runtime, by a computed call or
+    /// `new $c` inside a literal eval, carried in unserialize's payload, or computed into a
+    /// `new $c`.
     ///
     /// The last is the one that nearly slipped through. Every builtin throwable is in
     /// `supported_dynamic_new_builtin_class_names`, so `new $c` can construct any of them, and
@@ -356,7 +361,9 @@ mod tests {
     #[test]
     fn a_name_no_walk_can_read_registers_everything() {
         for source in [
-            "<?php eval('throw new DomainException(\"x\");');",
+            "<?php eval($argv[1]);",
+            "<?php eval('$c = $argv[1]; throw new $c(\"x\");');",
+            "<?php eval('include $argv[1];');",
             "<?php $e = unserialize($payload);",
             "<?php $c = $argv[1]; throw new $c('x');",
         ] {
@@ -365,6 +372,17 @@ mod tests {
                 assert!(wanted.contains(name), "{name} missing for: {source}");
             }
         }
+    }
+
+    /// A literal eval is read like inline code: the throwable its source names is registered
+    /// with its ancestors, and the rest of the family stays out.
+    #[test]
+    fn a_literal_eval_registers_only_the_throwables_its_source_names() {
+        let wanted = registered("<?php eval('throw new DomainException(\"x\");');");
+        assert!(wanted.contains("DomainException"));
+        assert!(wanted.contains("LogicException"));
+        assert!(!wanted.contains("RangeException"));
+        assert!(!wanted.contains("ReflectionException"));
     }
 
     /// `new $c` widens even when a literal assigned `$c` earlier, and that is not laziness: at

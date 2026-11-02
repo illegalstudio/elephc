@@ -19,6 +19,8 @@ umask 077
 SIGNING_WORKDIR="$(mktemp -d "$RUNNER_TEMP/elephc-notarization.XXXXXX")"
 KEYCHAIN_PATH="$SIGNING_WORKDIR/signing.keychain-db"
 ACTIVE_NOTARY_PID=""
+ORIGINAL_KEYCHAINS=()
+RESTORE_SEARCH_LIST=""
 
 cleanup() {
     local result=$?
@@ -28,6 +30,9 @@ cleanup() {
     if [[ -n "$ACTIVE_NOTARY_PID" ]]; then
         kill -KILL "$ACTIVE_NOTARY_PID" 2>/dev/null || true
         wait "$ACTIVE_NOTARY_PID" 2>/dev/null || true
+    fi
+    if [[ -n "$RESTORE_SEARCH_LIST" ]]; then
+        security list-keychains -d user -s ${ORIGINAL_KEYCHAINS[@]+"${ORIGINAL_KEYCHAINS[@]}"} >/dev/null 2>&1 || true
     fi
     security delete-keychain "$KEYCHAIN_PATH" >/dev/null 2>&1 || true
     rm -rf "$SIGNING_WORKDIR"
@@ -52,12 +57,25 @@ KEYCHAIN_PASSWORD="$(openssl rand -hex 32)"
 echo "::add-mask::$KEYCHAIN_PASSWORD"
 printf '%s' "$APPLE_CERTIFICATE_P12" | base64 --decode > "$SIGNING_WORKDIR/certificate.p12"
 security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+# codesign --keychain only narrows the identity search: the keychain must also
+# be on the user search list, or signing fails with errSecItemNotFound.
+SEARCH_LIST_OUTPUT="$(security list-keychains -d user)"
+while IFS= read -r line; do
+    keychain="${line#*\"}"
+    keychain="${keychain%\"*}"
+    if [[ -n "$keychain" ]]; then
+        ORIGINAL_KEYCHAINS+=("$keychain")
+    fi
+done <<< "$SEARCH_LIST_OUTPUT"
+RESTORE_SEARCH_LIST=1
+security list-keychains -d user -s "$KEYCHAIN_PATH" ${ORIGINAL_KEYCHAINS[@]+"${ORIGINAL_KEYCHAINS[@]}"}
 security set-keychain-settings -lut 3600 "$KEYCHAIN_PATH"
 security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 security import "$SIGNING_WORKDIR/certificate.p12" \
     -P "$APPLE_CERTIFICATE_PASSWORD" -k "$KEYCHAIN_PATH" -T /usr/bin/codesign
 security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
     -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+security find-identity -v -p codesigning "$KEYCHAIN_PATH"
 
 codesign --force --options runtime --timestamp \
     --keychain "$KEYCHAIN_PATH" --sign "$APPLE_SIGNING_IDENTITY" "$NOTARIZE_BINARY"

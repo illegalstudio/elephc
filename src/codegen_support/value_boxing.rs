@@ -7,6 +7,8 @@
 //!
 //! Key details:
 //! - Tag values and payload register conventions must match `__rt_mixed_from_value`.
+//! - `container_value_tag()` is the tag stored for an array or hash element: pointer words use
+//!   `POINTER_ARRAY_VALUE_TYPE` (13) instead of the integer tag a boxed pointer takes.
 //! - `mixed_unbox_payload_reg()` is the matching contract for the OTHER direction: it names
 //!   the register `__rt_mixed_unbox` returns its payload low word in, which is not the first
 //!   argument register on AArch64.
@@ -49,10 +51,24 @@ pub(crate) fn runtime_value_tag(ty: &PhpType) -> u8 {
         PhpType::Void => 8,
         PhpType::Resource(_) => 9,
         PhpType::Callable => 10,
-        PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_) | PhpType::Never => 0,
+        PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_) | PhpType::Never | PhpType::Narrow(_) => 0,
         PhpType::TaggedScalar => {
             unreachable!("TaggedScalar carries its runtime tag in the tag register, not a static tag")
         }
+    }
+}
+
+/// Returns the runtime value tag an indexed-array header or hash entry records for an element of
+/// type `ty`.
+///
+/// A pointer element (`ptr<T>` or `?ptr<T>`) is stored as its raw word under
+/// `POINTER_ARRAY_VALUE_TYPE`, so dynamic readers show the null pointer as PHP null rather than
+/// integer 0. Every other type uses `runtime_value_tag`.
+pub(crate) fn container_value_tag(ty: &PhpType) -> i64 {
+    if matches!(ty.codegen_repr(), PhpType::Pointer(_)) {
+        crate::codegen_support::sentinels::POINTER_ARRAY_VALUE_TYPE
+    } else {
+        runtime_value_tag(ty) as i64
     }
 }
 
@@ -92,7 +108,15 @@ pub(crate) fn emit_box_runtime_payload_as_mixed(
 /// is kept because the arm states the contract — "already boxed, nothing to do" — and a future
 /// representation could map a union to itself; the comment says so rather than letting the next
 /// reader infer a live branch, which is how the original bug hid.
+///
+/// Pass the value's declared type when it is a `?ptr<T>`: its codegen form is the bare pointer,
+/// and only the declared union says that address 0 is PHP null. A plain `ptr` boxes as its
+/// integer address, 0 included (a null `ptr` is not PHP null).
 pub(crate) fn emit_box_current_value_as_mixed(emitter: &mut Emitter, ty: &PhpType) {
+    if crate::types::is_nullable_pointer_type(ty) {
+        emit_box_nullable_pointer_word_as_mixed(emitter);
+        return;
+    }
     match &ty.codegen_repr() {
         PhpType::Mixed | PhpType::Union(_) => {}
         PhpType::Iterable => emit_box_dynamic_container_as_mixed(emitter, 4),
@@ -119,6 +143,7 @@ pub(crate) fn emit_box_current_value_as_mixed(emitter: &mut Emitter, ty: &PhpTyp
         | PhpType::False
         | PhpType::Void
         | PhpType::Never
+        | PhpType::Narrow(_)
         | PhpType::Resource(_) => match emitter.target.arch {
             Arch::AArch64 => {
                 emitter.instruction("mov x1, x0");                              // move the current scalar payload into the mixed helper argument register
@@ -204,6 +229,31 @@ pub(crate) fn emit_box_current_value_as_mixed(emitter: &mut Emitter, ty: &PhpTyp
                     emitter.instruction("call __rt_mixed_from_value");          // box the raw pointer bits into a mixed cell
                 }
             }
+        }
+    }
+}
+
+/// Boxes the `?ptr<T>` word in the result register: address 0 is PHP null, and any other
+/// address is kept as an integer-like payload.
+fn emit_box_nullable_pointer_word_as_mixed(emitter: &mut Emitter) {
+    // -- box a ?ptr<T> word: address 0 as PHP null, any other address as an integer --
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("mov x1, x0");                                  // move the raw pointer into the mixed helper payload register
+            emitter.instruction("mov x2, xzr");                                 // raw pointers only use the low word
+            emitter.instruction("cmp x1, #0");                                  // address 0 is PHP null
+            emitter.instruction("mov x9, #8");                                  // stage the runtime null tag
+            emitter.instruction("csel x0, x9, xzr, eq");                        // box a null pointer as null and a live one as an integer-like payload
+            emitter.instruction("bl __rt_mixed_from_value");                    // box the nullable pointer word into a mixed cell
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov rdi, rax");                                // move the raw pointer into the mixed helper payload register
+            emitter.instruction("xor rsi, rsi");                                // raw pointers only use the low word
+            abi::emit_load_int_immediate(emitter, "rax", 0);
+            abi::emit_load_int_immediate(emitter, "r11", 8);
+            emitter.instruction("test rdi, rdi");                               // address 0 is PHP null
+            emitter.instruction("cmovz rax, r11");                              // box a null pointer as null and a live one as an integer-like payload
+            emitter.instruction("call __rt_mixed_from_value");                  // box the nullable pointer word into a mixed cell
         }
     }
 }

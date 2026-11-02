@@ -169,17 +169,11 @@ pub(crate) fn emit_call_entry(emitter: &mut Emitter) {
 /// is a clean PHP `0`/`1` rather than whatever the callee left in the upper half (which
 /// both ABIs leave unspecified).
 pub(crate) fn emit_zero_extend_int_result(emitter: &mut Emitter) {
-    match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction("mov w0, w0"),                     // zero-extend the C int32_t answer into x0
-        Arch::X86_64 => emitter.instruction("mov eax, eax"),                    // zero-extend the C int32_t answer into rax
-    }
+    abi::emit_extend_int_result(emitter, 32, false);
 }
 
 /// Sign-extends a C `int32_t` return into the full result register. Used only by
 /// `curl_errno()`, whose value is a `CURLcode` rather than a boolean.
 pub(crate) fn emit_sign_extend_int_result(emitter: &mut Emitter) {
-    match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction("sxtw x0, w0"),                    // sign-extend the CURLcode into x0
-        Arch::X86_64 => emitter.instruction("movsxd rax, eax"),                 // sign-extend the CURLcode into rax
-    }
+    abi::emit_extend_int_result(emitter, 32, true);
 }

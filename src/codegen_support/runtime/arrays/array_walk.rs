@@ -71,7 +71,8 @@ pub fn emit_array_walk(emitter: &mut Emitter) {
     emitter.instruction("ldp x19, x20, [sp, #32]");                             // restore callee-saved x19, x20
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
-    emitter.instruction("ret");                                                 // return (void)
+    emitter.instruction("mov x0, #1");                                          // PHP array_walk returns bool(true)
+    emitter.instruction("ret");                                                 // return the boolean result
 }
 
 /// Emits `__rt_array_walk` for Linux x86_64 using the System V AMD64 ABI.
@@ -114,6 +115,7 @@ fn emit_array_walk_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop r14");                                             // restore the caller callback-environment callee-saved register
     emitter.instruction("pop r13");                                             // restore the caller source-index callee-saved register
     emitter.instruction("pop r12");                                             // restore the caller callback callee-saved register
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning void
-    emitter.instruction("ret");                                                 // return to the caller after walking the whole source array
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning
+    emitter.instruction("mov rax, 1");                                          // PHP array_walk returns bool(true)
+    emitter.instruction("ret");                                                 // return the boolean result to the caller
 }

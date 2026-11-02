@@ -16,8 +16,8 @@ pub(crate) fn parse_literal_fragment(fragment: &str, strict_php: bool) -> Option
     // never alias the ROOT file's equal coordinates in span-keyed maps such as
     // `builtin_call_types` and the binding keys (issue #1291). The id comes from a synthetic
     // counter that `reset_source_ids` does not rewind and that starts above the include range, so
-    // it cannot alias an INCLUDED file's id either: the include counter restarts per resolution
-    // unit (autoload resets it), which is why sharing it left a narrower alias gap.
+    // it cannot alias an INCLUDED or autoloaded file's id either: the include counter restarts at
+    // the start of every compile, which is why sharing it left a narrower alias gap.
     let source_id = crate::span::Span::fresh_synthetic_source_id();
     let tokens = crate::lexer::tokenize_with_mode_and_source_id(
         &source,

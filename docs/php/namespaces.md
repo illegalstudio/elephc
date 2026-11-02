@@ -46,6 +46,27 @@ Supported forms: `use Foo\Bar;`, `use Foo\Bar as Baz;`, `use function`, `use con
 - A predefined constant can be written fully qualified too, as namespaced code often does to skip
   the namespace lookup: `\PHP_EOL`, `\PHP_INT_MAX`, `\M_PI`, `\STDERR`, `\true`, `\null`. Each
   names the same global constant as its bare spelling
+- A reserved word is an ordinary segment inside a qualified name, as in PHP 8:
+  `namespace Vendor\Default\Theme;`, `use Demo\Namespace\Subject;`, `new \Vendor\List\Item()`.
+  It can be the first segment too, in any position a name can stand, including right after a
+  `switch` case label, as a `match` arm pattern, after `else`/`endif`, and in a string's
+  `{$...}`: `Default\Palette::accent()`, `function f(Default\Palette $p)`,
+  `catch (Self\Failure $e)`, `public Static\Factory $f` (a typed property, not a static one),
+  `#[Default\Attr]`, `use Function\Registry;` (a class import). `eval()` code follows the same
+  rule. As in PHP, the word must touch the `\` (`new \Foo()` is still `new`). A reserved word
+  other than `namespace` can also be a whole namespace name (`namespace Default;`). Standing
+  alone elsewhere it is still the keyword, `namespace Namespace;` is refused, and a leading
+  `namespace\` is the relative-name prefix, never a segment spelled `namespace`
+- A relative name `namespace\helper()` names `helper` in the current namespace: inside
+  `namespace Demo;` it is exactly `\Demo\helper()`, and in the global namespace it is `\helper()`.
+  It works wherever a name does (calls, constants, `new`, static calls, `::class`, `instanceof`,
+  `extends`, `implements`, trait `use` and `insteadof`, type declarations, `catch`, attributes,
+  `instanceof namespace\Cfg::$class`) and in `eval()` code. Inside braced `namespace X { ... }`
+  blocks each block's own name applies. It is fully resolved, so it never falls back to a global
+  function or constant: `namespace\NAN` inside `Demo` is `Demo\NAN`, while in the global
+  namespace `namespace\PHP_EOL` is `\PHP_EOL`. As in PHP, a `use` import cannot name it
+  (`use namespace\Foo;` is a syntax error), and a namespace declaration is only accepted at the
+  top level of a file, never inside a function, a block or another namespace
 - Qualified names retain predefined-constant spellings as name segments: `\Demo\Math\NAN`
   and `Math\PHP_EOL` read namespaced constants, not global predefined values. Class contexts
   such as `new \INF`, `\INF::class`, and `\INF::method()` likewise treat the spelling as a name.

@@ -89,13 +89,13 @@ enum OperandKey {
 /// `(op, immediate, operands)` can carry different PHP type metadata over the
 /// same `I64` storage (for instance a `const_i64 0` used as a plain integer
 /// versus a null-resource sentinel), and downstream lowering dispatches on that
-/// PHP type. `PhpType` is not `Hash`, so its `Debug` form (which uniquely encodes
-/// each type) is used.
+/// PHP type. The structural type is keyed directly so diagnostic formatting cannot
+/// merge distinct internal pointer targets.
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct Key {
     op: Op,
     result_type: IrType,
-    php_type: String,
+    php_type: crate::types::PhpType,
     ownership: Ownership,
     immediate: ImmKey,
     operands: Vec<OperandKey>,
@@ -238,7 +238,7 @@ fn make_key(
     Key {
         op: inst.op,
         result_type: inst.result_type,
-        php_type: format!("{:?}", inst.result_php_type),
+        php_type: inst.result_php_type.clone(),
         ownership: inst.result_ownership,
         immediate: immediate_key(inst.immediate.as_ref()),
         operands,

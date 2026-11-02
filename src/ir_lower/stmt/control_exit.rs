@@ -59,6 +59,14 @@ fn release_taken_exceptions(ctx: &mut LoweringContext<'_, '_>, target_loop_depth
         let open = ctx.loop_stack.len();
         emit_innermost_loop_cleanups(ctx, open.saturating_sub(loop_depth));
         ctx.exit_cleaned_loops.extend(loop_depth..open);
+        let discarded = ctx.load_local(&temp, None);
+        ctx.emit_void(
+            Op::RuntimeCall,
+            vec![discarded.value],
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::ExceptionDiscard)),
+            crate::ir::Effects::all(),
+            None,
+        );
         ctx.release_owned_hidden_temp(&temp, None);
     }
 }
@@ -395,6 +403,13 @@ fn acquire_and_return_reference_cell(
 
 /// Lowers a return expression with contextual array-literal element storage when available.
 pub(super) fn lower_return_expr(ctx: &mut LoweringContext<'_, '_>, value_expr: &Expr) -> LoweredValue {
+    // A pointer-array return keeps pointer words whatever the returned expression builds.
+    if !ctx.by_ref_return
+        && crate::ir_lower::expr::is_pointer_array_destination(&ctx.return_php_type)
+    {
+        let return_ty = ctx.return_php_type.clone();
+        return crate::ir_lower::expr::lower_expr_for_destination(ctx, value_expr, &return_ty);
+    }
     if matches!(value_expr.kind, ExprKind::ArrayLiteral(_)) {
         if let PhpType::Array(elem_ty) = ctx.return_php_type.codegen_repr() {
             return lower_array_literal_with_expected_type(ctx, value_expr, *elem_ty);
@@ -432,28 +447,17 @@ pub(super) fn persist_scratch_return_string(
     value: LoweredValue,
     span: Span,
 ) -> LoweredValue {
-    if value.ir_type != IrType::Str
-        || ctx.builder.value_ownership(value.value) == Ownership::Owned
-    {
+    if !string_value_needs_persistence(ctx, value) {
         return value;
     }
-    let Some(op) = ctx.builder.value_defining_op(value.value) else {
-        return value;
-    };
-    if !string_op_uses_scratch_storage(op) {
-        return value;
-    }
-    ctx.emit_value(
-        Op::StrPersist,
-        vec![value.value],
-        None,
-        PhpType::Str,
-        Op::StrPersist.default_effects(),
-        Some(span),
-    )
+    persist_pending_string(ctx, value, span)
 }
 
 /// Gives typed object returns an independent owner and stabilizes borrowed heap reads.
+///
+/// A borrowed string-to-string cast is persisted too. It aliases its operand except
+/// when that operand is the missing-entry sentinel, which the cast turns into the
+/// canonical empty string. The caller must receive storage it can release on its own.
 ///
 /// Function-static slots are included: the slot keeps owning its boxed value across
 /// calls, so `return $static_local` must hand the caller an extra reference, since the
@@ -481,6 +485,27 @@ pub(super) fn acquire_borrowed_return_value(
     if temporary {
         return value;
     }
+    // A string-to-string cast normalizes a missing-entry sentinel but otherwise
+    // aliases its operand. Returning that alias would either free the operand
+    // before the caller reads it or hand the caller storage it must not release.
+    // Persist the normalized view so the caller owns an independent string.
+    if value.ir_type == IrType::Str
+        && ctx.builder.value_defining_op(value.value) == Some(Op::Cast)
+        && ctx
+            .builder
+            .value_defining_instruction(value.value)
+            .and_then(|inst| inst.operands.first().copied())
+            .is_some_and(|source| ctx.builder.value_type(source) == IrType::Str)
+    {
+        return ctx.emit_owned_value(
+            Op::StrPersist,
+            vec![value.value],
+            None,
+            PhpType::Str,
+            Op::StrPersist.default_effects(),
+            Some(span),
+        );
+    }
     if !Ownership::php_type_needs_lifetime_tracking(&php_type) {
         return value;
     }
@@ -505,6 +530,7 @@ pub(super) fn acquire_borrowed_return_value(
                 | Op::DynamicPropGet
                 | Op::NullsafePropGet
                 | Op::LoadStaticLocal
+                | Op::LoadStaticProperty
         )
     ) {
         return value;
@@ -512,8 +538,61 @@ pub(super) fn acquire_borrowed_return_value(
     crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
 }
 
+/// Identifies local-backed values whose return transfers the frame's existing reference.
+fn pending_return_uses_local_owner(ctx: &LoweringContext<'_, '_>, mut value: crate::ir::ValueId) -> bool {
+    while let Some(inst) = ctx.builder.value_defining_instruction(value) {
+        match inst.op {
+            Op::Move | Op::Borrow | Op::ArrayToMixed | Op::HashToMixed => {
+                let Some(source) = inst.operands.first() else { return false; };
+                value = *source;
+            }
+            Op::LoadLocal | Op::LoadStaticLocal => {
+                let Some(Immediate::LocalSlot(slot)) = inst.immediate else { return false; };
+                return matches!(ctx.builder.local_kind(slot), LocalKind::PhpLocal | LocalKind::StaticLocal);
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
 /// Terminates with a return after running active finally bodies from inner to outer.
 pub(crate) fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<crate::ir::ValueId>) {
+    let pending = value.filter(|value| {
+        !ctx.finally_stack.is_empty()
+            && Ownership::php_type_needs_lifetime_tracking(&ctx.builder.value_php_type(*value))
+            && ctx.value_is_owning_temporary(LoweredValue {
+                value: *value,
+                ir_type: ctx.builder.value_type(*value),
+            })
+            // Concrete local container reads are only provisional owners. Their
+            // final return transfers the local reference; parking it a second
+            // time would let unwind cleanup release that reference twice.
+            && !pending_return_uses_local_owner(ctx, *value)
+    }).map(|value| {
+        let ty = ctx.builder.value_php_type(value);
+        let name = ctx.declare_owned_hidden_temp(ty.clone());
+        let slot = ctx.local_slots[&name];
+        // A caught throw can revisit this return site in the same activation.
+        // Retire that abandoned return before publishing its replacement.
+        ctx.emit_void(
+            Op::ReleaseLocalSlot, Vec::new(), Some(Immediate::LocalSlot(slot)),
+            Op::ReleaseLocalSlot.default_effects(), None,
+        );
+        ctx.store_local(&name, LoweredValue {
+            value, ir_type: ctx.builder.value_type(value),
+        }, ty, None);
+        name
+    });
+    terminate_return_with_owner(ctx, value, pending.as_deref());
+}
+
+/// Keeps a pending return frame-owned across every copied finalizer until its final transfer.
+fn terminate_return_with_owner(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: Option<crate::ir::ValueId>,
+    pending: Option<&str>,
+) {
     let saved_finally_stack = ctx.finally_stack.clone();
     let saved_try_loop_depths = ctx.try_loop_depths.clone();
     let saved_taken = ctx.taken_finally_exceptions.clone();
@@ -521,7 +600,7 @@ pub(crate) fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<
     release_taken_exceptions(ctx, None);
     if run_innermost_finally(ctx, false, None) {
         if !ctx.builder.insertion_block_is_terminated() {
-            terminate_return(ctx, value);
+            terminate_return_with_owner(ctx, value, pending);
         }
         // Finalizer frames are consumed only on the emitted control-flow path.
         // Restore the lexical lowering state for sibling and fallthrough blocks.
@@ -535,6 +614,11 @@ pub(crate) fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<
     ctx.taken_finally_exceptions = saved_taken;
     ctx.exit_cleaned_loops = saved_cleaned;
     ctx.emit_eval_scope_finalizer(None);
+    if let Some(pending) = pending {
+        // A normal return transfers this exact SSA owner to the caller. Throws
+        // and superseding returns instead leave it to activation cleanup.
+        ctx.clear_owned_hidden_temp(pending, None);
+    }
     ctx.builder.terminate(Terminator::Return { value });
 }
 
@@ -595,12 +679,22 @@ pub(crate) fn lower_throw_access_error(
     message: &str,
     span: Span,
 ) {
+    lower_throw_access_exception(ctx, "Error", message, span);
+}
+
+/// Lowers a statically-decided access violation as a named catchable exception.
+pub(crate) fn lower_throw_access_exception(
+    ctx: &mut LoweringContext<'_, '_>,
+    exception_class: &str,
+    message: &str,
+    span: Span,
+) {
     if ctx.builder.insertion_block_is_terminated() {
         return;
     }
     let error_expr = Expr::new(
         ExprKind::NewObject {
-            class_name: crate::names::Name::unqualified("Error"),
+            class_name: crate::names::Name::unqualified(exception_class),
             args: vec![Expr::new(ExprKind::StringLiteral(message.to_string()), span)],
         },
         span,
@@ -621,6 +715,20 @@ pub(crate) fn lower_throw_access_error_expr(
     message: &str,
     span: Span,
 ) -> LoweredValue {
+    lower_throw_access_error_expr_as(ctx, message, span, PhpType::Void)
+}
+
+/// Lowers a statically-decided access violation while preserving the surrounding result type.
+///
+/// The returned value is unreachable at runtime, but later expression lowering still inspects its
+/// PHP and EIR types. Keeping the expected type prevents a chained operation after the throwing
+/// expression from being rejected as an operation on `Void` before the exception can be caught.
+pub(crate) fn lower_throw_access_error_expr_as(
+    ctx: &mut LoweringContext<'_, '_>,
+    message: &str,
+    span: Span,
+    php_type: PhpType,
+) -> LoweredValue {
     let error_expr = Expr::new(
         ExprKind::NewObject {
             class_name: crate::names::Name::unqualified("Error"),
@@ -636,6 +744,12 @@ pub(crate) fn lower_throw_access_error_expr(
         Op::ThrowException.default_effects(),
         Some(span),
     );
+    let ir_type = crate::ir_lower::context::value_ir_type(&php_type);
+    let ownership = if matches!(Ownership::for_php_type(&php_type), Ownership::NonHeap) {
+        Ownership::NonHeap
+    } else {
+        Ownership::Borrowed
+    };
     LoweredValue {
         value: ctx
             .builder
@@ -643,14 +757,14 @@ pub(crate) fn lower_throw_access_error_expr(
                 Op::ConstNull,
                 Vec::new(),
                 None,
-                IrType::I64,
-                PhpType::Void,
-                Ownership::NonHeap,
+                ir_type,
+                php_type,
+                ownership,
                 Op::ConstNull.default_effects(),
                 Some(span),
             )
             .expect("const_null produces a value"),
-        ir_type: IrType::I64,
+        ir_type,
     }
 }
 

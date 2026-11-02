@@ -914,6 +914,38 @@ function add($arr, $value) {
     );
 }
 
+/// `(string)` of a local that stays a concrete string borrows the slot.
+///
+/// Copying that cast on every call leaked the copy when it was passed to a
+/// function or `trim`, and it dominated a loop that only read a live string.
+#[test]
+fn concrete_string_local_cast_stays_borrowed() {
+    let module = super::lower_source(
+        r#"<?php
+function id(string $x): string { return "<".$x.">"; }
+function show(string $s): void {
+    for ($i = 0; $i < 4; $i++) {
+        echo id((string)$s);
+        echo trim((string)$s);
+    }
+}
+show("ggg");
+"#,
+    );
+    let function = module
+        .functions
+        .iter()
+        .find(|function| function.name == "show")
+        .expect("expected show EIR function");
+    assert!(
+        !function
+            .instructions
+            .iter()
+            .any(|inst| inst.op == Op::StrPersist),
+        "a concrete string local must not be copied by (string)"
+    );
+}
+
 /// Stringifying a Mixed local read must not release its slot-backed source.
 #[test]
 fn mixed_string_cast_does_not_release_local_source() {

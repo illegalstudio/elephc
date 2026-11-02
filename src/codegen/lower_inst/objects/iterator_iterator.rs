@@ -61,6 +61,7 @@ pub(super) fn lower_iterator_iterator_new(ctx: &mut FunctionContext<'_>, inst: &
         offset: inner_offset,
         is_declared: true,
         is_packed: false,
+        width: None,
         is_reference: false,
         abstract_setter_type_error_prefix: None,
     };

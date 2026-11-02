@@ -105,14 +105,14 @@ free($src);
     assert_eq!(out, "305419896");
 }
 
-/// Verifies that a plain `extern function` returning `int` is resolved and called correctly.
+/// Verifies that a plain `extern function` returning a C `int` (`i32`) is resolved and called correctly.
 ///
-/// Fixture: extern function getpid() returning int, asserts the returned pid is positive.
+/// Fixture: extern function getpid() returning i32, asserts the returned pid is positive.
 #[test]
 fn test_ffi_extern_getpid() {
     let out = compile_and_run(
         r#"<?php
-extern function getpid(): int;
+extern function getpid(): i32;
 $pid = getpid();
 echo $pid > 0 ? "yes" : "no";
 "#,
@@ -134,4 +134,19 @@ echo strlen($home) > 0 ? "ok" : "empty";
 "#,
     );
     assert_eq!(out, "ok");
+}
+
+/// C-string returns are copied before argument cleanup, including pointers into an argument.
+#[test]
+fn test_ffi_extern_copied_string_return_releases_arguments() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+extern function strchr(string $value, i32 $byte): string;
+function directSearch(string $value): string { return strchr($value, 97); }
+function callableSearch(string $value): string { return call_user_func('strchr', $value, 97); }
+$value = str_repeat('a', $argc + 3);
+echo strlen(directSearch($value)), strlen(callableSearch($value));
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "44", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

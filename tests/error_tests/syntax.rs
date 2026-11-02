@@ -823,6 +823,57 @@ fn test_error_for_condition_comma_list_is_named() {
     );
 }
 
+/// Verifies a relative name is refused in every `use` import form (#825), as PHP's grammar
+/// refuses it ("unexpected namespace-relative name"), instead of being skipped or read as a
+/// name whose first segment is `namespace`.
+#[test]
+fn test_error_relative_name_in_use_import() {
+    for source in [
+        "<?php namespace App; use namespace\\Box;",
+        "<?php namespace App; use function namespace\\helper;",
+        "<?php namespace App; use const namespace\\LIMIT;",
+        "<?php namespace App; use Lib\\Tool, namespace\\Box;",
+    ] {
+        expect_error(source, "cannot be imported with 'use'");
+    }
+}
+
+/// Verifies a relative name is fully resolved, so it never falls back to a global function
+/// (`namespace\strlen()` in `App` is `App\strlen`, undefined, as in PHP), and that a bare
+/// `namespace\` with no name after it is a syntax error (#825).
+#[test]
+fn test_error_relative_name_has_no_global_fallback_and_needs_a_name() {
+    expect_error(
+        "<?php namespace App; echo namespace\\strlen(\"abc\");",
+        "Undefined function: App\\strlen",
+    );
+    expect_error(
+        "<?php namespace App; echo namespace\\;",
+        "Expected identifier after '\\' in qualified name",
+    );
+    // Inside a namespace, `namespace\PHP_EOL` is that namespace's constant, not the global one.
+    expect_error(
+        "<?php namespace App; echo namespace\\PHP_EOL;",
+        "Undefined constant: App\\PHP_EOL",
+    );
+}
+
+/// Verifies a namespace declaration is refused anywhere but the top level of a file (#825
+/// review), as PHP refuses it ("unexpected token namespace"). Accepted inside a function or `if`
+/// body, it moved the parser's relative-name namespace for the rest of the file while the
+/// resolver scoped it to that body, so a later `namespace\X` could bind to the wrong class.
+#[test]
+fn test_error_nested_namespace_declaration() {
+    for source in [
+        "<?php namespace App; function g() { namespace Other; }",
+        "<?php if (true) { namespace Other; }",
+        "<?php namespace App { namespace Other; }",
+        "<?php $f = function () { namespace Other { } };",
+    ] {
+        expect_error(source, "only allowed at the top level of a file");
+    }
+}
+
 /// Verifies a malformed file-scope `const` declarator list is rejected by its own cause
 /// (issue #1142): a trailing comma names the missing constant, and a declarator without a value
 /// names the missing `=`.
@@ -881,4 +932,21 @@ fn test_error_class_constant_name_after_comma() {
         expect_error(&format!("<?php {owner} C {{ const ; }}"), "Expected class constant name after 'const'");
     }
     expect_error("<?php class C { const FIRST = 1; const ; }", "Expected class constant name after 'const'");
+}
+
+/// Verifies `namespace` itself stays refused as a one-word namespace name, as in PHP ("Cannot
+/// use 'Namespace' as namespace name"), now that every other reserved word is accepted as one
+/// (`namespace Default;`, #840).
+#[test]
+fn test_error_namespace_is_not_a_namespace_name() {
+    expect_error("<?php namespace Namespace;", "Expected namespace name after 'namespace'");
+    expect_error("<?php namespace namespace { }", "Expected namespace name after 'namespace'");
+}
+
+/// Verifies a reserved word is a name only when glued into a qualified name (#826): standing
+/// alone, or before a group-use `\{`, it is still the keyword, as in PHP.
+#[test]
+fn test_error_lone_reserved_word_is_not_a_name() {
+    expect_error("<?php Default::accent();", "Unexpected token");
+    expect_error("<?php use Default\\{Palette};", "Expected imported name");
 }

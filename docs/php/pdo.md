@@ -1236,8 +1236,8 @@ $pg->exec("DO $$ BEGIN RAISE NOTICE 'migrated'; END $$");   // callback fires wi
 ```
 
 Passing `null` unregisters delivery. Delivery is **boundary-dispatched**: the driver buffers notices as they arrive and
-dispatches them right after each `exec()` / `query()` on the connection, so a `NOTICE`
-raised by a prepared-statement `execute()` is delivered on the next `exec()`/`query()`.
+dispatches them after the connection's `exec()` / `query()` or the prepared
+statement's `execute()` completes, through the owning connection's callback.
 
 ## Divergences from php-src
 
@@ -1317,9 +1317,9 @@ preserve source SQL evaluation order, and retain the rendered text for
   supported TLS key/cert/CA/verification settings. A disabled local-infile handler rejects
   the server request instead of returning a successful empty upload.
 - `Pdo\Mysql::ATTR_SSL_CAPATH` is adapted to rustls by building a deterministic
-  multi-certificate PEM bundle. The pinned mysql 28 patch adds `ATTR_SSL_CIPHER` and
-  `ATTR_SERVER_PUBLIC_KEY`, the two controls absent from its public API. No security option
-  is accepted inertly.
+  multi-certificate PEM bundle. `ATTR_SSL_CIPHER` and `ATTR_SERVER_PUBLIC_KEY`
+  use upstream mysql 28.0.4's public cipher-suite and server-key configuration APIs.
+  No security option is accepted inertly.
 - `Pdo\Pgsql::ATTR_RESULT_MEMORY_SIZE` reports the bytes owned by the native
   result and returns `null` with HY000 before statement execution. `ATTR_PREFETCH` is
   supported at connection and prepare-option scope.

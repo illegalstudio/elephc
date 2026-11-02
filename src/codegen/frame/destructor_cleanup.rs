@@ -84,7 +84,7 @@ pub(super) fn emit_callback(ctx: &mut FunctionContext<'_>, entry: &str) {
 }
 
 /// Preserves the caller's real stack while selecting a borrowed PHP frame for ordinary slot helpers.
-fn enter_borrowed_frame(emitter: &mut Emitter) {
+pub(super) fn enter_borrowed_frame(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::AArch64 {
         emitter.instruction("sub sp, sp, #48");                                 // reserve cleanup state and saved linkage outside the borrowed PHP frame
         emitter.instruction("stp x29, x30, [sp, #32]");                         // preserve caller linkage across protected cleanup calls
@@ -101,7 +101,7 @@ fn enter_borrowed_frame(emitter: &mut Emitter) {
 }
 
 /// Restores actual helper storage and caller registers while preserving the cleanup result.
-fn leave_borrowed_frame(emitter: &mut Emitter) {
+pub(super) fn leave_borrowed_frame(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::AArch64 {
         emitter.instruction("mov sp, x19");                                     // leave any borrowed-frame addressing behind before restoring linkage
         emitter.instruction("ldr x19, [sp, #16]");                              // restore the caller's stack-anchor register

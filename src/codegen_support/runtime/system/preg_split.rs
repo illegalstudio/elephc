@@ -78,6 +78,7 @@ pub(crate) fn emit_preg_split(emitter: &mut Emitter) {
 
     // -- strip delimiters --
     emitter.instruction("bl __rt_preg_strip");                                  // strip slash delimiters and return regex flags in x3
+    emitter.instruction("tbnz x3, #30, __rt_preg_split_fail");                  // the removed /e modifier is invalid in PHP 8
     emitter.instruction(&format!("str x3, [sp, #{}]", regex_flags_off));        // save regex compilation flags
 
     // -- materialize the PCRE pattern as a C string --
@@ -224,10 +225,9 @@ pub(crate) fn emit_preg_split(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x0, [sp, #{}]", array_ptr_off));          // reload result array pointer
     emitter.instruction("b __rt_preg_split_ret");                               // return through common epilogue
 
-    // -- failure: return empty array with the same layout the successful path would use --
+    // -- failure: PHP returns false for an invalid pattern --
     emitter.label("__rt_preg_split_fail");
-    emit_preg_split_alloc_result_arm64(emitter, "fail", preg_flags_off, array_ptr_off);
-    emitter.instruction(&format!("ldr x0, [sp, #{}]", array_ptr_off));          // reload empty result array pointer
+    emitter.instruction("mov x0, #-1");                                         // failure sentinel: PHP false
     emitter.instruction("b __rt_preg_split_ret");                               // return through common epilogue
 
     emitter.label("__rt_preg_split_malloc_fail");
@@ -514,6 +514,8 @@ fn emit_preg_split_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, rdi");                                        // move pattern pointer into preg-strip input register
     emitter.instruction("mov rdx, rsi");                                        // move pattern length into preg-strip input register
     emitter.instruction("call __rt_preg_strip");                                // strip slash delimiters and gather supported regex flags
+    emitter.instruction("bt rcx, 30");                                          // did the pattern use the removed /e modifier?
+    emitter.instruction("jc __rt_preg_split_fail_linux_x86_64");                // PHP 8 rejects /e as an unknown modifier
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", regex_flags_off)); // preserve delimiter-strip regex flags
     emitter.instruction("call __rt_pcre_to_posix");                             // materialize PCRE pattern as a C string
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pattern_cstr_off)); // preserve null-terminated PCRE pattern
@@ -648,8 +650,7 @@ fn emit_preg_split_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_preg_split_ret_linux_x86_64");                // share common epilogue
 
     emitter.label("__rt_preg_split_fail_linux_x86_64");
-    emit_preg_split_alloc_result_x86_64(emitter, "fail", preg_flags_off, array_ptr_off);
-    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", array_ptr_off)); // return empty result array pointer
+    emitter.instruction("mov rax, -1");                                         // failure sentinel: PHP false
     emitter.instruction("jmp __rt_preg_split_ret_linux_x86_64");                // return through common epilogue
 
     emitter.label("__rt_preg_split_malloc_fail_linux_x86_64");

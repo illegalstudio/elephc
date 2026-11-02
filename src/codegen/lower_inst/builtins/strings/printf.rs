@@ -302,6 +302,7 @@ pub(in crate::codegen::lower_inst::builtins) fn pack_sprintf_like_arg(
 /// Packs one sprintf variadic operand using its static PHP representation.
 ///
 /// Mixed operands always go through `__rt_sprintf_pack_mixed`, which reads the boxed runtime tag.
+/// Raw pointers pack as their "0x..." string, the only conversion a pointer has.
 /// Statically known arrays, objects, resources, callables, and erased iterables carry their raw
 /// payload under a deferred runtime tag. This routing is independent of whether the format is a
 /// literal: coercion happens only after `__rt_sprintf` has parsed the actual conversion.
@@ -319,6 +320,13 @@ pub(super) fn pack_static_sprintf_arg(
         }
         PhpType::TaggedScalar => {
             return pack_sprintf_tagged_scalar_arg(ctx, value, owner);
+        }
+        // A packed record address is the same pointer word a `ptr<T>` holds.
+        PhpType::Pointer(_) | PhpType::Packed(_) => {
+            // A runtime format is not known here, so pack the same "0x..." string record a
+            // literal `%s` gets: a pointer converts to that text, `echo` prints it.
+            load_sprintf_arg_as_string(ctx, value, owner)?;
+            return pack_sprintf_string_arg(ctx);
         }
         _ => {}
     }

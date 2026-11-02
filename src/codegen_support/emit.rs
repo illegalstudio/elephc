@@ -24,11 +24,18 @@ pub struct Emitter {
     /// addressing. Required for shared-library output, where the loader cannot
     /// resolve cross-object `R_X86_64_PC32` relocations at dlopen time.
     pub pic_data_refs: bool,
+    /// Capacity of the shared `_concat_buf` result arena in bytes. The default
+    /// matches the historical 64 KiB scratch buffer; runtime generation raises
+    /// it to the program's configured heap budget so string producers can use
+    /// the same memory ceiling as PHP instead of an artificial 64 KiB cap.
+    pub concat_capacity: usize,
     /// When `true`, user frames publish exceptional cleanup activations and
     /// process-fatal runtime paths may unwind through the cdylib host boundary.
     /// This is deliberately independent from position-independent addressing:
     /// PIC is a relocation choice, while boundary recovery is an ABI contract.
     pub cdylib_boundary: bool,
+    /// Routes final output to a malloc-only producer callback, never to the host stdout fd.
+    pub phpext_output: bool,
     /// When `true`, macOS runtime emission is prepared for per-symbol dead
     /// stripping: `label()` records each internal label name in
     /// `internal_labels` so the final assembly can rename them to Mach-O
@@ -39,6 +46,10 @@ pub struct Emitter {
     /// Only set for the macOS executable runtime object; Linux uses per-section
     /// `--gc-sections` and cdylibs never dead-strip.
     pub dead_strip: bool,
+    /// The platform-mangled symbol of the hosted-extension shutdown routine, when this module
+    /// hosts PHP extensions. Every process-exit sequence calls it after flushing output, which
+    /// is where php-src runs request shutdown (RSHUTDOWN) and then module shutdown (MSHUTDOWN).
+    pub exit_hook: Option<String>,
     /// Names of internal (`label()`) labels recorded while `dead_strip` is set,
     /// used by `localize_internal_labels` to rewrite them `L`-prefixed.
     internal_labels: HashSet<String>,
@@ -65,8 +76,11 @@ impl Emitter {
             target,
             platform: target.platform,
             pic_data_refs: false,
+            concat_capacity: 65_536,
             cdylib_boundary: false,
+            phpext_output: false,
             dead_strip: false,
+            exit_hook: None,
             internal_labels: HashSet::new(),
             out_of_line: String::new(),
         }
@@ -201,8 +215,14 @@ impl Emitter {
     /// "tail filed under another function" mistake this whole mechanism exists to avoid.
     pub fn end_out_of_line(&mut self, scope: OutOfLine) {
         let body = std::mem::replace(&mut self.buf, scope.caller);
+        self.push_out_of_line(&body);
+    }
+
+    /// Files a body taken with [`Self::end_detached`] after all other text, as
+    /// [`Self::end_out_of_line`] would have.
+    pub fn push_out_of_line(&mut self, body: &str) {
         self.out_of_line.push_str(".text\n");
-        self.out_of_line.push_str(&body);
+        self.out_of_line.push_str(body);
     }
 
     /// Finishes a detached scope opened by [`Self::begin_out_of_line`] and returns its text.

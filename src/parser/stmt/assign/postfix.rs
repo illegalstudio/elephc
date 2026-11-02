@@ -807,13 +807,15 @@ fn lower_effectful_postfix_assignment(
 /// Lowers discarded post-increment/decrement to the existing assignment statement forms.
 ///
 /// Statement position discards the operator's value, so prefix `++$obj->n;` lowers through
-/// here too: with the result unused, `++X` and `X++` are both `X += 1`.
+/// here too. Array-element places retain the shared PHP incdec kernel instead of numeric `+= 1`.
 pub(crate) fn lower_postfix_incdec_assignment(
     lhs_expr: Expr,
     is_increment: bool,
     span: Span,
 ) -> Result<Stmt, CompileError> {
-    let op = if is_increment {
+    let op = if matches!(&lhs_expr.kind, ExprKind::ArrayAccess { .. }) {
+        AssignmentOperator::IncDec(is_increment)
+    } else if is_increment {
         AssignmentOperator::Compound(BinOp::Add)
     } else {
         AssignmentOperator::Compound(BinOp::Sub)
@@ -832,6 +834,11 @@ pub(crate) fn lower_postfix_incdec_assignment(
     }
 
     if !can_replay_assignment_target(&lhs_expr) {
+        if matches!(&lhs_expr.kind, ExprKind::ArrayAccess { array, .. }
+            if matches!(array.kind, ExprKind::StaticPropertyAccess { .. }))
+        {
+            return lower_effectful_static_assignment(lhs_expr, op, one, span);
+        }
         return lower_effectful_postfix_assignment(lhs_expr, op, one, span);
     }
 
@@ -850,6 +857,14 @@ pub(crate) fn lower_postfix_incdec_assignment(
                 property,
                 index: *index,
                 value,
+            },
+            ExprKind::StaticPropertyAccess { receiver, property } => {
+                StmtKind::StaticPropertyArrayAssign {
+                    receiver,
+                    property,
+                    index: *index,
+                    value,
+                }
             },
             _ => StmtKind::NestedArrayAssign {
                 target: Expr::new(ExprKind::ArrayAccess { array, index }, span),
@@ -1046,18 +1061,23 @@ impl EffectfulTargetLowerer {
     }
 
     /// Stabilizes the base of a nested array access chain. Recursively processes
-    /// `ArrayAccess`, `PropertyAccess`, and `DynamicPropertyAccess` chains; returns `Variable`,
-    /// `This`, and `StaticPropertyAccess` directly; calls `stabilize` for all other expressions.
+    /// `ArrayAccess`, `PropertyAccess`, and `DynamicPropertyAccess` chains; captures indices before
+    /// a later effectful dimension can change their inputs. Bare variables retain
+    /// PHP's deferred store-time lookup instead of becoming eager expression reads.
     fn stabilize_array_base(&mut self, expr: Expr) -> Expr {
         let span = expr.span;
         match expr.kind {
-            ExprKind::ArrayAccess { array, index } => Expr::new(
-                ExprKind::ArrayAccess {
-                    array: Box::new(self.stabilize_array_base(*array)),
-                    index: Box::new(self.stabilize(*index)),
-                },
-                span,
-            ),
+            ExprKind::ArrayAccess { array, index } => {
+                let array = Box::new(self.stabilize_array_base(*array));
+                let index = if update_index_needs_snapshot(&index)
+                    && !matches!(index.kind, ExprKind::Variable(_))
+                {
+                    self.stabilize_unconditionally(*index)
+                } else {
+                    self.stabilize(*index)
+                };
+                Expr::new(ExprKind::ArrayAccess { array, index: Box::new(index) }, span)
+            }
             ExprKind::PropertyAccess { object, property } => Expr::new(
                 ExprKind::PropertyAccess {
                     object: Box::new(self.stabilize_array_base(*object)),

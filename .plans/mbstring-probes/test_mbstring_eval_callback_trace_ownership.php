@@ -1,7 +1,7 @@
 <?php
 // With zend.exception_ignore_args=0, PHP prints caught, done, released.
 // With zend.exception_ignore_args=1, PHP prints released, caught, done.
-// Native eval currently follows the second order because throwable traces do not retain arguments.
+// The historical native eval observation followed the second order; requalify current trace retention.
 mb_ereg_match("", "");
 $source = $argc > 0 ? '
 class EvalTraceOutput {

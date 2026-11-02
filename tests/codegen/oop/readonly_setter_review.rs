@@ -29,14 +29,11 @@ echo isset($fresh->x) ? "bad" : "U"; unset($object, $fresh);
     assert!(out.stderr.contains("leak summary: clean"), "{}", out.stderr);
 }
 
-/// Relative setter contracts bind to their original owner, not global or unrelated caller scope.
-#[test]
-fn test_readonly_setter_greptile_current_eval_relative_scope() {
-    for (hint, storage) in [("self", "Base"), ("parent", "Root")] {
-        for native_root in [false, true] {
-            let parent = format!("abstract class Base extends Root {{ abstract public {hint} $x {{ set; }} }}");
-            let child = format!("abstract class Child extends Base {{ public public(set) readonly {storage} $x; }} class Grandchild extends Child {{}}");
-            let body = r#"class Caller {
+/// Checks one relative setter contract so each compile has its own test timeout budget.
+fn verify_eval_relative_setter_scope(hint: &str, storage: &str, native_root: bool) {
+    let parent = format!("abstract class Base extends Root {{ abstract public {hint} $x {{ set; }} }}");
+    let child = format!("abstract class Child extends Base {{ public public(set) readonly {storage} $x; }} class Grandchild extends Child {{}}");
+    let body = r#"class Caller {
     public static function write(Grandchild $value): void { $value->x = $value; }
 }
 $object = new Grandchild(); $object->x = $object;
@@ -44,13 +41,35 @@ echo isset($object->x) ? "bad" : "U";
 Caller::write($object); echo isset($object->x) ? "bad" : "|U";
 try { $object->x = new stdClass(); } catch (TypeError $error) { echo "|", $error->getMessage(); }
 "#;
-            // Native property declarations do not yet parse relative hints; keep Base in eval.
-            let (native, dynamic_root) = if native_root { ("class Root {}", "") }
-                else { ("", "class Root {}") };
-            assert_eq!(compile_and_run(&format!("<?php {native} eval('{dynamic_root} {parent} {child} {body}');")),
-                format!("U|U|Base::$x::set(): Argument #1 ($value) must be of type {storage}, stdClass given"));
-        }
-    }
+    // Native property declarations do not yet parse relative hints; keep Base in eval.
+    let (native, dynamic_root) = if native_root { ("class Root {}", "") }
+        else { ("", "class Root {}") };
+    assert_eq!(compile_and_run(&format!("<?php {native} eval('{dynamic_root} {parent} {child} {body}');")),
+        format!("U|U|Base::$x::set(): Argument #1 ($value) must be of type {storage}, stdClass given"));
+}
+
+/// The self setter contract retains its owner with a root class declared in eval.
+#[test]
+fn test_readonly_setter_eval_relative_scope_self_eval_root() {
+    verify_eval_relative_setter_scope("self", "Base", false);
+}
+
+/// The self setter contract retains its owner with a native root class.
+#[test]
+fn test_readonly_setter_eval_relative_scope_self_native_root() {
+    verify_eval_relative_setter_scope("self", "Base", true);
+}
+
+/// The parent setter contract retains its owner with a root class declared in eval.
+#[test]
+fn test_readonly_setter_eval_relative_scope_parent_eval_root() {
+    verify_eval_relative_setter_scope("parent", "Root", false);
+}
+
+/// The parent setter contract retains its owner with a native root class.
+#[test]
+fn test_readonly_setter_eval_relative_scope_parent_native_root() {
+    verify_eval_relative_setter_scope("parent", "Root", true);
 }
 
 /// Storage accepts direct and inherited interfaces even before the setter's class is built.
@@ -112,10 +131,28 @@ fn test_readonly_setter_greptile_current_nullable_source_owners_no_ir_opt() {
     without_ir_opt(test_readonly_setter_greptile_current_nullable_source_owners);
 }
 
-/// Relative setter scopes are independent of EIR optimization.
+/// The self setter contract with a root declared in eval is independent of EIR optimization.
 #[test]
-fn test_readonly_setter_greptile_current_eval_relative_scope_no_ir_opt() {
-    without_ir_opt(test_readonly_setter_greptile_current_eval_relative_scope);
+fn test_readonly_setter_eval_relative_scope_self_eval_root_no_ir_opt() {
+    without_ir_opt(test_readonly_setter_eval_relative_scope_self_eval_root);
+}
+
+/// The self setter contract with a native root is independent of EIR optimization.
+#[test]
+fn test_readonly_setter_eval_relative_scope_self_native_root_no_ir_opt() {
+    without_ir_opt(test_readonly_setter_eval_relative_scope_self_native_root);
+}
+
+/// The parent setter contract with a root declared in eval is independent of EIR optimization.
+#[test]
+fn test_readonly_setter_eval_relative_scope_parent_eval_root_no_ir_opt() {
+    without_ir_opt(test_readonly_setter_eval_relative_scope_parent_eval_root);
+}
+
+/// The parent setter contract with a native root is independent of EIR optimization.
+#[test]
+fn test_readonly_setter_eval_relative_scope_parent_native_root_no_ir_opt() {
+    without_ir_opt(test_readonly_setter_eval_relative_scope_parent_native_root);
 }
 
 /// Complete interface storage checks do not depend on EIR optimization.
@@ -198,30 +235,55 @@ fn test_readonly_setter_review_reflection_eval() { verify_reflection(Some(false)
 #[test]
 fn test_readonly_setter_review_reflection_native_parent() { verify_reflection(Some(true)); }
 
-/// Reflected no-op writes add no owners beyond normally released reflector construction.
+/// Repeated reflected writes add no owners after constructing their metadata once.
 #[test]
 fn test_readonly_setter_review_reflection_owners() {
     let mut baseline = None;
     for iterations in [1, 8] {
-        let run = |function: &str| compile_and_run_with_heap_debug(&source(None, &format!(r#"
-function reflect(Grandchild $object): void {{
+        let runs = compile_and_run_with_heap_debug_per_argv(&source(None, &format!(r#"
+function reflect(Grandchild $object, ReflectionProperty $property): void {{
+    try {{ $property->setValue($object, str_repeat("b", 2)); }}
+    catch (TypeError $error) {{ echo "T"; unset($error); }}
+    $property->setValue($object, 4);
+    echo isset($object->x) ? "bad" : "U";
+}}
+function control(Grandchild $object, ReflectionProperty $property): void {{
+    if ($property->getName() !== "x") {{ echo "bad"; }}
+    try {{ $object->x = str_repeat("b", 2); }}
+    catch (TypeError $error) {{ echo "T"; unset($error); }}
+    $object->x = 4;
+    echo isset($object->x) ? "bad" : "U";
+}}
+function inlineReflect(Grandchild $object): void {{
     try {{ (new ReflectionProperty(Grandchild::class, "x"))->setValue($object, str_repeat("b", 2)); }}
     catch (TypeError $error) {{ echo "T"; unset($error); }}
     (new ReflectionProperty(Grandchild::class, "x"))->setValue($object, 4);
     echo (new ReflectionProperty(Grandchild::class, "x"))->isInitialized($object) ? "bad" : "U";
 }}
-function control(Grandchild $object): void {{
+function inlineControl(Grandchild $object): void {{
     new ReflectionProperty(Grandchild::class, "x");
+    try {{ $object->x = str_repeat("b", 2); }}
+    catch (TypeError $error) {{ echo "T"; unset($error); }}
     new ReflectionProperty(Grandchild::class, "x");
+    $object->x = 4;
     new ReflectionProperty(Grandchild::class, "x");
-    echo "TU";
+    echo isset($object->x) ? "bad" : "U";
 }}
-for ($i = 0; $i < {iterations}; $i++) {{ $object = new Grandchild(); {function}($object); unset($object); }}
-"#)));
-        let control = run("control");
-        let result = run("reflect");
+$object = new Grandchild();
+if ($argc > 1) {{ inlineReflect($object); }} else {{ inlineControl($object); }}
+unset($object);
+$property = new ReflectionProperty(Grandchild::class, "x");
+for ($i = 0; $i < {iterations}; $i++) {{
+    $object = new Grandchild();
+    if ($argc > 1) {{ reflect($object, $property); }} else {{ control($object, $property); }}
+    unset($object);
+}}
+unset($property);
+"#)), &[&[], &["reflect"]]);
+        let control = &runs[0];
+        let result = &runs[1];
         assert!(control.success && result.success, "control: {}\nresult: {}\n{}", control.stderr, result.stdout, result.stderr);
-        assert_eq!(control.stdout, "TU".repeat(iterations));
+        assert_eq!(control.stdout, "TU".repeat(iterations + 1));
         assert_eq!(result.stdout, control.stdout, "{}", result.stderr);
         let retained = |stderr: &str| ["live_blocks=", "live_bytes="].map(|metric| {
             stderr.lines().next().unwrap().split_whitespace()
@@ -234,10 +296,10 @@ for ($i = 0; $i < {iterations}; $i++) {{ $object = new Grandchild(); {function}(
             let growth = |current: [usize; 2], original: [usize; 2]| [current[0] - original[0], current[1] - original[1]];
             let result_growth = growth(result_retained, result_baseline);
             let control_growth = growth(control_retained, control_baseline);
-            assert_eq!(result_growth[0], control_growth[0]);
-            // Free-list reuse can change retained metadata block capacities across binaries.
-            assert!(result_growth[1] <= control_growth[1],
-                "argument owners must not add to the pre-existing metadata baseline: {result_growth:?} > {control_growth:?}");
+            // Metadata allocation precedes the writes, so allocator reuse cannot change
+            // its retained capacities. Every additional call must release all of its owners.
+            assert_eq!(control_growth, [0, 0], "direct setter owners: {control_growth:?}");
+            assert_eq!(result_growth, [0, 0], "reflected setter owners: {result_growth:?}");
         } else { baseline = Some((control_retained, result_retained)); }
     }
 }

@@ -72,6 +72,8 @@ impl ReceiverPlace {
         if let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate {
             return match inst_ref.op {
                 Op::LoadLocal => Ok(Self::Local(slot)),
+                Op::LoadRefCell if !ctx.local_ref_cell_representation_is_definite(slot)
+                    && !ctx.local_ref_cell_representation_is_dynamic(slot) => Ok(Self::Local(slot)),
                 Op::LoadRefCell => Ok(Self::RefCell(slot)),
                 _ => Ok(Self::Opaque),
             };
@@ -93,7 +95,7 @@ impl ReceiverPlace {
 
     /// Returns the resolved slot, whichever representation it is reached through.
     ///
-    /// Used by the pre-mutation bookkeeping (`release_mutated_source_local_owner`) that only
+    /// Used by the pre-mutation bookkeeping (`prepare_mutated_source_local_owner`) that only
     /// needs to name the slot; the representation choice belongs to the write-back.
     pub(super) fn slot(&self) -> Option<LocalSlotId> {
         match self {
@@ -128,14 +130,15 @@ impl ReceiverPlace {
     /// property receiver already reaches this layer through an owning `Acquire`; its normal EIR
     /// cleanup retires the replacement transient after the property store retains it. Concrete
     /// containers unboxed from a Mixed raw local already carry a detached owner; releasing the
-    /// superseded box transfers that owner into the helper.
+    /// superseded box transfers that owner into the helper. An unpromoted reference load instead
+    /// borrows the payload, so the raw-local prepare acquires its lease before dropping the box.
     pub(super) fn prepare_consuming_storeback(
         &self,
         ctx: &mut FunctionContext<'_>,
         value: ValueId,
     ) -> Result<()> {
         match self {
-            Self::Local(slot) => ctx.release_mutated_source_local_owner(*slot, value),
+            Self::Local(slot) => ctx.prepare_mutated_source_local_owner(*slot, value),
             Self::RefCell(_) => {
                 let value_ty = ctx.load_value_to_result(value)?;
                 abi::emit_incref_if_refcounted(ctx.emitter, &value_ty);
@@ -204,7 +207,11 @@ impl ReceiverPlace {
         };
         let source_ty = ctx.load_local_to_result(slot)?;
         let result_ty = ctx.value_php_type(value)?;
-        super::coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty)?;
+        if ctx.needs_borrowed_container_lease(slot, value)? {
+            super::local_loads::coerce_borrowed_ref_cell_local(ctx, &source_ty, &result_ty)?;
+        } else {
+            super::coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty)?;
+        }
         ctx.store_result_value(value)
     }
 
@@ -257,7 +264,7 @@ impl ReceiverPlace {
     ) -> Result<()> {
         match self {
             Self::Opaque => Ok(()),
-            Self::Local(slot) => ctx.store_container_writeback_to_local(*slot, value),
+            Self::Local(slot) => ctx.store_mutated_container_writeback_to_local(*slot, value),
             Self::RefCell(_) | Self::Property { .. } => self.store_back_value(ctx, value),
             Self::Global { symbol, php_type } => emit_global_receiver_store_back(
                 ctx,

@@ -57,8 +57,11 @@ parsing, but execution remains interpreted. Repeated native function activations
 also share an immutable catalog of the module's native callable signatures,
 class metadata and constants. Each thread retains up to eight module catalogs;
 activation scopes, dynamic declarations, references, handlers and materialized
-default values remain separate. Force-linking with `--with-eval` also increases binary size even if no
-call ultimately requires fallback.
+default values remain separate. On a catalog cache miss, short numeric-only
+fragments can postpone metadata setup for up to 512 eval executions in one
+activation. The next eval initializes the complete catalog before synchronizing
+scope, bounding proof overhead in long loops. Force-linking with `--with-eval`
+also increases binary size even if no call ultimately requires fallback.
 
 ## Quick start
 
@@ -116,7 +119,10 @@ PHP call surfaces.
 
 ## Scope behavior
 
-Variables from the caller's local scope are visible in the fragment.
+Variables from the caller's local scope are visible in the fragment, except
+locals stored as a native pointer word or handle: `ptr<T>` and `?ptr<T>` locals,
+packed record addresses, buffers, and locals that hold `null` and pointers (see
+[Pointers](../beyond-php/pointers.md)). The fragment reads those as undefined.
 Assignments and `unset()` are reflected back into that scope, variables created
 by the fragment remain visible after `eval()`, and `return expr;` returns from
 the `eval()` call itself.
@@ -704,6 +710,16 @@ null, empty-array, supported array-valued, or supported object-valued default
 values when native signatures are registered. Eval code can also reflect
 supported callable-builtin signatures, including internal origin, parameter
 names, parameter types, and return type metadata.
+
+Generated method and constructor defaults that defer a missing-parent `Error`,
+including errors nested inside arrays or constructor arguments, retain their
+expression trees as eval metadata. Omitting the argument raises a catchable
+`Error` through direct or callback calls from `eval()`, while supplying the
+argument explicitly skips the default. Native reflected defaults retain the
+same lazy behavior. Reflection retains default availability without evaluating
+the tree when the parameter object is created. `getDefaultValue()` evaluates the
+whole default on each request, including earlier constructor side effects.
+
 Eval-declared
 functions and methods expose declared-type presence for parameters and return types, simple
 named type metadata through
@@ -1065,14 +1081,14 @@ where listed below unless a note says otherwise.
 | File and directory streams | `fopen()`, `fclose()`, `feof()`, `fflush()`, `fgetc()`, `fgets()`, `fgetcsv()`, `fpassthru()`, `fprintf()`, `fputcsv()`, `fread()`, `fscanf()`, `flock()`, `fseek()`, `fstat()`, `fsync()`, `fdatasync()`, `ftell()`, `ftruncate()`, `fwrite()`, `rewind()`, `vfprintf()`, `opendir()`, `readdir()`, `closedir()`, `rewinddir()` |
 | Streams and stream contexts | `stream_get_filters()`, `stream_get_transports()`, `stream_get_wrappers()`, `stream_isatty()`, `stream_is_local()`, `stream_supports_lock()`, `stream_get_contents()`, `stream_get_line()`, `stream_get_meta_data()`, `stream_copy_to_stream()`, `stream_resolve_include_path()`, `stream_select()`, `stream_set_blocking()`, `stream_set_chunk_size()`, `stream_set_read_buffer()`, `stream_set_timeout()`, `stream_set_write_buffer()`, `stream_context_create()`, `stream_context_get_default()`, `stream_context_get_options()`, `stream_context_get_params()`, `stream_context_set_default()`, `stream_context_set_option()`, `stream_context_set_params()`, `stream_wrapper_register()`, `stream_wrapper_unregister()`, `stream_wrapper_restore()`, `stream_filter_register()`, `stream_filter_append()`, `stream_filter_prepend()`, `stream_filter_remove()`, `stream_bucket_new()`, `stream_bucket_make_writeable()`, `stream_bucket_append()`, `stream_bucket_prepend()` |
 | Stream sockets and network databases | `stream_socket_server()`, `stream_socket_client()`, `stream_socket_accept()`, `stream_socket_enable_crypto()`, `stream_socket_get_name()`, `stream_socket_pair()`, `stream_socket_recvfrom()`, `stream_socket_sendto()`, `stream_socket_shutdown()`, `fsockopen()`, `pfsockopen()`, `gethostname()`, `gethostbyname()`, `gethostbyaddr()`, `getprotobyname()`, `getprotobynumber()`, `getservbyname()`, `getservbyport()`, `long2ip()`, `ip2long()`, `inet_pton()`, `inet_ntop()` |
-| Strings, bytes, and formatting | `strlen()`, `ord()`, `chr()`, `strtolower()`, `strtoupper()`, `ucfirst()`, `lcfirst()`, `ucwords()`, `str_contains()`, `str_starts_with()`, `str_ends_with()`, `strpos()`, `strrpos()`, `strcmp()`, `strcasecmp()`, `trim()`, `ltrim()`, `rtrim()`, `chop()`, `strrev()`, `grapheme_strrev()`, `str_repeat()`, `substr()`, `substr_replace()`, `str_pad()`, `strstr()`, `str_split()`, `wordwrap()`, `nl2br()`, `explode()`, `implode()`, `str_replace()`, `str_ireplace()`, `htmlspecialchars()`, `htmlentities()`, `html_entity_decode()`, `parse_url()`, `urlencode()`, `urldecode()`, `rawurlencode()`, `rawurldecode()`, `ctype_alpha()`, `ctype_digit()`, `ctype_alnum()`, `ctype_space()`, `addslashes()`, `stripslashes()`, `bin2hex()`, `hex2bin()`, `base64_encode()`, `base64_decode()`, `gzcompress()`, `gzdeflate()`, `gzinflate()`, `gzuncompress()`, `number_format()`, `sprintf()`, `printf()`, `vsprintf()`, `vprintf()`, `sscanf()` |
+| Strings, bytes, and formatting | `strlen()`, `ord()`, `chr()`, `strtolower()`, `strtoupper()`, `ucfirst()`, `lcfirst()`, `ucwords()`, `str_contains()`, `str_starts_with()`, `str_ends_with()`, `strpos()`, `strrpos()`, `strcmp()`, `strcasecmp()`, `trim()`, `ltrim()`, `rtrim()`, `chop()`, `strrev()`, `grapheme_strrev()`, `str_repeat()`, `substr()`, `substr_replace()`, `str_pad()`, `strstr()`, `str_split()`, `wordwrap()`, `nl2br()`, `explode()`, `implode()`, `str_replace()`, `str_ireplace()`, `htmlspecialchars()`, `htmlentities()`, `html_entity_decode()`, `strip_tags()`, `parse_url()`, `urlencode()`, `urldecode()`, `rawurlencode()`, `rawurldecode()`, `ctype_alpha()`, `ctype_digit()`, `ctype_alnum()`, `ctype_space()`, `addslashes()`, `stripslashes()`, `bin2hex()`, `hex2bin()`, `base64_encode()`, `base64_decode()`, `gzcompress()`, `gzdeflate()`, `gzinflate()`, `gzuncompress()`, `number_format()`, `sprintf()`, `printf()`, `vsprintf()`, `vprintf()`, `sscanf()` |
 | Hashing | `crc32()`, `hash()`, `hash_file()`, `hash_hmac()`, `md5()`, `sha1()`, `hash_equals()`, `hash_algos()`, `hash_init()`, `hash_update()`, `hash_final()`, `hash_copy()` |
 | JSON | `json_encode()`, `json_decode()`, `json_validate()`, `json_last_error()`, `json_last_error_msg()` |
 | Regex | `preg_match()`, `preg_match_all()`, `preg_replace()`, `preg_replace_callback()`, `preg_split()`, `mb_ereg_match()` |
 | Arrays and sorting | `array_sum()`, `array_product()`, `array_chunk()`, `array_column()`, `array_combine()`, `array_fill()`, `array_fill_keys()`, `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `array_flip()`, `array_keys()`, `array_values()`, `array_diff()`, `array_intersect()`, `array_diff_key()`, `array_intersect_key()`, `range()`, `array_merge()`, `array_pad()`, `array_reverse()`, `array_slice()`, `array_splice()`, `array_unique()`, `array_key_exists()`, `array_rand()`, `in_array()`, `array_search()`, `array_pop()`, `array_shift()`, `array_push()`, `array_unshift()`, `arsort()`, `asort()`, `krsort()`, `ksort()`, `natcasesort()`, `natsort()`, `rsort()`, `shuffle()`, `sort()`, `uasort()`, `uksort()`, `usort()`, `count()` |
 | Iterators and SPL | `iterator_count()`, `iterator_to_array()`, `iterator_apply()`, `spl_classes()`, `spl_object_id()`, `spl_object_hash()`, `spl_autoload()`, `spl_autoload_call()`, `spl_autoload_extensions()`, `spl_autoload_functions()`, `spl_autoload_register()`, `spl_autoload_unregister()` |
 | Math and random | `abs()`, `sqrt()`, `floor()`, `ceil()`, `round()`, `pow()`, `clamp()`, `min()`, `max()`, `pi()`, `sin()`, `cos()`, `tan()`, `asin()`, `acos()`, `atan()`, `atan2()`, `sinh()`, `cosh()`, `tanh()`, `log()`, `log2()`, `log10()`, `exp()`, `deg2rad()`, `rad2deg()`, `hypot()`, `intdiv()`, `fdiv()`, `fmod()`, `rand()`, `mt_rand()`, `random_int()` |
-| Raw memory and buffers | `buffer_new()`, `buffer_len()`, `buffer_free()`, `ptr()`, `ptr_null()`, `ptr_is_null()`, `ptr_offset()`, `ptr_get()`, `ptr_set()`, `ptr_read8()`, `ptr_read16()`, `ptr_read32()`, `ptr_read_string()`, `ptr_write8()`, `ptr_write16()`, `ptr_write32()`, `ptr_write_string()`, `ptr_sizeof()` |
+| Raw memory and buffers | `buffer_new()`, `buffer_len()`, `buffer_ptr()`, `buffer_free()`, `ptr()`, `ptr_null()`, `ptr_is_null()`, `ptr_offset()`, `ptr_get()`, `ptr_set()`, `ptr_read8()`, `ptr_read16()`, `ptr_read32()`, `ptr_read_string()`, `ptr_write8()`, `ptr_write16()`, `ptr_write32()`, `ptr_write_string()`, `ptr_sizeof()` |
 | Types, metadata, and dynamic calls | `intval()`, `floatval()`, `strval()`, `boolval()`, `settype()`, `gettype()`, `get_called_class()`, `get_class()`, `get_parent_class()`, `get_class_methods()`, `get_class_vars()`, `get_object_vars()`, `get_resource_type()`, `get_resource_id()`, `function_exists()`, `is_callable()`, `class_exists()`, `interface_exists()`, `trait_exists()`, `enum_exists()`, `class_alias()`, `class_implements()`, `class_parents()`, `class_uses()`, `get_declared_classes()`, `get_declared_interfaces()`, `get_declared_traits()`, `method_exists()`, `property_exists()`, `is_a()`, `is_subclass_of()`, `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, `call_user_func()`, `call_user_func_array()`, `empty()`, `isset()`, `unset()`, `is_int()`, `is_integer()`, `is_long()`, `is_float()`, `is_double()`, `is_real()`, `is_nan()`, `is_finite()`, `is_infinite()`, `is_string()`, `is_bool()`, `is_null()`, `is_array()`, `is_object()`, `is_iterable()` for arrays and `Traversable` objects, `is_numeric()`, `is_scalar()`, `is_resource()` |
 | Debug output | `print_r()`, `var_dump()` |
 | Constants | `define()`, `defined()` |

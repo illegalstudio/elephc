@@ -256,7 +256,7 @@ echo $f->getReturn();
 fn test_fiber_string_extern_callable_uses_descriptor_invoker() {
     let out = compile_and_run(
         r#"<?php
-extern function atoi(string $value): int;
+extern function atoi(string $value): i32;
 
 $callback = "ATOI";
 $f = new Fiber($callback);

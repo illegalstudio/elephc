@@ -177,24 +177,27 @@ buffer_free($values);
 
 /// A counter that overflows in a RAW slot stops, instead of printing a number php never produces.
 ///
-/// The narrowed opcodes exist because the sink proved every observation of the value is an int,
-/// which is what lets it live in a raw slot. An overflow breaks exactly that proof: php promotes
-/// to float, 64 raw bits cannot hold one, and the previous answer — php's float-to-int conversion
-/// of the true result — printed `int(-9223372036854775808)` where php prints
-/// `float(9.223372036854776E+18)`.
-///
-/// Boxing the counter instead was measured and rejected: it fixes the promotion and costs 4.7x on
-/// a 20M-iteration loop, because the boxed slot also turns the loop's `icmp` into `php_rel_cmp`
-/// and its `ichecked_add` into `mixed_numeric_binop`.
+/// A counter that can exceed the integer range keeps its promoted float on later iterations.
+/// Both IR modes preserve PHP's tags instead of truncating, wrapping or terminating the loop.
 #[test]
-fn test_for_counter_overflow_stops_instead_of_wrapping() {
-    let err = compile_and_run_expect_failure(
-        "<?php for ($i = PHP_INT_MAX - 1, $n = 0; $n < 3; $i++, $n++) { var_dump($i); }",
-    );
-    assert!(
-        err.contains("integer overflow in arithmetic whose result is used as an int"),
-        "expected the raw-slot overflow to stop, got: {err}"
-    );
+fn test_for_counter_overflow_promotes_to_float() {
+    let source = "<?php for ($i = PHP_INT_MAX - 1, $n = 0; $n < 3; $i++, $n++) { var_dump($i); }";
+    let expected = "int(9223372036854775806)\nint(9223372036854775807)\nfloat(9.223372036854776E+18)\n";
+    let dir = make_cli_test_dir("elephc_counter_float_promotion");
+    let path = dir.join("main.php"); fs::write(&path, source).unwrap();
+    for mode in ["--ir-opt=off", "--ir-opt=on"] {
+        let compiled = elephc_cli_command(&dir).args([mode, "--heap-debug"]).arg(&path).output().unwrap();
+        assert!(compiled.status.success(), "{}", String::from_utf8_lossy(&compiled.stderr));
+        let output = run_binary(&path.with_extension(""), &dir);
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+        assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"));
+        if std::env::var_os("ELEPHC_PHP_CHECK").is_some() {
+            let php = Command::new("php").arg("-n").arg(&path).output().unwrap();
+            assert!(php.status.success()); assert_eq!(php.stdout, output.stdout);
+        }
+    }
+    fs::remove_dir_all(dir).unwrap();
 }
 
 /// An explicit `(int)` cast keeps php's own conversion, which is the OTHER reason the sink

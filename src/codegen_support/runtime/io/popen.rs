@@ -17,9 +17,9 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 /// Input:  AArch64 x1/x2 = command string, x3/x4 = mode string
 ///         x86_64  rdi/rsi = command string, rdx/rcx = mode string
 /// Output: the pipe descriptor, or -1 on failure
-pub fn emit_popen(emitter: &mut Emitter) {
+pub fn emit_popen(emitter: &mut Emitter, web: bool) {
     if emitter.target.arch == Arch::X86_64 {
-        emit_popen_linux_x86_64(emitter);
+        emit_popen_linux_x86_64(emitter, web);
         return;
     }
 
@@ -59,7 +59,7 @@ pub fn emit_popen(emitter: &mut Emitter) {
     // -- popen(command, mode) --
     emitter.instruction("ldr x0, [sp, #16]");                                   // command C-string argument
     emitter.instruction("add x1, sp, #32");                                     // mode C-string argument
-    emitter.bl_c("popen");
+    emitter.bl_c(if web { "elephc_web_application_popen" } else { "popen" });
     emitter.instruction("cbz x0, __rt_popen_fail");                             // a NULL FILE* means popen failed
     emitter.instruction("str x0, [sp, #24]");                                   // save the FILE* across the fileno call
 
@@ -84,7 +84,7 @@ pub fn emit_popen(emitter: &mut Emitter) {
 }
 
 /// Emits the Linux x86_64 stream runtime helper for popen.
-fn emit_popen_linux_x86_64(emitter: &mut Emitter) {
+fn emit_popen_linux_x86_64(emitter: &mut Emitter, web: bool) {
     emitter.blank();
     emitter.comment("--- runtime: popen ---");
     emitter.label_global("__rt_popen");
@@ -123,7 +123,7 @@ fn emit_popen_linux_x86_64(emitter: &mut Emitter) {
     // -- popen(command, mode) --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // command C-string argument
     emitter.instruction("lea rsi, [rbp - 40]");                                 // mode C-string argument
-    emitter.bl_c("popen");
+    emitter.bl_c(if web { "elephc_web_application_popen" } else { "popen" });
     emitter.instruction("test rax, rax");                                       // a NULL FILE* means popen failed
     emitter.instruction("jz __rt_popen_fail_x86");                              // bail out on a popen failure
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the FILE* across the fileno call

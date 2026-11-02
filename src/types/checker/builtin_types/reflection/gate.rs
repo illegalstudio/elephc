@@ -52,10 +52,11 @@ pub(crate) const REFLECTION_CLASS_NAMES: &[&str] = &[
 /// Reflection classes a program actually touches. This gate is upstream of that, about checker
 /// metadata alone.
 ///
-/// EVAL KEEPS EVERYTHING, and must. The dynamic bridge resolves class names at runtime, so a
-/// program containing `eval` can construct any Reflection class from a string this walk never
-/// sees. `usage.introspects` covers it — `eval` parses as an ordinary call, not as its own AST
-/// node, so the usage walker's introspection table sees it like any other builtin.
+/// AN OPAQUE EVAL KEEPS EVERYTHING, and must. The dynamic bridge resolves class names at
+/// runtime, so a program whose `eval` source is only known at runtime, or does not parse, can
+/// construct any Reflection class from a string this walk never sees. `usage.introspects`
+/// covers it. A parsable literal fragment is scanned as inline code instead: it registers the
+/// Reflection family only when its source names it or carries a dynamic hazard of its own.
 ///
 /// IT SEES THE PROGRAM AFTER PRELUDE INJECTION, so a prelude that hints a Reflection type
 /// registers the family exactly as user code would. None does today.

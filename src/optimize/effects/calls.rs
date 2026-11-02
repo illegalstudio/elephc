@@ -95,6 +95,10 @@ fn semantic_optimizer_arg_types(
             ExprKind::NewObject { class_name, .. } => {
                 PhpType::Object(class_name.as_str().to_string())
             }
+            // A runtime conversion descriptor consumes the original PHP value, so a
+            // checked parameter type cannot describe a non-literal source expression.
+            _ if matches!(def.spec.semantics.argument_lowering,
+                crate::builtins::semantics::BuiltinArgumentLowering::PreserveUncoerced) => PhpType::Mixed,
             _ => def
                 .params
                 .get(index)

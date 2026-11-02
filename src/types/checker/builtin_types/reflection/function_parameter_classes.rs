@@ -44,6 +44,10 @@ pub(super) fn builtin_reflection_parameter() -> FlattenedClass {
             builtin_property("name", Visibility::Public, Some(TypeExpr::Str), empty_string()),
             builtin_property("__name", Visibility::Private, Some(TypeExpr::Str), empty_string()),
             builtin_property("__attrs", Visibility::Private, Some(array_type()), empty_array()),
+            // PHP renders a parameter as `Parameter #0 [ <required> int $a ]`. This slot used
+            // to be absent and `__toString` read `__name`, so `(string) $parameter` answered
+            // the bare name (#1080).
+            builtin_property("__string", Visibility::Private, Some(TypeExpr::Str), empty_string()),
             builtin_property("__position", Visibility::Private, Some(TypeExpr::Int), int_lit(0)),
             builtin_property(
                 "__optional",
@@ -114,6 +118,8 @@ pub(super) fn builtin_reflection_parameter() -> FlattenedClass {
                 Some(mixed_type()),
                 null_lit(),
             ),
+            builtin_property("__default_error", Visibility::Private, Some(TypeExpr::Str), empty_string()),
+            builtin_property("__default_factory", Visibility::Private, Some(mixed_type()), null_lit()),
             builtin_property(
                 "__default_value_object_class",
                 Visibility::Private,
@@ -155,7 +161,7 @@ pub(super) fn builtin_reflection_parameter() -> FlattenedClass {
             builtin_reflection_slot_getter("isCallable", "__is_callable_type", TypeExpr::Bool),
             builtin_reflection_slot_getter("getType", "__type", mixed_type()),
             builtin_reflection_slot_getter("getClass", "__class", mixed_type()),
-            builtin_reflection_slot_getter("__toString", "__name", TypeExpr::Str),
+            builtin_reflection_class_string_method("__toString", "__string"),
             builtin_reflection_owner_get_attributes_method("ReflectionParameter"),
             builtin_reflection_slot_getter(
                 "isDefaultValueAvailable",
@@ -200,6 +206,8 @@ pub(super) fn builtin_reflection_parameter_get_default_value_method() -> ClassMe
         by_ref_return: false,
         body: vec![
             reflection_parameter_throw_if_default_missing(dummy_span),
+            reflection_throw_if_deferred_default_error(dummy_span),
+            reflection_parameter_lazy_factory_return(dummy_span),
             Stmt::new(
                 StmtKind::If {
                     condition: binary_expr(

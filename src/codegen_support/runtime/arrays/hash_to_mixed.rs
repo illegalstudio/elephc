@@ -12,10 +12,12 @@
 //!   skipped whole, so a repeated by-reference foreach cannot restamp a live reference set.
 //! - The owned-box entry point is shared so `__rt_hash_set` can reuse it when writing a
 //!   non-boxed replacement through an existing reference cell.
+//! - A tag-13 entry (a raw `?ptr<T>` word) boxes as PHP null for 0 and an integer otherwise. The
+//!   owned-box helper is unchanged, so an integer 0 written through `__rt_hash_set` stays one.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::sentinels::emit_branch_if_null_container;
+use crate::codegen_support::sentinels::{emit_branch_if_null_container, POINTER_ARRAY_VALUE_TYPE};
 
 
 /// Emits the `__rt_hash_to_mixed` runtime helper.
@@ -75,6 +77,13 @@ pub fn emit_hash_to_mixed(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [sp, #16]");                                   // restore the payload after key comparison
     emitter.instruction("ldr x4, [sp, #24]");                                   // restore the high payload word
     emitter.instruction("ldr x5, [sp, #32]");                                   // restore the runtime tag
+    // -- a ?ptr<T> entry boxes 0 as PHP null and any other address as an integer --
+    emitter.instruction(&format!("cmp x5, #{}", POINTER_ARRAY_VALUE_TYPE));     // is this entry a raw ?ptr<T> word?
+    emitter.instruction("b.ne __rt_hash_to_mixed_box_value");                   // every other entry keeps its stored tag
+    emitter.instruction("mov x9, #8");                                          // runtime tag 8 = PHP null for the null pointer word
+    emitter.instruction("cmp x3, #0");                                          // is this entry the null pointer word?
+    emitter.instruction("csel x5, x9, xzr, eq");                                // box 0 as PHP null and any address as an integer
+    emitter.label("__rt_hash_to_mixed_box_value");
     emitter.instruction("mov x0, x5");                                          // pass the source runtime value tag to the owned-box helper
     emitter.instruction("mov x1, x3");                                          // pass the entry low payload word to the owned-box helper
     emitter.instruction("mov x2, x4");                                          // pass the entry high payload word to the owned-box helper
@@ -206,6 +215,14 @@ fn emit_hash_to_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                       // restore the payload after key comparison
     emitter.instruction("mov r8, QWORD PTR [rbp - 32]");                        // restore the high payload word
     emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // restore the runtime tag
+    // -- a ?ptr<T> entry boxes 0 as PHP null and any other address as an integer --
+    emitter.instruction(&format!("cmp r9, {}", POINTER_ARRAY_VALUE_TYPE));      // is this entry a raw ?ptr<T> word?
+    emitter.instruction("jne __rt_hash_to_mixed_x86_box_value");                // every other entry keeps its stored tag
+    emitter.instruction("xor r9d, r9d");                                        // runtime tag 0 = integer for a live pointer address
+    emitter.instruction("mov r10, 8");                                          // runtime tag 8 = PHP null for the null pointer word
+    emitter.instruction("test rcx, rcx");                                       // is this entry the null pointer word?
+    emitter.instruction("cmovz r9, r10");                                       // box 0 as PHP null
+    emitter.label("__rt_hash_to_mixed_x86_box_value");
     emitter.instruction("mov rax, r9");                                         // pass the source runtime value tag to the owned-box helper
     emitter.instruction("mov rdi, rcx");                                        // pass the entry low payload word to the owned-box helper
     emitter.instruction("mov rsi, r8");                                         // pass the entry high payload word to the owned-box helper
