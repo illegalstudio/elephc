@@ -2608,14 +2608,14 @@ echo get_class($u), "|", get_class($o);
     );
 }
 
-/// Identical static helpers share a body, while instance callers retain their distinct callee
-/// entry symbols. Emission folding does not transitively canonicalize calls through thunks.
+/// Identical observable static helpers share a body, while instance callers retain their distinct
+/// callee entry symbols. Output keeps the helper calls alive after pure-call elimination.
 #[test]
 fn test_shape_merge_keeps_self_static_calls_to_distinct_entries() {
     let source = r#"<?php
 class Box<T> {
     public function __construct(private T $value) {}
-    private static function helper(): void { return; }
+    private static function helper(): void { echo "helper|"; }
     public function touch(): void { self::helper(); }
 }
 class User {}
@@ -2626,7 +2626,7 @@ $o = new Box(new Order());
 $o->touch();
 echo get_class($u), "|", get_class($o);
 "#;
-    assert_eq!(compile_and_run(source), "Box<User>|Box<Order>");
+    assert_eq!(compile_and_run(source), "helper|helper|Box<User>|Box<Order>");
 
     let user_asm = compile_cli_to_asm("selfstatic", source);
     let key = elephc::names::php_symbol_key("helper");

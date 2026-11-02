@@ -4599,3 +4599,25 @@ echo $total, "\n";
         out.stderr
     );
 }
+
+/// Regression: `array_intersect_key()` and `array_diff_key()` of two concrete hashes release
+/// their result. Both build a fresh hash, but sat in the default may-alias ownership bucket, so
+/// the result was never released (four blocks per call) (AIC #227).
+#[test]
+fn test_key_set_results_are_released() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+$h = ["p" => 1, "q" => 2, "r" => 3];
+$g = ["q" => 0];
+for ($i = 0; $i < 3; $i++) {
+    foreach (array_intersect_key($h, $g) as $k => $v) { echo $k, $v; }
+    foreach (array_diff_key($h, $g) as $k => $v) { echo $k, $v; }
+    echo ",";
+}
+echo "\n";
+"#,
+    );
+    assert!(output.success, "stdout={:?}\nstderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "q2p1r3,q2p1r3,q2p1r3,\n");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}

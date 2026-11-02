@@ -8,7 +8,7 @@
 //! Key details:
 //! - Direct-call summaries use a monotone fixed point so pure recursion remains precise.
 //! - Instance dispatch unions every concrete implementation reachable from the receiver type.
-//! - Mixed, external, eval-defined, or otherwise unresolved targets retain opcode defaults.
+//! - Dynamic eval dispatch retains full bridge effects; other unresolved targets keep defaults.
 
 use std::collections::HashMap;
 
@@ -19,6 +19,9 @@ use crate::names::php_symbol_key;
 use crate::types::{ClassInfo, PhpType};
 
 mod container_stores;
+mod static_calls;
+
+use static_calls::static_call_effects;
 
 const MAX_EFFECT_ITERATIONS: usize = 64;
 
@@ -148,14 +151,15 @@ fn summarize_function(function: &Function, context: &RefinementContext<'_>) -> E
     } else {
         crate::ir::parameter_roots::borrowed_parameter_roots(function)
     };
-    // A literal false signature has a throwing call-boundary guard even if its body is empty.
-    if function.params.iter().any(|parameter| parameter.php_type == PhpType::False) {
-        effects |= Effects::READS_HEAP | Effects::ALLOC_HEAP | Effects::MAY_THROW | Effects::MAY_DEOPT;
-    }
+    // Literal false and null signatures have throwing guards even when their bodies are empty.
+    effects |= literal_parameter_guard_effects(function.params.iter().map(|parameter| &parameter.php_type));
     for instruction in &function.instructions {
-        // The reset restores this frame's inherited scratch offset, which PHP cannot observe.
-        // Keep its instruction effect so intra-function passes retain and order the reset.
-        if instruction.op == Op::ConcatReset {
+        // Scratch offsets and the operand-owner chain are private to this frame.
+        // Keep instruction effects so intra-function passes retain and order bookkeeping.
+        // Acquisition and retirement remain separate, potentially observable instructions.
+        if matches!(instruction.op,
+            Op::ConcatReset | Op::PushCallOperandOwner | Op::PopCallOperandOwner)
+        {
             continue;
         }
         if instruction.op == Op::ReleaseLocalSlot
@@ -252,27 +256,6 @@ fn refined_instruction_effects(
     }
 }
 
-/// Resolves an explicitly named static receiver through its inherited implementation.
-/// Forwarding self/parent/static receivers and runtime-selected callables keep their defaults.
-fn static_call_effects(
-    function: &Function,
-    instruction: &crate::ir::Instruction,
-    context: &RefinementContext<'_>,
-) -> Option<Effects> {
-    let Immediate::Data(name_id) = instruction.immediate.as_ref()? else {
-        return None;
-    };
-    let name = context.data.strings.get(name_id.as_raw() as usize)?;
-    let (class_name, method) = name.rsplit_once("::")?;
-    let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
-    let (_, class) = context.classes.iter()
-        .find(|(name, _)| php_symbol_key(name) == class_key)?;
-    let method_key = php_symbol_key(method);
-    let implementation = class.static_method_impl_classes.get(&method_key)?;
-    let target = callable_key(&format!("{implementation}::{method_key}"));
-    resolved_callable_effects(function, instruction, &target, context)
-}
-
 /// Resolves a direct user-function call through the function-name data pool.
 fn direct_call_effects(
     function: &Function,
@@ -283,7 +266,7 @@ fn direct_call_effects(
         return None;
     };
     let name = context.data.function_names.get(name_id.as_raw() as usize)?;
-    resolved_callable_effects(function, instruction, &callable_key(name), context)
+    resolved_callable_effects(function, instruction, &callable_key(name), 0, context)
 }
 
 /// Resolves and unions all concrete implementations reachable by one instance call.
@@ -304,36 +287,48 @@ fn instance_call_effects(
         let class = context.classes.get(&runtime_class)?;
         let implementation = class.method_impl_classes.get(&method_key)?;
         let target = callable_key(&format!("{implementation}::{method_key}"));
-        effects |= resolved_callable_effects(function, instruction, &target, context)?;
+        effects |= resolved_callable_effects(function, instruction, &target, 0, context)?;
     }
     Some(effects)
 }
 
 /// Combines one callee summary with warning effects from its caller-side argument coercions.
+/// A lexical instance call omits its implicit receiver from both parameter and operand matching.
 fn resolved_callable_effects(
     function: &Function,
     instruction: &crate::ir::Instruction,
     target: &str,
+    parameter_offset: usize,
     context: &RefinementContext<'_>,
 ) -> Option<Effects> {
     let summary = context.summaries.get(target).copied()?;
-    let parameters = context.parameters.get(target)?;
-    Some(summary | call_argument_coercion_effects(function, instruction, parameters))
+    let parameters = context.parameters.get(target)?.get(parameter_offset..)?;
+    Some(summary | call_argument_coercion_effects(function, instruction,
+        parameters.iter().map(|parameter| (&parameter.php_type, parameter.by_ref))))
 }
 
-/// Models warning-capable conversions performed only while the backend materializes call args.
-fn call_argument_coercion_effects(
+/// Includes throwing literal guards even when a declaration has no emitted function body.
+fn literal_parameter_guard_effects<'a>(parameters: impl IntoIterator<Item = &'a PhpType>) -> Effects {
+    if parameters.into_iter().any(|ty| matches!(ty, PhpType::False | PhpType::Void)) {
+        Effects::READS_HEAP | Effects::ALLOC_HEAP | Effects::MAY_THROW | Effects::MAY_DEOPT
+    } else {
+        Effects::PURE
+    }
+}
+
+/// Models argument conversions whose warning handler can also throw during materialization.
+fn call_argument_coercion_effects<'a>(
     function: &Function,
     instruction: &crate::ir::Instruction,
-    parameters: &[CallParameter],
+    parameters: impl IntoIterator<Item = (&'a PhpType, bool)>,
 ) -> Effects {
     let warns = instruction
         .operands
         .iter()
         .zip(parameters)
-        .any(|(&operand, parameter)| {
-            !parameter.by_ref
-                && parameter.php_type == PhpType::Bool
+        .any(|(&operand, (php_type, by_ref))| {
+            !by_ref
+                && *php_type == PhpType::Bool
                 && function.value(operand).is_none_or(|value| {
                     matches!(
                         value.php_type.codegen_repr(),
@@ -342,7 +337,7 @@ fn call_argument_coercion_effects(
                 })
         });
     if warns {
-        Effects::MAY_WARN
+        Effects::MAY_WARN | Effects::MAY_THROW
     } else {
         Effects::PURE
     }

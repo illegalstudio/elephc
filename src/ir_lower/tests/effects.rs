@@ -77,7 +77,7 @@ echo Child::relay();
     }
     let relay = module.class_methods.iter().find(|function| function.name == "Base::relay").unwrap();
     let forwarding = relay.instructions.iter().find(|instruction| instruction.op == Op::StaticMethodCall).unwrap();
-    assert_eq!(forwarding.effects, Op::StaticMethodCall.default_effects());
+    assert_eq!(forwarding.effects, Effects::PURE);
 }
 
 /// Returns the named direct-call instruction from one lowered function.
