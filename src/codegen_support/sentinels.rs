@@ -163,6 +163,8 @@ pub(crate) const REFERENCE_CELL_HEAP_KIND: u32 = 8;
 
 /// JSON property descriptors preserve the payload tag and mark an indirect reference cell.
 pub(crate) const JSON_REFERENCE_PROPERTY_FLAG: u64 = 1 << 8;
+/// JSON omits declared properties whose native initialization marker is still unset.
+pub(crate) const JSON_DECLARED_PROPERTY_FLAG: u64 = 1 << 9;
 
 /// Heap-owned callable descriptor with typed capture metadata.
 pub(crate) const CALLABLE_HEAP_KIND: u32 = 9;

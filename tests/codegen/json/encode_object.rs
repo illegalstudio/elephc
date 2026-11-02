@@ -42,6 +42,37 @@ unset($text, $count, $items, $value, $object);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Removed reference cells and never-initialized typed slots produce no JSON keys or commas.
+#[test]
+fn test_json_encode_skips_uninitialized_and_detached_reference_properties() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class JsonAbsentReferenceProperties {
+    public string $before;
+    public string $kept = 'visible';
+    public int $after;
+    public ?int $nullable = null;
+    public function &beforeRef(): string { return $this->before; }
+}
+class JsonAbsentReferenceOnly {
+    public string $value = 'old';
+    public function &valueRef(): string { return $this->value; }
+}
+$object = new JsonAbsentReferenceProperties();
+$object->before = 'discarded';
+$alias =& $object->beforeRef();
+unset($object->before);
+echo json_encode($object), '|', json_encode($object, JSON_PRETTY_PRINT), '|', $alias, '|';
+$empty = new JsonAbsentReferenceOnly();
+$emptyAlias =& $empty->valueRef();
+unset($empty->value);
+echo json_encode($empty), '|', json_encode($empty, JSON_PRETTY_PRINT), '|', $emptyAlias, '|';
+unset($alias, $emptyAlias, $object, $empty);
+"#);
+    assert!(out.success, "status={} stdout={} stderr={}", out.status, out.stdout, out.stderr);
+    assert_eq!(out.stdout, "{\"kept\":\"visible\",\"nullable\":null}|{\n    \"kept\": \"visible\",\n    \"nullable\": null\n}|discarded|{}|{}|old|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Verifies an empty class encodes as {} with no public properties.
 #[test]
 fn test_json_encode_empty_object() {

@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::codegen_support::data_section::comm_directive;
 use crate::codegen_support::platform::Target;
-use crate::codegen_support::sentinels::{JSON_REFERENCE_PROPERTY_FLAG, SERPROP_FALSE_ONLY_BIT, TAGGED_SCALAR_PROPERTY_TAG};
+use crate::codegen_support::sentinels::{JSON_DECLARED_PROPERTY_FLAG, JSON_REFERENCE_PROPERTY_FLAG, SERPROP_FALSE_ONLY_BIT, TAGGED_SCALAR_PROPERTY_TAG};
 use crate::codegen_support::source_method_adapters::{self, MethodAbiPlan, MethodKind};
 use crate::names::{
     enum_case_symbol, function_variant_active_symbol, interface_method_wrapper_symbol, mangle_fqn,
@@ -1407,6 +1407,9 @@ pub(crate) fn emit_runtime_data_user(
             };
             let tag = tag | if class_info.property_slot_is_reference(*prop_index, prop_name) {
                 JSON_REFERENCE_PROPERTY_FLAG
+            } else { 0 };
+            let tag = tag | if class_info.property_slot_is_declared(*prop_index, prop_name) {
+                JSON_DECLARED_PROPERTY_FLAG
             } else { 0 };
             out.push_str(&format!(
                 "    .quad _class_json_pname_{}_{}\n",
