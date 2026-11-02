@@ -124,3 +124,50 @@ echo PrivateBase::relay();
     assert_eq!(compile_and_run(source), "21");
     assert_eq!(without_ir_opt(|| compile_and_run(source)), "21");
 }
+
+/// Runtime-defined overrides preserve catch readers and output in both optimizer modes.
+#[test]
+fn test_call_effect_batch_eval_dispatch_bundle() {
+    let cases = [
+        BundleCase {
+            name: "eval_override_catch_reader",
+            source: r#"<?php
+class CallEffectEvalCatchBase {
+    public static function value(): int { return 0; }
+    public static function relay(bool $force): int {
+        $seen = 0;
+        try {
+            if ($force) { throw new Exception("keep catch"); }
+            $seen = 1;
+            return static::value();
+        } catch (Exception $e) { return $seen; }
+    }
+}
+$evalCatchCode = $argc > 0
+    ? 'class CallEffectEvalCatchChild extends CallEffectEvalCatchBase { public static function value(): int { throw new Exception("stop"); } }'
+    : '';
+eval($evalCatchCode);
+echo CallEffectEvalCatchChild::relay($argc === 999);
+"#,
+            expected: "1",
+        },
+        BundleCase {
+            name: "eval_override_output",
+            source: r#"<?php
+class CallEffectEvalOutputBase {
+    public static function value(): int { return 0; }
+    public static function relay(): int { return static::value(); }
+}
+$evalOutputCode = $argc > 0
+    ? 'class CallEffectEvalOutputChild extends CallEffectEvalOutputBase { public static function value(): int { echo "output;"; return 7; } }'
+    : '';
+eval($evalOutputCode);
+CallEffectEvalOutputChild::relay();
+echo "done";
+"#,
+            expected: "output;done",
+        },
+    ];
+    assert_bundle(&cases);
+    without_ir_opt(|| assert_bundle(&cases));
+}

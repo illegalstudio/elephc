@@ -8,7 +8,7 @@
 //! Key details:
 //! - Direct-call summaries use a monotone fixed point so pure recursion remains precise.
 //! - Instance dispatch unions every concrete implementation reachable from the receiver type.
-//! - Mixed, external, eval-defined, or otherwise unresolved targets retain opcode defaults.
+//! - Dynamic eval dispatch retains full bridge effects; other unresolved targets keep defaults.
 
 use std::collections::HashMap;
 

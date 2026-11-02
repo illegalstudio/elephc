@@ -625,10 +625,11 @@ reads. Named static receivers include inherited implementations; `self::` and
 concrete implementations in that class's checked descendant hierarchy, including
 callable static bodies declared on abstract classes. Abstract declarations retain
 failure effects, so a discarded call cannot erase invalid dispatch. An opaque
-eval bridge blocks this late-static refinement because it can introduce further
-overrides. When the lexical class has no static vtable slot, such as for a private
-method, `static::` uses that lexical implementation directly and does not union
-unrelated descendant methods. Unresolved closure, descriptor, pipe,
+eval bridge gives late-static calls the full eval-call effects, including
+exceptions, output and global mutation, because it can introduce further
+overrides. Without that barrier, when the lexical class has no static vtable
+slot, such as for a private method, `static::` uses its implementation directly
+and does not union unrelated descendant methods. Unresolved closure, descriptor, pipe,
 function-variant and eval call opcodes retain their defaults, and the validator
 rejects narrower effects for them. Lowering-specific builtin and runtime
 contracts remain refinable. Final effects are immutable after validation and

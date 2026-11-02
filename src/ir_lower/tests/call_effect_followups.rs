@@ -107,7 +107,7 @@ echo Child::relay();
     }
 }
 
-/// Opaque eval prevents late-static refinement while self and parent remain early-bound.
+/// Opaque eval keeps full bridge effects while self and parent remain early-bound.
 #[test]
 fn call_effect_batch_dynamic_class_barrier() {
     let module = super::lower_source(r#"<?php
@@ -123,7 +123,7 @@ function install(string $source): void { eval($source); }
 echo Child::value();
 "#);
     assert_eq!(call(&module, "Child::relay", "static::value").effects,
-        Op::StaticMethodCall.default_effects());
+        Op::EvalStaticMethodCall.default_effects());
     for (caller, callee) in [("Child::relaySelf", "self::value"),
         ("Child::relayParent", "parent::value")]
     {

@@ -6,11 +6,11 @@
 //!
 //! Key details:
 //! - `self` and `parent` select an early-bound implementation.
-//! - `static` includes concrete implementations even on abstract classes, except across eval.
+//! - `static` includes concrete implementations even on abstract classes; eval keeps bridge effects.
 
 use super::{
     callable_key, class_is_same_or_subclass, php_symbol_key, resolved_callable_effects,
-    Effects, Function, Immediate, RefinementContext,
+    Effects, Function, Immediate, Op, RefinementContext,
 };
 
 /// Resolves named and lexical receivers, unioning closed-world late-static implementations.
@@ -36,7 +36,9 @@ pub(super) fn static_call_effects(
         return implementation_effects(function, instruction, context, class, &method_key,
             matches!(receiver, "self" | "parent"));
     }
-    if context.has_dynamic_class_barrier { return None; }
+    if context.has_dynamic_class_barrier {
+        return Some(Op::EvalStaticMethodCall.default_effects());
+    }
     // With no lexical vtable slot, codegen calls this implementation directly.
     // Private methods are absent from descendant implementation maps.
     if !class.static_vtable_slots.contains_key(&method_key) {
