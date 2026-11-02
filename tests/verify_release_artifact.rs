@@ -1,7 +1,7 @@
 //! Purpose:
-//! Fixture tests for `scripts/verify-release-artifact.sh`: packed curl, mbstring,
-//! and XML archives are compile-probed after their native requirements are
-//! installed, archive-less capabilities stay skipped, and link failures fail.
+//! Fixture tests for `scripts/verify-release-artifact.sh`: packed curl, GMP,
+//! mbstring, and XML archives are compile-probed after native preparation.
+//! Archive-less capabilities stay skipped, and link failures fail.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness (`cargo test --test verify_release_artifact`).
@@ -9,7 +9,7 @@
 //! Key details:
 //! - The script unpacks into an empty prefix on purpose, so these tests ship a
 //!   mock `elephc` inside a tarball rather than the real compiler.
-//! - The mock accepts the managed curl, Oniguruma, PCRE2, and libxml2 packages
+//! - The mock accepts the managed curl, GMP, Oniguruma, PCRE2, and libxml2 packages
 //!   before their bridge probes; it never downloads or builds catalog sources.
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -41,10 +41,10 @@ fn scratch(label: &str) -> PathBuf {
 
 /// Writes a mock packaged `elephc` that implements the probe's exact calls.
 ///
-/// `--print-capabilities` reports `tls` as archive-only, plus `curl`, `mbstring`,
-/// and `xml` with managed native requirements. `regex` and `mysqli` have no
-/// archives. Managed bridge calls fail until native add creates their markers.
-/// A `broken` capability, when advertised,
+/// `--print-capabilities` reports `tls` as archive-only, plus `curl`, `gmp`,
+/// `mbstring`, and `xml` with managed native requirements. `regex` and `mysqli`
+/// have no archives. Managed bridge calls fail until native add creates their
+/// markers. A `broken` capability, when advertised,
 /// always fails with a truncated-archive error so a real link failure still
 /// FAILs without inventing a native add.
 fn write_mock_elephc(path: &Path, advertise_broken: bool) {
@@ -66,6 +66,7 @@ case "${{1:-}}" in
   --print-capabilities)
     echo -e 'bridge\ttls\tlibelephc_tls.a'
     echo -e 'bridge\tcurl\tlibelephc_curl.a'
+    echo -e 'bridge\tgmp\tlibelephc_gmp.a'
     echo -e 'bridge\tmbstring\tlibelephc_mbstring.a'
     echo -e 'bridge\txml\tlibelephc_xml.a'
     {broken_line}    echo -e 'capability\tregex'
@@ -80,6 +81,15 @@ case "${{1:-}}" in
       echo "native project error: curl support requires managed native package curl" >&2
       echo "project: not found (searched from )" >&2
       echo "recovery: cd -- '' && elephc native add curl" >&2
+      exit 1
+    fi
+    printf '#!/bin/sh\necho ok\n' > probe
+    chmod +x probe
+    ;;
+  --with-gmp)
+    if [ ! -f "$state_dir/added-gmp" ]; then
+      echo "native manifest error: project does not declare required native package gmp" >&2
+      echo "recovery: elephc native add gmp" >&2
       exit 1
     fi
     printf '#!/bin/sh\necho ok\n' > probe
@@ -136,6 +146,7 @@ fn pack_tarball(staging: &Path, tarball: &Path, advertise_broken: bool) {
     write_mock_elephc(&pack.join("elephc"), advertise_broken);
     fs::write(pack.join("libelephc_tls.a"), b"tls-archive\n").expect("write tls archive");
     fs::write(pack.join("libelephc_curl.a"), b"curl-archive\n").expect("write curl archive");
+    fs::write(pack.join("libelephc_gmp.a"), b"gmp-archive\n").expect("write gmp archive");
     fs::write(pack.join("libelephc_mbstring.a"), b"mbstring-archive\n").expect("write mbstring archive");
     fs::write(pack.join("libelephc_xml.a"), b"xml-archive\n").expect("write xml archive");
     if advertise_broken {
@@ -151,6 +162,7 @@ fn pack_tarball(staging: &Path, tarball: &Path, advertise_broken: bool) {
             "elephc",
             "libelephc_tls.a",
             "libelephc_curl.a",
+            "libelephc_gmp.a",
             "libelephc_mbstring.a",
             "libelephc_xml.a",
         ])
@@ -178,7 +190,7 @@ fn run_probe(tarball: &Path) -> (bool, String) {
     (output.status.success(), combined)
 }
 
-/// Packed curl, mbstring, and XML archives link after their managed packages are added.
+/// Packed curl, GMP, mbstring, and XML archives link after their managed packages are added.
 #[test]
 fn packed_managed_bridges_are_ok_after_native_add() {
     let dir = scratch("curl_ok");
@@ -187,6 +199,12 @@ fn packed_managed_bridges_are_ok_after_native_add() {
 
     let (ok, log) = run_probe(&tarball);
     assert!(ok, "probe should pass after add-first native add; log:\n{log}");
+    assert!(
+        log.contains("adding managed native package gmp before --with-gmp")
+            && log.contains("mock: native add gmp")
+            && log.contains("ok    bridge gmp (libelephc_gmp.a)"),
+        "GMP must be prepared before its packed archive is link-probed; log:\n{log}"
+    );
     assert!(log.contains("adding managed native package oniguruma before --with-mbstring"), "{log}");
     assert!(log.contains("mock: native add oniguruma"), "{log}");
     assert!(log.contains("adding managed native package pcre2 before --with-mbstring"), "{log}");
