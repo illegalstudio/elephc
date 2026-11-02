@@ -121,6 +121,7 @@ fn emit_throw_current_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the x86_64 throw helper
     emitter.instruction("push r12");                                            // preserve the active handler record pointer across helper calls
     emitter.instruction("push r13");                                            // preserve the scratch callee-saved register used for the fatal path
+    emitter.instruction("and rsp, -16");                                        // align nested calls for both called and tail-entered throw paths
     emit_instr_throw_hook(emitter);
     abi::emit_load_symbol_to_reg(emitter, "r12", "_exc_handler_top", 0);
     abi::emit_load_symbol_to_reg(emitter, "r10", "_debuginfo_guard", 0);
@@ -265,6 +266,29 @@ mod tests {
         let mut emitter = Emitter::new(Target::new(platform, arch));
         emit_throw_current(&mut emitter);
         emitter.output()
+    }
+
+    /// Tail branches and ordinary calls both enter an unwinder that makes aligned SysV calls.
+    #[test]
+    fn x86_unwinder_aligns_nested_calls_from_both_entry_shapes() {
+        let asm = emitted(Platform::Linux, Arch::X86_64);
+        let body = asm.split_once("__rt_throw_current:").unwrap().1
+            .split_once("call __rt_pcntl_abort_dispatch").unwrap().0;
+        for initial in [0i64, 8] {
+            let mut stack = initial;
+            let mut calls = 0;
+            for line in body.lines() {
+                let instruction = line.split("//").next().unwrap().trim();
+                if instruction.starts_with("push ") { stack -= 8; }
+                else if instruction == "and rsp, -16" { stack &= -16; }
+                else if instruction.starts_with("call ") {
+                    assert_eq!(stack.rem_euclid(16), 0, "entry alignment {initial}: {instruction}");
+                    calls += 1;
+                }
+            }
+            assert!(calls > 0, "the instrumentation hook must be covered");
+            assert_eq!(stack.rem_euclid(16), 0, "PCNTL cleanup alignment for entry {initial}");
+        }
     }
 
     /// Every throw tells the profiler, and pays nothing when there is none.
