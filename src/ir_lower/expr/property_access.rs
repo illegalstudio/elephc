@@ -1172,6 +1172,17 @@ fn lower_dynamic_property_fetch_without_native(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: LoweredValue,
     result_type: PhpType, mode: PropertyFetchMode, expr: &Expr,
 ) -> LoweredValue {
+    if mode == PropertyFetchMode::Read {
+        if let Some(value) = runtime_hooks::lower_dynamic(ctx, object, property, expr) { return value; }
+    }
+    lower_dynamic_property_fetch_without_runtime_hooks(ctx, object, property, result_type, mode, expr)
+}
+
+/// Emits the physical runtime-name read after ordinary getter dispatch has been exhausted.
+fn lower_dynamic_property_fetch_without_runtime_hooks(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: LoweredValue,
+    result_type: PhpType, mode: PropertyFetchMode, expr: &Expr,
+) -> LoweredValue {
     if !mode.is_read() && scalar_property_probe_receiver(ctx, object.value) {
         crate::ir_lower::ownership::release_if_owned(ctx, property, Some(expr.span));
         release_owning_receiver_temporary(ctx, object, expr.span);

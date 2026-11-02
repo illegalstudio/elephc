@@ -125,8 +125,7 @@ pub(super) fn lower_dynamic(
     ctx.builder.position_at_end(regular);
     ctx.restore_initialized_slots(initial.clone());
     let (ordinary, fallback_owner) = ordinary_receiver(ctx, object, span);
-    ctx.emit_void(Op::DynamicPropSet, vec![ordinary.value, name.value, value.value], None,
-        Op::DynamicPropSet.default_effects(), Some(span));
+    super::runtime_set_hooks::lower_dynamic(ctx, ordinary, name, value, span);
     if let Some(owner) = fallback_owner { crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span); }
     branch_to(ctx, merge);
     let regular_initialized = ctx.initialized_slots_snapshot();

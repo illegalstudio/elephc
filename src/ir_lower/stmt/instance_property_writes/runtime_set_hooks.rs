@@ -14,6 +14,70 @@ use super::*;
 use crate::ir::{PhpTypePredicate, RuntimeCallTarget, RuntimeFnId};
 use crate::parser::ast::Visibility;
 
+/// Routes runtime property names through the literal setter dispatcher after XML is excluded.
+pub(super) fn lower_dynamic(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, name: LoweredValue,
+    value: LoweredValue, span: Span,
+) {
+    let mut properties = std::collections::BTreeSet::new();
+    for info in ctx.classes.values() {
+        for property in info.property_hooks.keys() {
+            if !ctx.in_own_property_accessor(property)
+                && info.methods.contains_key(&php_symbol_key(&property_hook_set_method(property))) {
+                properties.insert(property.clone());
+            }
+        }
+    }
+    if properties.is_empty() {
+        ctx.emit_void(Op::DynamicPropSet, vec![object.value, name.value, value.value], None,
+            Op::DynamicPropSet.default_effects(), Some(span));
+        return;
+    }
+    let done = ctx.builder.create_named_block("property.dynamic.setter.done", vec![]);
+    let mut merged: Option<HashSet<LocalSlotId>> = None;
+    for property in properties {
+        let data = ctx.intern_string(&property);
+        let expected = ctx.emit_value(Op::ConstStr, vec![], Some(Immediate::Data(data)), PhpType::Str,
+            Op::ConstStr.default_effects(), Some(span));
+        let condition = ctx.emit_value(Op::StrictEq, vec![name.value, expected.value], None,
+            PhpType::Bool, Op::StrictEq.default_effects(), Some(span));
+        let yes = ctx.builder.create_named_block("property.dynamic.setter", vec![]);
+        let next = ctx.builder.create_named_block("property.dynamic.setter.next", vec![]);
+        let initial = ctx.initialized_slots_snapshot();
+        ctx.builder.terminate(Terminator::CondBr { cond: condition.value,
+            then_target: yes, then_args: vec![], else_target: next, else_args: vec![] });
+        ctx.builder.position_at_end(yes);
+        let receiver = borrow_dynamic_operand(ctx, object, span);
+        let assigned = borrow_dynamic_operand(ctx, value, span);
+        if !lower(ctx, receiver, &property, assigned, true, span) {
+            ctx.emit_void(Op::DynamicPropSet, vec![receiver.value, name.value, assigned.value], None,
+                Op::DynamicPropSet.default_effects(), Some(span));
+        }
+        let state = ctx.initialized_slots_snapshot();
+        merged = Some(match merged.take() { Some(previous) => previous.intersection(&state).copied().collect(),
+            None => state });
+        branch_to(ctx, done);
+        ctx.builder.position_at_end(next);
+        ctx.restore_initialized_slots(initial);
+    }
+    ctx.emit_void(Op::DynamicPropSet, vec![object.value, name.value, value.value], None,
+        Op::DynamicPropSet.default_effects(), Some(span));
+    let fallback = ctx.initialized_slots_snapshot();
+    branch_to(ctx, done);
+    ctx.builder.position_at_end(done);
+    ctx.restore_initialized_slots(merged.expect("a setter name was selected")
+        .intersection(&fallback).copied().collect());
+}
+
+/// Lends the caller's existing operand lease to one mutually exclusive setter branch.
+fn borrow_dynamic_operand(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span) -> LoweredValue {
+    let ty = ctx.builder.value_php_type(value.value);
+    let value = ctx.emit_value(Op::Borrow, vec![value.value], None, ty,
+        Op::Borrow.default_effects(), Some(span));
+    ctx.builder.set_value_ownership(value.value, Ownership::Borrowed);
+    value
+}
+
 /// Dispatches an ordinary property write through a setter absent from its static class.
 pub(super) fn lower(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str,

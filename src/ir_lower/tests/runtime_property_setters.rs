@@ -104,3 +104,32 @@ nativeEvalStorageWrite($child, 2);
 }
 
 supported_target_cases!(native_backed_eval_property_dispatch, verify_native_backed_eval_property_dispatch);
+
+/// Runtime property names preserve both accessor calls in the ordinary XML fallback.
+fn verify_dynamic_property_hook_updates(target: &str) {
+    let source = r#"<?php
+class DynamicHookXmlCapability extends SimpleXMLElement {}
+class DynamicHookCounter {
+    public string $value = '5' {
+        get { return $this->value; }
+        set { $this->value = $value; }
+    }
+}
+function dynamicHookUpdate(mixed $object, string $name): mixed { return --$object->{$name}; }
+echo dynamicHookUpdate(new DynamicHookCounter(), 'value');
+"#;
+    let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+        std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+    let function = module.functions.iter().find(|function| function.name == "dynamicHookUpdate").unwrap();
+    for method in ["__propget_value", "__propset_value"] {
+        assert!(function.instructions.iter().any(|instruction| instruction.op == Op::MethodCall
+            && matches!(instruction.immediate, Some(Immediate::Data(id))
+                if module.data.strings[id.as_raw() as usize] == method)),
+            "{target}: runtime property names must invoke {method}\n{}", crate::ir::print_function(function));
+    }
+    crate::ir::validate_module(&module).unwrap();
+    crate::codegen::generate_user_asm_from_ir(&module, false, false)
+        .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+}
+
+supported_target_cases!(dynamic_property_hook_updates, verify_dynamic_property_hook_updates);
