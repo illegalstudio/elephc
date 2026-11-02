@@ -36,7 +36,8 @@ fn variadic_reference_writeback_releases_owned_element_reads() {
         bind_method_scope_args(&mut callee, &["values".into()], &[true],
             std::slice::from_ref(&bound), &mut context, &mut values).unwrap();
         let before = values.cell_owners[&(replacement.as_ptr() as usize)];
-        let result = write_back_method_variadic_ref_args("values", &bound, &callee, &mut context, &mut values);
+        let result = write_back_method_ref_args(&["values".into()], std::slice::from_ref(&bound),
+            &callee, &mut context, &mut values);
         assert_eq!(result, if reject { Err(EvalStatus::RuntimeFatal) } else { Ok(()) });
         assert_eq!(values.cell_owners[&(replacement.as_ptr() as usize)], before + usize::from(!reject));
         assert_eq!(values.releases.iter().filter(|value| **value == replacement).count(), 1,
