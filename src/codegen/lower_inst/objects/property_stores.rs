@@ -156,9 +156,9 @@ pub(super) fn emit_reference_property_bind(
     slot: &PropertySlot,
     base_reg: &str,
 ) -> Result<()> {
+    abi::emit_push_reg(ctx.emitter, base_reg);
     super::super::materialize_local_ref_arg_address(ctx, value)?;
     let pointer_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_push_reg(ctx.emitter, base_reg);
     abi::emit_push_reg(ctx.emitter, pointer_reg);
     abi::emit_call_label(ctx.emitter, "__rt_reference_cell_is_unmanaged_borrow");
     let safe = ctx.next_label("reference_property_bind_safe");
@@ -169,6 +169,20 @@ pub(super) fn emit_reference_property_bind(
     ctx.emitter.label(&safe);
     abi::emit_pop_reg(ctx.emitter, pointer_reg);
     abi::emit_pop_reg(ctx.emitter, base_reg);
+    let owns_cell = ctx.module.class_infos.get(&slot.class_name)
+        .is_some_and(|class| class.property_slot_owns_reference((slot.offset - 8) / 16));
+    if owns_cell {
+        abi::emit_push_reg(ctx.emitter, base_reg);
+        abi::emit_call_label(ctx.emitter, "__rt_reference_cell_retain_mixed");
+        abi::emit_pop_reg(ctx.emitter, base_reg);
+        let previous = reference_pointer_reg(ctx, base_reg);
+        abi::emit_load_from_address(ctx.emitter, previous, base_reg, slot.offset);
+        abi::emit_store_to_address(ctx.emitter, pointer_reg, base_reg, slot.offset);
+        abi::emit_store_zero_to_address(ctx.emitter, base_reg, slot.offset + 8);
+        abi::emit_reg_move(ctx.emitter, pointer_reg, previous);
+        abi::emit_call_label(ctx.emitter, "__rt_reference_cell_release");
+        return Ok(());
+    }
     abi::emit_store_to_address(
         ctx.emitter,
         pointer_reg,
@@ -186,7 +200,12 @@ pub(super) fn is_promoted_reference_property_bind(
     value: ValueId,
     slot: &PropertySlot,
 ) -> Result<bool> {
-    if !slot.is_reference {
+    if !slot.is_reference
+        || !ctx.function.name.rsplit_once("::")
+            .is_some_and(|(_, method)| method.eq_ignore_ascii_case("__construct"))
+        || !ctx.module.class_infos.get(&slot.class_name)
+            .is_some_and(|class| class.promoted_properties.contains(&slot.property))
+    {
         return Ok(false);
     }
     let Some(object_source) = loaded_local_source(ctx, object)? else {

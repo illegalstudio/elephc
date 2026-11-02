@@ -59,6 +59,7 @@ pub(super) fn emit_reference_cells(emitter: &mut Emitter) {
     emit_release(emitter);
     emit_clone(emitter);
     mixed_payload::emit_promote_mixed(emitter);
+    mixed_payload::emit_retain_mixed(emitter);
     property_unset::emit_property_unset(emitter);
     emit_owner_lookup(emitter);
     emit_unmanaged_borrow_lookup(emitter);

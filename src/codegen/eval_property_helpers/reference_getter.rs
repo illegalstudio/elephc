@@ -110,13 +110,14 @@ mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
 
-    /// Opaque eval prepares exact Mixed user slots while raw, constrained and borrowed slots stay distinct.
+    /// Mixed constructor slots own exportable cells while raw and constrained storage stays distinct.
     #[test]
     fn native_mixed_reference_export_preserves_storage_boundaries_on_every_target() {
         let source = "<?php class MixedExportParent { public mixed $value = 'old'; \
             public int $number = 1; public int|string $union = 1; } \
             class MixedExportChild extends MixedExportParent {} \
             class BorrowedExport { public function __construct(public mixed &$borrowed) {} } \
+            class RawBorrowedExport { public function __construct(public int &$borrowed) {} } \
             $code = $argc > 0 ? '' : 'echo 1;'; eval($code);";
         let tokens = crate::lexer::tokenize(source).unwrap();
         let program = crate::parser::parse(&tokens).unwrap();
@@ -124,7 +125,7 @@ mod tests {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let target = Target::parse(name).unwrap();
             let mut module = Module::new(target);
-            for class in ["MixedExportParent", "MixedExportChild", "BorrowedExport"] {
+            for class in ["MixedExportParent", "MixedExportChild", "BorrowedExport", "RawBorrowedExport"] {
                 module.class_infos.insert(class.to_string(), checked.classes[class].clone());
             }
             let slots = collect_eval_property_slots(&module);
@@ -134,15 +135,16 @@ mod tests {
                 assert!(!info.reference_properties.contains("number"), "{name}: raw integer layout");
                 assert!(!info.reference_properties.contains("union"), "{name}: constrained union layout");
             }
-            assert!(!module.class_infos["BorrowedExport"].owned_reference_properties.contains("borrowed"));
-            assert_eq!(slots.iter().filter(|slot| eligible(&module, slot)).count(), 2);
+            assert!(module.class_infos["BorrowedExport"].owned_reference_properties.contains("borrowed"));
+            assert!(!module.class_infos["RawBorrowedExport"].owned_reference_properties.contains("borrowed"));
+            assert_eq!(slots.iter().filter(|slot| eligible(&module, slot)).count(), 3);
             let mut emitter = Emitter::new(target);
             emit(&module, &mut emitter, &mut DataSection::new(), &slots);
             let assembly = emitter.output();
-            assert_eq!(assembly.matches("__rt_reference_cell_promote_mixed").count(), 2);
+            assert_eq!(assembly.matches("__rt_reference_cell_promote_mixed").count(), 3);
             assert!(!assembly.contains("__rt_mixed_clone"), "{name}: reference export must preserve its current child");
             assert!(assembly.contains("__rt_incref"), "{name}: the exported wrapper owns a receiver-independent lease");
-            assert!(!assembly.contains("BorrowedExport"), "{name}: borrowed constructor cells are not promoted");
+            assert!(!assembly.contains("RawBorrowedExport"), "{name}: raw borrowed constructor cells are not promoted");
         }
     }
     /// Private ancestor cells retain physical ownership beneath both promoted and raw shadows.

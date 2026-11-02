@@ -233,7 +233,10 @@ fn dynamic_new_class_is_planning_candidate(
     if sig.variadic.is_some() {
         return false;
     }
-    if !dynamic_new_args_need_planning(sig, args) {
+    let owns_promoted_references = class_info.constructor_param_to_prop.iter().flatten()
+        .any(|property| class_info.visible_property_index(property)
+            .is_some_and(|slot| class_info.property_slot_owns_reference(slot)));
+    if !dynamic_new_args_need_planning(sig, args) && !owns_promoted_references {
         return false;
     }
     dynamic_new_args_lower_to_exact_arity(ctx, sig, args)

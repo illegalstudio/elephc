@@ -113,8 +113,7 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
             .enumerate()
             .filter_map(|(index, property)| {
                 let property = property.as_ref()?;
-                (class_info.reference_properties.contains(property)
-                    && !class_info.visible_property_index(property).is_some_and(|slot| class_info.property_slot_owns_reference(slot)))
+                class_info.reference_properties.contains(property)
                     .then_some(index)
             })
             .collect::<Vec<_>>();

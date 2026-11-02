@@ -391,7 +391,9 @@ fn promote_boxed_reference_local_argument(
     let ExprKind::Variable(name) = &arg.kind else {
         return;
     };
-    if !ctx.boxed_reference_promotion_is_authorized(name, arg.span) {
+    if !ctx.boxed_reference_promotion_is_authorized(name, arg.span)
+        && ctx.local_type(name) != PhpType::Mixed
+    {
         return;
     }
     if !ctx.is_ref_bound_local(name) && ctx.local_is_promotable_to_ref_cell(name) {

@@ -10,6 +10,76 @@
 
 use crate::support::*;
 
+/// Mixed constructor properties retain live caller bindings across frame retirement and eval.
+#[test]
+fn test_promoted_mixed_constructor_owned_reference_lifetimes_bundle() {
+    let source = r#"<?php
+class OwnedPromotedMixed {
+    public function __construct(public mixed &$value = 'default') {}
+    public function assign(mixed &$value): void { $this->value = $value; }
+}
+class OwnedPromotedMixedChild extends OwnedPromotedMixed {}
+class ThrowingPromotedMixed {
+    public function __construct(public mixed &$value) { throw new Exception('constructor'); }
+}
+function makeOwnedPromotedMixed(): OwnedPromotedMixedChild {
+    $value = ['stage' => 'frame'];
+    return new OwnedPromotedMixedChild($value);
+}
+function exerciseOwnedPromotedMixed(bool $run): void {
+    $value = ['stage' => 'initial'];
+    $object = new OwnedPromotedMixedChild($value);
+    $copy = clone $object;
+    $value = ['stage' => 'caller'];
+    echo json_encode($object->value), ':', json_encode($copy->value), '|';
+    $incoming = ['stage' => 'method'];
+    $object->assign($incoming);
+    $incoming = ['stage' => 'separate'];
+    echo json_encode($value), '|';
+    $code = $run ? '
+function captureOwnedPromotedMixed(&$value): callable {
+    return function (mixed $next) use (&$value): mixed { $value = $next; return $value; };
+}
+$escaped = captureOwnedPromotedMixed($object->value);
+' : '';
+    eval($code);
+    unset($object->value);
+    $object->value = ['stage' => 'new'];
+    echo json_encode($object), ':', json_encode($copy), '|';
+    unset($object, $copy);
+    $code = $run ? '$escaped(["stage" => "escaped"]); unset($escaped);' : '';
+    eval($code);
+    echo json_encode($value), '|';
+    $survivor = makeOwnedPromotedMixed();
+    $survivor->value = ['stage' => 'survived'];
+    echo json_encode($survivor), '|';
+    $default = new OwnedPromotedMixed();
+    echo $default->value, '|';
+    $class = $run ? 'OwnedPromotedMixed' : 'OwnedPromotedMixedChild';
+    $dynamic = new $class($value);
+    $value = ['stage' => 'dynamic'];
+    echo json_encode($dynamic->value), '|';
+    try { $failed = new ThrowingPromotedMixed($value); }
+    catch (Exception $error) { echo $error->getMessage(), '|'; }
+    $code = $run ? '
+$evalNativeValue = ["stage" => "eval-new"];
+$evalObject = new OwnedPromotedMixed($evalNativeValue);
+$evalNativeValue = ["stage" => "eval-updated"];
+echo json_encode($evalObject->value), "|";
+unset($evalObject, $evalNativeValue);
+' : '';
+    eval($code);
+    unset($value, $incoming, $survivor, $default, $dynamic, $class, $code, $error);
+}
+exerciseOwnedPromotedMixed($argc > 0);
+"#;
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "{\"stage\":\"caller\"}:{\"stage\":\"caller\"}|{\"stage\":\"method\"}|{\"value\":{\"stage\":\"new\"}}:{\"value\":{\"stage\":\"method\"}}|{\"stage\":\"escaped\"}|{\"value\":{\"stage\":\"survived\"}}|default|{\"stage\":\"dynamic\"}|constructor|{\"stage\":\"eval-updated\"}|");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+    assert!(!output.stderr.contains("Warning:"), "{}", output.stderr);
+}
+
 /// AOT and eval writes, nested mutations, clone and unset preserve one escaping Mixed alias.
 #[test]
 fn test_native_mixed_property_escaping_eval_aliases_bundle() {

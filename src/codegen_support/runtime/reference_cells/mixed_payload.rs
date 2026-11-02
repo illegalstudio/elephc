@@ -11,6 +11,33 @@
 
 use super::*;
 
+/// Retains an existing managed cell or gives a borrowed Mixed slot an owned wrapper-backed cell.
+pub(super) fn emit_retain_mixed(emitter: &mut Emitter) {
+    let result = abi::int_result_reg(emitter);
+    let scratch = abi::secondary_scratch_reg(emitter);
+    emitter.blank();
+    emitter.label_global("__rt_reference_cell_retain_mixed");
+    abi::emit_frame_prologue(emitter, 48);
+    abi::store_at_offset(emitter, result, 8);
+    abi::emit_call_label(emitter, "__rt_reference_cell_owner");
+    abi::emit_branch_if_int_result_zero(emitter, "__rt_reference_cell_retain_mixed_borrowed");
+    abi::emit_call_label(emitter, "__rt_incref");
+    abi::emit_jump(emitter, "__rt_reference_cell_retain_mixed_done");
+    emitter.label("__rt_reference_cell_retain_mixed_borrowed");
+    abi::load_at_offset(emitter, result, 8);
+    abi::emit_call_label(emitter, "__rt_reference_cell_promote_mixed");
+    abi::emit_load_from_address(emitter, result, result, 0);
+    abi::emit_call_label(emitter, "__rt_incref");
+    abi::store_at_offset(emitter, result, 16);
+    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 0), 7);
+    abi::emit_call_label(emitter, "__rt_reference_cell_new");
+    abi::load_at_offset(emitter, scratch, 16);
+    abi::emit_store_to_address(emitter, scratch, result, 0);
+    emitter.label("__rt_reference_cell_retain_mixed_done");
+    abi::emit_frame_restore(emitter, 48);
+    abi::emit_return(emitter);
+}
+
 /// Selects the writable child slot of an existing reference without changing any owner counts.
 pub(crate) fn follow_mixed_reference_slot(
     emitter: &mut Emitter, address: &str, value: &str, marker: &str, done: &str,
@@ -90,4 +117,39 @@ pub(super) fn emit_promote_mixed(emitter: &mut Emitter) {
     abi::load_at_offset(emitter, result, 8);
     abi::emit_frame_restore(emitter, 48);
     abi::emit_return(emitter);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Every target owns a promoted Mixed constructor cell and retires its replaced placeholder.
+    #[test]
+    fn promoted_mixed_constructor_reference_ownership_on_every_target() {
+        let source = "<?php class OwnedMixedConstructor { \
+            public function __construct(public mixed &$value = 'default') {} } \
+            class OwnedMixedChild extends OwnedMixedConstructor {} \
+            function makeOwnedMixed(mixed $value): OwnedMixedChild { \
+                return new OwnedMixedChild($value); } \
+            $object = makeOwnedMixed('initial'); $object->value = 'updated';";
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let module = crate::ir_lower::tests::lower_source_at_for_target(
+                source, std::path::Path::new("main.php"), std::path::Path::new("."), target,
+            );
+            for class in ["OwnedMixedConstructor", "OwnedMixedChild"] {
+                assert!(module.class_infos[class].property_slot_owns_reference(0), "{name}: {class}");
+            }
+            let user = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+            assert!(user.contains("__rt_reference_cell_retain_mixed"), "{name}: constructor retains its binding");
+            assert!(user.contains("__rt_reference_cell_release"), "{name}: placeholder owner retires");
+            let mut emitter = Emitter::new(target);
+            emit_retain_mixed(&mut emitter);
+            let runtime = emitter.output();
+            assert!(runtime.contains("__rt_reference_cell_owner"), "{name}: reuse exact managed owners");
+            assert!(runtime.contains("__rt_reference_cell_promote_mixed"), "{name}: borrowed slots share a persistent wrapper");
+            assert!(!runtime.contains("__rt_mixed_clone"), "{name}: keep the original PHP reference identity");
+        }
+    }
 }
