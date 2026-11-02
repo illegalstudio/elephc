@@ -228,7 +228,8 @@ struct GraphState {
     checker_interface_methods: HashMap<String, HashSet<(String, bool)>>,
     checker_method_implementations: HashMap<(String, String, bool), String>,
     vtable_slots: HashSet<(String, String, bool)>,
-    /// Every injected prelude group, rooted whole whenever a literal eval fragment runs. The
+    /// Injected prelude groups, rooted whole whenever a literal eval fragment runs except XML,
+    /// whose forwarding builtins and parsed fragment supply explicit declaration edges. The
     /// interpreter conjures core classes without the fragment naming them, and the builtin
     /// method bodies the eval-only lowering surfaces materialize (`DateTimeZone::getLocation`
     /// calling the `elephc_tz_location` extern, `listIdentifiers` calling the list-id prelude
@@ -361,6 +362,16 @@ impl GraphState {
     fn apply_global_hazards(&mut self) {
         if self.reach.hazards.literal_eval {
             for group in &self.literal_eval_baseline {
+                // XML eval calls have explicit fragment or builtin-helper edges. Keeping
+                // its SAX callback bodies unconditionally introduces user-call hazards.
+                // Retain the existing bridge-presence sentinel used by Magician; its
+                // constructor/destructor edges do not pull in parser callback dispatch.
+                if group.id == "xml" {
+                    let sentinel = php_symbol_key("xml_parser_create");
+                    self.reach.functions.insert(sentinel.clone());
+                    self.behavioral.functions.insert(sentinel);
+                    continue;
+                }
                 self.reach.functions.extend(group.functions.iter().cloned());
                 self.reach.classes.extend(group.classes.iter().cloned());
                 self.reach.methods.extend(group.methods.iter().cloned());

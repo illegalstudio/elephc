@@ -321,7 +321,14 @@ impl Scanner<'_> {
             "get_class_methods" => self.usage.hazards.dynamic_method = true,
             "class_exists" | "interface_exists" | "enum_exists" | "trait_exists" => self.literal_class_or_hazard(first),
             "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" | "unserialize"
-            | "__elephc_simplexml_allocate" => self.usage.hazards.dynamic_class = true,
+                => self.usage.hazards.dynamic_class = true,
+            "__elephc_simplexml_allocate" => {
+                if self.current_function.as_deref() == Some("__elephc_simplexml_wrap") {
+                    self.usage.instantiated_subclass_roots.insert(php_symbol_key("SimpleXMLElement"));
+                } else {
+                    self.usage.hazards.dynamic_class = true;
+                }
+            }
             "eval" => self.literal_eval_or_hazard(first),
             _ => {}
         }
@@ -339,6 +346,17 @@ impl Scanner<'_> {
             }
             "is_a" | "is_subclass_of" => {
                 let normalized = self.normalized_function_arguments(name, args);
+                // This prelude helper rejects every name outside the SimpleXML family.
+                // Ordinary string class probes must retain their dynamic lookup hazard.
+                if name == "is_a"
+                    && self.current_function.as_deref() == Some("__elephc_simplexml_class")
+                    && normalized.get(1).map(unwrap_named_arg).is_some_and(|class| {
+                        matches!(&class.kind, ExprKind::StringLiteral(class) if class == "SimpleXMLElement")
+                    })
+                {
+                    self.usage.instantiated_subclass_roots.insert(php_symbol_key("SimpleXMLElement"));
+                    return;
+                }
                 let allow_string = match normalized.get(2).map(unwrap_named_arg) {
                     Some(Expr { kind: ExprKind::BoolLiteral(false), .. }) => false,
                     Some(_) => true,
