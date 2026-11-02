@@ -981,6 +981,7 @@ impl Checker {
         }
         // Everything below this point failed to produce a signature: the return type may still be
         // recoverable from a recorded closure shape, but the PARAMETER binding modes are not.
+        self.require_valid_unresolved_call_argument_order(args, "callable expression")?;
         self.record_unresolved_callee_argument_aliases(args);
         for arg in args {
             self.infer_descriptor_call_arg_type(arg, env)?;
@@ -1017,6 +1018,7 @@ impl Checker {
         args: &[Expr],
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        self.require_valid_unresolved_call_argument_order(args, "callable array")?;
         self.record_unresolved_callee_argument_aliases(args);
         for arg in args {
             self.infer_descriptor_call_arg_type(arg, env)?;

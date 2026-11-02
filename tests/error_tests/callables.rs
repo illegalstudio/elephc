@@ -471,11 +471,43 @@ fn test_error_unresolved_call_positional_argument_order() {
         "cannot use positional arguments after spread arguments");
 }
 
+/// Runtime callable arrays, method receivers and eval declarations share ordering errors.
+#[test]
+fn test_error_unresolved_member_and_expression_call_argument_order() {
+    let calls = [
+        "function invoke(array $callbacks): void { ($callbacks[0])(ARGS); }",
+        "function invoke(array $callback): void { $callback(ARGS); }",
+        "function invoke(mixed $receiver): void { $receiver->run(ARGS); }",
+        "function invoke(callable $callback): void { $callback->call(ARGS); }",
+        "function invoke(?stdClass $receiver): void { $receiver?->run(ARGS); }",
+        "function invoke(?stdClass $receiver, string $method): void { $receiver?->$method(ARGS); }",
+        "eval('return null;'); UnresolvedAfterEval::run(ARGS);",
+    ];
+    for call in calls {
+        for (args, detail) in [
+            ("...[], 1", "positional arguments after spread arguments"),
+            ("value: 1, 2", "positional arguments after named arguments"),
+            ("...[\"value\" => 1, 0 => 2]", "positional argument after named argument during unpacking"),
+        ] {
+            expect_error(&format!("<?php {}", call.replace("ARGS", args)),
+                &format!("cannot use {detail}"));
+        }
+    }
+}
+
 /// Named arguments after unpacking remain legal when the selected signature is unknown.
 #[test]
 fn test_unresolved_call_named_argument_after_spread_is_allowed() {
     for parameter_type in ["mixed", "string", "callable"] {
         expect_no_error(&format!("<?php function invoke({parameter_type} $callback): void {{ $callback(...[], value: 1); }}"));
+    }
+    for call in [
+        "function invoke(array $callback): void { $callback(...[], value: 1); }",
+        "function invoke(mixed $receiver): void { $receiver->run(...[], value: 1); }",
+        "function invoke(callable $callback): void { $callback->call(new stdClass(), ...[], value: 1); }",
+        "eval('return null;'); UnresolvedAfterEval::run(...[], value: 1);",
+    ] {
+        expect_no_error(&format!("<?php {call}"));
     }
 }
 

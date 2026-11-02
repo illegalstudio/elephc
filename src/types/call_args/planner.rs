@@ -197,6 +197,7 @@ fn validate_no_spread_after_named(args: &[Expr]) -> Result<(), CallArgPlanError>
 pub(crate) fn validate_unresolved_call_argument_order(args: &[Expr]) -> Result<(), CallArgPlanError> {
     validate_no_spread_after_named(args)?;
     validate_positional_spread_order(args)?;
+    validate_static_unpack_order(args)?;
     let mut seen_named = false;
     for arg in args {
         if matches!(arg.kind, ExprKind::NamedArg { .. }) {

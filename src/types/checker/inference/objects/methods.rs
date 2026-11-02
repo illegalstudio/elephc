@@ -36,6 +36,7 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        self.require_valid_unresolved_call_argument_order(args, "Method call")?;
         let obj_ty = self.infer_type(object, env)?;
         self.record_member_receiver_type(expr.span, &obj_ty);
         if let PhpType::Object(class_name) = &obj_ty {
@@ -229,6 +230,7 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        self.require_valid_unresolved_call_argument_order(args, "Nullsafe method call")?;
         let obj_ty = self.infer_type(object, env)?;
         self.record_member_receiver_type(expr.span, &obj_ty);
         let Some((class_name, nullable)) =
@@ -262,6 +264,7 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        self.require_valid_unresolved_call_argument_order(args, "Dynamic method call")?;
         let obj_ty = self.infer_type(object, env)?;
         let Some((_class_name, _nullable)) =
             self.nullsafe_object_receiver(&obj_ty, expr, "method call")?
@@ -999,6 +1002,7 @@ impl Checker {
         env: &TypeEnv,
         allow_by_ref_spread: bool,
     ) -> Result<PhpType, CompileError> {
+        self.require_valid_unresolved_call_argument_order(args, "Static method call")?;
         // `Box::of(5)` on a generic class, BEFORE the receiver is resolved against the class
         // table: a template is stripped from the program, so the table has no entry for it and
         // the ordinary path reports it as an undefined class.

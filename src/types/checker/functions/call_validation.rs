@@ -155,11 +155,12 @@ impl Checker {
                 &format!("{} cannot use positional arguments after named arguments", callee_desc)),
             CallArgPlanError::PositionalAfterSpread { span } => CompileError::new(span,
                 &format!("{} cannot use positional arguments after spread arguments", callee_desc)),
+            CallArgPlanError::PositionalAfterNamedUnpack { span } => CompileError::new(span,
+                &format!("{} cannot use positional argument after named argument during unpacking", callee_desc)),
             // The remaining variants need a signature and cannot originate here. Keep
             // the match exhaustive so a future rule still reports a real span.
             CallArgPlanError::UnknownNamed { span, .. }
             | CallArgPlanError::Duplicate { span, .. }
-            | CallArgPlanError::PositionalAfterNamedUnpack { span }
             | CallArgPlanError::MissingRequired { span, .. } => {
                 CompileError::new(span, &format!("{} has invalid arguments", callee_desc))
             }
