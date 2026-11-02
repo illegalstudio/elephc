@@ -23,7 +23,7 @@ class RuntimeStringHookTarget {
 }
 function runtimeHookAssign(mixed $object, mixed $value): void { $object->value = $value; }
 function runtimeStringHookAssign(mixed $object, mixed $value): void { $object->text = $value; }
-function runtimeHookAssignBase(RuntimeHookBase $object, mixed $value): void { $object->value = $value; }
+function runtimeHookAssignBase(RuntimeHookBase $object, string $value): void { $object->value = $value; }
 $object = new RuntimeHookTarget(); runtimeHookAssign($object, 'value');
 runtimeHookAssignBase($object, 'derived');
 runtimeStringHookAssign(new RuntimeStringHookTarget(), 'string');
@@ -51,8 +51,9 @@ runtimeStringHookAssign(new RuntimeStringHookTarget(), 'string');
             if module.data.strings[data.as_raw() as usize] == "__propset_value")),
         "{target}: raw base-class receivers also need the subclass setter arm");
     assert!(base.instructions.iter().any(|inst| inst.op == Op::DynamicPropSet
-        && base.value(inst.operands[0]).unwrap().php_type == PhpType::Mixed),
-        "{target}: fallback storage must dispatch the runtime class instead of a missing base slot");
+        && base.value(inst.operands[0]).unwrap().php_type == PhpType::Mixed
+        && base.value(inst.operands[2]).unwrap().php_type == PhpType::Mixed),
+        "{target}: boxed fallback receivers and values must use the runtime property guard");
     let strings = module.functions.iter().find(|function| function.name == "runtimeStringHookAssign").unwrap();
     let (call_position, setter) = strings.instructions.iter().enumerate().find(|(_, inst)| inst.op == Op::MethodCall
         && matches!(inst.immediate, Some(Immediate::Data(data))
@@ -71,6 +72,7 @@ runtimeStringHookAssign(new RuntimeStringHookTarget(), 'string');
             && inst.immediate == Some(Immediate::LocalSlot(owner))),
             "{target}: converted setter string needs {op:?}");
     }
+    crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
 }
 
 supported_target_cases!(runtime_property_setters, verify_runtime_property_setters);

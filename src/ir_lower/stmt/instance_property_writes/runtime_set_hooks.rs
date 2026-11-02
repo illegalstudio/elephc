@@ -185,6 +185,7 @@ fn fallback_slot_assign(
         let boxed = ctx.box_value_as_mixed(borrowed, PhpType::Mixed, Some(span));
         crate::ir_lower::expr::root_owned_call_operand(ctx, boxed, span)
     } else { (object, None) };
+    let value = box_value_for_runtime_shaped_receiver(ctx, object, value, span);
     lower_property_slot_assign(ctx, object, property, value, preserve || owner.is_some(), retained, span);
     if let Some(owner) = owner { crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span); }
 }
