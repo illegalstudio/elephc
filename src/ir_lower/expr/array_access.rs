@@ -565,6 +565,12 @@ fn lower_array_access_from_values_with_receiver_pins(
         index_value = rooted;
         owner
     } else { None };
+    let owns_hash_string_key = matches!(op, Op::HashGet | Op::HashGetSilent)
+        && ctx.builder.value_php_type(index_value.value).codegen_repr() == PhpType::Str
+        && ctx.value_is_owning_temporary(index_value);
+    let key_pins = if owns_hash_string_key {
+        super::pin_in_flight_owners(ctx, &[index_value.value], index.span)
+    } else { Vec::new() };
     // Native dimension syntax is distinct from explicit ArrayAccess method calls, even
     // when a nullable subclass implements that interface and overrides offsetGet.
     let native_method = (op == Op::RuntimeCall).then(|| {
@@ -589,6 +595,7 @@ fn lower_array_access_from_values_with_receiver_pins(
         // must copy that byte before an owning receiver can be retired (issue #1908).
         ctx.builder.set_value_ownership(result.value, Ownership::Borrowed);
     }
+    super::unpin_in_flight_owners(ctx, key_pins, index.span);
     super::unpin_in_flight_owners(ctx, receiver_pins, expr.span);
     // An owning boxed index temporary (e.g. `$B[$i + 1]` on the mixed-key read
     // path) is consumed by the read without any runtime refcount operation on
@@ -605,9 +612,7 @@ fn lower_array_access_from_values_with_receiver_pins(
         let normalized_copy = ctx.builder.value_defining_instruction(index_value.value)
             .is_some_and(|producer| producer.op == Op::StrPersist
                 && producer.immediate == Some(Immediate::Bool(true)));
-        if matches!(op, Op::HashGet | Op::HashGetSilent)
-            && ctx.builder.value_php_type(index_value.value).codegen_repr() == PhpType::Str
-            && !normalized_copy {
+        if owns_hash_string_key && !normalized_copy {
             // Hash lookups never retain or return the key. Ternaries and calls can own
             // ordinary string keys independently of the normalized-cast copies below.
             crate::ir_lower::ownership::release_if_owned(ctx, index_value, Some(index.span));

@@ -9,6 +9,52 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// A throwing missing-key handler releases the temporary key before the same-frame catch resumes.
+#[test]
+fn test_hash_reads_release_owned_string_keys_on_warning_throw() {
+    let source = r#"<?php
+function throwingHashReadKey(): string { return str_repeat('x', 2); }
+set_error_handler(function(int $level, string $message): bool { throw new RuntimeException('missing'); });
+$table = ['known' => 'kept'];
+for ($i = 0; $i < 4; $i++) {
+    try { echo $table[throwingHashReadKey()]; }
+    catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
+}
+restore_error_handler();
+unset($error, $table);
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "missing|".repeat(4));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+
+/// Borrowed keys from array elements and object fields remain owned by their source containers.
+#[test]
+fn test_hash_reads_preserve_borrowed_string_keys() {
+    let source = r#"<?php
+class BorrowedHashKeyHolder {
+    public string $key;
+    public function __construct() { $this->key = str_repeat('k', 2); }
+}
+
+$keys = [str_repeat('k', 2)];
+$holder = new BorrowedHashKeyHolder();
+$table = ['kk' => 'hit'];
+for ($i = 0; $i < 4; $i++) {
+    echo $table[$keys[0]], ':', $keys[0], '|';
+    echo $table[$holder->key], ':', $holder->key, '|';
+}
+unset($keys, $holder, $table);
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "hit:kk|hit:kk|".repeat(4));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
+}
+
 /// Hash hits and silent misses release string keys produced by calls and ternaries.
 #[test]
 fn test_hash_reads_release_temporary_string_keys() {
