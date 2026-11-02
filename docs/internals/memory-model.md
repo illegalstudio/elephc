@@ -644,6 +644,15 @@ the registry before cleanup can inspect a retired request stack. Generated
 publishers still need to enter and leave these roots on every path; cancellation
 must retire a record before releasing its activation's stack.
 
+The native coercion adapter invokes a descriptor's explicit two-argument C entry
+inside `__rt_cleanup_invoke`. It clears the candidate output before calling user
+code, transfers one owned Mixed result on success, and contains a thrown native
+exception in the context's second word. The caller's active exception is restored
+separately. A context that already owns a contained Throwable stops before another
+validator runs. The descriptor entry must return a boxed owner without PHP hidden
+argument collectors or scalar-result markers. Generated declaration validators
+and publishers still need to bind this adapter and retire its raw Throwable owner.
+
 Native function parameter flags carry physical boxed-reference storage separately
 from declared PHP types and tagged nullable integers. Normal function object
 references use the normalized Mixed ABI. A closure descriptor can instead expose

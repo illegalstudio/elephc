@@ -31,6 +31,15 @@ fn call(out: &mut String, entry: &str) {
     instruction(out, &format!("bl {entry}"), &format!("call {entry}"));
 }
 
+/// Materializes one native code or data symbol without clobbering another test register.
+fn address(out: &mut String, arm: &str, x86: &str, symbol: &str) {
+    if target().arch == Arch::AArch64 {
+        if target().platform == Platform::Linux {
+            out.push_str(&format!("    adrp {arm}, {symbol}\n    add {arm}, {arm}, :lo12:{symbol}\n"));
+        } else { out.push_str(&format!("    adrp {arm}, {symbol}@PAGE\n    add {arm}, {arm}, {symbol}@PAGEOFF\n")); }
+    } else { out.push_str(&format!("    lea {x86}, [rip + {symbol}]\n")); }
+}
+
 /// Loads a retained or borrowed test value from its stable harness stack slot.
 fn load(out: &mut String, offset: usize) {
     instruction(out, &format!("ldr x0, [sp, #{offset}]"), &format!("mov rax, QWORD PTR [rsp + {offset}]"));
@@ -82,6 +91,59 @@ fn expect_zero(out: &mut String, symbol: &str) {
     }
 }
 
+/// Invokes the actual protected coercion entry with the fixture's context and descriptor.
+fn coerce(out: &mut String, status: usize) {
+    instruction(out, "add x0, sp, #128", "lea rdi, [rsp + 128]");
+    instruction(out, "add x1, sp, #144", "lea rsi, [rsp + 144]");
+    instruction(out, "ldr x2, [sp, #8]", "mov rdx, QWORD PTR [rsp + 8]");
+    instruction(out, "add x3, sp, #160", "lea rcx, [rsp + 160]");
+    call(out, "__rt_reference_validation_coerce");
+    instruction(out, &format!("cmp x0, #{status}"), &format!("cmp rax, {status}"));
+    instruction(out, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
+}
+
+/// Checks original-input acceptance, contained throws and a separately parked caller exception.
+fn protected_coercion(out: &mut String) {
+    for offset in [128, 136] {
+        instruction(out, &format!("str xzr, [sp, #{offset}]"), &format!("mov QWORD PTR [rsp + {offset}], 0"));
+    }
+    call(out, "__rt_unmanaged_reference_escape_error_new");
+    store(out, 176);
+    address(out, "x9", "r10", "_exc_value");
+    instruction(out, "str x0, [x9]", "mov QWORD PTR [r10], rax");
+    address(out, "x0", "rax", "Lvalidation_pin_accept");
+    store(out, 144);
+    coerce(out, 0);
+    load(out, 160);
+    instruction(out, "ldr x9, [sp, #8]", "mov r10, QWORD PTR [rsp + 8]");
+    instruction(out, "cmp x0, x9", "cmp rax, r10");
+    instruction(out, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
+    call(out, "__rt_decref_mixed");
+    address(out, "x0", "rax", "Lvalidation_pin_throw");
+    store(out, 144);
+    coerce(out, 2);
+    load(out, 160);
+    instruction(out, "cmp x0, #0", "test rax, rax");
+    instruction(out, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
+    load(out, 136);
+    instruction(out, "cmp x0, #0", "test rax, rax");
+    instruction(out, "b.eq Lvalidation_pin_fail", "je Lvalidation_pin_fail");
+    // A pending validation exception stops before dereferencing even an empty descriptor.
+    instruction(out, "str xzr, [sp, #144]", "mov QWORD PTR [rsp + 144], 0");
+    coerce(out, 2);
+    load(out, 136);
+    instruction(out, "str xzr, [sp, #136]", "mov QWORD PTR [rsp + 136], 0");
+    call(out, "__rt_decref_any");
+    address(out, "x9", "r10", "_exc_value");
+    instruction(out, "ldr x9, [x9]", "mov r10, QWORD PTR [r10]");
+    load(out, 176);
+    instruction(out, "cmp x0, x9", "cmp rax, r10");
+    instruction(out, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
+    address(out, "x9", "r10", "_exc_value");
+    instruction(out, "str xzr, [x9]", "mov QWORD PTR [r10], 0");
+    call(out, "__rt_decref_any");
+}
+
 /// Real nested pins preserve singleton copy semantics, unlink in any order and leave no heap owners.
 #[test]
 fn test_native_reference_validation_pins_preserve_copy_semantics_and_retire() {
@@ -89,13 +151,15 @@ fn test_native_reference_validation_pins_preserve_copy_semantics_and_retire() {
     let (user, runtime, requirements) =
         compile_source_to_asm_with_options("<?php", &dir.0, 65_536, false, true);
     let mut asm = String::new();
-    instruction(&mut asm, "sub sp, sp, #160", "sub rsp, 160");
+    instruction(&mut asm, "sub sp, sp, #224", "sub rsp, 224");
     // Create a canonical native cell whose PHPRef has exactly one real owner, the cell.
     instruction(&mut asm, "mov x0, #0", "mov eax, 0");
     instruction(&mut asm, "mov x1, #41", "mov edi, 41");
     instruction(&mut asm, "mov x2, #0", "xor esi, esi");
     call(&mut asm, "__rt_mixed_from_value");
     store(&mut asm, 8);
+    protected_coercion(&mut asm);
+    load(&mut asm, 8);
     call(&mut asm, "__rt_reference_new");
     store(&mut asm, 0);
     load(&mut asm, 8);
@@ -162,7 +226,14 @@ fn test_native_reference_validation_pins_preserve_copy_semantics_and_retire() {
     } else {
         asm.push_str("    mov rsi, rax\n    mov edi, 1\n    mov eax, 1\n    syscall\n");
     }
-    instruction(&mut asm, "add sp, sp, #160", "add rsp, 160");
+    instruction(&mut asm, "add sp, sp, #224", "add rsp, 224");
+    instruction(&mut asm, "b Lvalidation_pin_callbacks_end", "jmp Lvalidation_pin_callbacks_end");
+    asm.push_str("Lvalidation_pin_accept:\n");
+    instruction(&mut asm, "mov x0, x1", "mov rax, rsi");
+    instruction(&mut asm, "b __rt_incref", "jmp __rt_incref");
+    asm.push_str("Lvalidation_pin_throw:\n");
+    instruction(&mut asm, "b __rt_unmanaged_reference_escape_error", "jmp __rt_unmanaged_reference_escape_error");
+    asm.push_str("Lvalidation_pin_callbacks_end:\n");
     let user = inject_main_exit_harness(&user, &asm);
     let runtime = runtime_obj_for_asm(&runtime);
     let output = assemble_and_run(&user, &runtime, &dir.0, &requirements, &default_link_paths(), &[]);
