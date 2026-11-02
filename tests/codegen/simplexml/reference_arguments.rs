@@ -80,15 +80,35 @@ runtimeMissingXmlAfterEval(runtimeMissingXmlReference(...), new SimpleXMLElement
 runtimeMissingXmlAfterEval(runtimeMissingXmlValue(...), new SimpleXMLElement('<r/>'), $barrier);
 "#;
     let expected = "SimpleXMLElement:first|SimpleXMLElement:created|SimpleXMLElement:name|1:1:1|::|1:4|1111111|SimpleXMLElement|0|11|11|created|created|created|111|absent|absent|absent|000|created|created|11|absent|absent|00|";
+    let mut body = body.to_string();
+    for (argc, marker) in [
+        (2, "replaceMissingVariadicXmlSelection($xml->tail);"),
+        (3, "replaceMissingVariadicXmlSelection($xml->tail[0]);"),
+        (4, "$callback = replaceMissingVariadicXmlSelection(...);"),
+        (5, "echo (int)isset($xml->tail), (int)isset($xml->namedTail), '|';"),
+        (6, "runtimeMissingXmlCall(runtimeMissingXmlReference(...), new SimpleXMLElement('<r/>'));"),
+    ] {
+        assert_eq!(body.matches(marker).count(), 1, "{marker}");
+        body = body.replace(marker, &format!("if ($argc === {argc}) {{ return; }}\n{marker}"));
+    }
     let native = format!("<?php {body}");
     let encoded = body.replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("<?php $xmlCapability = new SimpleXMLElement('<r/>'); unset($xmlCapability); $code = $argc > 0 ? '{encoded}' : ''; eval($code); unset($code);");
+    let before_variadic = expected.split_inclusive('|').take(9).collect::<String>();
+    let before_runtime = expected.split_inclusive('|').take(11).collect::<String>();
+    let expected_windows = [expected, &before_variadic, &before_variadic, &before_variadic, &before_variadic, &before_runtime];
+    let arguments = ["checkpoint"; 5];
+    let argv = (0..=5).map(|length| &arguments[..length]).collect::<Vec<_>>();
     for (mode, source) in [native, eval].iter().enumerate() {
-        let (out, assembly) = compile_and_run_with_heap_debug_and_asm(source);
-        preserve_stdout_mismatches(source, &assembly, std::slice::from_ref(&out), &[expected]);
-        assert!(out.success, "mode={mode}: stdout={} stderr={}", out.stdout, out.stderr);
-        assert_eq!(out.stdout, expected, "mode={mode}");
-        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "mode={mode}: {}", out.stderr);
+        let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(source, &argv);
+        preserve_stdout_mismatches(source, &assembly, &runs, &expected_windows);
+        let mut failures = Vec::new();
+        for (window, (out, expected)) in runs.iter().zip(expected_windows).enumerate() {
+            if !out.success || out.stdout != expected || !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
+                failures.push(format!("mode={mode} window={window}: stdout={} stderr={}", out.stdout, out.stderr));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 }
 

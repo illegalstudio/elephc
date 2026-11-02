@@ -11,6 +11,40 @@
 use super::super::*;
 use super::support::*;
 
+/// Variadic writeback retires its array-read lease after both successful and rejected publication.
+#[test]
+fn variadic_reference_writeback_releases_owned_element_reads() {
+    for reject in [false, true] {
+        let mut values = FakeOps::default();
+        let mut context = ElephcEvalContext::new();
+        let mut caller = ElephcEvalScope::new();
+        let mut callee = ElephcEvalScope::new();
+        let old = values.string("original").unwrap();
+        caller.set_from_aot("target", old, ScopeCellOwnership::Owned);
+        let replacement = values.string("replacement").unwrap();
+        let key = values.int(0).unwrap();
+        let array = values.array_new(1).unwrap();
+        let array = values.array_set(array, key, replacement).unwrap();
+        let target_scope: *mut ElephcEvalScope = if reject { std::ptr::null_mut() } else { &mut caller };
+        let bound = BoundMethodArg {
+            value: array,
+            ref_target: None,
+            variadic_ref_targets: vec![(key, EvalReferenceTarget::Variable {
+                scope: target_scope, name: "target".into(),
+            })],
+        };
+        bind_method_scope_args(&mut callee, &["values".into()], &[true],
+            std::slice::from_ref(&bound), &mut context, &mut values).unwrap();
+        let before = values.cell_owners[&(replacement.as_ptr() as usize)];
+        let result = write_back_method_variadic_ref_args("values", &bound, &callee, &mut context, &mut values);
+        assert_eq!(result, if reject { Err(EvalStatus::RuntimeFatal) } else { Ok(()) });
+        assert_eq!(values.cell_owners[&(replacement.as_ptr() as usize)], before + usize::from(!reject));
+        assert_eq!(values.releases.iter().filter(|value| **value == replacement).count(), 1,
+            "the acquired array read must retire independently of publication");
+        if !reject { assert_eq!(caller.visible_cell("target"), Some(replacement)); }
+    }
+}
+
 /// Native nullable-integer references stage both words and dirty the caller on tag-only changes.
 #[test]
 fn native_nullable_integer_reference_staging_preserves_payload_and_tag() {

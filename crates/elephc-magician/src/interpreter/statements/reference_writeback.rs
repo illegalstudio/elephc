@@ -265,7 +265,9 @@ pub(super) fn write_back_method_variadic_ref_args(
     }
     for (key, target) in &bound_arg.variadic_ref_targets {
         let value = values.array_get(entry.cell(), *key)?;
-        write_back_method_ref_target(target, value, context, values)?;
+        let written = write_back_method_ref_target(target, value.borrowed(), context, values);
+        let released = release_expr_result(value, context, values);
+        written.and(released)?;
     }
     Ok(())
 }
