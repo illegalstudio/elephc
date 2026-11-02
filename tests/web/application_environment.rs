@@ -21,15 +21,22 @@ fn application_allocation_responses(binary: &Path, extra_environment: bool) -> V
     }).collect()
 }
 
-/// Application requests allocate independently of unused environment size, including literal calls.
+/// Application allocations ignore unused environment size even with unreferenced callback helpers.
 #[test]
 fn web_application_environment_unused_entries_do_not_allocate() {
     let dir = EnvironmentFixture(make_test_dir("web_application_environment_unused"));
-    for (stem, prefix) in [
-        ("direct", ""),
-        ("literal_callable", "$fn = 'strlen'; $fn('ok');"),
+    for (stem, declarations, prefix) in [
+        ("direct", "", ""),
+        ("literal_callable", "", "$fn = 'strlen'; $fn('ok');"),
+        ("unused_callbacks", r#"
+function unused_callback(callable $callback): string { return $callback('ok'); }
+final class Environment {
+    public function map(callable $callback): string { return $callback('ok'); }
+}
+"#, ""),
     ] {
         let source = format!(r#"<?php
+{declarations}
 class Application implements Elephc\Web\WorkerApplication {{
     private int $previous = 0;
     public function __construct() {{ $this->previous = memory_get_allocations(); }}

@@ -13,6 +13,9 @@ use super::*;
 #[path = "application_environment.rs"]
 mod application;
 
+#[path = "environment_review.rs"]
+mod review;
+
 /// Removes only this test's fixture directory after its server guards have stopped.
 struct EnvironmentFixture(PathBuf);
 

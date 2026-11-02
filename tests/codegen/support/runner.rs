@@ -1352,7 +1352,8 @@ fn test_link_plan(
     for framework in extra_frameworks {
         plan.push(LinkItem::Framework(framework.clone()));
     }
-    plan.without_redundant_embedded_bridges()
+    super::magician_link::with_apple_libraries(plan, target().platform)
+        .without_redundant_embedded_bridges()
 }
 
 /// Appends the managed native curl chain as EXACT ARCHIVES, in catalog dependency order.

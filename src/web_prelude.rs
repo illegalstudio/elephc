@@ -71,7 +71,7 @@ mod environment;
 
 /// Detects environment observers in the discarded autoload probe before web injection.
 pub(crate) fn program_observes_environment(program: &[Stmt]) -> bool {
-    environment::is_observable(&usage::collect(program))
+    environment::is_observable(program, &usage::collect_environment(program))
 }
 
 /// The catch-all wrapper: the whole handler body goes inside its `try` so an uncaught exception
@@ -245,13 +245,13 @@ fn inject_if_web_on_compiler_stack(
         return program;
     }
     let program = lift_preload_to_startup(program, preload_path);
-    let user_usage = usage::collect(&program);
+    let user_usage = usage::collect_environment(&program);
     let needs_callable_session_handler = user_usage.references("session_set_save_handler")
         || user_usage.dynamic_function_call;
     let mut combined = build::web_declarations_with_environment(
         php_version,
         ini_overrides,
-        autoload_observes_environment || environment::is_observable(&user_usage),
+        autoload_observes_environment || environment::is_observable(&program, &user_usage),
     );
     if !needs_callable_session_handler {
         combined.retain(|stmt| !is_callable_session_handler_decl(&stmt.kind));
