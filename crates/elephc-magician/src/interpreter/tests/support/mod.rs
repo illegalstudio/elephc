@@ -73,6 +73,8 @@ pub(super) struct FakeOps {
     /// Independent fake storage history for automatic associative-array indices.
     pub(super) array_next_indices: HashMap<usize, i64>,
     pub(super) references: HashMap<usize, RuntimeCellHandle>,
+    /// Physical source tags of native reference markers, separate from their slot addresses.
+    pub(super) invoker_marker_source_tags: HashMap<usize, u64>,
     /// Fake mirror of the runtime resource-id registry: native payload to PHP id.
     ///
     /// WHY THIS EXISTS. The fake used to answer `payload + 1` for every resource

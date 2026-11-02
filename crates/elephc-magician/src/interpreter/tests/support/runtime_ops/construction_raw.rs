@@ -104,9 +104,11 @@ macro_rules! impl_fake_construction_raw_ops {
     fn invoker_raw_ref_cell(
         &mut self,
         slot: *mut std::ffi::c_void,
-        _source_tag: u64,
+        source_tag: u64,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
-        self.runtime_invoker_marker(slot as usize)
+        let marker = self.runtime_invoker_marker(slot as usize)?;
+        self.invoker_marker_source_tags.insert(marker.as_ptr() as usize, source_tag);
+        Ok(marker)
     }
     /// Extracts one fake low payload word for raw by-reference staging.
     fn raw_value_word(&mut self, value: RuntimeCellHandle) -> Result<u64, EvalStatus> {
@@ -122,6 +124,7 @@ macro_rules! impl_fake_construction_raw_ops {
             // lookup key into `EvalStreamResources`. What a display path reports is
             // `FakeOps::fake_resource_id`, the fake mirror of the runtime registry.
             FakeValue::Resource(value) => value as u64,
+            FakeValue::InvokerRefCell(slot) => slot as u64,
             FakeValue::String(_) | FakeValue::Bytes(_) => value.as_ptr() as u64,
             FakeValue::Array(_)
             | FakeValue::Assoc(_)
@@ -135,6 +138,8 @@ macro_rules! impl_fake_construction_raw_ops {
         Ok(match self.get(value) {
             FakeValue::String(value) => value.len() as u64,
             FakeValue::Bytes(value) => value.len() as u64,
+            FakeValue::InvokerRefCell(_) => self.invoker_marker_source_tags
+                .get(&(value.as_ptr() as usize)).copied().unwrap_or(EVAL_TAG_MIXED),
             _ => 0,
         })
     }
