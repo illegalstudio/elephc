@@ -387,13 +387,20 @@ function captureNativeStaticMixed(&$value): callable {
 $escapedStatic = captureNativeStaticMixed(PersistentNativeMixedStatic::$value);
 class EvalNativeMixedStaticChild extends PersistentNativeMixedStatic {
     public static function bindSecret(): callable { return captureNativeStaticMixed(parent::$secret); }
+    public static function directSecret(): void {
+        echo (int)isset(PersistentNativeMixedStatic::$secret), ":", PersistentNativeMixedStatic::$secret, "|";
+        PersistentNativeMixedStatic::$secret = "direct";
+        echo PersistentNativeMixedStatic::$secret, "|";
+        PersistentNativeMixedStatic::$secret = "native-secret";
+    }
 }
 $escapedSecret = EvalNativeMixedStaticChild::bindSecret();
 ' : '';
     eval($code);
     PersistentNativeMixedStatic::$value = ['stage' => 'native'];
     PersistentNativeMixedStatic::writeSecret('native-secret');
-    $code = $run ? 'echo json_encode($escapedStatic(false)), ":", $escapedSecret(false), "|";
+    $code = $run ? 'EvalNativeMixedStaticChild::directSecret();
+echo json_encode($escapedStatic(false)), ":", $escapedSecret(false), "|";
 $escapedStatic(true, ["stage" => "eval"]); $escapedSecret(true, "eval-secret");' : '';
     eval($code);
     echo json_encode($native), ':', PersistentNativeMixedStatic::readSecret(), '|';
@@ -413,7 +420,7 @@ exerciseNativeMixedStatics($argc > 0);
 "#;
     let output = compile_and_run_with_heap_debug(source);
     assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
-    assert_eq!(output.stdout, "{\"stage\":\"native\"}:native-secret|{\"stage\":\"eval\"}:eval-secret|{\"stage\":\"eval\",\"nested\":[\"alias\"],\"property\":[\"native\"]}|static-unset|{\"stage\":\"old\"}:{\"stage\":\"shadow\"}|static-retired|");
+    assert_eq!(output.stdout, "1:native-secret|direct|{\"stage\":\"native\"}:native-secret|{\"stage\":\"eval\"}:eval-secret|{\"stage\":\"eval\",\"nested\":[\"alias\"],\"property\":[\"native\"]}|static-unset|{\"stage\":\"old\"}:{\"stage\":\"shadow\"}|static-retired|");
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
     assert!(!output.stderr.contains("Warning:"), "{}", output.stderr);
 }

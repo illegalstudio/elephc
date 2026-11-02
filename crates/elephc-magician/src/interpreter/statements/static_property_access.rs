@@ -211,7 +211,9 @@ pub(in crate::interpreter) fn eval_static_property_get_result_with_ownership(
                     None => eval_reference_target_value(&target, context, values),
                 };
             }
-            if !values.static_property_is_initialized(&declaring_class, property_name)? {
+            if !eval_with_native_bridge_scope(&declaring_class, context, values, |values| {
+                values.static_property_is_initialized(&declaring_class, property_name)
+            })? {
                 return eval_throw_uninitialized_static_property_error(
                     &declaring_class,
                     property_name,
@@ -219,6 +221,12 @@ pub(in crate::interpreter) fn eval_static_property_get_result_with_ownership(
                     values,
                 );
             }
+            if let Some(value) = eval_with_native_bridge_scope(&declaring_class, context, values,
+                |values| values.static_property_get(&class_name, property_name))?
+            {
+                return Ok(value);
+            }
+            return eval_throw_undeclared_static_property_error(&class_name, property_name, context, values);
         }
     }
     if let Some(value) = values.static_property_get(&class_name, property_name)? {
@@ -258,7 +266,7 @@ pub(in crate::interpreter) fn eval_static_property_isset_result(
             };
             value
         };
-        return Ok(!values.is_null(value)?);
+        return eval_static_isset_value(value, context, values);
     }
     if eval_static_member_context_owns_class(&class_name, context) {
         if let Some(parent) = context.class_native_parent_name(&class_name) {
@@ -282,7 +290,7 @@ pub(in crate::interpreter) fn eval_static_property_isset_result(
                     .cloned()
                 {
                     let value = eval_reference_target_value(&target, context, values)?;
-                    return Ok(!values.is_null(value)?);
+                    return eval_static_isset_value(value, context, values);
                 }
                 if !eval_with_native_bridge_scope(&declaring_class, context, values, |values| {
                     values.static_property_is_initialized(&declaring_class, property_name)
@@ -294,7 +302,7 @@ pub(in crate::interpreter) fn eval_static_property_isset_result(
                     context,
                     values, |values| values.static_property_get(&declaring_class, property_name),
                 )? {
-                    return Ok(!values.is_null(value)?);
+                    return eval_static_isset_value(value, context, values);
                 }
             }
         }
@@ -320,18 +328,32 @@ pub(in crate::interpreter) fn eval_static_property_isset_result(
             .cloned()
         {
             let value = eval_reference_target_value(&target, context, values)?;
-            return Ok(!values.is_null(value)?);
+            return eval_static_isset_value(value, context, values);
         }
-        if !values.static_property_is_initialized(&declaring_class, property_name)? {
+        if !eval_with_native_bridge_scope(&declaring_class, context, values, |values| {
+            values.static_property_is_initialized(&declaring_class, property_name)
+        })? {
             return Ok(false);
         }
+        let value = eval_with_native_bridge_scope(&declaring_class, context, values,
+            |values| values.static_property_get(&class_name, property_name))?;
+        return match value { Some(value) => eval_static_isset_value(value, context, values), None => Ok(false) };
     } else if !eval_runtime_class_like_exists(&class_name, context, values)? {
         return eval_throw_class_not_found_error(&class_name, context, values);
     }
     if let Some(value) = values.static_property_get(&class_name, property_name)? {
-        return Ok(!values.is_null(value)?);
+        return eval_static_isset_value(value, context, values);
     }
     Ok(false)
+}
+
+/// Probes an acquired static value and retires its read lease before returning the boolean.
+fn eval_static_isset_value(
+    value: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let present = values.is_null(value).map(|null| !null);
+    let released = release_expr_result(value, context, values);
+    present.and_then(|present| released.map(|()| present))
 }
 
 /// Throws PHP's catchable error for attempts to unset an existing static property target.
@@ -679,7 +701,9 @@ pub(super) fn eval_static_property_reference_bind_result(
         )?;
         let value = eval_reference_target_value(&target, context, values)?;
         context.bind_static_property_alias(&declaring_class, property_name, target);
-        if values.static_property_set(&class_name, property_name, value)? {
+        if eval_with_native_bridge_scope(&declaring_class, context, values, |values| {
+            values.static_property_set(&class_name, property_name, value)
+        })? {
             return Ok(());
         }
         return eval_throw_undeclared_static_property_error(
@@ -916,6 +940,12 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
                     values,
                 )?;
             }
+            if eval_with_native_bridge_scope(&declaring_class, context, values, |values| {
+                values.static_property_set(&class_name, property_name, value)
+            })? {
+                return Ok(());
+            }
+            return eval_throw_undeclared_static_property_error(&class_name, property_name, context, values);
         }
     }
     if values.static_property_set(&class_name, property_name, value)? {
