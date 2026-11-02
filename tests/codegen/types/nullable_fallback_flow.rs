@@ -9,6 +9,13 @@
 
 use super::*;
 
+/// Production match labels, arms and defaults preserve active guards and clean ownership.
+#[test]
+fn test_nullable_fallback_flow_r62_match_guard_views_runtime() {
+    assert_nullable_flow_cli_heap_output(include_str!("../../fixtures/nullable_fallback_match_guard_views.php"),
+        "int(7)\nint(0)\nint(0)\nint(7)\nint(0)\nint(0)\nlabel1\nlabel1\nlabel2\nlabel1\nlabel2\nint(7)\nint(7)\nint(7)\nint(0)\nint(7)\nint(0)\nfinally:7\nfinally:7\nint(1)\nint(1)\nint(0)\nsafe\n");
+}
+
 /// Production CLI preserves active interface guards through catch, finally and loop exits.
 #[test]
 fn test_nullable_fallback_flow_r61_exception_guard_views_runtime() {

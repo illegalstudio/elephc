@@ -9,6 +9,27 @@
 
 use super::*;
 
+/// Match destinations retain guards and reject stale reads after label or arm writes.
+#[test]
+fn test_nullable_fallback_flow_r62_match_guard_views() {
+    check_source(include_str!("../fixtures/nullable_fallback_match_guard_views.php"))
+        .unwrap_or_else(|error| panic!("active match guard: {error}"));
+    let declarations = "interface Marker {} class Base {} function consume(Marker $value): int { return 7; }";
+    for body in [
+        "return match ($flag) { (($value = null) ?? 1) => consume($value), default => 0 };",
+        "return match ($flag) { 1, (($value = null) ?? 2) => consume($value), default => 0 };",
+        "return match ($flag) { (($value = null) ?? 1) => 0, default => consume($value) };",
+        "$r = match ($flag) { 1 => ($value = null), default => 0 }; return consume($value);",
+    ] {
+        let source = format!("<?php {declarations} function run(?Base $value, int $flag): int {{ if ($value === null) {{ return 0; }} if ($value instanceof Marker) {{ {body} }} return 0; }}");
+        expect_error(&source, "expects Marker");
+    }
+    let arm_store = format!("<?php {declarations} function run(?Base $value, int $flag): void {{ if ($value instanceof Marker) {{ match ($flag) {{ 1 => $value = new Base(), default => null }}; }} }}");
+    check_source(&arm_store).unwrap();
+    expect_error(&arm_store.replace("default => null };", "default => null }; consume($value);"), "expects Marker");
+    expect_error("<?php function change(int &$value): int { return ++$value; } function run(?int $value, int $flag): int { if ($value === null) { return 0; } return match ($flag) { 1 => change($value), default => 0 }; }", "by-reference");
+}
+
 /// Exception destinations retain enclosing guards but never revive a value replaced in the try.
 #[test]
 fn test_nullable_fallback_flow_r61_exception_guard_views() {

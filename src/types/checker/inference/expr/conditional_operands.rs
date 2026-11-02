@@ -56,11 +56,14 @@ impl Checker {
         self.infer_type_with_assignment_effects(subject, env)?;
         let mut flow = self.snapshot_conditional_flow(env);
         self.exclude_conditional_binding_entry(&mut flow);
-        let mut missed = self.snapshot_flow_exit(env);
+        let scope = self.snapshot_flow_exit(env);
+        let mut missed = scope.clone();
         let mut typed_arms = Vec::new();
         for (conditions, result) in arms {
-            let mut label_env = missed.views.clone();
-            self.restore_flow_snapshot(&missed, &mut label_env);
+            let input = self.join_scoped_flow_snapshots(std::slice::from_ref(&missed), &scope)
+                .expect("match label input");
+            let mut label_env = input.views.clone();
+            self.restore_flow_snapshot(&input, &mut label_env);
             let mut entries = Vec::new();
             for condition in conditions {
                 self.infer_type_with_assignment_effects(condition, &mut label_env)?;
@@ -68,7 +71,7 @@ impl Checker {
             }
             missed = self.snapshot_flow_exit(&label_env);
             self.observe_flow_snapshot(&mut flow, &missed, false);
-            let entry = self.join_flow_snapshots(&entries).unwrap_or_else(|| missed.clone());
+            let entry = self.join_scoped_flow_snapshots(&entries, &scope).unwrap_or(input);
             let mut arm_env = entry.views.clone();
             let ty = self.with_conditional_flow_arm(&mut flow, &mut arm_env, |checker, env| {
                 checker.restore_flow_snapshot(&entry, env);
@@ -78,9 +81,11 @@ impl Checker {
             typed_arms.push((result, if matches!(result.kind, ExprKind::Throw(_)) { PhpType::Never } else { ty }));
         }
         if let Some(result) = default {
-            let mut arm_env = missed.views.clone();
+            let entry = self.join_scoped_flow_snapshots(std::slice::from_ref(&missed), &scope)
+                .expect("match default input");
+            let mut arm_env = entry.views.clone();
             let ty = self.with_conditional_flow_arm(&mut flow, &mut arm_env, |checker, env| {
-                checker.restore_flow_snapshot(&missed, env);
+                checker.restore_flow_snapshot(&entry, env);
                 checker.infer_type_with_assignment_effects(result, env)
             })?;
             Self::merge_short_circuit_storage_effects(env, &arm_env);
