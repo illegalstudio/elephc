@@ -413,12 +413,34 @@ fn finish_native_argument_binding(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<BoundMethodArg>, EvalStatus> {
     let bound = apply_native_callable_bound_arg_types(signature, &mut args, context, values)
-        .and_then(|()| copy_native_call_user_func_by_value_ref_args(signature, &mut args, by_ref_mode, values));
+        .and_then(|()| copy_native_call_user_func_by_value_ref_args(signature, &mut args, by_ref_mode, values))
+        .and_then(|()| promote_native_mixed_reference_temporaries(signature, &mut args, context, values));
     if let Err(status) = bound {
         let _ = release_native_bound_args(&args, context, values);
         return Err(status);
     }
     Ok(args)
+}
+
+/// Gives call-local Mixed reference values a persistent owner before native constructors retain them.
+/// These values have no caller target; raw typed and caller-backed references keep their existing ABI.
+fn promote_native_mixed_reference_temporaries(
+    signature: &NativeCallableSignature, args: &mut [BoundMethodArg],
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if !values.supports_persistent_references() { return Ok(()); }
+    for (index, arg) in args.iter_mut().enumerate() {
+        if !signature.param_by_ref(index) || signature.param_variadic(index)
+            || arg.ref_target.is_some()
+        { continue; }
+        let mixed = signature.param_type(index).is_none_or(|ty|
+            !ty.is_intersection() && matches!(ty.variants(), [EvalParameterTypeVariant::Mixed]));
+        if !mixed || values.is_reference(arg.value)? { continue; }
+        let original = arg.value;
+        arg.value = values.reference_new(original)?;
+        release_expr_result(original, context, values)?;
+    }
+    Ok(())
 }
 
 /// Applies registered native AOT parameter types after argument binding and default filling.

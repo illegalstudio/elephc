@@ -11,6 +11,32 @@
 use super::super::*;
 use super::support::*;
 
+/// Native Mixed reference defaults can escape a constructor activation without legacy copyback.
+#[test]
+fn native_mixed_reference_defaults_have_independent_persistent_owners() {
+    for (by_ref, param_type, expected_reference) in [
+        (true, EvalParameterTypeVariant::Mixed, true),
+        (false, EvalParameterTypeVariant::Mixed, false),
+        (true, EvalParameterTypeVariant::String, false),
+    ] {
+        let mut context = ElephcEvalContext::new();
+        let mut values = FakeOps::default();
+        let mut signature = crate::context::NativeCallableSignature::new(1);
+        signature.set_param_name(0, "value");
+        signature.set_param_type(0, EvalParameterType::new(vec![param_type], false));
+        signature.set_param_by_ref(0, by_ref);
+        signature.set_param_default(0, crate::context::NativeCallableDefault::String("default".into()));
+        let args = bind_native_callable_bound_args_with_mode(Some(signature), Vec::new(),
+            EvalByRefBindingMode::RequireTarget, &mut context, &mut values).unwrap();
+        assert_eq!(values.is_reference(args[0].value).unwrap(), expected_reference);
+        let escaped = values.retain(args[0].value).unwrap();
+        release_native_bound_args(&args, &mut context, &mut values).unwrap();
+        assert_eq!(values.get(escaped), FakeValue::String("default".into()));
+        values.release(escaped).unwrap();
+        assert!(values.cell_owners.values().all(|owners| *owners == 0), "default and wrapper owners must both retire");
+    }
+}
+
 /// Variadic writeback retires its array-read lease after both successful and rejected publication.
 #[test]
 fn variadic_reference_writeback_releases_owned_element_reads() {
