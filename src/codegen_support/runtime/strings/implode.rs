@@ -375,6 +375,7 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.label("__rt_implode_raw_float_elem");
     emit_aarch64_scalar_reserve(emitter, "raw_float");
     emitter.instruction("ldr d0, [x12]");                                       // load the raw double element into the FP argument register
+    crate::codegen_support::runtime::emit_nan_string_coercion_probe(emitter, "__rt_implode_raw_float_no_nan");
     emit_aarch64_scalar_format_into(emitter, "__rt_ftoa_into");
     emitter.instruction("b __rt_implode_copy_value");                           // the text already sits at the destination cursor
 
@@ -705,6 +706,7 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_implode_raw_float_elem");
     emit_x86_64_scalar_reserve(emitter, "raw_float");
     emitter.instruction("movsd xmm0, QWORD PTR [rcx]");                         // load the raw double element into the FP argument register
+    crate::codegen_support::runtime::emit_nan_string_coercion_probe(emitter, "__rt_implode_raw_float_no_nan_linux_x86_64");
     emitter.instruction("mov rsi, r10");                                        // format directly in the reserved implode destination window
     emitter.instruction("call __rt_ftoa_into");                                 // write PHP's precision=14 text → rax=ptr, rdx=len
     emit_x86_64_scalar_copy_setup(emitter);
