@@ -236,12 +236,24 @@ fn dynamic_new_class_is_planning_candidate(
     let Some(sig) = constructor_owner.methods.get(constructor_key) else {
         return false;
     };
-    if sig.variadic.is_some() {
-        return false;
-    }
     let owns_promoted_references = body_owner.constructor_param_to_prop.iter().flatten()
         .any(|property| body_owner.visible_property_index(property)
             .is_some_and(|slot| body_owner.property_slot_owns_reference(slot)));
+    // Eval and backtraces append a hidden collector even to nonvariadic constructors.
+    // The generic padding thunk refuses references, so these constructors must retain the
+    // fixed-class argument planner that promotes and transfers their caller-owned cells.
+    if owns_promoted_references && crate::func_args::sig_collects_surplus_args(sig)
+        && !args.iter().any(is_spread_arg)
+    {
+        if crate::types::call_args::has_named_args(args) {
+            return crate::types::call_args::plan_call_args(sig, args, args[0].span, false, false).is_ok();
+        }
+        let regular = crate::types::call_args::regular_param_count(sig);
+        return args.len() >= regular || sig.defaults[args.len()..regular].iter().all(Option::is_some);
+    }
+    if sig.variadic.is_some() {
+        return false;
+    }
     if !dynamic_new_args_need_planning(sig, args) && !owns_promoted_references {
         return false;
     }
