@@ -248,7 +248,8 @@ fn mark_descriptor_coercion_writeback(
             force_writeback: force,
             ..
         } => *force = true,
-        BoundNativeFunctionRefSlot::Mixed { .. }
+        BoundNativeFunctionRefSlot::ManagedMixed { .. }
+        | BoundNativeFunctionRefSlot::Mixed { .. }
         | BoundNativeFunctionRefSlot::TaggedScalar { .. }
         | BoundNativeFunctionRefSlot::OwnedRawWord { .. } => {}
     }
