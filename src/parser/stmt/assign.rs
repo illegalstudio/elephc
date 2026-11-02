@@ -37,6 +37,7 @@ pub(crate) use postfix::{
     update_index_needs_snapshot,
 };
 pub(super) use postfix::{
+    try_parse_computed_property_element_postfix_incdec,
     try_parse_postfix_assignment,
     try_parse_postfix_incdec,
     try_parse_scoped_postfix_incdec,

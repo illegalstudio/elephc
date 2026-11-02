@@ -376,6 +376,25 @@ pub(in crate::parser::stmt) fn try_parse_scoped_postfix_incdec(
     lower_postfix_incdec_assignment(lhs_expr, is_increment, span).map(Some)
 }
 
+/// Claims a discarded computed property-element postfix without consuming surrounding expressions.
+pub(in crate::parser::stmt) fn try_parse_computed_property_element_postfix_incdec(
+    tokens: &[SpannedToken], pos: &mut usize, span: Span,
+) -> Result<Option<Stmt>, CompileError> {
+    let start = *pos;
+    let Some((position, increment)) = find_top_level_postfix_incdec(tokens, start) else { return Ok(None); };
+    if !matches!(tokens.get(position + 1), Some((Token::Semicolon, _)))
+        || assignment_precedes(tokens, start, position) { return Ok(None); }
+    let lhs = &tokens[start..position];
+    if contains_empty_dimension(lhs) { return Ok(None); }
+    let mut consumed = 0;
+    let Ok(target) = parse_expr(lhs, &mut consumed) else { return Ok(None); };
+    if consumed != lhs.len() || !matches!(target.kind, ExprKind::ArrayAccess { .. })
+        || !computed_receiver_property_target(&target) { return Ok(None); }
+    *pos = position + 1;
+    expect_semicolon(tokens, pos)?;
+    lower_postfix_incdec_assignment(target, increment, span).map(Some)
+}
+
 /// Parses discarded post-increment/decrement on a complex l-value target.
 ///
 /// For statement contexts the original expression result is unused, so `$a[0]++`

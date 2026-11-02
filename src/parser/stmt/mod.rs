@@ -328,6 +328,9 @@ fn parse_expression_led_stmt(
     if let Some(stmt) = assign::try_parse_postfix_assignment(tokens, pos, span)? {
         return Ok(stmt);
     }
+    if let Some(stmt) = assign::try_parse_computed_property_element_postfix_incdec(tokens, pos, span)? {
+        return Ok(stmt);
+    }
     let expr = parse_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
     Ok(Stmt::new(StmtKind::ExprStmt(expr), span))

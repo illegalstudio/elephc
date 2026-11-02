@@ -402,3 +402,34 @@ fn test_call_rooted_property_element_updates_keep_delayed_traversal() {
         } else { assert!(matches!(value.kind, ExprKind::BinaryOp { .. }), "{source}"); }
     }
 }
+
+/// Discarded expression-led postfixes share the scoped element incdec kernel with prefixes.
+#[test]
+fn test_computed_receiver_postfix_statements_retain_incdec_kernel() {
+    for source in [
+        "<?php receiver()->items[0]++;", "<?php receiver()->{name()}[0]++;",
+        "<?php (receiver())->items[0]++;", "<?php \\receiver()->{name()}[0]--;",
+    ] {
+        let statements = parse_source(source);
+        let mut statement = &statements[0];
+        while let StmtKind::Synthetic(body) = &statement.kind { statement = body.last().unwrap(); }
+        let value = match &statement.kind {
+            StmtKind::PropertyArrayAssign { value, .. } | StmtKind::NestedArrayAssign { value, .. } => value,
+            _ => panic!("{source}: expected one attached indexed write, got {statement:?}"),
+        };
+        let ExprKind::Assignment { value, .. } = &value.kind else { panic!("{source}: expected captured incdec"); };
+        assert!(matches!(value.kind, ExprKind::PreIncrement(_) | ExprKind::PreDecrement(_)), "{source}");
+    }
+}
+
+/// Larger expressions ending in a postfix stay with the Pratt parser without losing tokens.
+#[test]
+fn test_expression_led_postfix_claimant_preserves_wrapping_operations() {
+    for source in [
+        "<?php isset($a) && receiver()->items[0]++;",
+        "<?php receiver() + $a[0]++;", "<?php (int)$x->a[0]++;", "<?php ~$a[0]++;",
+    ] {
+        let statements = parse_source(source);
+        assert!(matches!(&statements[0].kind, StmtKind::ExprStmt(_)), "{source}: {statements:?}");
+    }
+}
