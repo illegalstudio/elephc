@@ -28,6 +28,9 @@ function sourceVariadicNullable(bool $present): ?SourceVariadicXml {
 function sourceVariadicArgument(): SourceVariadicXml {
     echo 'unexpected|'; return new SourceVariadicXml('<r/>');
 }
+function sourceVariadicNullsafe(?SourceVariadicXml $node): void {
+    $node?->collect(sourceVariadicArgument());
+}
 $node = sourceVariadicMake();
 $present = $node;
 $code = $argc > 0 ? '
@@ -55,8 +58,7 @@ try { $node->prefix(); } catch (ArgumentCountError $error) {
 $number = 1; $node->change($number); echo $number, '|';
 $evalChild->collect($missing);
 $other->collect(1);
-$nullable = sourceVariadicNullable($argc < 0);
-$nullable?->collect(sourceVariadicArgument());
+sourceVariadicNullsafe(sourceVariadicNullable($argc < 0));
 echo 'done';
 "#);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
