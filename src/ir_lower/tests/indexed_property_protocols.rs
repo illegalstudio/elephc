@@ -55,3 +55,24 @@ $child = new IndexedPrivateChild([2 => 2, 1005 => 1]);
 }
 
 supported_target_cases!(indexed_private_ancestor_storage, verify_indexed_private_ancestor_storage);
+
+/// Inaccessible declared storage with a getter remains an overloaded read on every target.
+fn verify_indexed_private_magic_property(target: &str) {
+    let source = r#"<?php
+class IndexedPrivateMagicValue {
+    private mixed $items = null;
+    private mixed $visible;
+    public function __construct(SimpleXMLElement $node) { $this->visible = $node; }
+    public function __get(string $name): mixed { return $this->visible; }
+}
+function indexedPrivateMagicWrite(IndexedPrivateMagicValue $object): void { $object->items[0] .= 'K'; }
+indexedPrivateMagicWrite(new IndexedPrivateMagicValue(new SimpleXMLElement('<r>V</r>')));
+"#;
+    let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+        std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+    crate::ir::validate_module(&module).unwrap();
+    crate::codegen::generate_user_asm_from_ir(&module, false, false)
+        .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+}
+
+supported_target_cases!(indexed_private_magic_property, verify_indexed_private_magic_property);

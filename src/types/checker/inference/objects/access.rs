@@ -289,6 +289,10 @@ impl Checker {
                     .map(String::as_str)
                     .unwrap_or(class_name);
                 if !self.can_access_member(declaring_class, visibility) {
+                    if let Some(getter) = class_info.methods.get("__get") {
+                        // Inaccessible declared properties use the same magic read as missing ones.
+                        return Ok(getter.return_type.clone());
+                    }
                     return Err(CompileError::new(
                         expr.span,
                         &format!(

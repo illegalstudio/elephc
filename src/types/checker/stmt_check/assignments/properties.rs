@@ -935,6 +935,17 @@ fn resolve_object_array_property(
     if crate::types::builtin_classes::native_property_method(class_name, property,
         elephc_builtin_contract::ObjectProperty::Get, &checker.classes).is_some()
     { return Ok((PhpType::Object(class_name.to_string()), true)); }
+    let inaccessible_read = class_info.property_visibilities.get(property).is_some_and(|visibility| {
+        let declaring = class_info.property_declaring_classes.get(property)
+            .map(String::as_str).unwrap_or(class_name);
+        !checker.can_access_member(declaring, visibility)
+    });
+    if inaccessible_read {
+        if let Some(getter) = class_info.methods.get("__get") {
+            // The selected value belongs to the accessor, never to the inaccessible slot.
+            return Ok((getter.return_type.clone(), true));
+        }
+    }
     if class_info.visible_property(property).is_none() {
         if crate::types::builtin_classes::has_native_dimensions(class_name, &checker.classes) {
             if let Some(sig) = class_info.methods.get("__get") {
