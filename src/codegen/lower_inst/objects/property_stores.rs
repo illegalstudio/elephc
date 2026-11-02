@@ -294,6 +294,14 @@ pub(super) fn publish_reference_cell_result_then_release_previous(
     incoming_result_ty: &PhpType,
 ) -> Result<()> {
     let prop_ty = prop_ty.codegen_repr();
+    if prop_ty == PhpType::Mixed {
+        let done = ctx.next_label("mixed_property_reference_store_slot");
+        let scratch = if ctx.emitter.target.arch == Arch::AArch64 { "x12" } else { "r8" };
+        let marker = if ctx.emitter.target.arch == Arch::AArch64 { "x13" } else { "rcx" };
+        crate::codegen_support::runtime::reference_cells::follow_mixed_reference_slot(
+            ctx.emitter, pointer_reg, scratch, marker, &done,
+        );
+    }
     let releases_value =
         matches!(prop_ty, PhpType::Str | PhpType::Callable) || prop_ty.is_refcounted();
     if !releases_value {

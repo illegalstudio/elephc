@@ -150,6 +150,14 @@ unsafe extern "C" {
         scope_ptr: *const u8,
         scope_len: u64,
     ) -> *mut RuntimeCell;
+    /// Returns an owned alias of eligible native property storage, or null when unsupported.
+    pub(super) fn __elephc_eval_value_property_reference(
+        object: *mut RuntimeCell,
+        name_ptr: *const u8,
+        name_len: u64,
+        scope_ptr: *const u8,
+        scope_len: u64,
+    ) -> *mut RuntimeCell;
     /// Tests whether an instance property is initialized and visible in the supplied scope.
     pub(super) fn __elephc_eval_value_property_is_initialized(
         object: *mut RuntimeCell,

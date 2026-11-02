@@ -31,6 +31,7 @@ mod replacement;
 mod unset;
 mod unset_boundary;
 mod reference_slots;
+mod reference_getter;
 use replacement::emit_owned_slot_replacement;
 use dynamic_properties::{
     emit_dynamic_property_get_fallback, emit_dynamic_property_set_fallback,
@@ -89,6 +90,7 @@ pub(super) fn emit_eval_property_helpers(
     }
     let slots = collect_eval_property_slots(module);
     emit_property_get_helper(module, emitter, data, &slots);
+    reference_getter::emit(module, emitter, data, &slots);
     emit_property_is_initialized_helper(module, emitter, data, &slots);
     emit_property_set_helper(module, emitter, data, &slots);
     unset::emit_property_unset_helper(module, emitter, data, &slots);
@@ -824,7 +826,7 @@ fn emit_x86_64_property_scope_check(
 /// Returns ARM64 stack offsets for the class-scope pointer and length.
 fn aarch64_scope_offsets(mode: &str) -> (usize, usize) {
     match mode {
-        "get" | "is_initialized" | "unset" => (32, 40),
+        "get" | "reference" | "is_initialized" | "unset" => (32, 40),
         "set" => (40, 48),
         _ => unreachable!("unknown eval property bridge operation"),
     }
@@ -833,7 +835,7 @@ fn aarch64_scope_offsets(mode: &str) -> (usize, usize) {
 /// Returns x86_64 frame offsets for the class-scope pointer and length.
 fn x86_64_scope_offsets(mode: &str) -> (usize, usize) {
     match mode {
-        "get" | "is_initialized" | "unset" => (40, 48),
+        "get" | "reference" | "is_initialized" | "unset" => (40, 48),
         "set" => (48, 56),
         _ => unreachable!("unknown eval property bridge operation"),
     }
@@ -1500,7 +1502,7 @@ fn emit_x86_64_store_tagged_scalar_property(emitter: &mut Emitter, slot: &EvalPr
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer for the store
     let payload = reference_slots::payload_slot(emitter, slot, "r11");
     let slot = payload.as_ref();
-    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", slot.offset));//store the nullable integer payload into the property slot
+    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", slot.offset)); //store the nullable integer payload into the property slot
     emitter.instruction(                                                        // store the nullable integer tag into the property slot
         &format!("mov QWORD PTR [r11 + {}], rdx", slot.offset + 8)
     );

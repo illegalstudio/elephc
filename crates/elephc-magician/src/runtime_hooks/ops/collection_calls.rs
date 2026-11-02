@@ -178,6 +178,18 @@ macro_rules! impl_collection_call_ops {
         })
     }
 
+    /// Retains an eligible native property's persistent reference without copying its value.
+    fn property_reference(
+        &mut self, object: RuntimeCellHandle, property: &str,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        let (scope_ptr, scope_len) = self.current_class_scope_abi();
+        let reference = unsafe {
+            __elephc_eval_value_property_reference(object.as_ptr(), property.as_ptr(),
+                property.len() as u64, scope_ptr, scope_len)
+        };
+        if reference.is_null() { Ok(None) } else { Self::handle(reference).map(Some) }
+    }
+
     /// Checks an AOT instance property initialization marker through the generated helper.
     fn property_is_initialized(
         &mut self,

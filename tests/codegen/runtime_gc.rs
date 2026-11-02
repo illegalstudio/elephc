@@ -225,6 +225,8 @@ mod issue_551_ownership;
 mod object_mixed_return_owners;
 mod native_string_arguments;
 mod native_property_unset;
+#[path = "runtime_gc/native_mixed_property_aliases.rs"]
+mod native_mixed_property_aliases;
 mod eval_closure_receivers;
 mod eval_alias_unwind;
 mod eval_call_result_owners;

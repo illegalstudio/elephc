@@ -476,6 +476,13 @@ pub trait RuntimeValueOps {
         property: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Returns an owned persistent reference when native property storage supports one.
+    fn property_reference(
+        &mut self, _object: RuntimeCellHandle, _property: &str,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        Ok(None)
+    }
+
     /// Checks whether a generated/AOT instance property is initialized.
     fn property_is_initialized(
         &mut self,

@@ -1530,6 +1530,23 @@ pub(crate) fn single_object_class_name(ty: &PhpType) -> Option<String> {
 /// (borrowed cell) and are left untouched. Object-owned reference cells are also recorded
 /// in `owned_reference_properties` so the object allocates and frees them.
 fn apply_reference_property_promotions(checker: &mut Checker) {
+    if checker.program_contains_eval {
+        let classes = &checker.classes;
+        let candidates = classes.iter().flat_map(|(name, info)| {
+            info.properties.iter().enumerate().filter_map(move |(index, (property, ty))| {
+                let declaring = info.property_declaring_classes.get(property).unwrap_or(name);
+                (ty == &PhpType::Mixed && info.visible_property_index(property) == Some(index)
+                    && info.property_slot_is_declared(index, property)
+                    && !info.reference_properties.contains(property)
+                    && !info.readonly_properties.contains(property)
+                    && !info.property_set_visibilities.contains_key(property)
+                    && !info.property_hooks.contains_key(property)
+                    && classes.get(declaring).is_some_and(|owner| !owner.is_internal))
+                    .then(|| (name.clone(), property.clone()))
+            })
+        }).collect::<Vec<_>>();
+        checker.reference_property_promotions.extend(candidates);
+    }
     let promotions = std::mem::take(&mut checker.reference_property_promotions);
     for (access_class, prop) in promotions {
         let declaring = checker

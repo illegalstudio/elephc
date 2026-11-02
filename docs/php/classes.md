@@ -1053,6 +1053,11 @@ the default instead of raising, on instance and static typed properties alike,
 including reads through a nullable receiver (`?Row $r` → `$r->id ?? "none"`). A
 plain read still raises the catchable `Error`.
 
+An eval function can retain a reference parameter bound to an ordinary `mixed`
+instance property. The alias observes subsequent native and eval writes and can
+outlive the object. Cloning preserves shared aliases; unsetting the property
+detaches its storage while surviving aliases keep their value.
+
 ### `unset()` on a dynamic property
 
 A property that lives in the object's **dynamic-property hash** — every `stdClass`

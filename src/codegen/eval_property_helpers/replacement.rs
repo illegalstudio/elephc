@@ -19,8 +19,16 @@ pub(super) fn emit_owned_slot_replacement(emitter: &mut Emitter, slot: &EvalProp
     let object = abi::symbol_scratch_reg(emitter);
     let previous = abi::secondary_scratch_reg(emitter);
     let result = abi::int_result_reg(emitter);
+    let is_reference = slot.is_reference;
     abi::load_at_offset(emitter, object, object_frame_offset);
     let payload = super::reference_slots::payload_slot(emitter, slot, object);
+    if slot.is_reference && slot.ty.codegen_repr() == PhpType::Mixed {
+        let done = format!("{}_reference_payload", slot_body_label_raw(slot, "set"));
+        let marker = if emitter.target.arch == Arch::AArch64 { "x12" } else { "r8" };
+        crate::codegen_support::runtime::reference_cells::follow_mixed_reference_slot(
+            emitter, object, previous, marker, &done,
+        );
+    }
     let slot = payload.as_ref();
     abi::emit_load_from_address(emitter, previous, object, slot.offset);
     if slot.ty.codegen_repr() == PhpType::Str {
@@ -29,7 +37,9 @@ pub(super) fn emit_owned_slot_replacement(emitter: &mut Emitter, slot: &EvalProp
         abi::emit_store_to_address(emitter, length, object, slot.offset + 8);
     } else {
         abi::emit_store_to_address(emitter, result, object, slot.offset);
-        abi::emit_store_zero_to_address(emitter, object, slot.offset + 8);
+        if !is_reference {
+            abi::emit_store_zero_to_address(emitter, object, slot.offset + 8);
+        }
     }
     abi::emit_reg_move(emitter, result, previous);
     abi::emit_call_label(emitter, "__rt_decref_any");

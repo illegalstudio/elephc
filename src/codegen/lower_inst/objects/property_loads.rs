@@ -108,6 +108,9 @@ pub(super) fn emit_reference_property_load(
             )))
         }
     }
+    if slot.php_type.codegen_repr() == PhpType::Mixed {
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_deref");
+    }
     Ok(())
 }
 

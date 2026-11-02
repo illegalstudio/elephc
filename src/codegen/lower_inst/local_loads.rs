@@ -165,6 +165,9 @@ pub(super) fn load_ref_cell_local_to_result_as(
             );
         }
     }
+    if payload_ty == PhpType::Mixed {
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_deref");
+    }
     coerce_borrowed_ref_cell_local(ctx, &payload_ty, &result_ty)?;
     Ok(result_ty)
 }

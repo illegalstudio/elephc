@@ -789,6 +789,13 @@ fn store_value_to_raw_ref_cell_as(
     let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::load_at_offset(ctx.emitter, pointer_reg, offset);
     let old_reg = abi::tertiary_scratch_reg(ctx.emitter);
+    if target_ty == PhpType::Mixed {
+        let done = ctx.next_label("mixed_reference_store_slot");
+        let scratch = abi::secondary_scratch_reg(ctx.emitter);
+        crate::codegen_support::runtime::reference_cells::follow_mixed_reference_slot(
+            ctx.emitter, pointer_reg, scratch, old_reg, &done,
+        );
+    }
     if retires_previous {
         abi::emit_load_from_address(ctx.emitter, old_reg, pointer_reg, 0);
         pop_ref_cell_store_value(ctx, &target_ty);

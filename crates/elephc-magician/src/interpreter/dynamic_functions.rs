@@ -260,11 +260,19 @@ fn eval_property_call_arg_value(
     selection: Option<elephc_builtin_contract::ObjectProperty>,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
+    let mut persistent_native = false;
     let selected = (|| {
         if let Some(operation) = selection {
             if let Some(value) = runtime_ops::simplexml_properties::invoke(values, object, &property,
                 operation, None)?
             { return Ok(value); }
+        }
+        if selection.is_some() && values.supports_persistent_references() {
+            validate_property_ref_target(object, &property, context, values)?;
+            if let Some(reference) = values.property_reference(object, &property)? {
+                persistent_native = true;
+                return Ok(reference);
+            }
         }
         eval_property_get_result(object, &property, context, values)
     })();
@@ -275,6 +283,12 @@ fn eval_property_call_arg_value(
             return Err(status);
         }
     };
+    if persistent_native {
+        return argument_owners::finish_argument_reference_owners(
+            Ok((value, Some(EvalReferenceTarget::Cell { cell: value.borrowed() }))),
+            vec![object], context, values,
+        );
+    }
     let native = match runtime_ops::simplexml_properties::is_native(values, object, &property) {
         Ok(native) => native,
         Err(status) => {
