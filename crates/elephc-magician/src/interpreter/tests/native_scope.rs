@@ -18,7 +18,7 @@ fn native_bridge_scope_restores_adapter_across_foreign_contexts() {
     let mut values = FakeOps::default();
     values.replace_native_class_scope(Some("AdapterOriginal".into()));
     let mut context = ElephcEvalContext::new();
-    context.push_class_scope("CallerOriginal".into());
+    context.push_class_scope("CallerOriginal");
     let mut foreign = ElephcEvalContext::new();
     let result: Result<(), EvalStatus> = eval_with_native_bridge_scope("NativeParent", &mut context, &mut values, |values| {
         assert_eq!(values.replace_native_class_scope(Some("NativeParent".into())), Some("NativeParent".into()));

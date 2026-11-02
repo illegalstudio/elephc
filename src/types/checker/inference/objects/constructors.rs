@@ -167,6 +167,16 @@ impl Checker {
                     Self::declared_method_param_flags(owner_info, "__construct", false);
                 let effective_sig = Self::callable_sig_for_declared_params(sig, &declared_flags);
                 let param_to_prop = owner_info.constructor_param_to_prop.clone();
+                let mixed_owner = self.classes.get(declaring_class).unwrap_or(owner_info);
+                let owned_mixed_references = param_to_prop.iter().map(|property| property.as_ref()
+                    .is_some_and(|property| mixed_owner.visible_property(property)
+                        .is_some_and(|(slot, (_, ty))| ty == &PhpType::Mixed
+                            && mixed_owner.property_slot_is_declared(slot, property)
+                            && !mixed_owner.is_internal
+                            && !mixed_owner.readonly_properties.contains(property)
+                            && !mixed_owner.property_set_visibilities.contains_key(property)
+                            && mixed_owner.property_hooks.get(property).is_none_or(|hooks| !hooks.any()))))
+                    .collect::<Vec<_>>();
                 let normalized_args = self.normalize_named_call_args(
                     &effective_sig,
                     args,
@@ -187,15 +197,7 @@ impl Checker {
                     effective_sig
                 };
                 for (i, arg) in normalized_args.iter().enumerate() {
-                    let mixed_owner = self.classes.get(declaring_class).unwrap_or(owner_info);
-                    let owns_mixed_reference = param_to_prop.get(i).and_then(Option::as_ref)
-                        .is_some_and(|property| mixed_owner.visible_property(property)
-                            .is_some_and(|(slot, (_, ty))| ty == &PhpType::Mixed
-                                && mixed_owner.property_slot_is_declared(slot, property)
-                                && !mixed_owner.is_internal
-                                && !mixed_owner.readonly_properties.contains(property)
-                                && !mixed_owner.property_set_visibilities.contains_key(property)
-                                && mixed_owner.property_hooks.get(property).is_none_or(|hooks| !hooks.any())));
+                    let owns_mixed_reference = owned_mixed_references.get(i).copied().unwrap_or(false);
                     let persistent_reference = param_to_prop
                         .get(i)
                         .is_some_and(|mapped| mapped.is_some())
