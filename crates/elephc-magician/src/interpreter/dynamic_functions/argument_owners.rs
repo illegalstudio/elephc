@@ -50,8 +50,8 @@ pub(in crate::interpreter) fn eval_owned_call_arg_values(
 
             if let Some(name) = arg.name() {
                 saw_named = true;
-                let (value, mut ref_target) =
-                    eval_call_arg_value(arg.value(), context, caller_scope, values)?;
+                let (value, ref_target) = eval_call_arg_value(arg.value(), context, caller_scope, values)?;
+                let (value, mut ref_target) = own_temporary_reference(value, ref_target, context, values)?;
                 capture_argument_receiver_owners(ref_target.as_mut(), &mut receiver_owners);
                 let value = if value.is_borrowed() {
                     values.retain(value)?
@@ -69,7 +69,8 @@ pub(in crate::interpreter) fn eval_owned_call_arg_values(
             if saw_named {
                 return Err(EvalStatus::RuntimeFatal);
             }
-            let (value, mut ref_target) = eval_call_arg_value(arg.value(), context, caller_scope, values)?;
+            let (value, ref_target) = eval_call_arg_value(arg.value(), context, caller_scope, values)?;
+            let (value, mut ref_target) = own_temporary_reference(value, ref_target, context, values)?;
             capture_argument_receiver_owners(ref_target.as_mut(), &mut receiver_owners);
             let value = if value.is_borrowed() {
                 values.retain(value)?
@@ -151,4 +152,24 @@ pub(super) fn finish_argument_reference_owners(
         }
         (Ok(result), Ok(())) => Ok(result),
     }
+}
+
+/// Promotes a temporary XML selection to a reference that may escape without parent writeback.
+fn own_temporary_reference(
+    value: RuntimeCellHandle, target: Option<EvalReferenceTarget>,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
+    if matches!(&target, Some(EvalReferenceTarget::Cell { cell }) if *cell == value)
+        && values.supports_persistent_references()
+    {
+        match values.is_reference(value) {
+            Ok(true) => return Ok((value, target)),
+            Ok(false) => {}
+            Err(status) => { let _ = release_expr_result(value, context, values); return Err(status); }
+        }
+        let result = values.reference_new(value);
+        let reference = finish_synthesized_method_arguments(result, vec![value], context, values)?;
+        return Ok((reference, Some(EvalReferenceTarget::Cell { cell: reference.borrowed() })));
+    }
+    Ok((value, target))
 }

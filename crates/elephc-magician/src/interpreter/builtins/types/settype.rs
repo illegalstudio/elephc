@@ -17,81 +17,51 @@ eval_builtin! {
     values: Settype,
 }
 
-/// Evaluates direct by-reference `settype()` calls and writes the converted cell back.
+/// Keeps direct settype operands and reference receivers owned through conversion and writeback.
 pub(in crate::interpreter) fn eval_builtin_settype_call(
-    args: &[EvalCallArg],
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
+    args: &[EvalCallArg], context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let (value, target, type_name) = eval_settype_direct_args(args, context, scope, values)?;
-    let Some(converted) = eval_settype_cast_value(value, type_name, values)? else {
-        return values.bool_value(false);
-    };
-    eval_write_direct_ref_target(
-        &target,
-        converted,
-        context,
-        values,
-        Some(ScopeCellOwnership::Owned),
-    )?;
-    values.bool_value(true)
+    with_eval_call_arguments(args, context, scope, values, |args, context, _, values| {
+        let (value, target, type_name) = bind_settype_arguments(args)?;
+        let Some(converted) = eval_settype_cast_value(value, type_name, values)? else {
+            return values.bool_value(false);
+        };
+        if matches!(&target, EvalReferenceTarget::Variable { .. }) {
+            // Variable assignment consumes the converted owner on success and rejection.
+            eval_write_direct_ref_target(&target, converted, context, values, Some(ScopeCellOwnership::Owned))?;
+            values.bool_value(true)
+        } else {
+            let result = eval_write_direct_ref_target(&target, converted, context, values, None)
+                .and_then(|()| values.bool_value(true));
+            finish_synthesized_method_arguments(result, vec![converted], context, values)
+        }
+    })
 }
 
-/// Evaluates and binds direct `settype()` arguments while preserving source order.
-pub(in crate::interpreter) fn eval_settype_direct_args(
-    args: &[EvalCallArg],
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
+/// Binds already evaluated named or positional operands without repeating PHP side effects.
+fn bind_settype_arguments(
+    args: Vec<EvaluatedCallArg>,
 ) -> Result<(RuntimeCellHandle, EvalReferenceTarget, RuntimeCellHandle), EvalStatus> {
-    let mut var_target = None;
+    let mut variable = None;
     let mut type_name = None;
-    let mut positional_index = 0;
-    let mut saw_named = false;
-
+    let mut positional = 0;
     for arg in args {
-        if arg.is_spread() {
-            return Err(EvalStatus::RuntimeFatal);
-        }
-        let parameter = if let Some(name) = arg.name() {
-            saw_named = true;
+        let parameter = if let Some(name) = arg.name.as_deref() { name } else {
+            let name = match positional { 0 => "var", 1 => "type", _ => return Err(EvalStatus::RuntimeFatal) };
+            positional += 1;
             name
-        } else {
-            if saw_named {
-                return Err(EvalStatus::RuntimeFatal);
-            }
-            let parameter = match positional_index {
-                0 => "var",
-                1 => "type",
-                _ => return Err(EvalStatus::RuntimeFatal),
-            };
-            positional_index += 1;
-            parameter
         };
-
         match parameter {
-            "var" => {
-                if var_target.is_some() {
-                    return Err(EvalStatus::RuntimeFatal);
-                }
-                let (value, target) = eval_call_arg_value(arg.value(), context, scope, values)?;
-                let target = target.ok_or(EvalStatus::RuntimeFatal)?;
-                var_target = Some((value, target));
+            "var" if variable.is_none() => {
+                variable = Some((arg.value, arg.ref_target.ok_or(EvalStatus::RuntimeFatal)?));
             }
-            "type" => {
-                if type_name.is_some() {
-                    return Err(EvalStatus::RuntimeFatal);
-                }
-                type_name = Some(eval_expr(arg.value(), context, scope, values)?);
-            }
+            "type" if type_name.is_none() => type_name = Some(arg.value),
             _ => return Err(EvalStatus::RuntimeFatal),
         }
     }
-
-    let (value, target) = var_target.ok_or(EvalStatus::RuntimeFatal)?;
-    let type_name = type_name.ok_or(EvalStatus::RuntimeFatal)?;
-    Ok((value, target, type_name))
+    let (value, target) = variable.ok_or(EvalStatus::RuntimeFatal)?;
+    Ok((value, target, type_name.ok_or(EvalStatus::RuntimeFatal)?))
 }
 
 /// Dispatches by-value `settype()` callable calls after argument binding.

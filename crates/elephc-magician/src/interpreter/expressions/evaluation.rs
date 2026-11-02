@@ -120,7 +120,8 @@ pub(in crate::interpreter) fn eval_array_get_result(
         return values.array_get(array, index);
     }
     if !eval_array_access_object_matches(array, context, values)? {
-        return Err(EvalStatus::RuntimeFatal);
+        let class_name = eval_closure_bound_object_class_name(array, context, values)?;
+        return eval_throw_error(&format!("Cannot use object of type {class_name} as array"), context, values);
     }
     if let Some(value) = super::super::runtime_ops::simplexml_properties::dimension(
         values, array, elephc_builtin_contract::ObjectDimension::Get, vec![index],

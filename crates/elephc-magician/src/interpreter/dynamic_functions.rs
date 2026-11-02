@@ -226,20 +226,37 @@ pub(in crate::interpreter) fn eval_call_arg_value(
     }
 }
 
-/// Keeps a temporary property receiver for successful writeback and retires it on failed reads.
+/// Keeps ordinary reference receivers while XML selections become independent temporary targets.
 fn eval_property_call_arg_value(
     object: RuntimeCellHandle, property: String, access_scope: ElephcEvalExecutionScope,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
-    let result = eval_property_get_result(object, &property, context, values).and_then(|value| {
-        if let Err(status) = validate_property_ref_target(object, &property, context, values) {
-            let _ = release_expr_result(value, context, values);
+    let value = match eval_property_get_result(object, &property, context, values) {
+        Ok(value) => value,
+        Err(status) => {
+            let _ = release_expr_result(object, context, values);
             return Err(status);
         }
-        Ok((value, Some(EvalReferenceTarget::ObjectProperty { object, property, access_scope })))
-    });
-    if result.is_err() { let _ = release_expr_result(object, context, values); }
-    result
+    };
+    let native = match runtime_ops::simplexml_properties::is_native(values, object, &property) {
+        Ok(native) => native,
+        Err(status) => {
+            let _ = release_expr_result(value, context, values);
+            let _ = release_expr_result(object, context, values);
+            return Err(status);
+        }
+    };
+    if native {
+        let result = promote_borrowed_result(value, values).map(|value|
+            (value, Some(EvalReferenceTarget::Cell { cell: value.borrowed() })));
+        return argument_owners::finish_argument_reference_owners(result, vec![object], context, values);
+    }
+    if let Err(status) = validate_property_ref_target(object, &property, context, values) {
+        let _ = release_expr_result(value, context, values);
+        let _ = release_expr_result(object, context, values);
+        return Err(status);
+    }
+    Ok((value, Some(EvalReferenceTarget::ObjectProperty { object, property, access_scope })))
 }
 
 /// Keeps indexed argument receivers and keys alive until either selection or reference writeback ends.
@@ -261,7 +278,14 @@ fn eval_nested_array_element_call_arg_value(
                 return Err(status);
             }
         };
-        if tag == EVAL_TAG_OBJECT { return Ok((value, None)); }
+        if tag == EVAL_TAG_OBJECT {
+            let native = match runtime_ops::simplexml_properties::is_native(values, array, "") {
+                Ok(native) => native,
+                Err(status) => { let _ = release_expr_result(value, context, values); return Err(status); }
+            };
+            let target = native.then(|| EvalReferenceTarget::Cell { cell: value.borrowed() });
+            return Ok((value, target));
+        }
         let Some(target) = array_target.take() else { return Ok((value, None)); };
         index_owner = None;
         let target = match target {
