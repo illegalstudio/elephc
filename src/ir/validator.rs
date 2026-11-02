@@ -893,8 +893,12 @@ fn validate_opcode_rules(
                 let ValueDef::Instruction { inst: load, .. } = owner.def else {
                     return Err(ValidationError::OwnershipTypeMismatch(inst.operands[1]));
                 };
-                if function.instruction(load).is_none_or(|load|
-                    load.op != Op::LoadLocal || !matches!(load.immediate, Some(Immediate::LocalSlot(_))))
+                let parking_slot = function.instruction(load).and_then(|load| {
+                    if load.op != Op::LoadLocal { return None; }
+                    let Some(Immediate::LocalSlot(slot)) = load.immediate else { return None; };
+                    function.locals.get(slot.as_raw() as usize)
+                });
+                if parking_slot.is_none_or(|slot| slot.kind != LocalKind::OwnedTemp)
                     || owner.ownership != Ownership::Borrowed
                 { return Err(ValidationError::OwnershipTypeMismatch(inst.operands[1])); }
                 Ok(())

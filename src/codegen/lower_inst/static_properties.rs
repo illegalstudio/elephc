@@ -421,6 +421,9 @@ fn static_transfer_owner_offset(
     let Some(Immediate::LocalSlot(slot)) = instruction.immediate else {
         return Err(CodegenIrError::invalid_module("static transfer owner needs a parking slot"));
     };
+    if ctx.local_kind(slot)? != crate::ir::LocalKind::OwnedTemp {
+        return Err(CodegenIrError::invalid_module("static transfer owner must be an unwind parking slot"));
+    }
     ctx.local_offset(slot).map(Some)
 }
 
