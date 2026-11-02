@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::codegen_support::data_section::comm_directive;
 use crate::codegen_support::platform::Target;
-use crate::codegen_support::sentinels::{JSON_DECLARED_PROPERTY_FLAG, JSON_REFERENCE_PROPERTY_FLAG, SERPROP_FALSE_ONLY_BIT, TAGGED_SCALAR_PROPERTY_TAG};
+use crate::codegen_support::sentinels::{JSON_DECLARED_PROPERTY_FLAG, JSON_REFERENCE_PROPERTY_FLAG, SERPROP_FALSE_ONLY_BIT, SERPROP_REFERENCE_PROPERTY_FLAG, TAGGED_SCALAR_PROPERTY_TAG};
 use crate::codegen_support::source_method_adapters::{self, MethodAbiPlan, MethodKind};
 use crate::names::{
     enum_case_symbol, function_variant_active_symbol, interface_method_wrapper_symbol, mangle_fqn,
@@ -1520,7 +1520,10 @@ pub(crate) fn emit_runtime_data_user(
                 .get(*prop_name)
                 .copied()
                 .unwrap_or(8 + prop_index * 16);
-            let tag = prop_value_tag(metadata, prop_name, prop_ty);
+            let tag = serialized_property_payload_tag(prop_ty)
+                | if class_info.property_slot_is_reference(*prop_index, prop_name) {
+                    SERPROP_REFERENCE_PROPERTY_FLAG
+                } else { 0 };
             out.push_str(&format!(
                 "    .quad _class_serpname_{}_{}\n",
                 class_info.class_id, prop_index
@@ -4377,6 +4380,11 @@ fn prop_value_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType) ->
     if class_info.reference_properties.contains(prop_name) {
         return 7;
     }
+    serialized_property_payload_tag(prop_ty)
+}
+
+/// Returns the logical serialization tag of a property's native payload after following its cell.
+fn serialized_property_payload_tag(prop_ty: &PhpType) -> u64 {
     if prop_ty.codegen_repr() == PhpType::TaggedScalar {
         return TAGGED_SCALAR_PROPERTY_TAG;
     }

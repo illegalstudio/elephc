@@ -145,3 +145,57 @@ exerciseNativeMixedScopes($argc > 0);
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
     assert!(!output.stderr.contains("Warning:"), "{}", output.stderr);
 }
+
+/// Serialization and hydration preserve native cells, persistent wrappers and low-word sentinels.
+#[test]
+fn test_native_reference_property_serialization_bundle() {
+    let source = r#"<?php
+class SerializedNativeMixed {
+    public mixed $value = ['key' => 'old'];
+    public mixed $missing;
+    public function &valueRef(): mixed { return $this->value; }
+}
+class SerializedNativeRaw {
+    public string $text = 'old';
+    public int $number = 1;
+    public function &textRef(): string { return $this->text; }
+    public function &numberRef(): int { return $this->number; }
+}
+class SerializedNativeSleep {
+    public mixed $value = 'sleep';
+    public mixed $missing;
+    public function __sleep(): array { return ['value', 'missing']; }
+}
+function exerciseNativeReferenceSerialization(bool $run): void {
+    $object = new SerializedNativeMixed();
+    $alias =& $object->valueRef();
+    $alias = ['key' => 'changed'];
+    $restored = unserialize(serialize($object));
+    echo json_encode($restored), '|';
+    $restored->value = ['key' => 'hydrated'];
+    echo json_encode($restored->value), '|';
+    $raw = new SerializedNativeRaw();
+    $text =& $raw->textRef();
+    $number =& $raw->numberRef();
+    $text = 'text';
+    $number = 7;
+    $rawCopy = unserialize(serialize($raw));
+    echo $rawCopy->text, ':', $rawCopy->number, '|';
+    $sleep = new SerializedNativeSleep();
+    $sleepCopy = unserialize(serialize($sleep));
+    echo json_encode($sleepCopy), '|';
+    unset($object->value);
+    $unsetCopy = unserialize(serialize($object));
+    echo json_encode($unsetCopy), '|';
+    $code = $run ? 'echo "eval|";' : '';
+    eval($code);
+    unset($object, $restored, $raw, $rawCopy, $sleep, $sleepCopy, $unsetCopy, $alias, $text, $number, $code);
+}
+exerciseNativeReferenceSerialization($argc > 0);
+"#;
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "{\"value\":{\"key\":\"changed\"}}|{\"key\":\"hydrated\"}|text:7|{\"value\":\"sleep\"}|{\"value\":{\"key\":\"old\"}}|eval|");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+    assert!(!output.stderr.contains("Warning:"), "{}", output.stderr);
+}
