@@ -339,7 +339,9 @@ pub(super) fn eval_array_element_reference_write(
             write_back_method_ref_target(&target, value, context, values)
         }
         EvalReferenceTarget::Cell { .. } => {
-            context.bind_array_element_alias(array, key, EvalReferenceTarget::Cell { cell: value });
+            // The following array store owns its replacement. Keeping a borrowed RHS cell in
+            // alias metadata would outlive operand cleanup and read recycled storage afterward.
+            context.remove_array_element_alias(array, &key);
             Ok(())
         }
         _ => write_back_method_ref_target(&target, value, context, values),
