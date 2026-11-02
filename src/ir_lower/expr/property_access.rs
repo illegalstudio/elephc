@@ -1210,10 +1210,10 @@ pub(super) fn lower_property_probe_from_value(
         elephc_builtin_contract::ObjectProperty::Probe)
     {
         let name = Expr::new(ExprKind::StringLiteral(property.into()), expr.span);
-        let call = if value_is_nullable(ctx, object.value) || value_may_carry_container_miss(ctx, object.value) {
-            Op::NullsafeMethodCall
-        } else { Op::MethodCall };
-        return lower_method_call_with_receiver(ctx, object, method, &[name], call, expr);
+        if value_is_nullable(ctx, object.value) || value_may_carry_container_miss(ctx, object.value) {
+            return lower_nullsafe_method_call_from_receiver(ctx, object, method, &[name], expr);
+        }
+        return lower_method_call_with_receiver(ctx, object, method, &[name], Op::MethodCall, expr);
     }
     if !property.starts_with("__elephc_") && ctx.classes.contains_key("SimpleXMLElement")
         && matches!(ctx.builder.value_php_type(object.value).codegen_repr(), PhpType::Mixed | PhpType::Union(_))

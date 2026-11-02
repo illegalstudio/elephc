@@ -32,11 +32,25 @@ pub(super) fn lower_nullsafe_method_call(
     expr: &Expr,
 ) -> LoweredValue {
     let object = lower_expr(ctx, object);
+    lower_nullsafe_method_call_from_receiver(ctx, object, method, args, expr)
+}
+
+/// Guards a prepared receiver, including missing elements whose declared type excludes null.
+pub(super) fn lower_nullsafe_method_call_from_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    method: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> LoweredValue {
     let object_ty = ctx.builder.value_php_type(object.value);
     if value_is_definitely_null(ctx, object.value) {
+        release_owning_receiver_temporary(ctx, object, expr.span);
         return lower_boxed_null(ctx, expr);
     }
-    let Some((_, true)) = singular_object_class(&object_ty) else {
+    let nullable = singular_object_class(&object_ty).is_some_and(|(_, nullable)| nullable);
+    let container_miss = value_may_carry_container_miss(ctx, object.value);
+    if !nullable && !container_miss {
         return lower_method_call_with_receiver(
             ctx,
             object,
@@ -45,7 +59,7 @@ pub(super) fn lower_nullsafe_method_call(
             Op::NullsafeMethodCall,
             expr,
         );
-    };
+    }
     let result_type = method_call_result_type(
         ctx,
         object.value,
@@ -53,6 +67,9 @@ pub(super) fn lower_nullsafe_method_call(
         Op::NullsafeMethodCall,
         expr,
     );
+    let result_type = if container_miss && !nullable && result_type.codegen_repr() != PhpType::Mixed {
+        nullable_result_type(result_type)
+    } else { result_type };
     let temp_name = ctx.declare_hidden_temp(result_type.clone());
     let null_block = ctx.builder.create_named_block("nullsafe.method.null", Vec::new());
     let call_block = ctx.builder.create_named_block("nullsafe.method.call", Vec::new());
@@ -74,6 +91,7 @@ pub(super) fn lower_nullsafe_method_call(
     });
 
     ctx.builder.position_at_end(null_block);
+    release_owning_receiver_temporary(ctx, object, expr.span);
     let null_value = lower_null(ctx, expr);
     let null_value = if result_type.codegen_repr() == PhpType::Mixed {
         ctx.box_value_as_mixed(null_value, result_type.clone(), Some(expr.span))
