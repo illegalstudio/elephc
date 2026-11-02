@@ -363,12 +363,17 @@ fn validate_instruction_effects(
         inst.op.default_effects()
     };
     let immutable_local_refinement = inst.op == Op::LoadLocal && inst.effects.is_pure();
+    // A gradual boundary cast (mixed to a declared scalar) warns through the user error
+    // handler, which may throw: lowering marks exactly those casts as throw points.
+    let throwing_boundary_cast = inst.op == Op::Cast
+        && inst.effects == Op::Cast.default_effects() | Effects::MAY_THROW;
     let packed_field_store_refinement = inst.op == Op::PropSet
         && matches!(inst.immediate, Some(Immediate::Data(_)))
         && inst.effects == Op::PropSet.packed_field_access_effects();
     if !inst.op.allows_effect_refinement()
         && !immutable_local_refinement
         && !packed_field_store_refinement
+        && !throwing_boundary_cast
         && inst.effects != expected
     {
         return Err(ValidationError::EffectMismatch {

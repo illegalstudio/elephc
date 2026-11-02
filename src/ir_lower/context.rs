@@ -6496,6 +6496,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         )
     }
 
+    /// Whether the variable `name` lives outside this frame's own slots: a `global` alias, a
+    /// superglobal, a top-level variable some function aliases, or a function `static`.
+    pub(crate) fn variable_storage_is_global_or_static(&self, name: &str) -> bool {
+        let kind = self.local_kinds.get(name).copied().unwrap_or(LocalKind::PhpLocal);
+        kind == LocalKind::StaticLocal || self.uses_global_storage(name, kind)
+    }
+
     fn uses_global_storage(&self, name: &str, kind: LocalKind) -> bool {
         kind == LocalKind::GlobalAlias
             || crate::superglobals::is_superglobal(name)

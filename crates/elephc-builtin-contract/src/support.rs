@@ -257,14 +257,19 @@ pub fn eval_execution(contract: &BuiltinContract) -> Option<EvalExecution> {
     if let Some(runtime_builtin) = runtime_builtin_id(contract.id) {
         // `headers_sent` joins them for its two by-reference out-parameters, which the boxed-cell
         // ABI cannot carry: the no-argument form is the shared helper, the others an adapter.
-        // `serialize` / `unserialize` keep the interpreter's own implementation: an object of an
-        // eval-declared class (its `__serialize`, `__sleep`, `Serializable` and hydration) exists
-        // only in the interpreter, so the compiled runtime helper cannot see its declaration.
+        // `serialize` / `unserialize` never take the shared helper from eval: an object of an
+        // eval-declared class (its `__serialize`, `__sleep`, `Serializable`, back-references and
+        // hydration) exists only in the interpreter, which the compiled runtime helper cannot see.
+        if matches!(runtime_builtin, RuntimeBuiltinId::Serialize | RuntimeBuiltinId::Unserialize) {
+            return Some(EvalExecution::Adapter {
+                runtime_builtin: None,
+                reason: EvalAdapterReason::DynamicObjectCoercion,
+            });
+        }
         return Some(if matches!(
             runtime_builtin,
             RuntimeBuiltinId::Intval | RuntimeBuiltinId::Round | RuntimeBuiltinId::HeadersSent
                 | RuntimeBuiltinId::MemoryGetUsage | RuntimeBuiltinId::MemoryGetPeakUsage
-                | RuntimeBuiltinId::Serialize | RuntimeBuiltinId::Unserialize
         ) {
             EvalExecution::Adapter {
                 runtime_builtin: Some(runtime_builtin),
@@ -559,12 +564,12 @@ mod tests {
         // builtins `headers_list` / `header_remove`.
         assert_eq!(shared_runtime, 91);
         // Heap usage queries keep a TypeError adapter for non-scalar flags; `headers_sent` keeps
-        // one for its by-reference out-parameters, and `serialize` / `unserialize` keep the
-        // interpreter's implementation for eval-declared classes.
-        assert_eq!(hybrid_adapter, 7);
+        // one for its by-reference out-parameters.
+        assert_eq!(hybrid_adapter, 5);
         // Includes the four float pointer builtins and `buffer_ptr`, which eval runs through
         // interpreter adapters.
-        assert_eq!(interpreter_adapter, 740 + curl_surface);
+        // `serialize` / `unserialize` are among them (see `eval_execution`).
+        assert_eq!(interpreter_adapter, 742 + curl_surface);
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own. So do the four
         // internal aliases the extension-hosting prelude calls.

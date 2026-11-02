@@ -209,14 +209,17 @@ pub(super) fn emit_property_warning_location(ctx: &mut FunctionContext<'_>, line
         ctx.emitter.instruction("mov rsi, rdx");                               // pass the formatted line-number length to the warning fragment buffer
     }
     abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
-    // Publish the real caller location for a user error handler.
+    // Publish the real caller location for a user error handler: one `php_site` record
+    // `{file descriptor, line}`, whose zero descriptor names the entry file (see
+    // `prepare_call_site`); warning dispatch expands it into the `_php_diagnostic_*` words.
+    let record = ctx.data.add_words(vec![
+        crate::codegen_support::data_section::DataWord::U64(0),
+        crate::codegen_support::data_section::DataWord::U64(u64::from(line)),
+    ]);
     let scratch = abi::symbol_scratch_reg(ctx.emitter);
-    abi::emit_symbol_address(ctx.emitter, scratch, "_script_source_file");
-    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file", 0);
-    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_script_source_file_len", 0);
-    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file_len", 0);
-    abi::emit_load_int_immediate(ctx.emitter, scratch, i64::from(line));
-    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_line", 0);
+    abi::emit_symbol_address(ctx.emitter, scratch, &record);
+    let site = abi::php_site_symbol(&ctx.emitter.target);
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, &site, 0);
 }
 
 /// Answers an `isset()`/`empty()` probe that found no property.

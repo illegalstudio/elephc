@@ -132,7 +132,16 @@ fn eval_dynamic_static_property_target(
     }
     let label = static_property_label(ctx, inst)?;
     let (receiver, property) = parse_static_property_label(label)?;
-    let receiver = resolve_static_property_receiver(ctx, receiver, inst)?;
+    // A receiver this body cannot resolve is not an eval class: it is `self::$x` in a closure
+    // variant bound to NO class scope (`Closure::bind($fn, null, null)` at a site whose closure is
+    // not traced plans one for every rebindable closure). php raises `Error: Cannot access "self"
+    // when no class scope is active` only if the access runs, which is what
+    // `emit_static_property_access_error` emits. Propagating the resolution error here refused the
+    // whole program instead: Symfony's `Router` closures (`unset(self::$cache[...])`) stopped a
+    // `--web` build with preload.
+    let Ok(receiver) = resolve_static_property_receiver(ctx, receiver, inst) else {
+        return Ok(None);
+    };
     if ctx.module.class_infos.contains_key(receiver.as_str()) {
         return Ok(None);
     }
@@ -478,6 +487,12 @@ pub(super) fn lower_static_property_initialized(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
+    // `isset(self::$x[...])` / `unset(...)` / `??` in a closure variant bound to no class scope:
+    // php raises the same scope Error as a read, only when the probe runs. An UNDECLARED property
+    // is not an error here (`isset` answers false), so only the missing-scope arm applies.
+    if emit_missing_class_scope_error(ctx, inst)? {
+        return Ok(());
+    }
     let slot = resolve_static_property_slot(ctx, inst, true)?;
     emit_direct_static_property_initialized_result(ctx, &slot);
     store_if_result(ctx, inst)
@@ -581,6 +596,23 @@ fn emit_static_property_access_error(
             format!("Access to undeclared static property {}::${}", receiver, property)
         }
     };
+    super::exceptions::emit_error(ctx, &message);
+    Ok(true)
+}
+
+/// Throws `Cannot access "self" when no class scope is active` for a `self::`/`static::`/`parent::`
+/// static property in a body with no class scope. Returns true when it emitted the throw.
+fn emit_missing_class_scope_error(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<bool> {
+    let label = static_property_label(ctx, inst)?;
+    let (raw_receiver, _) = parse_static_property_label(label)?;
+    let raw_receiver = raw_receiver.trim_start_matches('\\');
+    if !matches!(raw_receiver, "self" | "static" | "parent") || super::current_method_class(ctx).is_ok() {
+        return Ok(false);
+    }
+    let message = format!("Cannot access \"{raw_receiver}\" when no class scope is active");
     super::exceptions::emit_error(ctx, &message);
     Ok(true)
 }

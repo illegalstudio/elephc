@@ -500,11 +500,24 @@ pub(in crate::interpreter) fn eval_var_reference_bind(
         }
         _ => source_target,
     };
-    let replaced = scope.rebind_reference(
-        name.to_string(),
-        source_value,
-        ScopeCellOwnership::Borrowed,
+    // An array element or a property source (`$r = &$x[0]`, `$r = &$o->p`) is resolved through an
+    // ordinary READ, which hands back an owned cell: bound as borrowed, nobody released it, one
+    // cell per bind. The other sources keep the borrowed bind they always had: a variable's own
+    // cell and a call result shared with its `Cell` target are views, and a static property's
+    // storage is the class's; none of them shows a separate reference this bind would own.
+    let read_source = matches!(
+        source,
+        EvalExpr::ArrayGet { .. }
+            | EvalExpr::ArrayAppendSlot { .. }
+            | EvalExpr::PropertyGet { .. }
+            | EvalExpr::DynamicPropertyGet { .. }
     );
+    let ownership = if read_source && !source_value.is_borrowed() {
+        ScopeCellOwnership::Owned
+    } else {
+        ScopeCellOwnership::Borrowed
+    };
+    let replaced = scope.rebind_reference(name.to_string(), source_value, ownership);
     scope.set_reference_target(name.to_string(), source_target);
     if let Some(replaced) = replaced {
         eval_release_value(context, values, replaced)?;

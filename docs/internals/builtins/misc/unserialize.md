@@ -49,8 +49,8 @@ function unserialize(string $data, mixed $options = []): mixed
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/core/unserialize.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/unserialize.rs) (`eval_builtin!`)
-- **Execution**: generated-runtime ABI (`RuntimeBuiltinId(95)`) with a Magician fallback adapter.
-- **Adapter reason**: `additional-signature-semantics`.
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `dynamic-object-coercion`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

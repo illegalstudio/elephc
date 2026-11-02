@@ -235,6 +235,10 @@ pub(super) fn lower_static_var(ctx: &mut LoweringContext<'_, '_>, name: &str, in
         else_args: Vec::new(),
     });
     ctx.builder.position_at_end(after_block);
-    ctx.set_local_type(name, storage_type);
+    // The slot's DECLARED type, not the initializer's: a string-keyed `static $m = [];` was
+    // declared as a hash above, and an `array<never>` fact here made the next nested write
+    // convert the slot's boxed value as if it were still a packed array.
+    let declared_type = ctx.builder.local_php_type(slot);
+    ctx.set_local_type(name, declared_type);
     ctx.clear_static_callable_locals();
 }

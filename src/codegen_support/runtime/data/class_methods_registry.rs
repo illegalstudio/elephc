@@ -171,12 +171,17 @@ fn own_method_names(class_name: &str, info: &ClassInfo) -> Vec<String> {
             .or_else(|| info.static_method_declaring_classes.get(key))
             .is_none_or(|declaring| declaring.eq_ignore_ascii_case(class_name.trim_start_matches('\\')))
     };
+    // A reviewed internal class (GMP) hides its compiler adapters from PHP, as reflection does.
+    let contract = elephc_builtin_contract::lookup_class(class_name.trim_start_matches('\\'));
+    let visible = |key: &str| contract.is_none_or(|class| class.method_is_php_visible(key));
     let mut seen = HashSet::new();
     let mut names = Vec::new();
     for name in &info.reflection_methods {
         let key = php_symbol_key(name);
         let known = info.methods.contains_key(&key) || info.static_methods.contains_key(&key);
-        if known && declares(&key) && !info.is_property_hook_method(&key) && seen.insert(key) {
+        if known && declares(&key) && visible(&key) && !info.is_property_hook_method(&key)
+            && seen.insert(key)
+        {
             names.push(name.clone());
         }
     }
@@ -185,7 +190,10 @@ fn own_method_names(class_name: &str, info: &ClassInfo) -> Vec<String> {
         .keys()
         .chain(info.static_methods.keys())
         .filter(|key| {
-            !seen.contains(key.as_str()) && declares(key) && !info.is_property_hook_method(key)
+            !seen.contains(key.as_str())
+                && declares(key)
+                && visible(key)
+                && !info.is_property_hook_method(key)
         })
         .map(|key| {
             info.method_decls

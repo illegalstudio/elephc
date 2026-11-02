@@ -35,28 +35,36 @@ struct CompiledSiteDescriptor {
 
 #[cfg(not(test))]
 unsafe extern "C" {
-    /// The most recent call site published by compiled code. The generated assembly spells this
-    /// global `_php_site`; Rust's C ABI adds the Mach-O underscore, so the extern names it
-    /// `php_site` to reach that exact symbol.
+    /// The most recent call site published by compiled code, under its C name `php_site`.
+    /// The compiler defines and references it through `abi::php_site_symbol`, which applies the
+    /// target's C symbol mangling exactly as Rust does here: `_php_site` on Mach-O, `php_site` on
+    /// ELF. Both sides spell the one logical name; neither hard-codes a platform prefix.
     static php_site: *const CompiledSiteRecord;
 }
 
 /// Returns the compiled caller's `(file, directory, line)`, when one is published.
 ///
-/// The entry file has no source path (`_php_site_none` / a zero descriptor), in which case the
-/// caller keeps whatever position the interpreter already had.
+/// A zero descriptor names the ENTRY file, not an unknown one: the compiler leaves it out of
+/// sites of the main script and the runtime resolves it to `_script_source_file`. It used to be
+/// read as "no site", so a call from the main script kept the interpreter's stale position:
+/// `$evalObject->compiledMethod()` on line 11 reported the line of the `eval()` that declared the
+/// class. The entry path comes from the runtime's source-file hook. Only `_php_site_none` (line
+/// zero) and a module without a source path leave the interpreter's position alone.
 #[cfg(not(test))]
-pub(crate) unsafe fn compiled_call_site() -> Option<(String, String, i64)> {
+pub(crate) unsafe fn compiled_call_site(
+    values: &mut impl crate::interpreter::RuntimeValueOps,
+) -> Option<(String, String, i64)> {
     let record = php_site;
-    if record.is_null() {
+    if record.is_null() || (*record).line == 0 {
         return None;
     }
     let file = (*record).file;
-    if file.is_null() || (*file).ptr.is_null() || (*file).len == 0 {
-        return None;
-    }
-    let bytes = std::slice::from_raw_parts((*file).ptr, (*file).len);
-    let path = String::from_utf8_lossy(bytes).into_owned();
+    let path = if file.is_null() || (*file).ptr.is_null() || (*file).len == 0 {
+        values.reflection_source_file().ok().flatten().filter(|path| !path.is_empty())?
+    } else {
+        let bytes = std::slice::from_raw_parts((*file).ptr, (*file).len);
+        String::from_utf8_lossy(bytes).into_owned()
+    };
     let directory = std::path::Path::new(&path)
         .parent()
         .map(|parent| parent.to_string_lossy().into_owned())
@@ -66,6 +74,8 @@ pub(crate) unsafe fn compiled_call_site() -> Option<(String, String, i64)> {
 
 /// Test builds link no generated runtime, so there is no compiled site to read.
 #[cfg(test)]
-pub(crate) unsafe fn compiled_call_site() -> Option<(String, String, i64)> {
+pub(crate) unsafe fn compiled_call_site(
+    _values: &mut impl crate::interpreter::RuntimeValueOps,
+) -> Option<(String, String, i64)> {
     None
 }

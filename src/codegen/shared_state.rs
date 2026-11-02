@@ -956,6 +956,13 @@ impl SharedCodegenState {
     pub(super) fn forget_worker_templates(&mut self) {
         self.runtime_instance_method_descriptors.clear();
         self.emitted_keyed_helpers.clear();
+        // Both memos name a table interned into the chunk's data section, and a deferred body's
+        // data is rolled back. A table the deferred body built left its label behind with no
+        // definition: the next body that hit the memo referenced a content-addressed
+        // `_data_h…` the serial pass never defines (it spells its own tables by counter), and a
+        // Symfony `--web` build without preload failed to link on three such labels.
+        self.instance_lookup_tables.borrow_mut().clear();
+        self.inaccessible_method_table = None;
     }
 
     /// Sizes of the append-only caches whose entries name out-of-line functions.
@@ -1591,6 +1598,33 @@ mod tests {
         assert!(state.mixed_method_candidates(&key).is_some());
         assert!(state.mixed_method_candidates(&(None, "run".to_string(), 1)).is_none(), "scope is part of the key");
         assert_eq!(state.unkeyed_cache_touches.get(), unkeyed_before);
+    }
+
+    /// A worker that defers a body rolls its data back, so every memo naming a table in that
+    /// data must go with it. The instance lookup tables and the inaccessible-method table used
+    /// to survive the deferral, and the next body of the chunk referenced a `_data_h…` table
+    /// the serial pass never defines (Symfony `--web` without preload failed to link).
+    #[test]
+    fn deferral_forgets_memos_naming_chunk_data() {
+        let module = Module::new(Target::parse("macos-aarch64").expect("target"));
+        let mut state = SharedCodegenState::for_module(&module);
+        let table = |label: &str| crate::codegen_support::callable_lookup::StringLookupTable::Linear {
+            label: label.to_string(),
+            count: 1,
+        };
+        state.cache_instance_lookup_table(vec![7], table("_data_h0000000000000001"));
+        state.cache_inaccessible_method_table(Some(table("_data_h0000000000000002")));
+        state.cache_mixed_method_candidates(
+            (None, "run".to_string(), 0),
+            std::sync::Arc::new(Vec::new()),
+        );
+        state.forget_worker_templates();
+        assert!(state.instance_lookup_table(&[7]).is_none(), "the instance table named rolled-back data");
+        assert!(state.inaccessible_method_table().is_none(), "the inaccessible table named rolled-back data");
+        assert!(
+            state.mixed_method_candidates(&(None, "run".to_string(), 0)).is_some(),
+            "a memo of pure module facts names no data and survives"
+        );
     }
 }
 

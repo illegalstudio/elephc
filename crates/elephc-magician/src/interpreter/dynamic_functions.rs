@@ -437,12 +437,17 @@ pub(in crate::interpreter) fn eval_call_arg_value(
             };
             let array = visible_scope_cell(context, caller_scope, array_name)
                 .map_or_else(|| values.null(), Ok)?;
-            let index = eval_expr(index, context, caller_scope, values)?;
-            let value = eval_array_get_result(array, index, context, values)?;
+            let index_cell = eval_expr(index, context, caller_scope, values)?;
+            let value = eval_array_get_result(array, index_cell, context, values)?;
+            // The key's own cell is only read (for the element and its reference key); it was
+            // never released, one cell per `&$x[$k]`.
             if values.type_tag(array)? == EVAL_TAG_OBJECT {
+                release_expr_result(index_cell, context, values)?;
                 return Ok((value, None));
             }
-            let index = eval_array_reference_key(index, values)?.ok_or(EvalStatus::RuntimeFatal)?;
+            let index = eval_array_reference_key(index_cell, values);
+            release_expr_result(index_cell, context, values)?;
+            let index = index?.ok_or(EvalStatus::RuntimeFatal)?;
             // An element of an array that is ITSELF a reference -- a by-reference parameter, a
             // `$session = &$_SESSION` -- is an element of what that reference names, and is
             // resolved now, as the `LoadVar` arm above resolves a variable, while `caller_scope`

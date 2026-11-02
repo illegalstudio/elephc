@@ -29,7 +29,8 @@ fn emit_publish_eval_site(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, scratch, "_php_site_eval");
     abi::emit_store_to_address(emitter, descriptor, scratch, 0);
     abi::emit_store_to_address(emitter, line, scratch, 8);
-    abi::emit_store_reg_to_symbol(emitter, scratch, "_php_site", 0);
+    let site = abi::php_site_symbol(&emitter.target);
+    abi::emit_store_reg_to_symbol(emitter, scratch, &site, 0);
 }
 
 /// Emits `__elephc_eval_publish_diagnostic_site(descriptor, line)`: the interpreter's current

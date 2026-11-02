@@ -21,15 +21,37 @@ fn static_receiver_declares_method(
 ) -> bool {
     let normalized = class_name.trim_start_matches('\\');
     let method_key = php_symbol_key(method_name);
+    // `$object->staticMethod()` is a valid call, so a static method counts as declared too.
     if let Some(interface_info) = ctx.module.interface_infos.get(normalized) {
-        return interface_info.methods.contains_key(&method_key);
+        return interface_info.methods.contains_key(&method_key)
+            || interface_info.static_methods.contains_key(&method_key);
     }
-    match ctx.module.class_infos.get(normalized) {
-        Some(class_info) => {
-            class_info.methods.contains_key(&method_key)
-                || class_info.methods.contains_key(&php_symbol_key("__call"))
+    let Some(mut class_info) = ctx.module.class_infos.get(normalized) else {
+        return true;
+    };
+    // A private method an ancestor declares is not copied into a subclass's table, yet a call
+    // from that ancestor's own code reaches it on a subclass receiver (Symfony's
+    // `CompiledUrlMatcherTrait::match()` calls its private `doMatch()` on a
+    // `RedirectableCompiledUrlMatcher` once `$this` is narrowed), so the ancestors count too.
+    let mut seen = std::collections::HashSet::new();
+    loop {
+        if class_info.methods.contains_key(&method_key)
+            || class_info.static_methods.contains_key(&method_key)
+            || class_info.methods.contains_key(&php_symbol_key("__call"))
+        {
+            return true;
         }
-        None => true,
+        let Some(parent) = class_info.parent.as_deref() else {
+            return false;
+        };
+        let parent = parent.trim_start_matches('\\');
+        if !seen.insert(parent.to_string()) {
+            return false;
+        }
+        match ctx.module.class_infos.get(parent) {
+            Some(info) => class_info = info,
+            None => return false,
+        }
     }
 }
 

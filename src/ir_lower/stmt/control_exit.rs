@@ -676,6 +676,11 @@ pub(super) fn acquire_borrowed_return_value(
                 | Op::LoadStaticProperty
                 | Op::LoadDynamicStaticProperty
                 | Op::LoadReflectionStaticProperty
+                // `return $s[8];` is a view of one byte inside `$s`. The string it points into
+                // dies with the frame (a parameter, a local) or with its object
+                // (`(new R($p))->at()` returning `$this->bytes[8]`), so the caller read freed
+                // bytes. The acquire copies the byte while its string is still alive.
+                | Op::StrCharAt
                 // `return eval($code);` hands back the fragment's value cell, which the eval
                 // scope still owns and tears down on the way out; `$r = eval($code)` retains it
                 // in the store, a bare return has to do the same.

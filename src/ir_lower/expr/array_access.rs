@@ -194,12 +194,65 @@ pub(super) fn lower_array_access_with_missing_warning(
     expr: &Expr,
     warn_on_missing: bool,
 ) -> LoweredValue {
+    if receiver_fetch_is_delayed(array) && crate::optimize::expr_has_side_effects(index) {
+        return lower_array_access_after_offset(ctx, array, index, expr, warn_on_missing);
+    }
     let array_value = if warn_on_missing {
         lower_expr(ctx, array)
     } else {
         lower_subscript_receiver_silently(ctx, array)
     };
     lower_array_access_from_receiver(ctx, array_value, index, expr, warn_on_missing)
+}
+
+/// Whether php reads this subscript receiver only AFTER evaluating the offset.
+///
+/// php compiles `$v[...]`, `$this->p[...]`, `$o->p[...]` and `Cls::$p[...]` reads with a delayed
+/// receiver fetch: the offset expression runs first, then the variable or property is read. An
+/// offset with side effects therefore sees its own writes: `$this->bytes[$this->mutate()]` and
+/// `$s[$f()]` with `$f` rewriting `$s` by reference read the NEW string.
+fn receiver_fetch_is_delayed(array: &Expr) -> bool {
+    match &array.kind {
+        ExprKind::Variable(_) | ExprKind::StaticPropertyAccess { .. } => true,
+        ExprKind::PropertyAccess { object, .. } => {
+            matches!(object.kind, ExprKind::Variable(_) | ExprKind::This)
+        }
+        _ => false,
+    }
+}
+
+/// Reads `$receiver[$offset]` in php's order when the offset has side effects: offset first, then
+/// the receiver.
+///
+/// Reading the receiver first was not only the wrong value but a read of freed memory: the string
+/// was loaded as a borrowed view, the offset's call replaced and released it, and the byte was
+/// then taken from the released buffer.
+fn lower_array_access_after_offset(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &Expr,
+    index: &Expr,
+    expr: &Expr,
+    warn_on_missing: bool,
+) -> LoweredValue {
+    let index_value = lower_expr(ctx, index);
+    // A property read may run a hook or `__get` that throws; the evaluated offset must not leak.
+    let pins = super::pin_in_flight_owners(ctx, &[index_value.value], index.span);
+    let array_value = if warn_on_missing {
+        lower_expr(ctx, array)
+    } else {
+        lower_subscript_receiver_silently(ctx, array)
+    };
+    super::unpin_in_flight_owners(ctx, pins, index.span);
+    // A receiver that may be null takes the boxed read, which answers null and raises php's
+    // `Trying to access array offset on null` itself.
+    let array_value = if receiver_needs_null_arm(ctx, array_value.value) {
+        ctx.box_value_as_mixed(array_value, PhpType::Mixed, Some(expr.span))
+    } else {
+        array_value
+    };
+    let array_value =
+        crate::ir_lower::ownership::persist_string_byte_view(ctx, array_value, Some(expr.span));
+    lower_array_access_from_values(ctx, array_value, index_value, index, expr, warn_on_missing, false)
 }
 
 /// Lowers array access over an already evaluated receiver, taking the null-safe route when

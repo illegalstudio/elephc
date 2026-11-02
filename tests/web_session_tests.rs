@@ -398,6 +398,46 @@ fn extract_phpsessid(resp: &str) -> Option<String> {
     extract_session_id(resp, "PHPSESSID")
 }
 
+/// A `--web` program that loads code at run time gives a closure calling a method on a `mixed`
+/// receiver its own eval context. With an untraced `Closure::bind($fn, null, null)` site, the
+/// compiler also plans a NO-scope variant of every `$this`-capturing closure, and in that variant
+/// `self::$cache` resolved to nothing: the eval-target probe propagated the error and refused the
+/// whole build (Symfony's `Router` closures stopped a `--web` build with preload). php raises the
+/// scope `Error` only if the access runs, so the build must succeed and answer like php does.
+#[test]
+fn web_unscoped_closure_variant_with_self_static_access_compiles() {
+    let dir = make_test_dir("web_unscoped_closure_variant");
+    let source = r#"<?php
+eval('final class EvalPath { public function __construct(private string $p) {} public function getPath(): string { return $this->p; } }');
+class Router {
+    private static array $cache = ['a' => 1, 'b' => 2, 'c' => 3];
+    private int $hits = 0;
+    public function forget(string $key): string {
+        $class = 'EvalPath';
+        $drop = function ($cache) {
+            $this->hits++;
+            unset(self::$cache[$cache->getPath()]);
+            return count(self::$cache) + $this->hits;
+        };
+        return $drop(new $class($key)) . ':' . implode(',', array_keys(self::$cache));
+    }
+}
+function unscope(array $closures): array {
+    return array_map(fn ($c) => Closure::bind($c, null, null), $closures);
+}
+echo (new Router())->forget('b'), "|", unscope([fn () => 'unscoped'])[0](), "\n";
+"#;
+    let bin = compile_web(&dir, source, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut server = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/");
+    let _ = server.kill();
+    let _ = server.wait();
+    // php -n: `3:a,c|unscoped`.
+    assert!(response.ends_with("3:a,c|unscoped\n"), "response: {response:?}");
+}
+
 /// Verifies request reset preserves stderr when a prior request leaks a PHP stream alias.
 #[test]
 fn web_request_reset_preserves_standard_stream_aliases() {

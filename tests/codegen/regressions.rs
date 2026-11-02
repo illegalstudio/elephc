@@ -87,5 +87,6 @@ mod agent_probe_throwable;
 mod demo_language_gaps;
 #[path = "regressions/laravel_language_gaps.rs"]
 mod laravel_language_gaps;
+mod review_fixes;
 #[path = "regressions/symfony_backend_refusals.rs"]
 mod symfony_backend_refusals;

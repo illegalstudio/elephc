@@ -6,16 +6,40 @@
 //!
 //! Key details:
 //! - Collector run counts distinguish absent keys from actual removals without timing assertions.
+//! - A removing `unset()` reaches `__rt_gc_safepoint`, which collects once per
+//!   `GC_SAFEPOINT_THRESHOLD` (10,000) safe points, like php-src's root buffer. The fixture
+//!   therefore parks the throttle one safe point short of a collection: the next counted
+//!   `unset()` runs exactly one collection and an absent key runs none.
 
 use crate::support::*;
 
-/// Leaves one unreachable cycle so the productive-run counter detects the next full scan.
+/// Parks the safe-point throttle one step short of a collection, then leaves one unreachable
+/// cycle so the productive-run counter detects the next full scan.
 fn compile_unset_gc_fixture(source: &str) -> ProgramOutput {
     let setup = r#"<?php
 class UnsetGarbageCycle { public $next = null; }
-function seedUnsetGarbage(): void {
+function parkUnsetSafepoint(): void {
+    $runs = gc_status()["runs"];
+    $slot = [0];
+    for ($i = 0; $i <= 10000 && gc_status()["runs"] === $runs; $i++) {
+        $cycle = new UnsetGarbageCycle();
+        $cycle->next = $cycle;
+        $cycle = null;
+        unset($slot[0]);
+        $slot[0] = 0;
+    }
+    for ($i = 1; $i < 10000; $i++) {
+        unset($slot[0]);
+        $slot[0] = 0;
+    }
+}
+function leaveUnsetGarbage(): void {
     $node = new UnsetGarbageCycle();
     $node->next = $node;
+}
+function seedUnsetGarbage(): void {
+    parkUnsetSafepoint();
+    leaveUnsetGarbage();
 }
 "#;
     compile_and_run_with_heap_debug(&source.replacen("<?php", setup, 1))
@@ -159,6 +183,7 @@ $node = new UnsetCycleElement();
 $node->next = $node;
 $items = ["cycle" => $node, "keep" => 1];
 unset($node);
+parkUnsetSafepoint();
 $before = gc_status()["runs"];
 unset($items["absent"]);
 echo gc_status()["runs"] - $before, "|";
@@ -200,10 +225,11 @@ class UnsetCollectionAccess implements ArrayAccess {
     public function offsetExists(mixed $key): bool { return false; }
     public function offsetGet(mixed $key): mixed { return null; }
     public function offsetSet(mixed $key, mixed $value): void {}
-    public function offsetUnset(mixed $key): void { seedUnsetGarbage(); }
+    public function offsetUnset(mixed $key): void { leaveUnsetGarbage(); }
 }
 function removeMixedOffset(mixed &$value): void { unset($value["absent"]); }
 $object = new UnsetCollectionAccess();
+parkUnsetSafepoint();
 $before = gc_status()["runs"];
 removeMixedOffset($object);
 echo gc_status()["runs"] - $before, "|";
@@ -213,10 +239,11 @@ $before = gc_status()["runs"];
 removeMixedOffset($nothing);
 echo gc_status()["runs"] - $before, "|";
 set_error_handler(function (int $level, string $message): bool {
-    seedUnsetGarbage();
+    leaveUnsetGarbage();
     return true;
 });
 $disabled = false;
+parkUnsetSafepoint();
 $before = gc_status()["runs"];
 removeMixedOffset($disabled);
 echo gc_status()["runs"] - $before;
@@ -235,14 +262,16 @@ fn test_gc_missing_key_unset_float_key_diagnostics() {
         r#"<?php
 function removeFloatOffset(array &$items): void { unset($items[1.5]); }
 set_error_handler(function (int $level, string $message): bool {
-    seedUnsetGarbage();
+    leaveUnsetGarbage();
     return true;
 });
 $raw = ["keep" => 1];
+parkUnsetSafepoint();
 $before = gc_status()["runs"];
 unset($raw[1.5]);
 echo gc_status()["runs"] - $before, "|";
 $declared = ["keep" => 1];
+parkUnsetSafepoint();
 $before = gc_status()["runs"];
 removeFloatOffset($declared);
 echo gc_status()["runs"] - $before;

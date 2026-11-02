@@ -67,6 +67,7 @@ mod strip_tags_review;
 mod weak_map_places;
 mod backtrace_labels;
 mod preg_match_all_review;
+mod php_site_symbol;
 mod object_mixed_return_owners;
 mod numeric_string_comparisons;
 mod packed_record_addresses;

@@ -69,6 +69,7 @@ pub use symbols::{
     emit_store_reg_to_symbol, emit_store_result_to_symbol, emit_store_zero_to_symbol,
     emit_symbol_address,
 };
+pub(crate) use symbols::php_site_symbol;
 #[cfg(test)]
 pub use symbols::{emit_load_symbol_to_local_slot, emit_store_local_slot_to_symbol};
 pub use values::{

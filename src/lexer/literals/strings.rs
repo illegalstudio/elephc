@@ -754,7 +754,10 @@ fn scan_unicode_escape(
                 ));
             }
             if let Some(scalar) = char::from_u32(value) {
-                push_literal_char(scalar, out);
+                // An ESCAPE names a codepoint, never a raw source byte, so even U+E000..U+E0FF
+                // takes the general encoding: `"\u{e000}"` is the three bytes EE 80 80, which
+                // `push_literal_char` would have kept as the byte marker for 0x00.
+                crate::string_bytes::push_literal_char(scalar, out);
             } else if (0xd800..=0xdfff).contains(&value) {
                 push_codepoint_utf8_bytes(value, out);
             } else {

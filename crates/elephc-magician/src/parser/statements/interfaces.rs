@@ -199,6 +199,14 @@ impl Parser {
         };
         let name = name.clone();
         self.advance();
+        // A method's own type parameters, as a class method takes them: native `<T>` syntax, or
+        // the `@template` of its docblock, which the docblock pass rewrites into that syntax.
+        // Interface signatures never took them, so the ordinary PHPDoc of Symfony's
+        // `ContainerBagInterface::resolveValue()` (`@template TValue of array<array|scalar>|scalar`)
+        // was a parse error the moment the file was loaded at run time. A signature has no body
+        // to specialize: the parameters are only in scope while its types are read.
+        let type_scope = self.type_parameters.len();
+        self.parse_generic_parameters()?;
         self.expect(TokenKind::LParen)?;
         let ParsedMethodParams {
             params,
@@ -217,6 +225,8 @@ impl Parser {
             &name,
             self.parse_optional_return_type(EvalTypePosition::MethodReturn)?,
         );
+        self.type_parameters.truncate(type_scope);
+        self.type_parameter_origins.truncate(type_scope);
         let source_end_line = self.current_line();
         self.expect_semicolon()?;
         Ok(EvalInterfaceMethod::new(name, params)

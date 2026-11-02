@@ -635,6 +635,19 @@ fn emit_store_callable_result_to_symbol(emitter: &mut Emitter, symbol: &str, rel
     emit_pop_reg(emitter, result_reg); // restore the published descriptor result after the release call
 }
 
+/// The C name of the published source-site record: a pointer to `{file descriptor, line}`.
+///
+/// It is the one runtime data symbol Rust code reads (`elephc-magician`'s `compiled_site` FFI
+/// declares `static php_site`), so its definition and every assembly reference must spell the
+/// C symbol the target's ABI makes of that name: `_php_site` on Mach-O, `php_site` on ELF. A
+/// literal `_php_site` linked on Apple only; Linux left Magician's `php_site` undefined.
+pub(crate) const PHP_SITE_C_NAME: &str = "php_site";
+
+/// The assembly symbol of the published source-site record for `target`.
+pub(crate) fn php_site_symbol(target: &crate::codegen_support::platform::Target) -> String {
+    target.extern_symbol(PHP_SITE_C_NAME)
+}
+
 /// Symbols whose storage is known to be 8-byte aligned, so a 64-bit access can carry the
 /// `symbol@PAGEOFF` immediate itself.
 ///
@@ -645,10 +658,10 @@ fn emit_store_callable_result_to_symbol(emitter: &mut Emitter, symbol: &str, rel
 /// ended (`_php_error_reporting`), and folding those broke diagnostics. So this is an explicit list
 /// of the hot symbols, not a rule.
 fn symbol_is_8_byte_aligned(symbol: &str) -> bool {
-    matches!(
+    symbol.strip_prefix('_').unwrap_or(symbol) == PHP_SITE_C_NAME
+        || matches!(
         symbol,
-        "_php_site"
-            | "_exc_call_frame_top"
+        "_exc_call_frame_top"
             | "_exc_handler_top"
             | "_exc_value"
             | "_concat_off"

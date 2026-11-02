@@ -124,7 +124,8 @@ pub(super) fn prepare_call_site(
             crate::codegen_support::data_section::DataWord::U64(line),
         ]);
         abi::emit_symbol_address(ctx.emitter, scratch, &record);
-        abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_site", 0);
+        let site = abi::php_site_symbol(&ctx.emitter.target);
+        abi::emit_store_reg_to_symbol(ctx.emitter, scratch, &site, 0);
     }
     // The callee's prologue copies this line into its own activation (`[32]`) and installs its
     // function-level frame reader (`[24]`); a call site must never overwrite either word, or every

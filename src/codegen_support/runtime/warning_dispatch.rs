@@ -98,7 +98,8 @@ fn emit_diag_resolve_site(e: &mut Emitter) {
     if e.target.arch == Arch::AArch64 {
         e.instruction("stp x9, x10, [sp, #-32]!");                              // preserve the scratch registers this helper uses
         e.instruction("stp x11, x12, [sp, #16]");                               // preserve the record and payload registers
-        abi::emit_load_symbol_to_reg(e, "x11", "_php_site", 0);
+        let site = abi::php_site_symbol(&e.target);
+        abi::emit_load_symbol_to_reg(e, "x11", &site, 0);
         e.instruction("ldr x12, [x11, #8]");                                    // the site's line
         abi::emit_store_reg_to_symbol(e, "x12", "_php_diagnostic_line", 0);
         abi::emit_symbol_address(e, "x10", "_php_site_none");
@@ -126,7 +127,8 @@ fn emit_diag_resolve_site(e: &mut Emitter) {
         e.instruction("push r9");                                               // preserve the payload register
         e.instruction("push r10");                                              // preserve the file register
         e.instruction("push r11");                                              // preserve the record register
-        abi::emit_load_symbol_to_reg(e, "r11", "_php_site", 0);
+        let site = abi::php_site_symbol(&e.target);
+        abi::emit_load_symbol_to_reg(e, "r11", &site, 0);
         e.instruction("mov r9, QWORD PTR [r11 + 8]");                           // the site's line
         abi::emit_store_reg_to_symbol(e, "r9", "_php_diagnostic_line", 0);
         abi::emit_symbol_address(e, "r10", "_php_site_none");

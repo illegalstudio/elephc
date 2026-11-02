@@ -429,7 +429,8 @@ pub(crate) fn emit_runtime_data_fixed(
     // callee's prologue copies both words into its activation (its frame's `file` and `line`) and
     // a diagnostic resolves them through `__rt_diag_resolve_site`. It starts at the zero record.
     out.push_str(".globl _php_site_none\n.p2align 3\n_php_site_none:\n    .quad 0\n    .quad 0\n");
-    out.push_str(".globl _php_site\n.p2align 3\n_php_site:\n    .quad _php_site_none\n");
+    let site = crate::codegen_support::abi::php_site_symbol(&target);
+    out.push_str(&format!(".globl {site}\n.p2align 3\n{site}:\n    .quad _php_site_none\n"));
     // The record an interpreter-published site is written into (see `__elephc_eval_publish_*`).
     out.push_str(&comm_directive("_php_site_eval", 16, target));
     for symbol in ["_rt_diag_pending_ptr", "_rt_diag_pending_len", "_rt_diag_warning_message_len", "_php_diagnostic_file", "_php_diagnostic_file_len", "_php_diagnostic_line"] {

@@ -340,16 +340,46 @@ echo preg_match_all(subject: 'ab', pattern: '//');
     assert_eq!(out, "3|3");
 }
 
-/// Variable syntax backed by global or static storage cannot discard capture output.
+/// A `$matches` destination backed by `global` or `static` storage receives the captures, as in
+/// php (this used to be refused at compile time), and keeps its value when the pattern does not
+/// compile. Expected output is `php -n` 8.5 verbatim; repeated calls must not leak the old matches.
 #[test]
-fn preg_match_all_review_rejects_global_and_static_destinations() {
-    for source in [
-        r#"<?php $matches = []; function collect(): void { global $matches; echo preg_match_all('/a/', 'a', $matches); } collect();"#,
-        r#"<?php function collect(): void { static $matches = []; echo preg_match_all('/a/', 'a', $matches); } collect();"#,
-    ] {
-        let error = compile_cli_file_with_flags_expect_failure(source, &[]);
-        assert!(error.contains("preg_match_all(): non-local $matches destinations are not supported"), "{error}");
-    }
+fn preg_match_all_review_fills_global_and_static_destinations() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$g = 5;
+function viaGlobal(string $s): int|false {
+    global $g;
+    return @preg_match_all('/a(b)?/', $s, $g);
+}
+function viaStatic(string $s): string {
+    static $m = [];
+    $n = preg_match('/(?<word>[a-z]+)(\d)/', $s, $m);
+    return $n . ':' . json_encode($m);
+}
+function badPattern(): string {
+    static $keep = ['kept'];
+    $r = @preg_match('/(/', 'a', $keep);
+    return var_export($r, true) . ':' . json_encode($keep);
+}
+var_dump(viaGlobal('ab a'));
+echo json_encode($g), "\n";
+var_dump(@preg_match_all('/(/', 'x', $g));
+echo json_encode($g), "\n";
+for ($i = 0; $i < 3; $i++) {
+    echo viaStatic("abc$i def"), "\n";
+}
+echo viaStatic('none'), "\n";
+echo badPattern(), "\n";
+function staticAll(): string {
+    static $all = [];
+    preg_match_all('/\d/', 'a1b2', $all, PREG_SET_ORDER);
+    return json_encode($all);
+}
+echo staticAll(), staticAll(), "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "int(2)\n[[\"ab\",\"a\"],[\"b\",\"\"]]\nbool(false)\n[[\"ab\",\"a\"],[\"b\",\"\"]]\n1:{\"0\":\"abc0\",\"word\":\"abc\",\"1\":\"abc\",\"2\":\"0\"}\n1:{\"0\":\"abc1\",\"word\":\"abc\",\"1\":\"abc\",\"2\":\"1\"}\n1:{\"0\":\"abc2\",\"word\":\"abc\",\"1\":\"abc\",\"2\":\"2\"}\n0:[]\nfalse:[\"kept\"]\n[[\"1\"],[\"2\"]][[\"1\"],[\"2\"]]\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
 /// Native-backed dynamic eval uses the same terminal-empty and UTF-8 progression rules.

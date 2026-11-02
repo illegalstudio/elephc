@@ -124,16 +124,26 @@ pub extern "C" fn elephc_mbstring_native_string_persist_v1(destination: u64, sou
 ///
 /// An allocation with no metadata at all gets a fresh origin here: the host keeps the creation
 /// hooks dormant until the first INI input, so a string made before then (every string of a
-/// request that never reaches `SharedIni`) is first seen by this call. An allocation tracked under
-/// another length is still refused.
+/// request that never reaches `SharedIni`) is first seen by this call.
+///
+/// The same dormancy means a freed string can leave its entry behind: an allocation the host
+/// reused before the hooks woke was never forgotten. Metadata recorded under ANOTHER length at
+/// this exact allocation start is that stale record — the host passes allocation starts, never
+/// interior views — so it is replaced by a fresh origin. Refusing it failed the whole INI call,
+/// and the protected coordinator turned that into a silent `exit(1)`:
+/// `ini_set('max_input_vars', '5'); ini_set('no_such', '1'); ini_set('max_input_vars', '6');` died on
+/// the third call when `"6"` landed where a 14-byte INI name had lived.
 ///
 /// # Safety
 /// The owner must still denote an immutable, readable byte range of the registered length. No other
-/// thread may change that range during this call. The host must forget stale owners before reuse.
+/// thread may change that range during this call.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_mbstring_native_string_resolve_v1(owner: u64, length: u64) -> u64 {
     catch_unwind(AssertUnwindSafe(|| {
-        if owner != 0 && length <= isize::MAX as u64 && !tracked(owner) {
+        if owner != 0 && length <= isize::MAX as u64 && origin(owner, length).is_none() {
+            if tracked(owner) {
+                forget(owner);
+            }
             create(owner, length, false);
         }
         let entry = origin(owner, length)?;
@@ -228,20 +238,40 @@ fn forget(owner: u64) {
 mod tests {
     use super::*;
 
-    /// Detects allocation churn without adding an Rc alias that would disable unique-origin reuse.
+    /// A freshly produced string records no metadata: an untracked allocation already is a distinct
+    /// value, and `resolve` gives it an origin the first time INI needs it. `fresh` on an address
+    /// that still carries metadata retires it, so a reused allocation never inherits the old value.
     #[test]
-    fn ini_native_unique_unresolved_refresh_reuses_metadata() {
+    fn ini_native_fresh_strings_stay_untracked_and_retire_stale_metadata() {
         assert_eq!(elephc_mbstring_native_string_reset_v1(), 0);
         let bytes = *b"a\0b";
         let owner = bytes.as_ptr() as u64;
-        assert_eq!(elephc_mbstring_native_string_fresh_v1(owner, 0), 0);
-        let address = || NATIVE.with(|values| Rc::as_ptr(values.borrow().get(&owner).unwrap()));
-        let original = address();
-        for length in [1, 3, 0, 2] {
+        for length in [0, 1, 3, 2] {
             assert_eq!(elephc_mbstring_native_string_fresh_v1(owner, length), 0);
-            assert_eq!(address(), original, "unique unresolved refresh must not replace metadata");
+            assert!(!tracked(owner), "a fresh string records no metadata (length {length})");
             assert_eq!(elephc_mbstring_native_string_lookup_v1(owner, length), 0);
         }
+        assert_eq!(create(owner, 3, false), 0);
+        assert!(tracked(owner));
+        assert_eq!(elephc_mbstring_native_string_fresh_v1(owner, 1), 0);
+        assert!(!tracked(owner), "fresh retires the reused allocation's previous metadata");
+        assert_eq!(elephc_mbstring_native_string_reset_v1(), 0);
+    }
+
+    /// An allocation still carrying metadata under ANOTHER length is a reused one whose free was
+    /// never forgotten (the host's hooks were dormant). Resolving the new, shorter value must give
+    /// it a fresh origin; refusing it failed the INI call and the coordinator exited the process.
+    #[test]
+    fn ini_native_resolution_replaces_stale_metadata_of_a_reused_allocation() {
+        assert_eq!(elephc_mbstring_native_string_reset_v1(), 0);
+        let bytes = *b"max_input_vars";
+        let owner = bytes.as_ptr() as u64;
+        let first = unsafe { elephc_mbstring_native_string_resolve_v1(owner, 14) };
+        assert_ne!(first, 0, "the original value resolves");
+        let reused = unsafe { elephc_mbstring_native_string_resolve_v1(owner, 1) };
+        assert_ne!(reused, 0, "the reused allocation's new value resolves");
+        assert_ne!(reused, first, "the new value is not the stale one");
+        assert_eq!(elephc_mbstring_native_string_lookup_v1(owner, 14), 0, "the stale record is gone");
         assert_eq!(elephc_mbstring_native_string_reset_v1(), 0);
     }
 }

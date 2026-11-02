@@ -634,7 +634,18 @@ pub(super) fn eval_reflection_shallow_class_object_result(
         );
     }
     let Some(metadata) = eval_reflection_class_like_attributes(class_name, context) else {
-        let Some((flags, modifiers)) = eval_reflection_aot_class_flags(class_name, values)? else {
+        // The declaring class of a member the program compiled IS declared, even when no include
+        // has raised its activation cell yet: an interface inherited by an interface that exists
+        // must exist too (php autoloads it while declaring the child). During Symfony's
+        // `opcache.preload`, `getMethods()` of a class taking a
+        // `(NodeDefinition&ParentNodeDefinitionInterface)|null` reached `setBuilder()`, declared
+        // by `BuilderAwareInterface`, whose cell was still down: the declaring class came back
+        // `false` and the call died with "eval() runtime failed". The compiled row stands in.
+        let resolved = match eval_reflection_aot_class_flags(class_name, values)? {
+            Some(pair) => Some(pair),
+            None => compiled_declaration_flags(class_name, values)?,
+        };
+        let Some((flags, modifiers)) = resolved else {
             return values.bool_value(false);
         };
         let interface_names = eval_reflection_aot_class_interface_names(class_name, values)?;
@@ -777,6 +788,26 @@ pub(super) fn eval_reflection_class_object_map_result(
 /// dynamic existence probes answer false for it (an activation cell no startup path raised).
 /// A name the compiled reflection metadata does not know either yields `None`, so a bogus entry
 /// still cannot fabricate a reflector.
+/// Flags of a compiled class-like from its generated reflection row alone, for a declaration whose
+/// activation cell no include has raised yet. The row carries the interface bit itself.
+fn compiled_declaration_flags(
+    class_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(u64, u64)>, EvalStatus> {
+    let runtime_class_name = class_name.trim_start_matches('\\');
+    let Some(row_flags) = values.reflection_class_flags(runtime_class_name)? else {
+        return Ok(None);
+    };
+    let flags = row_flags | EVAL_REFLECTION_CLASS_FLAG_USER_DEFINED;
+    let modifiers = eval_reflection_class_modifiers(
+        flags & EVAL_REFLECTION_CLASS_FLAG_FINAL != 0,
+        flags & EVAL_REFLECTION_CLASS_FLAG_ABSTRACT != 0,
+        flags & EVAL_REFLECTION_CLASS_FLAG_READONLY != 0,
+        flags & EVAL_REFLECTION_CLASS_FLAG_ENUM != 0,
+    );
+    Ok(Some((flags, modifiers)))
+}
+
 fn compiled_relation_flags(
     class_name: &str,
     relation_kind: Option<&str>,

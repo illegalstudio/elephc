@@ -404,7 +404,9 @@ pub(in crate::interpreter) fn execute_stmt(
                 status
             })?;
             let reference_target = scope.reference_target(name).cloned();
+            let mut entry_owns = false;
             if let Some(target) = reference_target {
+                entry_owns = super::reference_writeback::written_value_is_owned_by_entry(&target, values)?;
                 write_back_method_ref_target(&target, value, context, values).map_err(|status| {
                     if trace {
                         eprintln!("[elephc-eval-trace] phase=store_var_error stage=writeback name={name:?} status={status:?} target={}", target.kind_name());
@@ -412,16 +414,17 @@ pub(in crate::interpreter) fn execute_stmt(
                     status
                 })?;
             }
-            let replaced = if scope.reference_target(name).is_some() {
-                // The by-reference target took the value; the local entry only borrows it.
-                set_scope_cell(
-                    context,
-                    scope,
-                    name.clone(),
-                    value,
-                    ScopeCellOwnership::Borrowed,
-                    values,
-                )
+            let wrote_through = scope.reference_target(name).is_some();
+            let replaced = if wrote_through {
+                // See `written_value_is_owned_by_entry`: the entry owns the reference
+                // `eval_owned_expr` handed this statement when the target kept one of its own
+                // (or none at all); otherwise it only borrows the value the target holds.
+                let ownership = if entry_owns {
+                    ScopeCellOwnership::Owned
+                } else {
+                    ScopeCellOwnership::Borrowed
+                };
+                set_scope_cell(context, scope, name.clone(), value, ownership, values)
             } else {
                 set_owned_scope_cell(context, scope, name.clone(), value, values)
             }

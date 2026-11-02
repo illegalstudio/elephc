@@ -7,8 +7,10 @@
 //! Key details:
 //! - Static dispatch is checked on every supported target before EIR optimization.
 //! - Owner publication stays ordered inside a function without exposing private state.
+//! - A gradual argument is narrowed by a boundary `cast` BEFORE the call, so its coercion
+//!   effects live on that cast; [`call_with_arguments`] reads the call and those casts together.
 
-use crate::ir::{Effects, Function, Immediate, Instruction, Module, Op};
+use crate::ir::{Effects, Function, Immediate, Instruction, Module, Op, ValueDef};
 
 const TARGETS: [&str; 5] = [
     "macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64",
@@ -42,6 +44,25 @@ fn call<'a>(module: &'a Module, caller: &str, callee: &str) -> &'a Instruction {
         };
         names.get(id.as_raw() as usize).is_some_and(|name| name == callee)
     }).unwrap_or_else(|| panic!("missing call {caller} -> {callee}"))
+}
+
+/// Effects of a call together with the boundary casts that narrow its arguments.
+///
+/// Lowering converts a mixed argument to a declared scalar parameter with an explicit `cast`
+/// in front of the call; the warning (and the handler's throw) belongs to that conversion.
+fn call_with_arguments(module: &Module, caller: &str, callee: &str) -> Effects {
+    let body = function(module, caller);
+    let call = call(module, caller, callee);
+    call.operands.iter().fold(call.effects, |effects, &operand| {
+        let Some(ValueDef::Instruction { inst, .. }) = body.value(operand).map(|value| value.def)
+        else {
+            return effects;
+        };
+        match body.instruction(inst) {
+            Some(argument) if argument.op == Op::Cast => effects | argument.effects,
+            _ => effects,
+        }
+    })
 }
 
 /// Early-bound self and parent calls inherit pure, output and throwing implementations.
@@ -160,9 +181,10 @@ class Child extends Base {}
 "#;
     for target in TARGETS {
         let module = lower_for(source, target);
-        let effects = call(&module, "Base::relay", "static::consume").effects;
+        let effects = call_with_arguments(&module, "Base::relay", "static::consume");
         assert!(effects.contains(Effects::MAY_WARN | Effects::MAY_THROW), "{target}");
-        assert!(!effects.contains(Effects::MAY_DEOPT), "{target}");
+        assert!(!call(&module, "Base::relay", "static::consume").effects
+            .contains(Effects::MAY_DEOPT), "{target}");
     }
 }
 
@@ -230,7 +252,8 @@ class Child extends Base {
         for (caller, callee) in [("Child::relayParent", "parent::consume"),
             ("Child::relaySelf", "self::consume")]
         {
-            assert!(call(&module, caller, callee).effects.contains(Effects::MAY_WARN | Effects::MAY_THROW),
+            assert!(call_with_arguments(&module, caller, callee)
+                .contains(Effects::MAY_WARN | Effects::MAY_THROW),
                 "{target}: {caller}");
         }
     }
@@ -304,7 +327,7 @@ echo Root::relay($argc);
         let source = template.replace("LITERAL", literal);
         for target in TARGETS {
             let module = lower_for(&source, target);
-            assert!(call(&module, "Root::relay", "static::accept").effects
+            assert!(call_with_arguments(&module, "Root::relay", "static::accept")
                 .contains(required | Effects::MAY_FATAL), "{target}: {literal}");
             assert!(call(&module, "main", "Root::relay").effects.contains(required),
                 "{target}: {literal} caller summary");

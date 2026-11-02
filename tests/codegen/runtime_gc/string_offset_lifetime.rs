@@ -660,3 +660,101 @@ echo "done\n";
 fn test_string_offset_lifetime_throwing_nested_index_without_ir_opt() {
     crate::support::without_ir_opt(test_string_offset_lifetime_throwing_nested_index);
 }
+
+/// A string-offset byte is a VIEW into its string. Returned from the function that owns the
+/// string (`$this->bytes[8]` on a temporary object, a local copy, a parameter) or boxed into a
+/// `mixed` array slot, it must carry its own copy: the caller read freed bytes (165 for 90), and
+/// the box kept the stack address the byte had been staged at (0 for 90). Expected output is
+/// php 8.5's own.
+#[test]
+fn test_string_offset_bytes_escaping_their_string_are_copied() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class R {
+    public string $bytes;
+    public array $list;
+    public function __construct(string $s) { $this->bytes = $s; $this->list = [$s . "L"]; }
+    public function at(): string { return $this->bytes[8]; }
+    public function whole(): string { return $this->bytes; }
+    public function first(): string { return $this->list[0]; }
+    public function viaLocal(): string { $b = $this->bytes; return $b[8]; }
+}
+function param(string $s): string { return $s[8]; }
+function store(string $payload): void {
+    $local = $payload . "!";
+    $mixed = [1, ""];
+    $mixed[0] = $local[8];
+    $hash = ['k' => 1];
+    $hash['k'] = $local[8];
+    $local = str_repeat("z", 4000);
+    echo ord($mixed[0]), "|", ord($hash['k']), "\n";
+}
+function run(string $p): void {
+    echo ord((new R($p))->at()), " ", (new R($p))->whole(), " ", (new R($p))->first(), " ", ord((new R($p))->viaLocal()), "\n";
+    echo ord(param($p . "x")), "\n";
+    store($p);
+}
+run("\x07aaaaaaaZ" . str_repeat("q", $argc));
+run("\x07\x00\x00\x00HPLEZ" . str_repeat("q", $argc));
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "90 \u{7}aaaaaaaZq \u{7}aaaaaaaZqL 90\n90\n90|90\n90 \u{7}\u{0}\u{0}\u{0}HPLEZq \u{7}\u{0}\u{0}\u{0}HPLEZqL 90\n90\n90|90\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// php evaluates the offset of `$var[...]`, `$this->p[...]` and `Cls::$p[...]` BEFORE it reads
+/// the receiver, so an offset that rewrites the receiver indexes the new value. Reading the
+/// receiver first also indexed the string the offset had just released. Covers strings, arrays,
+/// static properties, a receiver that is null until the offset runs, a throwing offset and a
+/// side-effecting `$i++` offset. Expected output is php 8.5's own.
+#[test]
+fn test_string_offset_reads_evaluate_the_offset_before_the_receiver() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Box {
+    public array $list = ['a', 'b', 'c'];
+    public static array $shared = [10, 20, 30];
+    public function grow(): int { $this->list = ['x', 'y', 'z', 'w']; return 3; }
+    public function at(): string { return $this->list[$this->grow()]; }
+    public static function bump(): int { self::$shared = [7, 8, 9]; return 1; }
+}
+class M {
+    public string $bytes;
+    public function __construct(string $s) { $this->bytes = $s; }
+    public function mutate(): int { $this->bytes = str_repeat("z", 64); return 8; }
+    public function at(): int { return ord($this->bytes[$this->mutate()]); }
+    public function keep(): string { return $this->bytes[$this->mutate()]; }
+}
+function local(string $p): int {
+    $s = $p . "!";
+    $f = function () use (&$s) { $s = str_repeat("y", 64); return 8; };
+    return ord($s[$f()]);
+}
+function arr(): void {
+    $a = [1, 2, 3];
+    $f = function () use (&$a) { $a = [40, 50, 60]; return 2; };
+    echo $a[$f()], "\n";
+}
+function nul(): void {
+    $x = null;
+    $f = function () use (&$x) { $x = "hello"; return 1; };
+    echo $x[$f()], "\n";
+}
+function thrower(): void {
+    $s = "abc";
+    $f = function (): int { throw new RuntimeException("offset"); };
+    try { echo $s[$f()]; } catch (RuntimeException $e) { echo "caught ", $e->getMessage(), "\n"; }
+}
+$p = "\x07aaaaaaaZ" . str_repeat("q", $argc);
+echo (new M($p))->at(), " ", ord((new M($p))->keep()), " ", local($p), "\n";
+echo (new Box())->at(), "\n";
+echo Box::$shared[Box::bump()], "\n";
+arr();
+nul();
+thrower();
+$i = 0;
+$letters = "pqr";
+echo $letters[$i++], $letters[$i++], $i, "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "122 122 121\nw\n8\n60\ne\ncaught offset\npq2\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

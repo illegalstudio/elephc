@@ -163,10 +163,8 @@ fn lower_native_container_isset_offset_probe(
                     Some(expr.span),
                 )
             };
-            // Ordinary array reads stabilize their result and retire an owning receiver. Native
-            // `isset` returns only a bool, so no stabilization is needed, but the receiver still
-            // has to be released when it was projected from widened Mixed frame storage.
-            release_owning_receiver_temporary(ctx, array_value, expr.span);
+            // The receiver is retired by the caller (`lower_native_isset_offset_probe_from_value`);
+            // releasing it here as well over-released a widened local's table.
             result
         }
         _ => {
@@ -180,7 +178,6 @@ fn lower_native_container_isset_offset_probe(
                 Some(expr.span),
             );
             release_owned_probe_key(ctx, index_value, expr);
-            release_owning_receiver_temporary(ctx, array_value, expr.span);
             checked
         }
     }

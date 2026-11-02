@@ -81,8 +81,81 @@ fn lower_socket_call_with_place_outputs(
 }
 
 /// Lowers a direct function, builtin, or extern call.
+/// Lowers `preg_match($p, $s, $matches, ...)` / `preg_match_all(...)` whose `$matches` is a
+/// `global` alias, a top-level variable a function aliases, or a function `static`.
+///
+/// The capture runtime writes its result into a frame-local slot, so it could not fill those
+/// variables and the call was refused (php fills them like any other variable). The call now
+/// captures into a hidden local and assigns that local to the variable afterwards, which is the
+/// same observable order: `$matches` is overwritten once the match has run.
+fn lower_regex_call_into_non_local_matches(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &Name,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let canonical = crate::names::php_symbol_key(name.as_str().trim_start_matches('\\'));
+    if !matches!(canonical.as_str(), "preg_match" | "preg_match_all")
+        || args.len() < 3
+        || crate::types::call_args::has_named_args(args)
+        || args.iter().any(super::is_spread_arg)
+    {
+        return None;
+    }
+    let ExprKind::Variable(variable) = &args[2].kind else {
+        return None;
+    };
+    if !ctx.variable_storage_is_global_or_static(variable) {
+        return None;
+    }
+    let hidden = ctx.declare_synthetic_php_local(
+        crate::types::checker::regex_matches_destination_type(&canonical, args),
+    );
+    let span = Some(args[2].span);
+    // Copy in: php leaves `$matches` untouched when the pattern does not compile, so the hidden
+    // local starts as the variable's current value and publishing it back is then a no-op.
+    let current = lower_expr(ctx, &args[2]);
+    let current_type = ctx.builder.value_php_type(current.value);
+    // `store_local` retains what it keeps and retires an owned source itself.
+    ctx.store_local(&hidden, current, current_type, span);
+    let mut rewritten = args.to_vec();
+    rewritten[2] = Expr::new(ExprKind::Variable(hidden.clone()), args[2].span);
+    let call = Expr::new(
+        ExprKind::FunctionCall { name: name.clone(), args: rewritten },
+        expr.span,
+    );
+    let result = lower_expr(ctx, &call);
+    // Copy out. The capture leaves the hidden local a boxed cell; a variable the checker typed
+    // concretely (a `static $matches = []` is `array`) only ever held, and now holds, that type.
+    let captured = ctx.load_local(&hidden, span);
+    let target_type = ctx.local_type(variable);
+    let captured = if !matches!(target_type.codegen_repr(), PhpType::Mixed)
+        && matches!(ctx.builder.value_php_type(captured.value).codegen_repr(), PhpType::Mixed)
+    {
+        // The load is a borrowed view of the hidden slot; the unbox takes its own reference,
+        // which `store_local` hands to the variable.
+        let effects = Op::mixed_unbox_effects(&target_type);
+        ctx.emit_owned_value(
+            Op::MixedUnbox,
+            vec![captured.value],
+            None,
+            target_type.clone(),
+            effects,
+            span,
+        )
+    } else {
+        captured
+    };
+    let captured_type = ctx.builder.value_php_type(captured.value);
+    ctx.store_local(variable, captured, captured_type, span);
+    Some(result)
+}
+
 pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[Expr], expr: &Expr) -> LoweredValue {
     if let Some(value) = lower_socket_call_with_place_outputs(ctx, name, args, expr) {
+        return value;
+    }
+    if let Some(value) = lower_regex_call_into_non_local_matches(ctx, name, args, expr) {
         return value;
     }
     super::late_bound_call::guard_runtime_function_binding(ctx, name.as_str(), expr);

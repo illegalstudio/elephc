@@ -232,7 +232,8 @@ fn emit_static_throw_from_result(ctx: &mut FunctionContext<'_>) -> Result<()> {
             ctx.emitter.instruction(&format!("b.ne {}", line_known));        // no: the raise baked its own line
             // A shared helper's raise names the line of the PHP statement that called it, which
             // that statement published in `_php_site` ({file descriptor, line}).
-            abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_php_site", 0);
+            let site = abi::php_site_symbol(&ctx.emitter.target);
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x9", &site, 0);
             ctx.emitter.instruction("ldr x9, [x9, #8]");                     // the calling statement's line
             ctx.emitter.label(&line_known);
             abi::emit_store_to_address(ctx.emitter, "x9", "x0", throwable_layout::LINE_OFFSET);
@@ -295,7 +296,8 @@ fn emit_static_throw_from_result(ctx: &mut FunctionContext<'_>) -> Result<()> {
             ctx.emitter.instruction(&format!("jne {}", line_known));         // no: the raise baked its own line
             // A shared helper's raise names the line of the PHP statement that called it, which
             // that statement published in `_php_site` ({file descriptor, line}).
-            abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_php_site", 0);
+            let site = abi::php_site_symbol(&ctx.emitter.target);
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r10", &site, 0);
             ctx.emitter.instruction("mov r10, QWORD PTR [r10 + 8]");         // the calling statement's line
             ctx.emitter.label(&line_known);
             abi::emit_store_to_address(ctx.emitter, "r10", "rax", throwable_layout::LINE_OFFSET);

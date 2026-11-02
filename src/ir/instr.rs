@@ -1479,8 +1479,10 @@ impl Op {
             self,
             Acquire
                 | StrPersist
-                // `$s[$i]` is an owned one-byte copy (`lower_str_char_at` persists it).
-                | StrCharAt
+                // NOT `StrCharAt`: `$s[$i]` is a borrowed VIEW of one byte inside `$s`
+                // (`lower_str_char_at` points the result into the receiver, issue #1908). A box
+                // that absorbed it kept that pointer, which `stage_string_byte_view` had just
+                // moved to the stack: `$mixed[0] = $local[8]` stored a dangling stack address.
                 | Call
                 | FunctionVariantCall
                 | ExternCall

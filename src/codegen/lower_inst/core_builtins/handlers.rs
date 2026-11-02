@@ -474,6 +474,11 @@ fn emit_default_user_error(
     internal_category: Option<&[u8]>,
 ) -> Result<()> {
     let skip_output = ctx.next_label("trigger_error_skip_output");
+    if matches!(site, TriggerSite::Caller) {
+        // The caller location is published as one `php_site` record; expand it into the
+        // `_php_diagnostic_*` words read below (the helper preserves every register).
+        abi::emit_call_label(ctx.emitter, "__rt_diag_resolve_site");
+    }
     emit_record_user_error(ctx, message, level, site)?;
     load_integer_operand(ctx, level)?;
     let level_reg = abi::nested_call_reg(ctx.emitter);

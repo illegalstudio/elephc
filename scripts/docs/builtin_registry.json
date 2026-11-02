@@ -138469,9 +138469,9 @@
     "canonical_name": "serialize",
     "description": "Generates a storable representation of a value.",
     "eval": {
-      "adapter_reason": "additional-signature-semantics",
+      "adapter_reason": "dynamic-object-coercion",
       "area": "core",
-      "execution": "hybrid-adapter",
+      "execution": "interpreter-adapter",
       "home_file": "crates/elephc-magician/src/interpreter/builtins/core/serialize.rs",
       "hooks": [
         "direct",
@@ -138488,7 +138488,7 @@
         }
       ],
       "required_param_count": 1,
-      "runtime_builtin_id": 94,
+      "runtime_builtin_id": null,
       "signature_override_reason": null,
       "supported": true,
       "variadic": null
@@ -161288,9 +161288,9 @@
     "canonical_name": "unserialize",
     "description": "Creates a PHP value from a stored representation.",
     "eval": {
-      "adapter_reason": "additional-signature-semantics",
+      "adapter_reason": "dynamic-object-coercion",
       "area": "core",
-      "execution": "hybrid-adapter",
+      "execution": "interpreter-adapter",
       "home_file": "crates/elephc-magician/src/interpreter/builtins/core/unserialize.rs",
       "hooks": [
         "direct",
@@ -161314,7 +161314,7 @@
         }
       ],
       "required_param_count": 1,
-      "runtime_builtin_id": 95,
+      "runtime_builtin_id": null,
       "signature_override_reason": null,
       "supported": true,
       "variadic": null

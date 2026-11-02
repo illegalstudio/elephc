@@ -37,6 +37,14 @@ pub(crate) fn boundary_coercion_narrows_gradual(target: &PhpType) -> bool {
     }
 }
 
+/// Effects of a scalar boundary cast: its conversion warnings (NaN to bool, lossy float to int)
+/// reach the user error handler, and a handler that throws makes the cast a throw point.
+/// The call no longer converts this argument itself, so the call-site coercion model in
+/// `effect_refinement` cannot supply the exceptional edge.
+fn boundary_cast_effects() -> crate::ir::Effects {
+    Op::Cast.default_effects() | crate::ir::Effects::MAY_THROW
+}
+
 /// Narrows a boxed gradual value into a concrete boundary representation when supported.
 pub(super) fn coerce_gradual_value_to_boundary(
     ctx: &mut LoweringContext<'_, '_>,
@@ -55,7 +63,7 @@ pub(super) fn coerce_gradual_value_to_boundary(
             vec![value.value],
             Some(Immediate::CastTarget(IrType::I64)),
             target.clone(),
-            Op::Cast.default_effects(),
+            boundary_cast_effects(),
             span,
         ),
         PhpType::Float => ctx.emit_value(
@@ -63,7 +71,7 @@ pub(super) fn coerce_gradual_value_to_boundary(
             vec![value.value],
             Some(Immediate::CastTarget(IrType::F64)),
             target.clone(),
-            Op::Cast.default_effects(),
+            boundary_cast_effects(),
             span,
         ),
         PhpType::Bool => ctx.emit_value(
@@ -71,7 +79,7 @@ pub(super) fn coerce_gradual_value_to_boundary(
             vec![value.value],
             Some(Immediate::CastTarget(IrType::I64)),
             target.clone(),
-            Op::Cast.default_effects(),
+            boundary_cast_effects(),
             span,
         ),
         PhpType::Str => ctx.emit_value(
@@ -79,7 +87,7 @@ pub(super) fn coerce_gradual_value_to_boundary(
             vec![value.value],
             Some(Immediate::CastTarget(IrType::Str)),
             target.clone(),
-            Op::Cast.default_effects(),
+            boundary_cast_effects(),
             span,
         ),
         PhpType::Object(class_name) => {

@@ -186,10 +186,15 @@ fn eval_serialize_append_value(
             let len = values.array_len(value)?;
             buf.extend_from_slice(format!("a:{len}:{{").as_bytes());
             for position in 0..len {
+                // `array_iter_key` and `array_get` hand back owned cells: each is released once
+                // written, or every serialized array leaked two cells per element.
                 let key = values.array_iter_key(value, position)?;
                 let element = values.array_get(value, key)?;
-                eval_serialize_append_key(key, values, buf)?;
-                eval_serialize_append_value(element, context, values, state, buf)?;
+                let written = eval_serialize_append_key(key, values, buf)
+                    .and_then(|()| eval_serialize_append_value(element, context, values, state, buf));
+                let _ = values.release(key);
+                let _ = values.release(element);
+                written?;
             }
             buf.push(b'}');
         }
@@ -208,34 +213,56 @@ fn eval_serialize_append_value(
                 )?;
                 return Ok(());
             }
-            let mut entries = eval_serialize_object_entries(value, identity, &class_name, context, values)?;
-            if eval_serialize_object_has_method(identity, &class_name, "__sleep", context, values)? {
-                match eval_serialize_sleep_names(value, &class_name, context, values)? {
-                    Some(names) => {
-                        entries = eval_serialize_sleep_entries(entries, &names, &class_name, values)?;
-                    }
-                    None => {
-                        buf.extend_from_slice(b"N;");
-                        return Ok(());
-                    }
-                }
-            }
-            buf.extend_from_slice(
-                format!("O:{}:\"{}\":{}:{{", class_name.len(), class_name, entries.len())
-                    .as_bytes(),
+            let (entries, entries_owner) =
+                eval_serialize_object_entries(value, identity, &class_name, context, values)?;
+            let written = eval_serialize_append_object_body(
+                value, identity, &class_name, entries, context, values, state, buf,
             );
-            for (key, element) in &entries {
-                buf.extend_from_slice(format!("s:{}:\"", key.len()).as_bytes());
-                buf.extend_from_slice(key);
-                buf.extend_from_slice(b"\";");
-                eval_serialize_append_value(*element, context, values, state, buf)?;
+            if let Some(owner) = entries_owner {
+                let _ = values.release(owner);
             }
-            buf.push(b'}');
+            written?;
         }
         // A resource carries no storable state; php serializes it as `i:0;` with no warning
         // (measured: `serialize(fopen(...))` -> `i:0;`, open or closed).
         _ => buf.extend_from_slice(b"i:0;"),
     }
+    Ok(())
+}
+
+/// Appends `O:...:{...}` for an object's (borrowed) property entries, honouring `__sleep()`.
+#[allow(clippy::too_many_arguments)]
+fn eval_serialize_append_object_body(
+    value: RuntimeCellHandle,
+    identity: Option<u64>,
+    class_name: &str,
+    mut entries: Vec<(Vec<u8>, RuntimeCellHandle)>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+    state: &mut EvalSerializeState,
+    buf: &mut Vec<u8>,
+) -> Result<(), EvalStatus> {
+    if eval_serialize_object_has_method(identity, class_name, "__sleep", context, values)? {
+        match eval_serialize_sleep_names(value, class_name, context, values)? {
+            Some(names) => {
+                entries = eval_serialize_sleep_entries(entries, &names, class_name, values)?;
+            }
+            None => {
+                buf.extend_from_slice(b"N;");
+                return Ok(());
+            }
+        }
+    }
+    buf.extend_from_slice(
+        format!("O:{}:\"{}\":{}:{{", class_name.len(), class_name, entries.len()).as_bytes(),
+    );
+    for (key, element) in &entries {
+        buf.extend_from_slice(format!("s:{}:\"", key.len()).as_bytes());
+        buf.extend_from_slice(key);
+        buf.extend_from_slice(b"\";");
+        eval_serialize_append_value(*element, context, values, state, buf)?;
+    }
+    buf.push(b'}');
     Ok(())
 }
 
@@ -286,27 +313,35 @@ fn eval_serialize_append_magic_serialize(
     for position in 0..len {
         let key = values.array_iter_key(data, position)?;
         let element = values.array_get(data, key)?;
-        eval_serialize_append_key(key, values, buf)?;
-        eval_serialize_append_value(element, context, values, state, buf)?;
+        let written = eval_serialize_append_key(key, values, buf)
+            .and_then(|()| eval_serialize_append_value(element, context, values, state, buf));
+        let _ = values.release(key);
+        let _ = values.release(element);
+        if let Err(status) = written {
+            let _ = values.release(data);
+            return Err(status);
+        }
     }
     buf.push(b'}');
     values.release(data)
 }
 
-/// The object's properties as `(serialized key, value)` pairs, private and protected names
-/// mangled the way php's wire format writes them.
+/// The object's properties as `(serialized key, borrowed value)` pairs, private and protected
+/// names mangled the way php's wire format writes them, plus the owner that keeps those values
+/// alive, for the caller to release once they are written.
 ///
 /// An interpreter-declared object reads its overlay; a compiled object reads the compiled
 /// program's `(array)` cast, which already carries php's mangled keys. Without that cast a
 /// compiled object's private and protected state was invisible here, and it serialized as
-/// `O:5:"Token":0:{}`.
+/// `O:5:"Token":0:{}`. That cast array is the returned owner: each element's own `array_get`
+/// reference is dropped right away, the array keeping the value alive.
 fn eval_serialize_object_entries(
     object: RuntimeCellHandle,
     identity: Option<u64>,
     class_name: &str,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<Vec<(Vec<u8>, RuntimeCellHandle)>, EvalStatus> {
+) -> Result<(Vec<(Vec<u8>, RuntimeCellHandle)>, Option<RuntimeCellHandle>), EvalStatus> {
     let eval_owned =
         identity.is_some_and(|identity| context.dynamic_object_declaring_class(identity).is_some());
     if !eval_owned {
@@ -318,15 +353,17 @@ fn eval_serialize_object_entries(
                 let element = values.array_get(array, key)?;
                 let key_bytes = values.string_bytes(key)?;
                 values.release(key)?;
+                values.release(element)?;
                 entries.push((key_bytes, element));
             }
-            return Ok(entries);
+            return Ok((entries, Some(array)));
         }
     }
-    Ok(eval_debug_object_properties(object, identity, class_name, context, values)?
+    let entries = eval_debug_object_properties(object, identity, class_name, context, values)?
         .iter()
         .map(|property| (eval_serialize_mangled_property_key(property).into_bytes(), property.value))
-        .collect())
+        .collect();
+    Ok((entries, None))
 }
 
 /// Calls `__sleep()` and returns the property names it lists, or None when it did not return

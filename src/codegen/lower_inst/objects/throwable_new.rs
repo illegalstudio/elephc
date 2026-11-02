@@ -291,7 +291,10 @@ fn emit_throwable_runtime_line_aarch64(
     payload_reg: &str,
     scratch_reg: &str,
 ) {
-    abi::emit_load_symbol_to_reg(ctx.emitter, scratch_reg, "_php_diagnostic_line", 0);
+    // `prepare_call_site` publishes one `{file descriptor, line}` record through `php_site`.
+    let site = abi::php_site_symbol(&ctx.emitter.target);
+    abi::emit_load_symbol_to_reg(ctx.emitter, scratch_reg, &site, 0);
+    ctx.emitter.instruction(&format!("ldr {scratch_reg}, [{scratch_reg}, #8]")); // the published site's line
     ctx.emitter.instruction(&format!(                                           // record the caller's source line for a prelude-synthesized throwable
         "str {}, [{}, #{}]",
         scratch_reg, payload_reg, THROWABLE_CREATION_LINE_OFFSET
@@ -304,7 +307,9 @@ fn emit_throwable_runtime_line_x86_64(
     payload_reg: &str,
     scratch_reg: &str,
 ) {
-    abi::emit_load_symbol_to_reg(ctx.emitter, scratch_reg, "_php_diagnostic_line", 0);
+    let site = abi::php_site_symbol(&ctx.emitter.target);
+    abi::emit_load_symbol_to_reg(ctx.emitter, scratch_reg, &site, 0);
+    ctx.emitter.instruction(&format!("mov {scratch_reg}, QWORD PTR [{scratch_reg} + 8]")); // the published site's line
     ctx.emitter.instruction(&format!(                                           // record the caller's source line for a prelude-synthesized throwable
         "mov QWORD PTR [{} + {}], {}",
         payload_reg, THROWABLE_CREATION_LINE_OFFSET, scratch_reg

@@ -738,7 +738,10 @@ unsafe fn eval_method_call_inner(
     // code. Carry it into the interpreter: the synthetic frame pushed for the native callee, and
     // any diagnostic raised while entering it, name the compiled call site (`Router.php:188`)
     // instead of the empty position the context held.
-    if let Some((file, directory, line)) = unsafe { crate::ffi::compiled_site::compiled_call_site() } {
+    let mut site_values = ElephcRuntimeOps::with_context(std::ptr::null());
+    if let Some((file, directory, line)) =
+        unsafe { crate::ffi::compiled_site::compiled_call_site(&mut site_values) }
+    {
         context.set_call_site(file, directory, line);
     }
     let forwarded_scopes = caller_context

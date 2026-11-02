@@ -25,6 +25,8 @@ docs/superpowers/
 # over a gigabyte, and one once reached 109 MB in a commit and blocked every push to GitHub.
 /examples/symfony-app/*
 !/examples/symfony-app/README.md
+/examples/symfony-demo/*
+!/examples/symfony-demo/README.md
 /examples/laravel-app/*
 !/examples/laravel-app/README.md
 

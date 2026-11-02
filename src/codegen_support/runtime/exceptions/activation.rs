@@ -36,7 +36,8 @@ pub fn emit_php_frame_publish(emitter: &mut Emitter) {
                 emitter.instruction("stp x10, x29, [x11, #8]");                  // [8] cleanup callback, [16] frame pointer
                 emitter.instruction("str xzr, [x11, #24]");                     // [24] frame reader, none yet
                 if backtrace {
-                    abi::emit_load_symbol_to_reg(emitter, "x12", "_php_site", 0);
+                    let site = abi::php_site_symbol(&emitter.target);
+                    abi::emit_load_symbol_to_reg(emitter, "x12", &site, 0);
                     emitter.instruction("ldp x12, x13, [x12]");                 // the caller's published {file descriptor, line}
                     emitter.instruction("stp x13, x12, [x11, #32]");             // [32] caller line, [40] caller file
                 } else {
@@ -52,7 +53,8 @@ pub fn emit_php_frame_publish(emitter: &mut Emitter) {
                 emitter.instruction("mov QWORD PTR [r11 + 16], rbp");           // [16] frame pointer
                 emitter.instruction("mov QWORD PTR [r11 + 24], 0");             // [24] frame reader, none yet
                 if backtrace {
-                    abi::emit_load_symbol_to_reg(emitter, "rax", "_php_site", 0);
+                    let site = abi::php_site_symbol(&emitter.target);
+                    abi::emit_load_symbol_to_reg(emitter, "rax", &site, 0);
                     emitter.instruction("mov rcx, QWORD PTR [rax + 8]");        // the caller's published line
                     emitter.instruction("mov QWORD PTR [r11 + 32], rcx");       // [32] caller line
                     emitter.instruction("mov rcx, QWORD PTR [rax]");            // the caller's published file descriptor

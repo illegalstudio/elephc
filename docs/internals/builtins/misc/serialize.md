@@ -49,8 +49,8 @@ function serialize(mixed $value): string
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/core/serialize.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/serialize.rs) (`eval_builtin!`)
-- **Execution**: generated-runtime ABI (`RuntimeBuiltinId(94)`) with a Magician fallback adapter.
-- **Adapter reason**: `additional-signature-semantics`.
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `dynamic-object-coercion`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
