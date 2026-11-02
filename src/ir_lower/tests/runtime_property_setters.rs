@@ -116,7 +116,9 @@ class DynamicHookCounter {
     }
 }
 function dynamicHookUpdate(mixed $object, string $name): mixed { return --$object->{$name}; }
+$capability = new DynamicHookXmlCapability('<r/>');
 echo dynamicHookUpdate(new DynamicHookCounter(), 'value');
+unset($capability);
 "#;
     let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
         std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());

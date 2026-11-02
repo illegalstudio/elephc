@@ -25,6 +25,8 @@ var_dump(eirPrefixScalar(new EirPrefixScalar()));
 "#, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen::platform::Target::parse(target).unwrap());
     let function = module.functions.iter().find(|function| function.name == "eirPrefixScalar").unwrap();
+    assert!(function.blocks.iter().any(|block| block.name.starts_with("property.prefix.initialized")),
+        "{target}: the typed read must belong to the guarded post-store prefix readback");
     assert!(function.instructions.iter().any(|inst| inst.op == Op::RuntimeCall
         && inst.immediate == Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::GetClass)))),
         "{target}: only exact runtime classes may select backing storage");

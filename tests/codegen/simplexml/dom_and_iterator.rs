@@ -591,7 +591,9 @@ function scalarParameterWalk(string $text, mixed $index): string {
     for ($n = 0; $n < 16; $n++) { $result = scalarParameterPick($text, $index + 3); }
     return $result;
 }
+$capability = new ScalarParameterXmlCapability('<r/>');
 echo scalarParameterWalk('abcdefgh', 2);
+unset($capability);
 "#);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "f");

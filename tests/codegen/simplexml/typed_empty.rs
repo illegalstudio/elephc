@@ -497,11 +497,12 @@ class PrefixStorageHook {
 }
 function prefixStorageNamed(mixed $object): mixed { return ++$object->value; }
 function prefixStorageDynamic(mixed $object, string $name): mixed { return --$object->{$name}; }
+$capability = new PrefixStorageXmlCapability('<r/>');
 foreach ([new PrefixStorageString(), new PrefixStorageInt(), new PrefixStorageFloat(),
     new PrefixStorageMixed(), new PrefixStorageDeclaredMagic(), new PrefixStorageMagic(), new PrefixStorageHook()] as $object) {
     var_dump(prefixStorageNamed($object), prefixStorageDynamic($object, 'value'));
 }
-unset($object);
+unset($object, $capability);
 "#;
     let (out, assembly) = compile_and_run_with_heap_debug_and_asm(source);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);

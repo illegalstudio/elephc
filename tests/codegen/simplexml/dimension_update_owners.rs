@@ -35,6 +35,7 @@ function coalesceOwnerProgram(): void {
     echo $root->child->value, '|';
     unset($root);
 }
+$capability = new CoalesceOwnerXmlCapability('<r/>');
 coalesceOwnerProgram();
 class CoalesceOwnerThrowChild {
     public function __isset(string $name): bool { return false; }
@@ -53,6 +54,7 @@ function coalesceOwnerThrowProgram(bool $null): void {
 for ($iteration = 0; $iteration < 3; $iteration++) {
     coalesceOwnerThrowProgram(false); coalesceOwnerThrowProgram(true);
 }
+unset($capability);
 "#;
     let out = compile_and_run_with_heap_debug(source);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
@@ -85,7 +87,9 @@ function arrayChildOwnerProgram(): void {
     echo $source->snapshot(), '|';
     unset($source);
 }
+$capability = new ArrayChildOwnerXmlCapability('<r/>');
 arrayChildOwnerProgram();
+unset($capability);
 "#;
     let out = compile_and_run_with_heap_debug(source);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
