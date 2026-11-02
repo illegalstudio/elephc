@@ -96,7 +96,7 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_prop_set(
     }
     match ctx.value_php_type(object)?.codegen_repr() {
         PhpType::Mixed | PhpType::Union(_) => {
-            lower_runtime_mixed_prop_set(ctx, object, property_value, value, inst)
+            lower_runtime_mixed_prop_set(ctx, object, property_value, value, None, inst)
         }
         PhpType::Object(class_name) => {
             lower_runtime_object_prop_set(ctx, object, property_value, value, &class_name, inst)
@@ -122,11 +122,10 @@ pub(super) fn lower_const_dynamic_prop_set(
         ctx.value_php_type(object)?.codegen_repr(),
         PhpType::Mixed | PhpType::Union(_)
     ) {
-        // A constant name still needs the complete runtime-name ladder. The named fast path
-        // enumerates declared slots and ordinary dynamic hashes, but cannot stage the name for
-        // a runtime class's guarded `__set` call. Reusing the full dispatcher also preserves the
-        // existing-entry-before-magic precedence for AllowDynamicProperties classes.
-        return lower_runtime_mixed_prop_set(ctx, object, property_value, value, inst);
+        // Keep runtime class, magic and dynamic-hash precedence while pruning declared slots
+        // whose names cannot match this literal. The named fast path cannot stage a guarded
+        // `__set` call or preserve existing-entry-before-magic precedence on its own.
+        return lower_runtime_mixed_prop_set(ctx, object, property_value, value, Some(property), inst);
     }
     if object_is_builtin_stdclass(ctx, object)? {
         return lower_stdclass_prop_set(ctx, object, value, property);
@@ -1269,11 +1268,12 @@ pub(super) fn lower_runtime_mixed_prop_set(
     object: ValueId,
     property_value: ValueId,
     value: ValueId,
+    known_name: Option<&str>,
     inst: &Instruction,
 ) -> Result<()> {
     ensure_runtime_dynamic_property_name(ctx, property_value, inst)?;
     let write_kind = PropertyAccessKind::RuntimeWrite;
-    let candidates = declared_mixed_property_set_candidates(ctx, value, write_kind, inst)?;
+    let candidates = declared_mixed_property_set_candidates(ctx, value, known_name, write_kind, inst)?;
     let done_label = ctx.next_label("mixed_dyn_prop_set_done");
     let miss_label = ctx.next_label("mixed_dyn_prop_set_miss");
     let stdclass_label = ctx.next_label("mixed_dyn_prop_set_stdclass");
@@ -1458,6 +1458,7 @@ pub(super) fn lower_runtime_mixed_prop_set(
 pub(super) fn declared_mixed_property_set_candidates(
     ctx: &FunctionContext<'_>,
     value: ValueId,
+    known_name: Option<&str>,
     write_kind: PropertyAccessKind,
     inst: &Instruction,
 ) -> Result<Vec<MixedPropertyWriteCandidate>> {
@@ -1470,6 +1471,7 @@ pub(super) fn declared_mixed_property_set_candidates(
             continue;
         }
         for (property, _) in &class_info.properties {
+            if known_name.is_some_and(|name| name != property) { continue; }
             let Some(candidate) = mixed_property_write_candidate(
                 ctx,
                 class_name,

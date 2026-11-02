@@ -133,3 +133,28 @@ echo dynamicHookUpdate(new DynamicHookCounter(), 'value');
 }
 
 supported_target_cases!(dynamic_property_hook_updates, verify_dynamic_property_hook_updates);
+
+/// Literal names prune unrelated declared slots while computed names retain every valid arm.
+fn verify_literal_mixed_property_write_candidates(target: &str) {
+    let source = r#"<?php
+class LiteralWriteTarget { public mixed $chosen = null; }
+class LiteralWriteOther { public mixed $unrelatedWriteSlot = null; }
+function writeKnownMixedProperty(mixed $object): void { $object->chosen = 1; }
+function writeUnknownMixedProperty(mixed $object, string $name): void { $object->{$name} = 1; }
+writeKnownMixedProperty(new LiteralWriteTarget());
+writeUnknownMixedProperty(new LiteralWriteOther(), 'unrelatedWriteSlot');
+"#;
+    let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+        std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+    let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    for (name, dynamic) in [("writeKnownMixedProperty", false), ("writeUnknownMixedProperty", true)] {
+        let symbol = crate::names::function_symbol(name);
+        let body = assembly.split_once(&format!("{symbol}:\n")).unwrap().1;
+        let body = body.split("\n.globl ").next().unwrap();
+        assert!(body.contains("mixed_dyn_prop_set_chosen_"), "{target}: preserve matching slot dispatch");
+        assert_eq!(body.contains("mixed_dyn_prop_set_unrelatedWriteSlot_"), dynamic,
+            "{target}: only computed names need unrelated declared candidates");
+    }
+}
+
+supported_target_cases!(literal_mixed_property_write_candidates, verify_literal_mixed_property_write_candidates);
