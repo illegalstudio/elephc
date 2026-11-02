@@ -176,7 +176,7 @@ fn native_hook_type(ty: Option<&EvalParameterType>, context: &ElephcEvalContext)
             || reflection_instantiation::native_class_is_a(class, "SimpleXMLElement", context)))
 }
 
-/// Reads an actual native child before a late key, leaving ordinary callbacks and guards untouched.
+/// Reads a native child or a final parent's array before a late key without invoking extra getters.
 pub(super) fn probe_native_child(
     object: RuntimeCellHandle, property: &str, context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -191,7 +191,13 @@ pub(super) fn probe_native_child(
         _ => return Ok(None),
     };
     let current = if current.is_borrowed() { values.retain(current)? } else { current };
-    let native = super::super::runtime_ops::simplexml_properties::is_native(values, current, "");
+    let native = super::super::runtime_ops::simplexml_properties::is_native(values, current, "")
+        .and_then(|native| {
+            if native { return Ok(true); }
+            if !matches!(values.type_tag(current)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) { return Ok(false); }
+            Ok(array_uses_writable_storage(object, property, context, values)?
+                && values.final_object_identity_for_release(object)?.is_some())
+        });
     match native {
         Ok(true) => Ok(Some(current)),
         result => {
@@ -204,6 +210,21 @@ pub(super) fn probe_native_child(
             }
             Ok(None)
         }
+    }
+}
+
+/// Mirrors native handoff eligibility for a real writable array slot or existing dynamic entry.
+pub(super) fn array_uses_writable_storage(
+    object: RuntimeCellHandle, property: &str, context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if let Some(slot) = slot(object, property, context, values)? {
+        return Ok(!slot.readonly
+            && validate_eval_member_access(&slot.owner, slot.write_visibility, context).is_ok());
+    }
+    match native_storage(object, property, context, values)? {
+        NativeStorage::Dynamic => values.object_dynamic_property_exists(object, property),
+        _ => Ok(false),
     }
 }
 
@@ -226,13 +247,13 @@ pub(super) fn native_child_uses_storage(
     }
 }
 
-/// Rejects null storage mutation before warning-producing element reads or autovivification.
+/// Rejects non-object readonly mutations and invalid null autovivification before element access.
 fn validate(
     slot: &Slot, property: &str, current: RuntimeCellHandle,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let tag = values.type_tag(current)?;
-    if tag != EVAL_TAG_NULL { return Ok(()); }
+    if matches!(tag, EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE) { return Ok(()); }
     let owner = slot.owner.trim_start_matches('\\');
     if slot.readonly {
         return eval_throw_error(&format!("Cannot indirectly modify readonly property {owner}::${property}"), context, values);
@@ -242,6 +263,7 @@ fn validate(
         let scope = eval_native_constructor_scope_label(context);
         return eval_throw_error(&format!("Cannot indirectly modify {visibility}(set) property {owner}::${property} from {scope}"), context, values);
     }
+    if tag != EVAL_TAG_NULL { return Ok(()); }
     if let Some(ty) = slot.ty.as_ref().filter(|ty| !admits_array(ty)) {
         let ty = type_label(ty, &slot.owner, context)?;
         return eval_throw_type_error(&format!("Cannot auto-initialize an array inside property {owner}::${property} of type {ty}"), context, values);

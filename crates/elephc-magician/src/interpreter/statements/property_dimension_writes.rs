@@ -115,6 +115,7 @@ fn write_selected(
             None => Ok(()), Some(_) => Err(EvalStatus::RuntimeFatal),
         };
     }
+    retire_duplicate_receiver_captures(object, operands, receiver_roots, context, values)?;
     let probed = if late_index.is_some() {
         property_dimension_guards::probe_native_child(object, property, context, values)?
     } else { None };
@@ -146,6 +147,16 @@ fn write_selected(
             None => Ok(()), Some(_) => Err(EvalStatus::RuntimeFatal),
         };
     }
+    if matches!(values.type_tag(current)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC)
+        && property_dimension_guards::array_uses_writable_storage(object, property, context, values)?
+        && values.final_object_identity_for_release(object)?.is_some() {
+        retire_native_parent(operands, receiver_roots, context, values)?;
+        let index = finish_dimension_index(index, late_index, operands, context, scope, values)?;
+        // The parent expired before mutation. Its selected array remains an independent
+        // value, so publishing the updated copy back would access destroyed object storage.
+        write_value(current, index, op, assigned, operands, context, values)?;
+        return Ok(());
+    }
     let index = finish_dimension_index(index, late_index, operands, context, scope, values)?;
     if let Some(array) = write_value(current, index, op, assigned, operands, context, values)? {
         if dynamic {
@@ -153,6 +164,22 @@ fn write_selected(
         } else {
             eval_property_set_result(object, property, array, context, values)?;
         }
+    }
+    Ok(())
+}
+
+/// Drops duplicate leases of the final receiver without destroying it or shifting capture indices.
+fn retire_duplicate_receiver_captures(
+    object: RuntimeCellHandle, operands: &mut [RuntimeCellHandle], roots: &[usize],
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let Some((&last, earlier)) = roots.split_last() else { return Ok(()); };
+    if operands[last].as_ptr() != object.as_ptr() { return Ok(()); }
+    for index in earlier.iter().rev() {
+        if operands[*index].as_ptr() != object.as_ptr() { continue; }
+        let placeholder = values.null()?;
+        let previous = std::mem::replace(&mut operands[*index], placeholder);
+        eval_release_value(context, values, previous)?;
     }
     Ok(())
 }
