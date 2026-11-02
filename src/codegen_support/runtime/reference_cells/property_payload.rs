@@ -1,8 +1,8 @@
 //! Purpose:
-//! Resolves serialized property rows to native payload slots and initialization markers.
+//! Resolves native property descriptors to payload slots and initialization markers.
 //!
 //! Called from:
-//! - The default object and __sleep property walks in the serialization emitter.
+//! - Serialization, value renderers and object-to-array projection emitters.
 //!
 //! Key details:
 //! - Row flags describe physical indirection independently of the logical value tag.
@@ -12,7 +12,7 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 use crate::codegen_support::sentinels::SERPROP_REFERENCE_PROPERTY_FLAG;
 
 /// Follows a flagged native cell and reads its marker without calling or acquiring owners.
-pub(super) fn resolve(
+pub(crate) fn resolve(
     emitter: &mut Emitter, address: &str, tag: &str, marker: &str, prefix: &str,
 ) {
     let reference = format!("{prefix}_reference");
@@ -68,6 +68,13 @@ mod tests {
                 "{name}: Mixed value and uninitialized slots remain distinct from their cell pointers");
             assert!(rows.contains(&format!("    .quad {}\n", SERPROP_REFERENCE_PROPERTY_FLAG | 1)),
                 "{name}: a raw native string cell keeps the string payload tag");
+            let marker = format!("_class_vd_desc_{}:\n", class.class_id);
+            let dump = assembly.split_once(&marker).unwrap().1
+                .split_once(".globl _class_prop_desc_").unwrap().0;
+            assert_eq!(dump.matches(&format!("    .quad {}\n", SERPROP_REFERENCE_PROPERTY_FLAG | 7)).count(), 2,
+                "{name}: dump and serialization agree on Mixed cell indirection");
+            assert!(dump.contains(&format!("    .quad {}\n", SERPROP_REFERENCE_PROPERTY_FLAG | 1)),
+                "{name}: dump preserves the raw string's logical tag");
         }
     }
 }

@@ -174,7 +174,8 @@ pub fn emit_print_r_object(emitter: &mut Emitter) {
     emitter.instruction("str x13, [sp, #56]");                                  // save the slot pointer across the calls
 
     // -- PHP omits an uninitialized typed property from print_r entirely --
-    emitter.instruction("ldr x14, [x13, #8]");                                  // load the slot's high word (the init marker)
+    emitter.instruction("ldr x0, [x11, #24]");                                  // load the logical tag and native storage flags
+    crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "x13", "x0", "x14", "__rt_pr_obj_marker");
     emit_uninit_sentinel_aarch64(emitter, "x15");                               // materialize the uninitialized-property marker
     emitter.instruction("cmp x14, x15");                                        // is this property still uninitialized?
     emitter.instruction("b.eq __rt_pr_obj_next");                               // skip it without emitting a line
@@ -189,6 +190,7 @@ pub fn emit_print_r_object(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [sp, #48]");                                  // reload the descriptor row pointer
     emitter.instruction("ldr x13, [sp, #56]");                                  // reload the property slot pointer
     emitter.instruction("ldr x0, [x11, #24]");                                  // property value tag → value renderer
+    crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "x13", "x0", "x14", "__rt_pr_obj_payload");
     emitter.instruction("ldr x1, [x13]");                                       // slot low word → value renderer
     emitter.instruction("ldr x2, [x13, #8]");                                   // slot high word → value renderer
     emit_resolve_tagged_scalar_property_tag(emitter, "x0", "x2");
@@ -338,7 +340,8 @@ fn emit_print_r_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r10, QWORD PTR [rbp - 8]");                        // resolve the absolute property slot address
     emitter.instruction("mov QWORD PTR [rbp - 64], r10");                       // save the slot pointer across the calls
 
-    emitter.instruction("mov rax, QWORD PTR [r10 + 8]");                        // load the slot's high word (the init marker)
+    emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");                       // load the logical tag and native storage flags
+    crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "r10", "rdi", "rax", "__rt_pr_obj_marker");
     emitter.instruction("movabs r8, 0x7ffffffffffffffd");                       // materialize the uninitialized-property marker
     emitter.instruction("cmp rax, r8");                                         // is this property still uninitialized?
     emitter.instruction("je __rt_pr_obj_next_x86");                             // skip it without emitting a line
@@ -351,6 +354,7 @@ fn emit_print_r_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the descriptor row pointer
     emitter.instruction("mov r10, QWORD PTR [rbp - 64]");                       // reload the property slot pointer
     emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");                       // property value tag → value renderer
+    crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "r10", "rdi", "r8", "__rt_pr_obj_payload");
     emitter.instruction("mov rsi, QWORD PTR [r10]");                            // slot low word → value renderer
     emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // slot high word → value renderer
     emit_resolve_tagged_scalar_property_tag(emitter, "rdi", "rdx");

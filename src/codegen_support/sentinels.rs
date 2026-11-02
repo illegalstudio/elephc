@@ -161,7 +161,7 @@ pub(crate) const CONCAT_TEMP_HEAP_KIND: u32 = 7;
 /// Independently owned reference cell whose payload descriptor occupies bits 8 through 14.
 pub(crate) const REFERENCE_CELL_HEAP_KIND: u32 = 8;
 
-/// Serialization property rows preserve the payload tag and mark a native reference-cell slot.
+/// Property descriptor rows preserve the payload tag and mark a native reference-cell slot.
 pub(crate) const SERPROP_REFERENCE_PROPERTY_FLAG: u64 = 1 << 8;
 
 /// JSON property descriptors preserve the payload tag and mark an indirect reference cell.

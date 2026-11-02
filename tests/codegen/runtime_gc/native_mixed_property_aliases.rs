@@ -301,3 +301,68 @@ exerciseNativeStaticTransfer($argc > 0);
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
     assert!(!output.stderr.contains("Warning:"), "{}", output.stderr);
 }
+
+/// Value walkers follow native cells while array projections preserve real PHP references and COW.
+#[test]
+fn test_native_reference_property_renderers_and_projection_bundle() {
+    let source = r#"<?php
+class RenderedNativeReference {
+    public mixed $value = ['key' => 'value'];
+    public mixed $missing;
+    public string $text = 'text';
+    public int $number = 7;
+    public function &textRef(): string { return $this->text; }
+    public function &numberRef(): int { return $this->number; }
+}
+function exerciseRenderedNativeReferences(bool $run): void {
+    $object = new RenderedNativeReference();
+    $text =& $object->textRef();
+    $number =& $object->numberRef();
+    $nativeValue =& $object->value;
+    $code = $run ? '
+function captureRenderedNativeReference(&$value): callable {
+    return function () use (&$value): mixed { return $value; };
+}
+$escapedRendered = captureRenderedNativeReference($object->value);
+' : '';
+    eval($code);
+    ob_start(); var_dump($object); $dump = ob_get_clean();
+    $printed = print_r($object, true);
+    $exported = var_export($object, true);
+    echo (int)str_contains($dump, 'uninitialized(mixed)'),
+        (int)str_contains($dump, 'string(4) "text"'),
+        (int)str_contains($dump, 'int(7)'),
+        (int)!str_contains($printed, '[missing]'),
+        (int)!str_contains($exported, "'missing'"),
+        (int)str_contains($exported, "'text'"), '|';
+    $vars = get_object_vars($object);
+    echo json_encode($vars), '|';
+    $vars['value'] = ['key' => 'vars'];
+    echo json_encode($object->value), '|';
+    $cast = (array)$object;
+    $cast['value'] = ['key' => 'cast'];
+    $code = $run ? 'echo json_encode($escapedRendered()), "|"; unset($escapedRendered);' : '';
+    eval($code);
+    unset($vars, $cast);
+    $nativeVars = get_object_vars($object);
+    $nativeVars['value'] = ['key' => 'native-only'];
+    echo json_encode($nativeValue), '|';
+    $peer = new RenderedNativeReference();
+    $peer->value = ['key' => 'native-only'];
+    echo (int)($object == $peer), '|';
+    $plain = new RenderedNativeReference();
+    $temporary =& $plain->value;
+    unset($temporary);
+    $plainVars = get_object_vars($plain);
+    $plainVars['value']['key'] = 'copy';
+    echo json_encode($plain->value), '|';
+    unset($object, $peer, $plain, $nativeVars, $nativeValue, $plainVars, $text, $number, $dump, $printed, $exported, $code);
+}
+exerciseRenderedNativeReferences($argc > 0);
+"#;
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "111111|{\"value\":{\"key\":\"value\"},\"text\":\"text\",\"number\":7}|{\"key\":\"vars\"}|{\"key\":\"cast\"}|{\"key\":\"native-only\"}|1|{\"key\":\"value\"}|");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+    assert!(!output.stderr.contains("Warning:"), "{}", output.stderr);
+}

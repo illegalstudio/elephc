@@ -3937,7 +3937,7 @@ fn var_dump_descriptor_rows(
                         .get(&prop_name)
                         .copied()
                         .unwrap_or(8 + layout_index * 16),
-                    tag: prop_value_tag(metadata, &prop_name, prop_ty),
+                    tag: prop_value_tag(metadata, &prop_name, prop_ty, layout_index),
                     type_name: var_dump_property_type_name(prop_ty),
                 })
             })
@@ -3963,7 +3963,7 @@ fn var_dump_descriptor_rows(
                     .get(prop_name)
                     .copied()
                     .unwrap_or(8 + layout_index * 16),
-                tag: prop_value_tag(metadata, prop_name, prop_ty),
+                tag: prop_value_tag(metadata, prop_name, prop_ty, layout_index),
                 type_name: var_dump_property_type_name(prop_ty),
             })
         })
@@ -4372,15 +4372,13 @@ fn serprop_widens_int_to_float(prop_ty: &PhpType) -> bool {
 
 /// Maps a declared property's static type to the runtime value tag consumed by
 /// `__rt_serialize_value` when serializing that property's 16-byte object slot.
-/// Mirrors the gc-descriptor tag mapping; reference and untyped/nullable
-/// properties are stored as boxed `Mixed` cells (tag 7), except `int|null`, whose
+/// Reference indirection is an independent descriptor flag; the payload retains its logical tag.
+/// Untyped/nullable properties use boxed `Mixed` cells (tag 7), except `int|null`, whose
 /// inline `{payload, tag}` pair gets `TAGGED_SCALAR_PROPERTY_TAG`. A `Closure`
 /// property holds its callable descriptor directly (tag 10), never a Mixed box.
-fn prop_value_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType) -> u64 {
-    if class_info.reference_properties.contains(prop_name) {
-        return 7;
-    }
+fn prop_value_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType, index: usize) -> u64 {
     serialized_property_payload_tag(prop_ty)
+        | if class_info.property_slot_is_reference(index, prop_name) { SERPROP_REFERENCE_PROPERTY_FLAG } else { 0 }
 }
 
 /// Returns the logical serialization tag of a property's native payload after following its cell.

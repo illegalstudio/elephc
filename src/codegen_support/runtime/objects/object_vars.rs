@@ -192,12 +192,14 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x16, [sp, #80]");                                  // save the property runtime-tag slot across nested runtime calls
     emitter.instruction("ldr x17, [sp, #0]");                                   // load the object pointer slot for `ldr x17, [sp, #0]`
     emitter.instruction("add x17, x17, x15");                                   // derive the current descriptor/property offset with `add x17, x17, x15`
+    crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "x17", "x16", "x11", "__rt_object_to_hash_slot");
+    emitter.instruction("str x16, [sp, #80]");                                  // persist the logical tag after resolving native storage
     emitter.instruction("ldr x1, [x17]");                                       // load the current object/descriptor operand for `ldr x1, [x17]`
     emitter.instruction("ldr x2, [x17, #8]");                                   // load the current object/descriptor operand for `ldr x2, [x17, #8]`
     emitter.instruction("str x1, [sp, #88]");                                   // save the property low-word slot across nested runtime calls
     emitter.instruction("str x2, [sp, #96]");                                   // save the property high-word slot across nested runtime calls
     abi::emit_load_int_immediate(emitter, "x10", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
-    emitter.instruction("cmp x2, x10");                                         // evaluate `cmp x2, x10` before selecting the projection branch
+    emitter.instruction("cmp x11, x10");                                        // test the marker selected for inline or reference storage
     emitter.instruction("b.eq __rt_object_to_hash_next");                       // skip or advance the current property via `__rt_object_to_hash_next`
     emitter.instruction("mov x0, x16");                                         // prepare the projection argument or result with `mov x0, x16`
     emit_resolve_tagged_scalar_property_tag(emitter, "x0", "x2");
@@ -205,13 +207,50 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, #7");                                          // does the slot hold a boxed Mixed cell pointer?
     emitter.instruction("b.ne __rt_object_to_hash_box");                        // other tags box their payload directly
     emit_branch_if_null_container(emitter, "x1", "x9", "__rt_object_to_hash_null_slot");
-    emitter.instruction("b __rt_object_to_hash_box");                           // a live cell boxes as before
+    emitter.instruction("ldr x9, [x1]");                                        // inspect the existing Mixed box before selecting copy semantics
+    emitter.instruction("cmp x9, #7");                                          // persistent references carry the nested Mixed tag
+    emitter.instruction("b.ne __rt_object_to_hash_copy_value");                 // ordinary values get independent zval storage
+    emitter.instruction("ldr x9, [x1, #16]");                                   // inspect the reference identity marker
+    emitter.instruction("cmp x9, #1");                                          // only a persistent PHP reference preserves its binding
+    emitter.instruction("b.ne __rt_object_to_hash_copy_value");                 // nested value boxes remain ordinary copies
+    emitter.instruction("ldr x9, [sp, #0]");                                    // recover the native object whose slot may own a cell
+    emitter.instruction("ldr x9, [x9]");                                        // select the class's physical GC descriptor
+    abi::emit_symbol_address(emitter, "x10", "_class_gc_desc_ptrs");
+    emitter.instruction("ldr x9, [x10, x9, lsl #3]");                           // load the per-slot storage ownership bytes
+    emitter.instruction("ldr x12, [sp, #72]");                                  // recover this physical property's byte offset
+    emitter.instruction("sub x12, x12, #8");                                    // exclude the class identifier word
+    emitter.instruction("lsr x12, x12, #4");                                    // convert the byte offset to a property index
+    emitter.instruction("ldrb w9, [x9, x12]");                                  // distinguish an owned native cell from inline or borrowed storage
+    emitter.instruction("cmp w9, #11");                                         // only owned kind-eight cells have a managed cell header
+    emitter.instruction("b.ne __rt_object_to_hash_wrapper_owners");             // inspect only the wrapper for other storage shapes
+    emitter.instruction("ldr w9, [x17, #-12]");                                 // native aliases retain their shared cell rather than its wrapper
+    emitter.instruction("ldr x10, [x17, #-8]");                                 // inspect collector-only cell ownership
+    emitter.instruction("ubfx x10, x10, #18, #1");                              // isolate the artificial destructor pin
+    emitter.instruction("sub w9, w9, w10");                                     // count only PHP-visible cell owners
+    emitter.instruction("cmp w9, #1");                                          // a live native alias keeps the projected reference shared
+    emitter.instruction("b.hi __rt_object_to_hash_shared_reference");           // preserve the native alias even when the wrapper has one owner
+    emitter.label("__rt_object_to_hash_wrapper_owners");
+    emitter.instruction("ldr w9, [x1, #-12]");                                  // inspect independently retained eval or projected aliases
+    emitter.instruction("ldr x10, [x1, #-8]");                                  // exclude collector-only wrapper ownership
+    emitter.instruction("ubfx x10, x10, #18, #1");                              // isolate the wrapper's artificial destructor pin
+    emitter.instruction("sub w9, w9, w10");                                     // count only PHP-visible wrapper owners
+    emitter.instruction("cmp w9, #1");                                          // singleton references project as ordinary copied values
+    emitter.instruction("b.ls __rt_object_to_hash_copy_value");                 // avoid creating an alias after its last external owner disappeared
+    emitter.label("__rt_object_to_hash_shared_reference");
+    emitter.instruction("mov x0, x1");                                          // give the projected entry the original PHP reference
+    emitter.instruction("bl __rt_incref");                                      // acquire the entry's independent wrapper owner
+    emitter.instruction("b __rt_object_to_hash_value_ready");                   // transfer the retained reference to the result hash
+    emitter.label("__rt_object_to_hash_copy_value");
+    emitter.instruction("mov x0, x1");                                          // copy the actual value box rather than wrapping its address
+    emitter.instruction("bl __rt_mixed_clone");                                 // preserve value copy-on-write without sharing mutable zval identity
+    emitter.instruction("b __rt_object_to_hash_value_ready");                   // transfer the copied value to the result hash
     emitter.label("__rt_object_to_hash_null_slot");
     emitter.instruction("mov x0, #8");                                          // runtime tag 8 = canonical PHP null
     abi::emit_load_int_immediate(emitter, "x1", NULL_SENTINEL);                 // null payload uses the shared in-band sentinel
     emitter.instruction("mov x2, #0");                                          // null carries no high payload word
     emitter.label("__rt_object_to_hash_box");
     emitter.instruction("bl __rt_mixed_from_value");                            // call `__rt_mixed_from_value` with the prepared projection arguments
+    emitter.label("__rt_object_to_hash_value_ready");
     emitter.instruction("mov x3, x0");                                          // prepare the projection argument or result with `mov x3, x0`
     emitter.instruction("ldr x0, [sp, #16]");                                   // load the result-hash slot for `ldr x0, [sp, #16]`
     emitter.instruction("ldr x1, [sp, #56]");                                   // load the property-key pointer slot for `ldr x1, [sp, #56]`
@@ -434,10 +473,12 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 88], r15");                       // save the property runtime-tag slot across nested runtime calls
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // load the object pointer slot for `mov r10, QWORD PTR [rbp - 8]`
     emitter.instruction("add r10, r14");                                        // derive the current descriptor/property offset with `add r10, r14`
+    crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "r10", "r15", "r11", "__rt_object_to_hash_slot");
+    emitter.instruction("mov QWORD PTR [rbp - 88], r15");                       // persist the logical tag after resolving native storage
     emitter.instruction("mov rdi, QWORD PTR [r10]");                            // load the current object/descriptor operand for `mov rdi, QWORD PTR [r10]`
     emitter.instruction("mov rsi, QWORD PTR [r10 + 8]");                        // load the current object/descriptor operand for `mov rsi, QWORD PTR [r10 + 8]`
-    abi::emit_load_int_immediate(emitter, "r11", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
-    emitter.instruction("cmp rsi, r11");                                        // evaluate `cmp rsi, r11` before selecting the projection branch
+    abi::emit_load_int_immediate(emitter, "r9", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+    emitter.instruction("cmp r11, r9");                                         // test the marker selected for inline or reference storage
     emitter.instruction("je __rt_object_to_hash_next_x");                       // skip or advance the current property via `__rt_object_to_hash_next_x`
     emitter.instruction("mov rax, r15");                                        // prepare the projection argument or result with `mov rax, r15`
     emit_resolve_tagged_scalar_property_tag(emitter, "rax", "rsi");
@@ -445,13 +486,49 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, 7");                                          // does the slot hold a boxed Mixed cell pointer?
     emitter.instruction("jne __rt_object_to_hash_box_x");                       // other tags box their payload directly
     emit_branch_if_null_container(emitter, "rdi", "r11", "__rt_object_to_hash_null_slot_x");
-    emitter.instruction("jmp __rt_object_to_hash_box_x");                       // a live cell boxes as before
+    emitter.instruction("cmp QWORD PTR [rdi], 7");                              // persistent references carry the nested Mixed tag
+    emitter.instruction("jne __rt_object_to_hash_copy_value_x");                // ordinary values get independent zval storage
+    emitter.instruction("cmp QWORD PTR [rdi + 16], 1");                         // inspect the reference identity marker
+    emitter.instruction("jne __rt_object_to_hash_copy_value_x");                // nested value boxes remain ordinary copies
+    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // recover the native object whose slot may own a cell
+    emitter.instruction("mov r9, QWORD PTR [r9]");                              // select the class's physical GC descriptor
+    abi::emit_symbol_address(emitter, "r11", "_class_gc_desc_ptrs");
+    emitter.instruction("mov r9, QWORD PTR [r11 + r9 * 8]");                    // load the per-slot storage ownership bytes
+    emitter.instruction("mov r11, QWORD PTR [rbp - 80]");                       // recover this physical property's byte offset
+    emitter.instruction("sub r11, 8");                                          // exclude the class identifier word
+    emitter.instruction("shr r11, 4");                                          // convert the byte offset to a property index
+    emitter.instruction("cmp BYTE PTR [r9 + r11], 11");                         // only owned kind-eight cells have a managed cell header
+    emitter.instruction("jne __rt_object_to_hash_wrapper_owners_x");            // inspect only the wrapper for other storage shapes
+    emitter.instruction("mov r9d, DWORD PTR [r10 - 12]");                       // native aliases retain their shared cell rather than its wrapper
+    emitter.instruction("mov r11, QWORD PTR [r10 - 8]");                        // inspect collector-only cell ownership
+    emitter.instruction("shr r11, 18");                                         // position the artificial destructor pin
+    emitter.instruction("and r11d, 1");                                         // isolate the artificial destructor pin
+    emitter.instruction("sub r9d, r11d");                                       // count only PHP-visible cell owners
+    emitter.instruction("cmp r9d, 1");                                          // a live native alias keeps the projected reference shared
+    emitter.instruction("ja __rt_object_to_hash_shared_reference_x");           // preserve the native alias even when the wrapper has one owner
+    emitter.label("__rt_object_to_hash_wrapper_owners_x");
+    emitter.instruction("mov r9d, DWORD PTR [rdi - 12]");                       // inspect independently retained eval or projected aliases
+    emitter.instruction("mov r11, QWORD PTR [rdi - 8]");                        // exclude collector-only wrapper ownership
+    emitter.instruction("shr r11, 18");                                         // position the wrapper's artificial destructor pin
+    emitter.instruction("and r11d, 1");                                         // isolate the artificial destructor pin
+    emitter.instruction("sub r9d, r11d");                                       // count only PHP-visible wrapper owners
+    emitter.instruction("cmp r9d, 1");                                          // singleton references project as ordinary copied values
+    emitter.instruction("jbe __rt_object_to_hash_copy_value_x");                // avoid creating an alias after its last external owner disappeared
+    emitter.label("__rt_object_to_hash_shared_reference_x");
+    emitter.instruction("mov rax, rdi");                                        // give the projected entry the original PHP reference
+    emitter.instruction("call __rt_incref");                                    // acquire the entry's independent wrapper owner
+    emitter.instruction("jmp __rt_object_to_hash_value_ready_x");               // transfer the retained reference to the result hash
+    emitter.label("__rt_object_to_hash_copy_value_x");
+    emitter.instruction("mov rax, rdi");                                        // copy the actual value box rather than wrapping its address
+    emitter.instruction("call __rt_mixed_clone");                               // preserve value copy-on-write without sharing mutable zval identity
+    emitter.instruction("jmp __rt_object_to_hash_value_ready_x");               // transfer the copied value to the result hash
     emitter.label("__rt_object_to_hash_null_slot_x");
     emitter.instruction("mov eax, 8");                                          // runtime tag 8 = canonical PHP null
     abi::emit_load_int_immediate(emitter, "rdi", NULL_SENTINEL);                // null payload uses the shared in-band sentinel
     emitter.instruction("xor esi, esi");                                        // null carries no high payload word
     emitter.label("__rt_object_to_hash_box_x");
     emitter.instruction("call __rt_mixed_from_value");                          // call `__rt_mixed_from_value` with the prepared projection arguments
+    emitter.label("__rt_object_to_hash_value_ready_x");
     emitter.instruction("mov rcx, rax");                                        // prepare the projection argument or result with `mov rcx, rax`
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // load the result-hash slot for `mov rdi, QWORD PTR [rbp - 24]`
     emitter.instruction("mov rsi, QWORD PTR [rbp - 64]");                       // load the property-key pointer slot for `mov rsi, QWORD PTR [rbp - 64]`
