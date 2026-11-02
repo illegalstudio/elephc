@@ -122,3 +122,40 @@ echo "unreachable";
         out.stderr
     );
 }
+
+/// An `array<mixed>` local (a heterogeneous literal, or a list rebuilt in a loop) passed to
+/// `?array &$a` accepts a callee array with raw typed slots: the writeback widens it into boxed
+/// cells, and the boxed array the callee keeps is retained as it is.
+#[test]
+fn test_nullable_array_reference_widens_into_mixed_locals() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Item { public function __construct(public int $id) {} }
+function replace_items(?array &$items, int $mode): void {
+    if ($mode === 0) {
+        $items = [new Item(4), new Item(5)];
+    } elseif ($mode === 1) {
+        $items = [8, 9, 10];
+    } else {
+        $items[] = "tail";
+    }
+}
+function run(): void {
+    for ($i = 0; $i < 3; $i++) {
+        $values = [1, "a", 2.5];
+        replace_items($values, 0);
+        $first = $values[0];
+        $other = [true, "b"];
+        replace_items($other, 1);
+        $kept = [1, "x"];
+        replace_items($kept, 2);
+        if ($i == 2) {
+            echo count($values), $first->id, "|", count($other), $other[2], "|", count($kept), $kept[2], "\n";
+        }
+    }
+}
+run();
+"#,
+    );
+    assert_clean(out, "24|310|3tail\n");
+}

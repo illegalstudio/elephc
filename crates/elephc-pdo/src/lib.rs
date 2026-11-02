@@ -2927,6 +2927,81 @@ pub unsafe extern "C" fn elephc_pdo_mysql_change_user(
     })
 }
 
+/// Sends a MYSQLI_ASYNC query on a MySQL connection: a worker thread runs it and buffers
+/// the result while the caller continues. `1` when sent, `-1` (mysqlnd's 2014 recorded on
+/// the connection) when the link is busy, or for a non-MySQL / unknown handle.
+///
+/// # Safety
+/// `sql` must point to a NUL-terminated string valid for the duration of the call.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_mysql_async_send(conn_id: i64, sql: *const c_char) -> i64 {
+    ffi_guard(-1, || {
+        let Some(sql) = cstr_arg(sql) else {
+            return -1;
+        };
+        let mut guard = lock_recover(conns());
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Mysql(c)) => c.async_send(sql),
+            _ => -1,
+        }
+    })
+}
+
+/// Waits up to `timeout_us` microseconds for the connection's async query to finish:
+/// `1` once its result is ready to reap, `0` on timeout, `-1` when none is in flight. The
+/// connection registry lock is NOT held while waiting, so other links keep working.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_async_wait(conn_id: i64, timeout_us: i64) -> i64 {
+    ffi_guard(-1, || {
+        let signal = {
+            let guard = lock_recover(conns());
+            match guard.get(&conn_id) {
+                Some(Conn::Mysql(c)) => c.async_signal(),
+                _ => None,
+            }
+        };
+        let Some(signal) = signal else {
+            return -1;
+        };
+        let (flag, condvar) = &*signal;
+        let done = lock_recover(flag);
+        let timeout = std::time::Duration::from_micros(timeout_us.max(0) as u64);
+        let (done, _) = condvar
+            .wait_timeout_while(done, timeout, |finished| !*finished)
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *done {
+            1
+        } else {
+            0
+        }
+    })
+}
+
+/// Reaps the connection's async query (blocking until it finishes): its buffered result
+/// is installed into a new executed statement walked with `elephc_pdo_step`. Returns the
+/// statement handle, or `-1` with the query's error recorded on the connection.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_async_reap(conn_id: i64) -> i64 {
+    ffi_guard(-1, || {
+        let reaped = {
+            let mut guard = lock_recover(conns());
+            match guard.get_mut(&conn_id) {
+                Some(Conn::Mysql(c)) => c.async_reap(),
+                _ => Err(()),
+            }
+        };
+        match reaped {
+            Ok(mut stmt) => {
+                stmt.conn_id = conn_id;
+                let id = next_id();
+                lock_recover(stmts()).insert(id, Stmt::Mysql(stmt));
+                id
+            }
+            Err(()) => -1,
+        }
+    })
+}
+
 /// Returns the server-side id of a natively prepared MySQL statement, backing
 /// `mysqli_stmt::$id`. `0` for an emulated statement, `-1` for a non-MySQL or
 /// unknown statement handle.

@@ -34,6 +34,7 @@ use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -309,6 +310,8 @@ pub struct MyConn {
     active_stream: Option<MyActiveStream>,
     /// Monotonic identity used to reject stale statement stream handles.
     next_stream_id: u64,
+    /// MYSQLI_ASYNC query in flight on a worker thread, owning the client meanwhile.
+    async_query: Option<MyAsyncQuery>,
 }
 
 /// A live MySQL prepared statement and its buffered or demand-driven result.
@@ -380,7 +383,19 @@ impl Drop for MyConn {
     /// Stops any active row worker before the owning PDO connection is released.
     fn drop(&mut self) {
         self.finish_active_stream();
+        self.finish_async();
     }
+}
+
+/// A MYSQLI_ASYNC query running on its own thread: the worker owns the client until the
+/// result is reaped, and `done` is signalled (with the condvar) once the server answered.
+struct MyAsyncQuery {
+    /// SQL text, kept for transaction-state bookkeeping and the reaped statement.
+    sql: String,
+    /// Worker returning the client, the buffered outcome, and the final warning count.
+    worker: JoinHandle<(Conn, Result<Vec<MyRowset>, mysql::Error>, u16)>,
+    /// Completion flag + condvar the poller waits on.
+    done: Arc<(Mutex<bool>, Condvar)>,
 }
 
 /// Keeps the MySQL client optional while an unbuffered worker owns it.
@@ -454,6 +469,22 @@ struct MyRowset {
 }
 
 impl MyRowset {
+    /// An empty, column-less result set (a statement that produced no result at all).
+    fn empty() -> Self {
+        MyRowset {
+            affected: 0,
+            last_id: None,
+            col_names: Vec::new(),
+            col_kinds: Vec::new(),
+            col_types: Vec::new(),
+            col_tables: Vec::new(),
+            col_flags: Vec::new(),
+            col_lengths: Vec::new(),
+            col_precisions: Vec::new(),
+            rows: Vec::new(),
+        }
+    }
+
     /// Returns PDO's row count for this result set: buffered row count for a
     /// SELECT-like set, otherwise the server's affected-row count.
     fn row_count(&self) -> i64 {
@@ -463,6 +494,59 @@ impl MyRowset {
             self.rows.len() as i64
         }
     }
+}
+
+/// Runs a text-protocol statement (or multi-statement batch) and buffers every result set,
+/// shared by buffered emulated statements and by mysqli's MYSQLI_ASYNC worker thread.
+fn collect_text_rowsets(
+    client: &mut Conn,
+    sql: String,
+    fetch_table_names: bool,
+) -> Result<Vec<MyRowset>, mysql::Error> {
+    let mut result = client.query_iter(sql)?;
+    let mut rowsets = Vec::new();
+    while let Some(mut set) = result.iter() {
+        let last_id = set.last_insert_id();
+        let affected = set.affected_rows() as i64;
+        let columns = set.columns();
+        let columns: &[Column] = columns.as_ref();
+        let col_names = columns
+            .iter()
+            .map(|column| column_display_name(column, fetch_table_names))
+            .collect::<Vec<_>>();
+        let col_kinds = columns.iter().map(ColKind::from_column).collect::<Vec<_>>();
+        let col_types = columns
+            .iter()
+            .map(|column| column.column_type())
+            .collect::<Vec<_>>();
+        let col_tables = columns
+            .iter()
+            .map(|column| column.table_str().into_owned())
+            .collect::<Vec<_>>();
+        let col_flags = columns.iter().map(Column::flags).collect::<Vec<_>>();
+        let col_lengths = columns
+            .iter()
+            .map(Column::column_length)
+            .collect::<Vec<_>>();
+        let col_precisions = columns.iter().map(Column::decimals).collect::<Vec<_>>();
+        let mut rows = Vec::new();
+        for row in set.by_ref() {
+            rows.push(decode_row(row?.unwrap(), &col_kinds));
+        }
+        rowsets.push(MyRowset {
+            affected,
+            last_id,
+            col_names,
+            col_kinds,
+            col_types,
+            col_tables,
+            col_flags,
+            col_lengths,
+            col_precisions,
+            rows,
+        });
+    }
+    Ok(rowsets)
 }
 
 /// Extracts a MySQL server error code from a driver error, or `1` for transport /
@@ -1886,6 +1970,7 @@ impl MyConn {
             server_version,
             no_backslash_escapes,
             active_stream: None,
+            async_query: None,
             next_stream_id: 0,
         })
     }
@@ -2385,6 +2470,101 @@ impl MyConn {
             .as_ref()
             .map(|c| i64::from(c.connection_id()))
             .unwrap_or(0)
+    }
+
+    /// Starts a MYSQLI_ASYNC query: the client moves to a worker thread that runs `sql` and
+    /// buffers its result sets, so the caller returns at once. `1` when sent, `-1` (mysqlnd's
+    /// 2014 recorded) when the connection is busy with a stream or another async query.
+    pub fn async_send(&mut self, sql: &str) -> i64 {
+        if self.active_stream.is_some() || self.async_query.is_some() || self.unbuffered_active {
+            self.sqlstate = "HY000".to_string();
+            self.errcode = 2014;
+            self.errmsg = "Commands out of sync; you can't run this command now".to_string();
+            return -1;
+        }
+        let Some(mut client) = self.conn.0.take() else {
+            self.sqlstate = "HY000".to_string();
+            self.errcode = 2014;
+            self.errmsg = "Commands out of sync; you can't run this command now".to_string();
+            return -1;
+        };
+        self.server_version = client.server_version();
+        self.no_backslash_escapes = client.no_backslash_escape();
+        let done = Arc::new((Mutex::new(false), Condvar::new()));
+        let signal = Arc::clone(&done);
+        let text = sql.to_string();
+        let fetch_table_names = self.fetch_table_names;
+        let worker = std::thread::spawn(move || {
+            let outcome = collect_text_rowsets(&mut client, text, fetch_table_names);
+            let warnings = client.warnings();
+            let (flag, condvar) = &*signal;
+            *flag.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
+            condvar.notify_all();
+            (client, outcome, warnings)
+        });
+        self.async_query = Some(MyAsyncQuery {
+            sql: sql.to_string(),
+            worker,
+            done,
+        });
+        self.errcode = 0;
+        self.sqlstate = "00000".to_string();
+        1
+    }
+
+    /// Returns the completion signal of the in-flight async query, if any, so a poller can
+    /// wait on it WITHOUT holding the connection registry lock.
+    pub fn async_signal(&self) -> Option<Arc<(Mutex<bool>, Condvar)>> {
+        self.async_query.as_ref().map(|query| Arc::clone(&query.done))
+    }
+
+    /// Collects the async query's outcome: the client comes back from the worker and the
+    /// buffered result sets are installed into a fresh executed text statement. `Err(())`
+    /// (error recorded on the connection) when the query failed or none was in flight.
+    pub fn async_reap(&mut self) -> Result<MyStmt, ()> {
+        let Some(query) = self.async_query.take() else {
+            self.sqlstate = "HY000".to_string();
+            self.errcode = 2014;
+            self.errmsg = "Commands out of sync; you can't run this command now".to_string();
+            return Err(());
+        };
+        let Ok((client, outcome, warnings)) = query.worker.join() else {
+            self.sqlstate = "HY000".to_string();
+            self.errcode = 2013;
+            self.errmsg = "Lost connection to MySQL server during query".to_string();
+            return Err(());
+        };
+        self.restore_stream_client(client, warnings);
+        match outcome {
+            Ok(mut rowsets) => {
+                let mut stmt = self.prepare(&query.sql, true).map_err(|_| ())?;
+                let first = if rowsets.is_empty() {
+                    MyRowset::empty()
+                } else {
+                    rowsets.remove(0)
+                };
+                stmt.remaining_rowsets = rowsets;
+                stmt.install_rowset(self, first);
+                self.note_transaction_sql(&query.sql);
+                self.errcode = 0;
+                self.sqlstate = "00000".to_string();
+                Ok(stmt)
+            }
+            Err(error) => {
+                self.record_mysql_error(&error);
+                Err(())
+            }
+        }
+    }
+
+    /// Waits for and discards an in-flight async query (close / reset paths), so the client
+    /// is never stranded on the worker thread.
+    fn finish_async(&mut self) {
+        if let Some(query) = self.async_query.take() {
+            if let Ok((client, _, warnings)) = query.worker.join() {
+                self.restore_stream_client(client, warnings);
+            }
+        }
     }
 
     /// Returns the info string of the last OK packet ("Records: 3  Duplicates: 0
@@ -3125,52 +3305,8 @@ impl MyStmt {
             conn.note_transaction_sql(&self.query_string);
             return Ok(());
         }
-        let outcome = (|| {
-            let mut result = conn.conn.query_iter(sql)?;
-            let mut rowsets = Vec::new();
-            while let Some(mut set) = result.iter() {
-                let last_id = set.last_insert_id();
-                let affected = set.affected_rows() as i64;
-                let columns = set.columns();
-                let columns: &[Column] = columns.as_ref();
-                let col_names = columns
-                    .iter()
-                    .map(|column| column_display_name(column, conn.fetch_table_names))
-                    .collect::<Vec<_>>();
-                let col_kinds = columns.iter().map(ColKind::from_column).collect::<Vec<_>>();
-                let col_types = columns
-                    .iter()
-                    .map(|column| column.column_type())
-                    .collect::<Vec<_>>();
-                let col_tables = columns
-                    .iter()
-                    .map(|column| column.table_str().into_owned())
-                    .collect::<Vec<_>>();
-                let col_flags = columns.iter().map(Column::flags).collect::<Vec<_>>();
-                let col_lengths = columns
-                    .iter()
-                    .map(Column::column_length)
-                    .collect::<Vec<_>>();
-                let col_precisions = columns.iter().map(Column::decimals).collect::<Vec<_>>();
-                let mut rows = Vec::new();
-                for row in set.by_ref() {
-                    rows.push(decode_row(row?.unwrap(), &col_kinds));
-                }
-                rowsets.push(MyRowset {
-                    affected,
-                    last_id,
-                    col_names,
-                    col_kinds,
-                    col_types,
-                    col_tables,
-                    col_flags,
-                    col_lengths,
-                    col_precisions,
-                    rows,
-                });
-            }
-            Ok::<_, mysql::Error>(rowsets)
-        })();
+        let fetch_table_names = conn.fetch_table_names;
+        let outcome = collect_text_rowsets(&mut conn.conn, sql, fetch_table_names);
         let warnings = conn.conn.warnings();
         match outcome {
             Ok(mut rowsets) => {

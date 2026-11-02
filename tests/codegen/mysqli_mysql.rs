@@ -1249,3 +1249,55 @@ try {
     ));
     assert_eq!(out, "1|1|1|NULL|42|0|NULL|0|No stream arrays were passed");
 }
+
+/// MYSQLI_ASYNC queries really run in the background: `query()` returns at once,
+/// `mysqli_poll()` waits (with its timeout) until a link's query finished, two links
+/// overlap their work, and `reap_async_query()` collects each result.
+#[test]
+#[ignore]
+fn test_mysqli_async_queries_overlap_and_poll_waits() {
+    let out = compile_and_run(&my_program(
+        r#"
+$other = new mysqli($host, $user, $pass, $dbname, $port);
+$started = microtime(true);
+$db->query("SELECT SLEEP(1) AS s, 'first' AS tag", MYSQLI_ASYNC);
+$other->query("SELECT SLEEP(1) AS s, 'second' AS tag", MYSQLI_ASYNC);
+echo "sent-fast=", (microtime(true) - $started) < 0.5 ? "y" : "n";
+$read = [$db];
+$error = [];
+$reject = [];
+echo "|early=", mysqli_poll($read, $error, $reject, 0, 100000);
+$tags = [];
+$links = [$db, $other];
+while (count($links) > 0) {
+    $read = $links;
+    $error = [];
+    $reject = [];
+    if (mysqli_poll($read, $error, $reject, 5) < 1) {
+        continue;
+    }
+    foreach ($read as $link) {
+        $row = $link->reap_async_query()->fetch_assoc();
+        $tags[] = $row["tag"];
+        $remaining = [];
+        foreach ($links as $candidate) {
+            if ($candidate !== $link) {
+                $remaining[] = $candidate;
+            }
+        }
+        $links = $remaining;
+    }
+}
+sort($tags);
+$elapsed = microtime(true) - $started;
+echo "|tags=", implode(",", $tags), "|overlapped=", $elapsed < 1.8 ? "y" : "n";
+echo "|busy=";
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->query("SELECT SLEEP(0.2)", MYSQLI_ASYNC);
+echo $db->query("SELECT 1") === false ? $db->errno : "ran";
+$db->reap_async_query();
+echo "|after=", $db->query("SELECT 5")->fetch_row()[0];
+"#,
+    ));
+    assert_eq!(out, "sent-fast=y|early=0|tags=first,second|overlapped=y|busy=2014|after=5");
+}

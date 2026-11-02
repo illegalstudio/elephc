@@ -360,7 +360,7 @@ pub(crate) fn nullable_reference_keeps_concrete_storage(expected: &PhpType, actu
         .collect();
     match actual {
         PhpType::Array(element) => {
-            !matches!(element.codegen_repr(), PhpType::Mixed | PhpType::Str)
+            !matches!(element.codegen_repr(), PhpType::Str)
                 && non_null.iter().all(|member| {
                     member.is_php_array()
                         || matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. })

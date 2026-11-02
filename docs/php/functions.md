@@ -436,7 +436,8 @@ A concrete local passed to a **nullable typed** by-reference parameter keeps its
 (`?array &$items` given an `array<Item>`, `?Item &$item` given an `Item`, `?float &$f` given a
 `float`): the parameter's boxed cell is written back into the typed variable when the call
 returns. An array the callee built from `mixed` values is converted into the variable's
-element layout on the way back, and a local that only ever holds `null` gets boxed storage so
+element layout on the way back (an `array<mixed>` variable instead boxes a typed array's
+slots), and a local that only ever holds `null` gets boxed storage so
 the callee can write any value through it. A callee that leaves a value the typed variable
 cannot hold — `null`, or elements of another kind — stops the program with a diagnostic
 (PHP would rebind the variable to the new value).

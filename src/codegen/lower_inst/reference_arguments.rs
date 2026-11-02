@@ -790,8 +790,9 @@ fn emit_low_payload_to_float_result(ctx: &mut FunctionContext<'_>) {
 /// result register. An empty array, or one whose slots already have the element layout (its
 /// header `value_type` equals the element's tag), is retained as it is. An array whose slots are
 /// boxed Mixed cells — what a callee builds from Mixed values — is converted by
-/// `__rt_array_unbox_slots`, which fails when an element has another kind. Every other
-/// layout fatals: the typed slot cannot describe it.
+/// `__rt_array_unbox_slots`, which fails when an element has another kind. An `array<mixed>`
+/// local instead widens raw typed slots into boxed cells with `__rt_array_to_mixed`. Every
+/// other layout fatals: the typed slot cannot describe it.
 fn emit_typed_array_ref_writeback_payload(ctx: &mut FunctionContext<'_>, element: &PhpType) {
     let keep = ctx.next_label("ref_writeback_keep_array");
     let done = ctx.next_label("ref_writeback_array_done");
@@ -814,6 +815,8 @@ fn emit_typed_array_ref_writeback_payload(ctx: &mut FunctionContext<'_>, element
                 ctx.emitter.instruction(&format!("mov x1, #{}", element_tag));  // pass the element tag the typed local expects
                 ctx.emitter.instruction("bl __rt_array_unbox_slots");           // build an owned raw-slot copy of the array
                 ctx.emitter.instruction(&format!("cbnz x0, {}", converted));    // a non-null copy means every element matched
+            } else {
+                ctx.emitter.instruction(&format!("b {}_widen", converted));     // raw typed slots widen into boxed Mixed cells
             }
         }
         Arch::X86_64 => {
@@ -832,8 +835,32 @@ fn emit_typed_array_ref_writeback_payload(ctx: &mut FunctionContext<'_>, element
                 ctx.emitter.instruction("call __rt_array_unbox_slots");         // build an owned raw-slot copy of the array
                 ctx.emitter.instruction("test rax, rax");                       // a non-null copy means every element matched
                 ctx.emitter.instruction(&format!("jne {}", converted));         // keep the converted owned copy
+            } else {
+                abi::emit_jump(ctx.emitter, &format!("{}_widen", converted));
             }
         }
+    }
+    if !convertible {
+        // An `array<mixed>` local holds boxed slots: a callee that left raw typed slots (an
+        // array of objects, ints, strings) is widened into an owned boxed copy. The helper
+        // consumes one owner, so the borrowed cell payload is retained first.
+        ctx.emitter.label(&format!("{}_widen", converted));
+        abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)));
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("ldr x1, [x0, #-8]");                   // reload the packed kind word after the retain
+                ctx.emitter.instruction("lsr x1, x1, #8");                      // shift the runtime value_type tag into the low bits
+                ctx.emitter.instruction("and x1, x1, #0x7f");                   // pass the current slot tag to the widening helper
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rdi, rax");                        // pass the retained array to the widening helper
+                ctx.emitter.instruction("mov rsi, QWORD PTR [rax - 8]");        // reload the packed kind word after the retain
+                ctx.emitter.instruction("shr rsi, 8");                          // shift the runtime value_type tag into the low bits
+                ctx.emitter.instruction("and rsi, 0x7f");                       // pass the current slot tag to the widening helper
+            }
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
+        abi::emit_jump(ctx.emitter, &converted);
     }
     ctx.emitter.label(&format!("{}_fail", converted));
     super::objects::emit_fatal_message(

@@ -51,6 +51,7 @@ use crate::synthetic_class::{
     s_array_assign,
     s_array_push,
     s_assign,
+    s_break,
     s_expr,
     s_for,
     s_foreach,
@@ -119,11 +120,8 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
         .private_prop("liveSetPending", TypeExpr::Bool, Some(e_bool(false)))
         .private_prop("streaming", TypeExpr::Bool, Some(e_bool(false)))
         .private_prop("multiMore", TypeExpr::Bool, Some(e_bool(false)))
-        .private_prop("asyncState", TypeExpr::Int, Some(e_int(0)))
-        .private_prop("asyncResult", t_nullable(t_class("mysqli_result")), Some(e_null()))
-        .private_prop("asyncErrno", TypeExpr::Int, Some(e_int(0)))
-        .private_prop("asyncError", TypeExpr::Str, Some(e_str("")))
-        .private_prop("asyncSqlstate", TypeExpr::Str, Some(e_str("")))
+        .private_prop("asyncPending", TypeExpr::Bool, Some(e_bool(false)))
+        .private_prop("asyncUnbuffered", TypeExpr::Bool, Some(e_bool(false)))
         .private_prop("connStats", t_array(), Some(e_array(vec![])))
         .method(
             method("__construct")
@@ -585,8 +583,6 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         None,
                     ),
                     s_expr(e_method_call(e_this(), "closeLive", vec![])),
-                    s_prop_assign(e_this(), "asyncState", e_int(0)),
-                    s_prop_assign(e_this(), "asyncResult", e_null()),
                     s_prop_assign(e_this(), "thread_id", e_call("elephc_pdo_mysql_thread_id", vec![e_this_prop("conn")])),
                     s_prop_assign(e_this(), "affected_rows", e_int(0)),
                     s_prop_assign(e_this(), "insert_id", e_int(0)),
@@ -1334,7 +1330,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     s_if(
                         e_binop(e_binop(e_var("result_mode"), BinOp::BitAnd, e_int(8)), BinOp::NotEq, e_int(0)),
                         vec![
-                            s_return(e_method_call(e_this(), "sendAsyncQuery", vec![e_var("query")])),
+                            s_return(e_method_call(e_this(), "sendAsyncQuery", vec![e_var("query"), e_binop(e_var("_base"), BinOp::Eq, e_int(1))])),
                         ],
                         vec![],
                         None,
@@ -1374,35 +1370,54 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                 .returns(t_union(vec![t_class("mysqli_result"), TypeExpr::Bool]))
                 .body(vec![
                     s_expr(e_method_call(e_this(), "requireInitialized", vec![])),
-                    s_assign("_state", e_this_prop("asyncState")),
-                    s_prop_assign(e_this(), "asyncState", e_int(0)),
                     s_if(
-                        e_binop(e_var("_state"), BinOp::Eq, e_int(0)),
+                        e_not(e_this_prop("asyncPending")),
                         vec![
                             s_return(e_bool(false)),
                         ],
                         vec![],
                         None,
                     ),
+                    s_prop_assign(e_this(), "asyncPending", e_bool(false)),
+                    s_assign("_stmt", e_call("elephc_pdo_mysql_async_reap", vec![e_this_prop("conn")])),
                     s_if(
-                        e_binop(e_var("_state"), BinOp::Eq, e_int(3)),
+                        e_binop(e_var("_stmt"), BinOp::Lt, e_int(0)),
                         vec![
-                            s_expr(e_method_call(e_this(), "syntheticFailure", vec![e_this_prop("asyncErrno"), e_this_prop("asyncError"), e_this_prop("asyncSqlstate")])),
-                            s_return(e_bool(false)),
+                            s_return(e_method_call(e_this(), "opFailed", vec![])),
                         ],
                         vec![],
                         None,
                     ),
+                    s_assign("_rc", e_call("elephc_pdo_step", vec![e_var("_stmt")])),
                     s_if(
-                        e_binop(e_var("_state"), BinOp::Eq, e_int(1)),
+                        e_binop(e_var("_rc"), BinOp::Lt, e_int(0)),
                         vec![
+                            s_expr(e_call("elephc_pdo_finalize", vec![e_var("_stmt")])),
+                            s_return(e_method_call(e_this(), "opFailed", vec![])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_assign("_columnCount", e_call("elephc_pdo_column_count", vec![e_var("_stmt")])),
+                    s_if(
+                        e_binop(e_var("_columnCount"), BinOp::Eq, e_int(0)),
+                        vec![
+                            s_expr(e_method_call(e_this(), "bump", vec![e_str("non_result_set_queries")])),
+                            s_expr(e_method_call(e_this(), "refreshStatus", vec![])),
+                            s_prop_assign(e_this(), "field_count", e_int(0)),
+                            s_expr(e_call("elephc_pdo_finalize", vec![e_var("_stmt")])),
+                            s_expr(e_method_call(e_this(), "clearError", vec![])),
                             s_return(e_bool(true)),
                         ],
                         vec![],
                         None,
                     ),
-                    s_assign("_result", e_this_prop("asyncResult")),
-                    s_prop_assign(e_this(), "asyncResult", e_null()),
+                    s_prop_assign(e_this(), "liveStmt", e_var("_stmt")),
+                    s_prop_assign(e_this(), "liveStep", e_var("_rc")),
+                    s_prop_assign(e_this(), "liveSetPending", e_bool(true)),
+                    s_prop_assign(e_this(), "field_count", e_var("_columnCount")),
+                    s_expr(e_method_call(e_this(), "clearError", vec![])),
+                    s_assign("_result", e_ternary(e_this_prop("asyncUnbuffered"), e_method_call(e_this(), "claimStream", vec![]), e_method_call(e_this(), "claimStored", vec![]))),
                     s_if(
                         e_binop(e_var("_result"), BinOp::StrictEq, e_null()),
                         vec![
@@ -1448,7 +1463,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         vec![],
                         None,
                     ),
-                    s_assign("_ready", e_array(vec![])),
+                    s_assign("_pending", e_array(vec![])),
                     s_assign("_rejected", e_array(vec![])),
                     s_if(
                         e_binop(e_var("read"), BinOp::StrictNotEq, e_null()),
@@ -1465,7 +1480,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                                 s_if(
                                     e_method_call(e_var("_link"), "__elephcAsyncPending", vec![]),
                                     vec![
-                                        s_array_push("_ready", e_var("_link")),
+                                        s_array_push("_pending", e_var("_link")),
                                     ],
                                     vec![],
                                     Some(vec![
@@ -1473,6 +1488,50 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                                 ]),
                                 ),
                             ]),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_assign("_ready", e_array(vec![])),
+                    s_assign("_budget", e_binop(e_binop(e_var("seconds"), BinOp::Mul, e_int(1000000)), BinOp::Add, e_var("microseconds"))),
+                    s_assign("_deadline", e_binop(e_call("microtime", vec![e_bool(true)]), BinOp::Add, e_binop(e_var("_budget"), BinOp::Div, e_int(1000000)))),
+                    s_assign("_count", e_call("count", vec![e_var("_pending")])),
+                    s_while(e_bool(true), vec![
+                        s_foreach(e_var("_pending"), None, "_link", vec![
+                            s_if(
+                                e_method_call(e_var("_link"), "__elephcAsyncReady", vec![e_int(0)]),
+                                vec![
+                                    s_array_push("_ready", e_var("_link")),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                        ]),
+                        s_if(
+                            e_binop(e_binop(e_call("count", vec![e_var("_ready")]), BinOp::Gt, e_int(0)), BinOp::Or, e_binop(e_var("_count"), BinOp::Eq, e_int(0))),
+                            vec![
+                                s_break(1),
+                            ],
+                            vec![],
+                            None,
+                        ),
+                        s_assign("_left", e_cast(CastType::Int, e_binop(e_binop(e_var("_deadline"), BinOp::Sub, e_call("microtime", vec![e_bool(true)])), BinOp::Mul, e_int(1000000)))),
+                        s_if(
+                            e_binop(e_var("_left"), BinOp::LtEq, e_int(0)),
+                            vec![
+                                s_break(1),
+                            ],
+                            vec![],
+                            None,
+                        ),
+                        s_assign("_slice", e_ternary(e_binop(e_var("_left"), BinOp::Lt, e_int(2000)), e_var("_left"), e_int(2000))),
+                        s_foreach(e_var("_pending"), None, "_link", vec![
+                            s_expr(e_method_call(e_var("_link"), "__elephcAsyncReady", vec![e_cast(CastType::Int, e_binop(e_var("_slice"), BinOp::Div, e_var("_count")))])),
+                        ]),
+                    ]),
+                    s_if(
+                        e_binop(e_var("read"), BinOp::StrictNotEq, e_null()),
+                        vec![
                             s_assign("read", e_var("_ready")),
                         ],
                         vec![],
@@ -1920,7 +1979,16 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                 .private()
                 .returns(TypeExpr::Bool)
                 .body(vec![
-                    s_return(e_binop(e_this_prop("asyncState"), BinOp::NotEq, e_int(0))),
+                    s_return(e_this_prop("asyncPending")),
+                ]),
+        )
+        .method(
+            method("__elephcAsyncReady")
+                .private()
+                .param("timeoutUs", TypeExpr::Int)
+                .returns(TypeExpr::Bool)
+                .body(vec![
+                    s_return(e_binop(e_this_prop("asyncPending"), BinOp::And, e_binop(e_call("elephc_pdo_mysql_async_wait", vec![e_this_prop("conn"), e_var("timeoutUs")]), BinOp::Eq, e_int(1)))),
                 ]),
         )
         .method(
@@ -1947,8 +2015,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     ),
                     s_expr(e_call("elephc_pdo_release", vec![e_this_prop("conn"), e_int(0)])),
                     s_prop_assign(e_this(), "conn", e_neg(e_int(1))),
-                    s_prop_assign(e_this(), "asyncState", e_int(0)),
-                    s_prop_assign(e_this(), "asyncResult", e_null()),
+                    s_prop_assign(e_this(), "asyncPending", e_bool(false)),
                     s_static_prop_assign("mysqli", "openLinks", e_binop(e_static_prop("mysqli", "openLinks"), BinOp::Sub, e_int(1))),
                     s_if(
                         e_this_prop("persistent"),
@@ -1966,6 +2033,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
             method("sendAsyncQuery")
                 .private()
                 .param("query", TypeExpr::Str)
+                .param("unbuffered", TypeExpr::Bool)
                 .returns(TypeExpr::Bool)
                 .body(vec![
                     s_if(
@@ -1984,41 +2052,27 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         vec![],
                         None,
                     ),
-                    s_assign("_mode", e_static_prop("mysqli", "reportMode")),
-                    s_static_prop_assign("mysqli", "reportMode", e_int(0)),
-                    s_assign("_code", e_method_call(e_this(), "runQuery", vec![e_var("query"), e_bool(false)])),
                     s_if(
-                        e_binop(e_var("_code"), BinOp::Eq, e_int(2)),
+                        e_binop(e_binop(e_call("strpos", vec![e_var("query"), e_str(";")]), BinOp::StrictNotEq, e_bool(false)), BinOp::And, e_binop(e_call("elephc_pdo_sql_has_multiple_statements", vec![e_this_prop("conn"), e_var("query"), e_call("strlen", vec![e_var("query")])]), BinOp::NotEq, e_int(0))),
                         vec![
-                            s_prop_assign(e_this(), "asyncResult", e_method_call(e_this(), "claimStored", vec![])),
+                            s_expr(e_method_call(e_this(), "syntheticFailure", vec![e_int(1064), e_str("elephc mysqli does not support multiple statements in mysqli::query(); use mysqli::multi_query()"), e_str("42000")])),
+                            s_return(e_bool(false)),
                         ],
                         vec![],
                         None,
                     ),
-                    s_static_prop_assign("mysqli", "reportMode", e_var("_mode")),
+                    s_expr(e_method_call(e_this(), "bump", vec![e_str("com_query")])),
                     s_if(
-                        e_binop(e_var("_code"), BinOp::Eq, e_int(0)),
+                        e_binop(e_call("elephc_pdo_mysql_async_send", vec![e_this_prop("conn"), e_var("query")]), BinOp::Lt, e_int(0)),
                         vec![
-                            s_prop_assign(e_this(), "asyncState", e_int(3)),
-                            s_prop_assign(e_this(), "asyncErrno", e_this_prop("errno")),
-                            s_prop_assign(e_this(), "asyncError", e_this_prop("error")),
-                            s_prop_assign(e_this(), "asyncSqlstate", e_this_prop("sqlstate")),
-                            s_expr(e_method_call(e_this(), "clearError", vec![])),
-                            s_return(e_bool(true)),
+                            s_return(e_method_call(e_this(), "opFailed", vec![])),
                         ],
                         vec![],
                         None,
                     ),
-                    s_if(
-                        e_binop(e_var("_code"), BinOp::Eq, e_int(1)),
-                        vec![
-                            s_prop_assign(e_this(), "asyncState", e_int(1)),
-                            s_return(e_bool(true)),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_prop_assign(e_this(), "asyncState", e_int(2)),
+                    s_prop_assign(e_this(), "asyncPending", e_bool(true)),
+                    s_prop_assign(e_this(), "asyncUnbuffered", e_var("unbuffered")),
+                    s_expr(e_method_call(e_this(), "clearError", vec![])),
                     s_return(e_bool(true)),
                 ]),
         )
@@ -2086,7 +2140,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                 .private()
                 .returns(TypeExpr::Bool)
                 .body(vec![
-                    s_return(e_binop(e_this_prop("liveStmt"), BinOp::GtEq, e_int(0))),
+                    s_return(e_binop(e_binop(e_this_prop("liveStmt"), BinOp::GtEq, e_int(0)), BinOp::Or, e_this_prop("asyncPending"))),
                 ]),
         )
         .method(

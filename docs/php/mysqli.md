@@ -222,10 +222,14 @@ if (mysqli_poll($read, $error, $reject, 5) > 0) {
 }
 ```
 
-The bridge client is synchronous, so the query runs while it is sent and
-`poll()` reports such a link as immediately readable (links without a pending
-query land in `$reject`). A failing async query is reported by
-`reap_async_query()`, exactly where mysqlnd surfaces it.
+The query runs on a bridge worker thread, so `query()` returns at once and
+several links can work concurrently. `poll()` waits up to `$seconds` +
+`$microseconds` for one of the `$read` links to finish (links with no query in
+flight land in `$reject`; `$error` comes back empty), and `reap_async_query()`
+collects the result — blocking if the query is still running. Until it is
+reaped the link answers other commands with errno 2014, like mysqlnd, and a
+failing async query is reported by `reap_async_query()`, exactly where mysqlnd
+surfaces it.
 
 ## Transactions and savepoints
 
@@ -358,9 +362,6 @@ they keep working (elephc raises no runtime `E_DEPRECATED`).
 
 ## Divergences from php-src
 
-- **MYSQLI_ASYNC queries complete when sent** (the bridge client is
-  synchronous): `poll()` never waits, and a long query blocks `query()` rather
-  than `reap_async_query()`.
 - **A connection statement while a prepared result is pending is permitted**,
   not rejected. A `mysqli_stmt::execute()` whose result set has not yet been
   drained leaves those rows buffered on the bridge (the connection wire is

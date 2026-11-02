@@ -287,6 +287,12 @@ extern "elephc_pdo" {
     function elephc_pdo_mysql_ping(int $conn): int;
     function elephc_pdo_mysql_change_user(int $conn, string $user, string $pass, string $db, int $has_db): int;
     function elephc_pdo_mysql_stmt_id(int $stmt): int;
+    // v61: MYSQLI_ASYNC on a worker thread — send returns at once, wait blocks up to
+    // $timeout_us microseconds (1 = ready, 0 = timeout, -1 = none in flight), and reap
+    // hands back an executed statement holding the buffered result (-1 = query failed).
+    function elephc_pdo_mysql_async_send(int $conn, string $sql): int;
+    function elephc_pdo_mysql_async_wait(int $conn, int $timeout_us): int;
+    function elephc_pdo_mysql_async_reap(int $conn): int;
     // v22: a live transaction-state read backing PDO::inTransaction() /
     // beginTransaction()'s already-active guard (P1-g). SQLite reads native
     // autocommit; PostgreSQL/MySQL use bridge-maintained state updated after every

@@ -103,15 +103,11 @@ class mysqli {
     private bool $streaming = false;
     // Whether $liveStmt is already positioned on a further result set.
     private bool $multiMore = false;
-    // MYSQLI_ASYNC query state: the query runs eagerly when it is sent (the
-    // bridge is synchronous); its outcome waits here until reap_async_query().
-    // 0 = none, 1 = success without a result set, 2 = result buffered,
-    // 3 = failed (the error is replayed and reported at reap time, like mysqlnd).
-    private int $asyncState = 0;
-    private ?mysqli_result $asyncResult = null;
-    private int $asyncErrno = 0;
-    private string $asyncError = "";
-    private string $asyncSqlstate = "";
+    // MYSQLI_ASYNC: whether a query was sent and runs on the bridge's worker
+    // thread (the link is busy until reap_async_query() collects it), and
+    // whether its result is wanted unbuffered (MYSQLI_USE_RESULT).
+    private bool $asyncPending = false;
+    private bool $asyncUnbuffered = false;
     // Per-connection mysqlnd-style statistics (mysqli::get_connection_stats()).
     private array $connStats = [];
 
@@ -401,8 +397,6 @@ class mysqli {
             return $this->opFailed();
         }
         $this->closeLive();
-        $this->asyncState = 0;
-        $this->asyncResult = null;
         $this->thread_id = elephc_pdo_mysql_thread_id($this->conn);
         $this->affected_rows = 0;
         $this->insert_id = 0;
@@ -803,7 +797,7 @@ class mysqli {
             throw new ValueError("mysqli::query(): Argument #2 (\$result_mode) must be either MYSQLI_USE_RESULT or MYSQLI_STORE_RESULT with MYSQLI_ASYNC as an optional bitmask flag");
         }
         if (($result_mode & 8) != 0) {
-            return $this->sendAsyncQuery($query);
+            return $this->sendAsyncQuery($query, $_base == 1);
         }
         // MYSQLI_USE_RESULT streams the rows from the server on demand; the
         // default MYSQLI_STORE_RESULT buffers them all before returning.
@@ -824,34 +818,48 @@ class mysqli {
 
     public function reap_async_query(): mysqli_result|bool {
         $this->requireInitialized();
-        $_state = $this->asyncState;
-        $this->asyncState = 0;
-        if ($_state == 0) {
+        if (!$this->asyncPending) {
             return false;
         }
-        if ($_state == 3) {
-            // The failure the eager execution recorded is reported now, at
-            // reap time, exactly where mysqlnd surfaces an async query error.
-            $this->syntheticFailure($this->asyncErrno, $this->asyncError, $this->asyncSqlstate);
-            return false;
+        $this->asyncPending = false;
+        // Blocks until the worker finished, then walks the buffered outcome; a
+        // failed query is reported here, exactly where mysqlnd surfaces it.
+        $_stmt = elephc_pdo_mysql_async_reap($this->conn);
+        if ($_stmt < 0) {
+            return $this->opFailed();
         }
-        if ($_state == 1) {
+        $_rc = elephc_pdo_step($_stmt);
+        if ($_rc < 0) {
+            elephc_pdo_finalize($_stmt);
+            return $this->opFailed();
+        }
+        $_columnCount = elephc_pdo_column_count($_stmt);
+        if ($_columnCount == 0) {
+            $this->bump("non_result_set_queries");
+            $this->refreshStatus();
+            $this->field_count = 0;
+            elephc_pdo_finalize($_stmt);
+            $this->clearError();
             return true;
         }
-        $_result = $this->asyncResult;
-        $this->asyncResult = null;
+        $this->liveStmt = $_stmt;
+        $this->liveStep = $_rc;
+        $this->liveSetPending = true;
+        $this->field_count = $_columnCount;
+        $this->clearError();
+        $_result = $this->asyncUnbuffered ? $this->claimStream() : $this->claimStored();
         if ($_result === null) {
             return false;
         }
         return $_result;
     }
 
-    // mysqli::poll(): every MYSQLI_ASYNC query has already completed when it
-    // was sent, so a link with an unreaped query is immediately readable and
-    // every other link is reported in $reject (mysqlnd's "nothing to poll").
-    // Links listed in $error are never in error state at poll time (a failed
-    // async query is reported by reap_async_query()). php's exact signature:
-    // $read / $error may be null, but not both. Returns the readable count.
+    // mysqli::poll(): waits up to $seconds + $microseconds for MYSQLI_ASYNC
+    // queries to finish. On return $read holds the links whose query can be
+    // reaped, $reject the links that have no async query in flight, and $error
+    // is empty (a failed query is reported by reap_async_query()). php's exact
+    // signature: $read / $error may be null, but not both. Returns the number
+    // of readable links.
     public static function poll(?array &$read, ?array &$error, array &$reject, int $seconds, int $microseconds = 0): int|false {
         if ($seconds < 0) {
             throw new ValueError("mysqli::poll(): Argument #4 (\$seconds) must be greater than or equal to 0");
@@ -862,7 +870,7 @@ class mysqli {
         if ($read === null && $error === null) {
             throw new ValueError("No stream arrays were passed");
         }
-        $_ready = [];
+        $_pending = [];
         $_rejected = [];
         if ($read !== null) {
             foreach ($read as $_link) {
@@ -870,11 +878,37 @@ class mysqli {
                     throw new TypeError("mysqli::poll(): Argument #1 (\$read) must only contain objects of type mysqli");
                 }
                 if ($_link->__elephcAsyncPending()) {
-                    $_ready[] = $_link;
+                    $_pending[] = $_link;
                 } else {
                     $_rejected[] = $_link;
                 }
             }
+        }
+        // Wait in short slices over every pending link until one is ready or
+        // the timeout elapses (the bridge waits without holding any lock).
+        $_ready = [];
+        $_budget = $seconds * 1000000 + $microseconds;
+        $_deadline = microtime(true) + $_budget / 1000000;
+        $_count = count($_pending);
+        while (true) {
+            foreach ($_pending as $_link) {
+                if ($_link->__elephcAsyncReady(0)) {
+                    $_ready[] = $_link;
+                }
+            }
+            if (count($_ready) > 0 || $_count == 0) {
+                break;
+            }
+            $_left = (int) (($_deadline - microtime(true)) * 1000000);
+            if ($_left <= 0) {
+                break;
+            }
+            $_slice = $_left < 2000 ? $_left : 2000;
+            foreach ($_pending as $_link) {
+                $_link->__elephcAsyncReady((int) ($_slice / $_count));
+            }
+        }
+        if ($read !== null) {
             $read = $_ready;
         }
         if ($error !== null) {
@@ -1142,7 +1176,12 @@ class mysqli {
 
     // Whether a MYSQLI_ASYNC query waits to be reaped (mysqli::poll()).
     private function __elephcAsyncPending(): bool {
-        return $this->asyncState != 0;
+        return $this->asyncPending;
+    }
+
+    // Waits up to $timeoutUs microseconds for this link's async query to finish.
+    private function __elephcAsyncReady(int $timeoutUs): bool {
+        return $this->asyncPending && elephc_pdo_mysql_async_wait($this->conn, $timeoutUs) == 1;
     }
 
     // Releases the bridge handle and every piece of per-connection state: an
@@ -1159,8 +1198,7 @@ class mysqli {
         }
         elephc_pdo_release($this->conn, 0);
         $this->conn = -1;
-        $this->asyncState = 0;
-        $this->asyncResult = null;
+        $this->asyncPending = false;
         mysqli::$openLinks = mysqli::$openLinks - 1;
         if ($this->persistent) {
             mysqli::$openPersistentLinks = mysqli::$openPersistentLinks - 1;
@@ -1169,37 +1207,29 @@ class mysqli {
         $this->persistent = false;
     }
 
-    // Runs a MYSQLI_ASYNC query eagerly and parks its outcome for
-    // reap_async_query(); the query call itself reports only send-time
-    // failures (unconnected / busy link), like mysqlnd's async send.
-    private function sendAsyncQuery(string $query): bool {
+    // Sends a MYSQLI_ASYNC query: the bridge runs it on a worker thread and
+    // this returns at once. Only send-time failures (unconnected / busy link,
+    // the multi-statement guard) are reported here, like mysqlnd's async send;
+    // the query's own outcome waits for reap_async_query().
+    private function sendAsyncQuery(string $query, bool $unbuffered): bool {
         if (!$this->requireConnection()) {
             return false;
         }
         if (!$this->requireNoPendingResults()) {
             return false;
         }
-        // Run with reporting suppressed so a server error is stored, not thrown.
-        $_mode = mysqli::$reportMode;
-        mysqli::$reportMode = 0;
-        $_code = $this->runQuery($query, false);
-        if ($_code == 2) {
-            $this->asyncResult = $this->claimStored();
+        if (strpos($query, ";") !== false
+            && elephc_pdo_sql_has_multiple_statements($this->conn, $query, strlen($query)) != 0) {
+            $this->syntheticFailure(1064, "elephc mysqli does not support multiple statements in mysqli::query(); use mysqli::multi_query()", "42000");
+            return false;
         }
-        mysqli::$reportMode = $_mode;
-        if ($_code == 0) {
-            $this->asyncState = 3;
-            $this->asyncErrno = $this->errno;
-            $this->asyncError = $this->error;
-            $this->asyncSqlstate = $this->sqlstate;
-            $this->clearError();
-            return true;
+        $this->bump("com_query");
+        if (elephc_pdo_mysql_async_send($this->conn, $query) < 0) {
+            return $this->opFailed();
         }
-        if ($_code == 1) {
-            $this->asyncState = 1;
-            return true;
-        }
-        $this->asyncState = 2;
+        $this->asyncPending = true;
+        $this->asyncUnbuffered = $unbuffered;
+        $this->clearError();
         return true;
     }
 
@@ -1243,7 +1273,7 @@ class mysqli {
     // Read-only pending probe for mysqli_stmt's two-step prepare()/execute()
     // guard (the statement records the 2014 on ITS OWN error state).
     private function __elephcHasPendingResults(): bool {
-        return $this->liveStmt >= 0;
+        return $this->liveStmt >= 0 || $this->asyncPending;
     }
 
     // Percent-encodes one packed driver-config value ('%' first, then ';' and
