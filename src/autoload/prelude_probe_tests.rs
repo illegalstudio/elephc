@@ -150,6 +150,7 @@ fn probe_detects_web_environment_observers_in_autoloaded_classes() {
         (r"return get_defined_vars();", true),
         (r"return eval($source);", true),
         (r"return getenv('PATH');", false),
+        (r"return $source();", false),
     ] {
         fs::write(project.0.join("src/Probe.php"), format!(
             "<?php namespace App; class Probe {{ public function read(string $source) {{ {body} }} }}",
