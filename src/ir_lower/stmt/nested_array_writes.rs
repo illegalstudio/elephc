@@ -686,7 +686,7 @@ pub(super) fn nested_target_has_static_array_root(ctx: &LoweringContext<'_, '_>,
         ExprKind::ArrayAccess { array, .. } => nested_target_has_static_array_root(ctx, array),
         ExprKind::StaticPropertyAccess { receiver, property } => {
             static_property_type(ctx, receiver, property)
-                .is_some_and(|ty| ty.codegen_repr() == PhpType::Mixed
+                .is_some_and(|ty| ty == PhpType::Mixed
                     || ty.is_php_array() || is_indexed_array_type(&ty)
                     || static_root_has_mixed_elements(&ty))
         }
