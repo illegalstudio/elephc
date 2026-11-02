@@ -37,6 +37,11 @@ pub(super) fn static_call_effects(
             matches!(receiver, "self" | "parent"));
     }
     if context.has_dynamic_class_barrier { return None; }
+    // With no lexical vtable slot, codegen calls this implementation directly.
+    // Private methods are absent from descendant implementation maps.
+    if !class.static_vtable_slots.contains_key(&method_key) {
+        return implementation_effects(function, instruction, context, class, &method_key, false);
+    }
 
     let mut effects = Effects::PURE;
     let mut found = false;

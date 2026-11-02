@@ -279,3 +279,31 @@ Root::relay();
             .contains(Effects::MAY_FATAL), "{target}");
     }
 }
+
+/// Private late-static calls keep their lexical body despite unrelated descendant methods.
+#[test]
+fn call_effect_batch_review_private_static_dispatch() {
+    let source = r#"<?php
+class Base {
+    private static function value(): int { throw new Exception("stop"); }
+    private static function quiet(): int { return 1; }
+    public static function relay(): int {
+        $seen = 1;
+        try { return static::value(); } catch (Exception $e) { return $seen; }
+    }
+    public static function relayQuiet(): int { return static::quiet(); }
+}
+class Child extends Base {
+    public static function other(): int { return 2; }
+}
+echo Child::other();
+echo Base::relay();
+"#;
+    for target in TARGETS {
+        let module = lower_for(source, target);
+        assert!(call(&module, "Base::relay", "static::value").effects
+            .contains(Effects::MAY_THROW), "{target}");
+        assert_eq!(call(&module, "Base::relayQuiet", "static::quiet").effects,
+            Effects::PURE, "{target}: the private method has no descendant implementation");
+    }
+}

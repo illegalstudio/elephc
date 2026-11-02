@@ -103,3 +103,24 @@ echo "done";
     assert_eq!(compile_and_run(source), expected);
     assert_eq!(without_ir_opt(|| compile_and_run(source)), expected);
 }
+
+/// A private late-static throw keeps stores whose only remaining reader is its catch.
+#[test]
+fn test_call_effect_batch_review_private_static_handler() {
+    let source = r#"<?php
+class PrivateBase {
+    private static function value(): int { throw new Exception("stop"); }
+    public static function relay(): int {
+        $seen = 1;
+        try { return static::value(); } catch (Exception $e) { return $seen; }
+    }
+}
+class PrivateChild extends PrivateBase {
+    public static function other(): int { return 2; }
+}
+echo PrivateChild::other();
+echo PrivateBase::relay();
+"#;
+    assert_eq!(compile_and_run(source), "21");
+    assert_eq!(without_ir_opt(|| compile_and_run(source)), "21");
+}
