@@ -18,12 +18,30 @@ class LoopCatchException extends Exception {
         if ($this->getMessage() === 'a0') { throw new Exception('d'); }
     }
 }
+class GlobalCatchException extends Exception {
+    public function __destruct() {
+        echo 'destroy ', $this->getMessage(), "\n";
+        if ($this->getMessage() === 'old') { throw new Exception('global d'); }
+    }
+}
 function needLoopCatch(LoopCatchException $value): void {
     echo get_class($value), ':', $value->getMessage(), "\n";
 }
 function showTopLoopCatch(): void {
     global $top;
     if ($top instanceof LoopCatchException) { needLoopCatch($top); } else { echo "missing\n"; }
+}
+function seedGlobalCatch(): void {
+    global $globalCatch;
+    $globalCatch = new GlobalCatchException('old');
+}
+function showGlobalCatch(): void {
+    global $globalCatch;
+    if ($globalCatch instanceof GlobalCatchException) {
+        echo 'global=', $globalCatch->getMessage(), "\n";
+    } else {
+        echo "global missing\n";
+    }
 }
 function firstLoopCatch(): void {
     for ($i = 0; $i < 2; $i++) {
@@ -43,8 +61,18 @@ foreach ([0, 1] as $i) {
     }
 }
 echo "end\n";
+seedGlobalCatch();
+try {
+    try { throw new GlobalCatchException('new'); } catch (GlobalCatchException $globalCatch) {}
+} catch (Exception $c) {
+    echo 'outer ', $c->getMessage(), "\n";
+    showGlobalCatch();
+}
+echo "global end\n";
 "#;
-    assert_nullable_flow_cli_heap_output(source, &"d:LoopCatchException:a1\nend\n".repeat(2));
+    assert_nullable_flow_cli_heap_output(source,
+        &format!("{}destroy old\nouter global d\nglobal=new\nglobal end\ndestroy new\n",
+            "d:LoopCatchException:a1\nend\n".repeat(2)));
 }
 
 /// The production CLI rejects object-to-integer backedge projections in both IR modes.

@@ -18,10 +18,23 @@ class LoopCatchException extends Exception {
         if ($this->getMessage() === 'a0') { throw new Exception('d'); }
     }
 }
+class GlobalCatchException extends Exception {
+    public function __destruct() {
+        if ($this->getMessage() === 'old') { throw new Exception('global d'); }
+    }
+}
 function needLoopCatch(LoopCatchException $value): void { echo $value->getMessage(); }
 function showTopLoopCatch(): void {
     global $top;
     if ($top instanceof LoopCatchException) { needLoopCatch($top); }
+}
+function seedGlobalCatch(): void {
+    global $globalCatch;
+    $globalCatch = new GlobalCatchException('old');
+}
+function showGlobalCatch(): void {
+    global $globalCatch;
+    if ($globalCatch instanceof GlobalCatchException) { echo $globalCatch->getMessage(); }
 }
 function firstLoopCatch(): void {
     for ($i = 0; $i < 2; $i++) {
@@ -36,6 +49,10 @@ foreach ([0, 1] as $i) {
         try { throw new LoopCatchException('a' . $i); } catch (LoopCatchException $top) {}
     } catch (Exception $c) { showTopLoopCatch(); }
 }
+seedGlobalCatch();
+try {
+    try { throw new GlobalCatchException('new'); } catch (GlobalCatchException $globalCatch) {}
+} catch (Exception $c) { showGlobalCatch(); }
 "#;
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let target = crate::codegen::platform::Target::parse(name).unwrap();

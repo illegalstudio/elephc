@@ -470,12 +470,18 @@ pub(super) fn lower_catch_bind(ctx: &mut LoweringContext<'_, '_>, catch: &CatchC
     // throw, and an outer catch must already observe the newly bound exception at that point.
     let previous_owner = catch.variable.as_ref().and_then(|name| {
         if !ctx.has_local_slot(name) {
-            if ctx.loop_stack.is_empty() && !ctx.has_eval_barrier() {
+            if ctx.loop_stack.is_empty()
+                && !ctx.has_eval_barrier()
+                && !ctx.local_uses_global_storage(name)
+            {
                 return None;
             }
-            // A first syntactic binding can replace a previous iteration's value or a
-            // value reloaded by eval. The frame slot is zero-initialized when absent.
-            ctx.declare_local(name, php_type.clone());
+            // A first syntactic binding can replace a previous iteration's value, a value
+            // reloaded by eval, or program-global storage populated by another scope. Frame
+            // slots are zero-initialized when absent; global loads use their shared symbol.
+            if !ctx.local_uses_global_storage(name) {
+                ctx.declare_local(name, php_type.clone());
+            }
         }
         let previous = ctx.load_local(name, Some(span));
         crate::ir_lower::expr::root_value_for_later_use(ctx, previous, span).1
