@@ -94,6 +94,13 @@ nativeEvalStorageWrite($child, 2);
     let probe = function.find("__elephc_eval_dynamic_object_property_set").unwrap();
     let native_slot = function.find("mixed_dyn_prop_set_count").unwrap();
     assert!(probe < native_slot, "{target}: eval identity must precede the backing slot's class-id arm");
+    let label = function.lines().find(|line| line.trim_end().ends_with(':')
+        && line.contains("eval_prop_set_raise")).expect("eval setter throw label");
+    let raise = &function[function.find(label).unwrap()..];
+    let retain = raise.find("__rt_incref").expect("the native throw owns the Throwable payload");
+    let retire = raise[retain..].find("__rt_decref_mixed").expect("the bridge-owned throw box is retired");
+    let throw = raise[retain..].find("__rt_throw_current").unwrap();
+    assert!(retire < throw, "{target}: retire the box before native unwinding");
 }
 
 supported_target_cases!(native_backed_eval_property_dispatch, verify_native_backed_eval_property_dispatch);

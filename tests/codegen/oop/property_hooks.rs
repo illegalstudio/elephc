@@ -36,11 +36,13 @@ $object = new RuntimeEvalSetterChild();
 ' : '';
 eval($code);
 $object->word = 'value';
-try { $object->word = 'fail'; }
-catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
+for ($i = 0; $i < 3; $i++) {
+    try { $object->word = 'fail'; }
+    catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
+}
 "#);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "child:value|child:fail|caught|");
+    assert_eq!(out.stdout, format!("child:value|{}", "child:fail|caught|".repeat(3)));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 

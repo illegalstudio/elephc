@@ -1700,6 +1700,12 @@ fn emit_runtime_property_set_for_stacked_name_after_eval_probe(
         Arch::AArch64 => abi::emit_store_reg_to_symbol(ctx.emitter, "x1", "_exc_value", 0),
         Arch::X86_64 => abi::emit_store_reg_to_symbol(ctx.emitter, "rdi", "_exc_value", 0),
     }
+    // The bridge transfers an owned box. Keep its Throwable payload for native unwinding,
+    // then retire the box before abandoning the stack block that held its only pointer.
+    abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, "_exc_value", 0);
+    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Object("Throwable".into()));
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
     abi::emit_release_temporary_stack(ctx.emitter, 32 + enclosing_stack_bytes);
     abi::emit_jump(ctx.emitter, "__rt_throw_current");
 
