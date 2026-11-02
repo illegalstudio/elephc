@@ -177,23 +177,28 @@ fn test_simplexml_type_boundaries_native_bundle() {
     if skip_without_xml_native("test_simplexml_type_boundaries_native_bundle") { return; }
     let marker = "$box = new BoundaryXmlBox();";
     assert_eq!(BOUNDARIES.matches(marker).count(), 1);
-    let boundaries = BOUNDARIES.replace(marker, &format!("if ($argc === 2) {{ return; }}\n{marker}"));
+    let boundaries = boundary_property_checkpoints(&BOUNDARIES.replace(marker,
+        &format!("if ($argc === 2) {{ return; }}\n{marker}")));
     let source = format!("{boundaries}\nif ($argc === 3) {{ return; }}\n{}\nif ($argc === 4) {{ return; }}\n{}",
         REFERENCES.strip_prefix("<?php").unwrap(), GENERATORS.strip_prefix("<?php").unwrap());
     let arguments = BOUNDARIES_EXPECTED.split_once("Cannot assign null").unwrap().0.to_string();
-    let expected = [
+    let mut expected = vec![
         format!("{BOUNDARIES_EXPECTED}{REFERENCES_EXPECTED}{GENERATORS_EXPECTED}"),
         arguments,
         BOUNDARIES_EXPECTED.to_string(),
         format!("{BOUNDARIES_EXPECTED}{REFERENCES_EXPECTED}"),
     ];
+    expected.extend(boundary_property_checkpoint_outputs(BOUNDARIES_EXPECTED));
     let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(
-        &source, &[&[], &["arguments"], &["properties", "checkpoint"], &["references", "checkpoint", "checkpoint"]],
+        &source, boundary_checkpoint_argv(),
     );
     let expected = expected.iter().map(String::as_str).collect::<Vec<_>>();
     preserve_stdout_mismatches(&source, &assembly, &runs, &expected);
+    drop(assembly);
     let mut failures = Vec::new();
-    for ((output, expected), checkpoint) in runs.iter().zip(expected).zip(["complete", "arguments", "properties", "references"]) {
+    for ((output, expected), checkpoint) in runs.iter().zip(expected).zip([
+        "complete", "arguments", "properties", "references", "raw_reflection", "static_properties", "methods", "callables",
+    ]) {
         if !output.success || output.stdout != expected
             || !output.stderr.contains("HEAP DEBUG: leak summary: clean")
             || output.stderr.contains("Warning:")
@@ -201,7 +206,7 @@ fn test_simplexml_type_boundaries_native_bundle() {
             failures.push(format!("checkpoint={checkpoint}: stdout={} stderr={}", output.stdout, output.stderr));
         }
     }
-    assert_eq!(runs.len(), 4);
+    assert_eq!(runs.len(), 8);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
@@ -209,20 +214,53 @@ fn test_simplexml_type_boundaries_native_bundle() {
 #[test]
 fn test_simplexml_type_boundaries_eval_bundle() {
     if skip_without_xml_native("test_simplexml_type_boundaries_eval_bundle") { return; }
-    let source = opaque_fixture(&BOUNDARIES.replace("BoundaryXml", "EvalBoundaryXml"));
+    let source = opaque_fixture(&boundary_property_checkpoints(BOUNDARIES).replace("BoundaryXml", "EvalBoundaryXml"));
     let source = format!("<?php class IndependentBoundaryXmlCapability extends SimpleXMLElement {{}}\n{}",
         source.strip_prefix("<?php").unwrap());
-    assert_independent_boundary_program(&source, &BOUNDARIES_EXPECTED.replace("BoundaryXml", "EvalBoundaryXml"));
+    let expected = BOUNDARIES_EXPECTED.replace("BoundaryXml", "EvalBoundaryXml");
+    let mut expected = vec![expected.clone(), expected.clone(), expected.clone(), expected.clone()];
+    let property_expected = boundary_property_checkpoint_outputs(&expected[0]).collect::<Vec<_>>();
+    expected.extend(property_expected);
+    let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(&source, boundary_checkpoint_argv());
+    let expected = expected.iter().map(String::as_str).collect::<Vec<_>>();
+    preserve_stdout_mismatches(&source, &assembly, &runs, &expected);
+    drop(assembly);
+    let mut failures = Vec::new();
+    for (index, (output, expected)) in runs.iter().zip(expected).enumerate() {
+        if !output.success || output.stdout != expected
+            || !output.stderr.contains("HEAP DEBUG: leak summary: clean") || output.stderr.contains("Warning:")
+        { failures.push(format!("checkpoint={index}: stdout={} stderr={}", output.stdout, output.stderr)); }
+    }
+    assert_eq!(runs.len(), 8);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// Keeps wrong-output assembly and strict per-program heap and warning checks for attribution.
-fn assert_independent_boundary_program(source: &str, expected: &str) {
-    let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(source, &[&[]]);
-    preserve_stdout_mismatches(source, &assembly, &runs, &[expected]);
-    drop(assembly);
-    let output = &runs[0];
-    assert!(output.success, "status={} stdout={} stderr={}", output.status, output.stdout, output.stderr);
-    assert_eq!(output.stdout, expected);
-    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
-    assert!(!output.stderr.contains("Warning:"), "{}", output.stderr);
+/// Adds early returns without removing any operation from the full boundary program.
+fn boundary_property_checkpoints(source: &str) -> String {
+    let mut source = source.to_string();
+    for (argc, marker) in [
+        (5, "// Eval can replace visible locals;"),
+        (6, "$lateReturn = new BoundaryXmlReturnChild('<r/>');"),
+        (7, "$callback = acceptBoundaryXml(...);"),
+        (8, "$hook = new BoundaryXmlHook();"),
+    ] {
+        assert_eq!(source.matches(marker).count(), 1, "{marker}");
+        source = source.replace(marker, &format!("if ($argc === {argc}) {{ return; }}\n{marker}"));
+    }
+    source
+}
+
+/// Gives the complete program and each diagnostic prefix a distinct runtime argc.
+fn boundary_checkpoint_argv() -> &'static [&'static [&'static str]] {
+    &[&[], &["arguments"], &["properties", "checkpoint"], &["references", "checkpoint", "checkpoint"],
+        &["raw", "checkpoint", "checkpoint", "checkpoint"],
+        &["static", "checkpoint", "checkpoint", "checkpoint", "checkpoint"],
+        &["methods", "checkpoint", "checkpoint", "checkpoint", "checkpoint", "checkpoint"],
+        &["callables", "checkpoint", "checkpoint", "checkpoint", "checkpoint", "checkpoint", "checkpoint"]]
+}
+
+/// Keeps the same exact stdout expectations through the additional property checkpoints.
+fn boundary_property_checkpoint_outputs(expected: &str) -> impl Iterator<Item = String> + '_ {
+    [24, 36, 45, 48].into_iter().map(move |lines|
+        expected.lines().take(lines).collect::<Vec<_>>().join("\n") + "\n")
 }
