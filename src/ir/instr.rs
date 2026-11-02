@@ -1550,10 +1550,12 @@ impl Op {
             }
             SplRuntimeCall | DynamicObjectNew | DynamicObjectNewMixed
             | DynamicObjectNewWithoutConstructorMixed | MethodLookup | StaticMethodCall
-            | InstanceOfDynamic | MixedNumericBinop | LooseEq | LooseNotEq | PhpRelCmp
+            | InstanceOfDynamic | MixedNumericBinop | PhpRelCmp
             | Spaceship => {
                 E::READS_HEAP | E::MAY_DEOPT
             }
+            // Object/number conversion can invoke an arbitrary PHP warning handler.
+            LooseEq | LooseNotEq => E::READS_HEAP | E::MAY_DEOPT | E::MAY_WARN | E::MAY_THROW,
             // `++`/`--` on a string reads the operand's payload, may write the shared
             // concat scratch while building the carried result, and always allocates the
             // boxed Mixed cell the new value is returned in.

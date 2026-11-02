@@ -687,6 +687,9 @@ impl ExceptionFlowAnalysis {
                 for (patterns, body) in cases {
                     for pattern in patterns {
                         thrown = thrown.combined(self.expr_throws(pattern, bindings, class_context));
+                        if binary_op_has_dynamic_throw(subject, &BinOp::Eq, pattern) {
+                            thrown = thrown.combined(ThrownTypes::unknown());
+                        }
                     }
                     thrown = thrown.combined(self.block_throws(body, bindings, class_context));
                 }
@@ -1311,6 +1314,9 @@ fn binary_op_exact_throw_type(
 /// Returns whether an operator may fail but runtime operand types prevent an exact class claim.
 fn binary_op_has_dynamic_throw(left: &Expr, op: &BinOp, right: &Expr) -> bool {
     match op {
+        BinOp::Eq | BinOp::NotEq => {
+            !effects::literal_scalar_operand(left) || !effects::literal_scalar_operand(right)
+        }
         BinOp::Div | BinOp::Mod => !matches!(
             &right.kind,
             ExprKind::IntLiteral(value) if *value != 0

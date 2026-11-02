@@ -4888,6 +4888,23 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.argument_guard_scopes.pop().expect("balanced argument capture scope");
     }
 
+    /// Guards provisional owning local views without consuming a live variable's reference.
+    /// Finalization removes these guards when the final slot lends the payload instead.
+    pub(crate) fn guard_owned_local_views(&mut self, values: &[LoweredValue], span: Span) -> Vec<ValueId> {
+        let mut guarded = Vec::new();
+        self.begin_argument_guard_scope();
+        for (index, value) in values.iter().enumerate() {
+            if self.value_is_owned_unboxed_local_load(value.value)
+                && !self.has_call_argument_guard(value.value)
+            {
+                self.guard_call_argument(*value, index, span);
+                guarded.push(value.value);
+            }
+        }
+        self.end_argument_guard_scope();
+        guarded
+    }
+
     /// Protects a captured argument in PHP parameter order until normal release or unwinding.
     pub(crate) fn guard_call_argument(&mut self, value: LoweredValue, parameter: usize, span: Span) {
         let ty = self.builder.value_php_type(value.value);

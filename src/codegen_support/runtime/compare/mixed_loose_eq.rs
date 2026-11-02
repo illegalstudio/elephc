@@ -155,6 +155,8 @@ fn emit_mixed_loose_eq_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #48]");                                  // reload the right runtime tag
     emitter.instruction("cmp x10, #8");                                         // is the right operand also null?
     emitter.instruction("b.eq __rt_mle_true");                                  // null is loosely equal to null
+    emitter.instruction("cmp x10, #2");                                         // float/null equality must stay quiet for NAN
+    emitter.instruction("b.eq __rt_mle_null_float_right");                      // test numeric zero without a boolean conversion
     emitter.instruction("cmp x10, #1");                                         // is the right operand a string?
     emitter.instruction("b.ne __rt_mle_null_vs_right_bool");                    // non-string operands coerce to bool
     emitter.instruction("ldr x11, [sp, #64]");                                  // load the right string length
@@ -170,6 +172,8 @@ fn emit_mixed_loose_eq_aarch64(emitter: &mut Emitter) {
     // -- null on the right --
     emitter.label("__rt_mle_right_null");
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the left runtime tag
+    emitter.instruction("cmp x9, #2");                                          // float/null equality must stay quiet for NAN
+    emitter.instruction("b.eq __rt_mle_null_float_left");                       // test numeric zero without a boolean conversion
     emitter.instruction("cmp x9, #1");                                          // is the left operand a string?
     emitter.instruction("b.ne __rt_mle_null_vs_left_bool");                     // non-string operands coerce to bool
     emitter.instruction("ldr x11, [sp, #40]");                                  // load the left string length
@@ -183,6 +187,8 @@ fn emit_mixed_loose_eq_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_mle_done");                                     // return the null-coerced result
 
     // -- container and object recursion --
+    emit_null_float_compare(emitter);
+
     emitter.label("__rt_mle_arrays");
     emitter.instruction("ldp x0, x1, [sp, #0]");                                // reload both boxed array operands
     emitter.instruction("ldr x2, [sp, #16]");                                   // reload the current recursion depth
@@ -206,6 +212,7 @@ fn emit_mixed_loose_eq_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x10, #2");                                         // is the right operand a float?
     emitter.instruction("b.ne __rt_mle_false");                                 // an object never equals a string or resource
     emitter.label("__rt_mle_object_one_right");
+    emit_object_numeric_warning(emitter, true);
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload the right boxed operand
     emitter.instruction("bl __rt_mixed_cast_float");                            // read the numeric value of the right operand
     emitter.instruction("fmov d1, #1.0");                                       // PHP converts the object operand to 1
@@ -220,6 +227,7 @@ fn emit_mixed_loose_eq_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, #2");                                          // is the left operand a float?
     emitter.instruction("b.ne __rt_mle_false");                                 // an object never equals a string or resource
     emitter.label("__rt_mle_object_one_left");
+    emit_object_numeric_warning(emitter, false);
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the left boxed operand
     emitter.instruction("bl __rt_mixed_cast_float");                            // read the numeric value of the left operand
     emitter.instruction("fmov d1, #1.0");                                       // PHP converts the object operand to 1
@@ -469,6 +477,8 @@ fn emit_mixed_loose_eq_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the right runtime tag
     emitter.instruction("cmp r11, 8");                                          // is the right operand also null?
     emitter.instruction("je __rt_mle_true");                                    // null is loosely equal to null
+    emitter.instruction("cmp r11, 2");                                          // float/null equality must stay quiet for NAN
+    emitter.instruction("je __rt_mle_null_float_right");                        // test numeric zero without a boolean conversion
     emitter.instruction("cmp r11, 1");                                          // is the right operand a string?
     emitter.instruction("jne __rt_mle_null_vs_right_bool");                     // non-string operands coerce to bool
     emitter.instruction("cmp QWORD PTR [rbp - 72], 0");                         // null converts to "" and equals only the empty string
@@ -484,6 +494,8 @@ fn emit_mixed_loose_eq_x86_64(emitter: &mut Emitter) {
     // -- null on the right --
     emitter.label("__rt_mle_right_null");
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the left runtime tag
+    emitter.instruction("cmp r10, 2");                                          // float/null equality must stay quiet for NAN
+    emitter.instruction("je __rt_mle_null_float_left");                         // test numeric zero without a boolean conversion
     emitter.instruction("cmp r10, 1");                                          // is the left operand a string?
     emitter.instruction("jne __rt_mle_null_vs_left_bool");                      // non-string operands coerce to bool
     emitter.instruction("cmp QWORD PTR [rbp - 48], 0");                         // null converts to "" and equals only the empty string
@@ -497,6 +509,8 @@ fn emit_mixed_loose_eq_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_mle_done");                                   // return the null-coerced result
 
     // -- container and object recursion --
+    emit_null_float_compare(emitter);
+
     emitter.label("__rt_mle_arrays");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the left boxed array operand
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the right boxed array operand
@@ -521,6 +535,7 @@ fn emit_mixed_loose_eq_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r11, 2");                                          // is the right operand a float?
     emitter.instruction("jne __rt_mle_false");                                  // an object never equals a string or resource
     emitter.label("__rt_mle_object_one_right");
+    emit_object_numeric_warning(emitter, true);
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the right boxed operand
     abi::emit_call_label(emitter, "__rt_mixed_cast_float"); // read the numeric value of the right operand
     emitter.instruction("jmp __rt_mle_compare_one");                            // compare the number against the converted object
@@ -532,6 +547,7 @@ fn emit_mixed_loose_eq_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, 2");                                          // is the left operand a float?
     emitter.instruction("jne __rt_mle_false");                                  // an object never equals a string or resource
     emitter.label("__rt_mle_object_one_left");
+    emit_object_numeric_warning(emitter, false);
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the left boxed operand
     abi::emit_call_label(emitter, "__rt_mixed_cast_float"); // read the numeric value of the left operand
 
@@ -665,4 +681,65 @@ fn emit_mixed_loose_eq_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 80");                                         // release the comparison frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the loose-equality boolean
+}
+
+/// Compares a float payload with null by ignoring its sign bit, without bool warnings.
+fn emit_null_float_compare(emitter: &mut Emitter) {
+    emitter.label("__rt_mle_null_float_right");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x0, [sp, #56]");                           // recover the right float payload bits
+            emitter.instruction("b __rt_mle_null_float");                       // share the quiet numeric-zero comparison
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov rax, QWORD PTR [rbp - 64]");               // recover the right float payload bits
+            emitter.instruction("jmp __rt_mle_null_float");                     // share the quiet numeric-zero comparison
+        }
+    }
+    emitter.label("__rt_mle_null_float_left");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x0, [sp, #32]");                           // recover the left float payload bits
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // recover the left float payload bits
+        }
+    }
+    emitter.label("__rt_mle_null_float");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("lsl x0, x0, #1");                              // discard the sign so positive and negative zero both match
+            emitter.instruction("cmp x0, #0");                                  // all other floats, including NAN, differ from null
+            emitter.instruction("cset x0, eq");                                 // materialize quiet float/null equality
+            emitter.instruction("b __rt_mle_done");                             // restore the borrowed comparison frame
+        }
+        Arch::X86_64 => {
+            emitter.instruction("shl rax, 1");                                  // discard the sign so positive and negative zero both match
+            emitter.instruction("sete al");                                     // all other floats, including NAN, differ from null
+            emitter.instruction("movzx rax, al");                               // widen quiet float/null equality
+            emitter.instruction("jmp __rt_mle_done");                           // restore the borrowed comparison frame
+        }
+    }
+}
+
+/// Reports ordinary object-to-number conversion using the opposite operand's numeric tag.
+fn emit_object_numeric_warning(emitter: &mut Emitter, left_object: bool) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            let (object, numeric_tag) = if left_object { (32, 48) } else { (56, 24) };
+            emitter.instruction(&format!("ldr x0, [sp, #{object}]"));           // borrow the concrete object for class-name lookup
+            emitter.instruction(&format!("ldr x1, [sp, #{numeric_tag}]"));      // zero selects int and tag two selects float wording
+            emitter.instruction("mov x2, #0");                                  // let the helper discover an eval object owner context
+            emitter.instruction("mov x3, #0");                                  // use ordinary object class metadata
+            abi::emit_call_label(emitter, "__rt_sprintf_warn_object_numeric");
+        }
+        Arch::X86_64 => {
+            let (object, numeric_tag) = if left_object { (40, 56) } else { (64, 32) };
+            emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {object}]")); // borrow the concrete object for class-name lookup
+            emitter.instruction(&format!("mov rsi, QWORD PTR [rbp - {numeric_tag}]")); // zero selects int and tag two selects float wording
+            emitter.instruction("xor edx, edx");                                // let the helper discover an eval object owner context
+            emitter.instruction("xor ecx, ecx");                                // use ordinary object class metadata
+            abi::emit_call_label(emitter, "__rt_sprintf_warn_object_numeric_x64");
+        }
+    }
 }

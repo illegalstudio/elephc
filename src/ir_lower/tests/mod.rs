@@ -15,6 +15,7 @@ use crate::codegen::platform::Target;
 use crate::ir::{print_module, Terminator};
 
 mod aggregate_operand_owners;
+mod loose_comparison_batch;
 mod argument_evaluation_owners;
 mod borrowed_string_reads;
 mod buffer_element_updates;

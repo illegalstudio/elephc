@@ -400,10 +400,20 @@ fn emit_mixed_loose_compare(
 ) -> Result<()> {
     let left_box_temp = !is_mixed_like(lhs_ty);
     let right_box_temp = !is_mixed_like(rhs_ty);
+    let guard_size = crate::codegen_support::try_handlers::EXCEPTION_GUARD_SLOT_SIZE;
+    let guard_bytes = (usize::from(left_box_temp) + usize::from(right_box_temp)) * guard_size;
+    abi::emit_reserve_temporary_stack(ctx.emitter, guard_bytes);
     materialize_value_as_mixed(ctx, lhs, lhs_ty)?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    if left_box_temp {
+        super::callable_guards::guard_saved_owner(ctx.emitter, 16, 0);
+    }
     materialize_value_as_mixed(ctx, rhs, rhs_ty)?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    if right_box_temp {
+        let record = 32 + usize::from(left_box_temp) * guard_size;
+        super::callable_guards::guard_saved_owner(ctx.emitter, record, 0);
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 16);
@@ -424,13 +434,16 @@ fn emit_mixed_loose_compare(
     }
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     if left_box_temp {
+        super::callable_guards::unguard_saved_owner(ctx.emitter, 48);
         decref_mixed_temp_at(ctx, 32);
     }
     if right_box_temp {
+        let record = 48 + usize::from(left_box_temp) * guard_size;
+        super::callable_guards::unguard_saved_owner(ctx.emitter, record);
         decref_mixed_temp_at(ctx, 16);
     }
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    abi::emit_release_temporary_stack(ctx.emitter, 32 + guard_bytes);
     Ok(())
 }
 
@@ -468,7 +481,7 @@ fn float_numeric_comparable(lhs_ty: &PhpType, rhs_ty: &PhpType) -> bool {
 /// (`Int`/`Float`) operand. Runtime tags still decide the exact PHP rule:
 /// float/int/null payloads compare numerically, strings use numeric-string
 /// parsing, booleans compare by truthiness, resources compare through their PHP
-/// display id, and arrays/objects are not equal to numbers.
+/// display id, objects convert to one with a warning, and arrays never equal numbers.
 fn mixed_numeric_comparable(lhs_ty: &PhpType, rhs_ty: &PhpType) -> bool {
     let numeric = |ty: &PhpType| matches!(ty, PhpType::Int | PhpType::Float);
     let one_mixed = *lhs_ty == PhpType::Mixed || *rhs_ty == PhpType::Mixed;
@@ -501,6 +514,7 @@ fn emit_mixed_numeric_compare(
     let string_label = ctx.next_label("mixed_numeric_string");
     let bool_label = ctx.next_label("mixed_numeric_bool");
     let resource_label = ctx.next_label("mixed_numeric_resource");
+    let object_label = ctx.next_label("mixed_numeric_object");
     let non_scalar_label = ctx.next_label("mixed_numeric_non_scalar");
     let done_label = ctx.next_label("mixed_numeric_done");
     let integer_label = (*numeric_ty == PhpType::Int)
@@ -514,6 +528,7 @@ fn emit_mixed_numeric_compare(
         &string_label,
         &bool_label,
         &resource_label,
+        &object_label,
         &non_scalar_label,
     );
 
@@ -538,12 +553,44 @@ fn emit_mixed_numeric_compare(
     emit_mixed_numeric_resource_compare(ctx, numeric_value, numeric_ty, is_equal)?;
     abi::emit_jump(ctx.emitter, &done_label);
 
+    ctx.emitter.label(&object_label);
+    emit_mixed_numeric_object_compare(ctx, numeric_ty, is_equal);
+    abi::emit_jump(ctx.emitter, &done_label);
+
     if let Some(label) = integer_label {
         ctx.emitter.label(&label);
         emit_exact_mixed_int_compare(ctx, numeric_value, is_equal)?;
     }
     ctx.emitter.label(&done_label);
     Ok(())
+}
+
+/// Warns for a borrowed unboxed object, then compares its numeric value one without boxing.
+fn emit_mixed_numeric_object_compare(
+    ctx: &mut FunctionContext<'_>,
+    numeric_ty: &PhpType,
+    is_equal: bool,
+) {
+    let kind = i64::from(*numeric_ty == PhpType::Float);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                              // borrow the unboxed object for its class name
+            abi::emit_load_int_immediate(ctx.emitter, "x1", kind);
+            ctx.emitter.instruction("mov x2, #0");                              // allow the warning helper to discover an eval owner context
+            ctx.emitter.instruction("mov x3, #0");                              // use the object's class rather than the Closure label
+            abi::emit_call_label(ctx.emitter, "__rt_sprintf_warn_object_numeric");
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", kind);
+            ctx.emitter.instruction("xor edx, edx");                            // allow the warning helper to discover an eval owner context
+            ctx.emitter.instruction("xor ecx, ecx");                            // rdi borrows the unboxed object for its class name
+            abi::emit_call_label(ctx.emitter, "__rt_sprintf_warn_object_numeric_x64");
+        }
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+    abi::emit_int_result_to_float_result(ctx.emitter);
+    emit_compare_current_float_with_saved_numeric(ctx, is_equal);
 }
 
 /// Compares an unboxed integer payload exactly, discarding the saved float approximation.
@@ -595,6 +642,7 @@ fn emit_mixed_numeric_tag_dispatch(
     string_label: &str,
     bool_label: &str,
     resource_label: &str,
+    object_label: &str,
     non_scalar_label: &str,
 ) {
     match ctx.emitter.target.arch {
@@ -608,7 +656,7 @@ fn emit_mixed_numeric_tag_dispatch(
             ctx.emitter.instruction("cmp x0, #5");                              // check whether the mixed payload is an associative array
             ctx.emitter.instruction(&format!("b.eq {}", non_scalar_label));     // hashes are never loosely equal to numeric operands
             ctx.emitter.instruction("cmp x0, #6");                              // check whether the mixed payload is an object
-            ctx.emitter.instruction(&format!("b.eq {}", non_scalar_label));     // objects are never loosely equal to numeric operands
+            ctx.emitter.instruction(&format!("b.eq {}", object_label));         // objects convert to one and emit PHP's numeric warning
             ctx.emitter.instruction("cmp x0, #9");                              // check whether the mixed payload is a resource
             ctx.emitter.instruction(&format!("b.eq {}", resource_label));       // resources compare through their PHP display id
         }
@@ -622,7 +670,7 @@ fn emit_mixed_numeric_tag_dispatch(
             ctx.emitter.instruction("cmp rax, 5");                              // check whether the mixed payload is an associative array
             ctx.emitter.instruction(&format!("je {}", non_scalar_label));       // hashes are never loosely equal to numeric operands
             ctx.emitter.instruction("cmp rax, 6");                              // check whether the mixed payload is an object
-            ctx.emitter.instruction(&format!("je {}", non_scalar_label));       // objects are never loosely equal to numeric operands
+            ctx.emitter.instruction(&format!("je {}", object_label));           // objects convert to one and emit PHP's numeric warning
             ctx.emitter.instruction("cmp rax, 9");                              // check whether the mixed payload is a resource
             ctx.emitter.instruction(&format!("je {}", resource_label));         // resources compare through their PHP display id
         }
@@ -1069,14 +1117,14 @@ fn emit_runtime_relational_result(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
-                .instruction(&format!("cmp {}, #0", result_reg));              // compare the normalized PHP ordering result against zero
+                .instruction(&format!("cmp {}, #0", result_reg));               // compare the normalized PHP ordering result against zero
             ctx.emitter.instruction(&format!(
                 "cset {}, {}",
                 result_reg,
                 super::aarch64_condition(predicate)?
             ));                                                                 // materialize the requested signed relational predicate
             ctx.emitter
-                .instruction(&format!("cmp {}, #0", unordered_reg));           // test whether numeric comparison encountered NaN
+                .instruction(&format!("cmp {}, #0", unordered_reg));            // test whether numeric comparison encountered NaN
             ctx.emitter.instruction(&format!(
                 "csel {}, xzr, {}, ne",
                 result_reg, result_reg
@@ -1084,13 +1132,13 @@ fn emit_runtime_relational_result(
         }
         Arch::X86_64 => {
             ctx.emitter
-                .instruction(&format!("cmp {}, 0", result_reg));               // compare the normalized PHP ordering result against zero
+                .instruction(&format!("cmp {}, 0", result_reg));                // compare the normalized PHP ordering result against zero
             ctx.emitter.instruction(&format!(
                 "set{} al",
                 super::x86_64_condition(predicate)?
             ));                                                                 // materialize the requested signed relational predicate
             ctx.emitter
-                .instruction(&format!("movzx {}, al", result_reg));            // widen the relational predicate byte to the result register
+                .instruction(&format!("movzx {}, al", result_reg));             // widen the relational predicate byte to the result register
             ctx.emitter.instruction("xor r11d, r11d");                          // prepare the false value for unordered selection
             ctx.emitter.instruction(&format!(
                 "test {}, {}",

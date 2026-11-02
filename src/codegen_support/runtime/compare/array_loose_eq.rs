@@ -42,18 +42,19 @@ pub fn emit_mixed_array_loose_eq(emitter: &mut Emitter) {
 
 /// Emits the AArch64 array comparison walker.
 ///
-/// Frame (128 bytes): `[sp,#0]` left cell, `[sp,#8]` right cell, `[sp,#16]` depth,
+/// Frame (192 bytes): `[sp,#0]` left cell, `[sp,#8]` right cell, `[sp,#16]` depth,
 /// `[sp,#24]` shared element count, `[sp,#32]`/`[sp,#40]` right tag and payload,
 /// `[sp,#48]` index-or-cursor, `[sp,#56]`/`[sp,#64]` left tag and payload,
 /// `[sp,#72]`/`[sp,#80]` the current key pair, `[sp,#88]`/`[sp,#96]` the two owned
-/// value cells, `[sp,#104]` the comparison result, `[sp,#112]` saved `x29`/`x30`.
+/// value cells, `[sp,#104]` the comparison result, `[sp,#112]` saved `x29`/`x30`,
+/// and `[sp,#128]`/`[sp,#160]` owned-cell exception guards.
 fn emit_mixed_array_loose_eq_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_array_loose_eq ---");
     emitter.label_global("__rt_mixed_array_loose_eq");
     emit_peel_nested_mixed_operands(emitter);
 
-    emitter.instruction("sub sp, sp, #128");                                    // allocate the array comparison frame
+    emitter.instruction("sub sp, sp, #192");                                    // allocate the array comparison frame
     emitter.instruction("stp x29, x30, [sp, #112]");                            // save frame pointer and return address
     emitter.instruction("add x29, sp, #112");                                   // establish the array comparison frame pointer
     emitter.instruction("stp x0, x1, [sp, #0]");                                // save both boxed array operands
@@ -142,19 +143,23 @@ fn emit_mixed_array_loose_eq_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x3, #0");                                          // read quietly: a comparison must not warn
     emitter.instruction("bl __rt_mixed_array_get");                             // read the left value as an owned boxed cell
     emitter.instruction("str x0, [sp, #88]");                                   // save the owned left value cell
+    abi::emit_guard_owned_at_stack(emitter, "x0", "__rt_exception_release_owned", 128);
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload the right boxed array operand
     emitter.instruction("ldr x1, [sp, #72]");                                   // reload the current key low word
     emitter.instruction("ldr x2, [sp, #80]");                                   // reload the current key high word
     emitter.instruction("mov x3, #0");                                          // read quietly: a comparison must not warn
     emitter.instruction("bl __rt_mixed_array_get");                             // read the right value as an owned boxed cell
     emitter.instruction("str x0, [sp, #96]");                                   // save the owned right value cell
+    abi::emit_guard_owned_at_stack(emitter, "x0", "__rt_exception_release_owned", 160);
     emitter.instruction("ldr x0, [sp, #88]");                                   // reload the left value cell
     emitter.instruction("ldr x1, [sp, #96]");                                   // reload the right value cell
     emitter.instruction("ldr x2, [sp, #16]");                                   // reload the current recursion depth
     emitter.instruction("bl __rt_mixed_loose_eq_d");                            // compare the two element values loosely
     emitter.instruction("str x0, [sp, #104]");                                  // save the element comparison result
+    abi::emit_unguard_owned_at_stack(emitter, 128);
     emitter.instruction("ldr x0, [sp, #88]");                                   // reload the owned left value cell
     emitter.instruction("bl __rt_decref_mixed");                                // release the left element copy
+    abi::emit_unguard_owned_at_stack(emitter, 160);
     emitter.instruction("ldr x0, [sp, #96]");                                   // reload the owned right value cell
     emitter.instruction("bl __rt_decref_mixed");                                // release the right element copy
     emitter.instruction("ldr x0, [sp, #104]");                                  // reload the element comparison result
@@ -173,7 +178,7 @@ fn emit_mixed_array_loose_eq_aarch64(emitter: &mut Emitter) {
 
     emitter.label("__rt_male_done");
     emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #128");                                    // release the array comparison frame
+    emitter.instruction("add sp, sp, #192");                                    // release the array comparison frame
     emitter.instruction("ret");                                                 // return the array loose-equality boolean
 }
 
@@ -222,11 +227,12 @@ fn emit_peel_nested_mixed_operands(emitter: &mut Emitter) {
 
 /// Emits the x86_64 array comparison walker.
 ///
-/// Frame (112 bytes below `rbp`): `[rbp-8]` left cell, `[rbp-16]` right cell,
+/// Frame (176 bytes below `rbp`): `[rbp-8]` left cell, `[rbp-16]` right cell,
 /// `[rbp-24]` depth, `[rbp-32]` shared element count, `[rbp-40]`/`[rbp-48]` right
 /// tag and payload, `[rbp-56]` index-or-cursor, `[rbp-64]`/`[rbp-72]` left tag and
 /// payload, `[rbp-80]`/`[rbp-88]` the current key pair, `[rbp-96]`/`[rbp-104]` the
-/// two owned value cells, `[rbp-112]` the comparison result.
+/// two owned value cells, `[rbp-112]` the comparison result; the bottom 64 bytes
+/// hold two owned-cell exception guards.
 fn emit_mixed_array_loose_eq_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_array_loose_eq ---");
@@ -235,7 +241,7 @@ fn emit_mixed_array_loose_eq_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // save the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the array comparison frame pointer
-    emitter.instruction("sub rsp, 112");                                        // allocate the aligned array comparison frame
+    emitter.instruction("sub rsp, 176");                                        // allocate the aligned array comparison frame
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the left boxed array operand
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the right boxed array operand
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the current recursion depth
@@ -319,19 +325,23 @@ fn emit_mixed_array_loose_eq_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor ecx, ecx");                                        // read quietly: a comparison must not warn
     abi::emit_call_label(emitter, "__rt_mixed_array_get"); // read the left value as an owned boxed cell
     emitter.instruction("mov QWORD PTR [rbp - 96], rax");                       // save the owned left value cell
+    abi::emit_guard_owned_at_stack(emitter, "rax", "__rt_exception_release_owned", 0);
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the right boxed array operand
     emitter.instruction("mov rsi, QWORD PTR [rbp - 80]");                       // reload the current key low word
     emitter.instruction("mov rdx, QWORD PTR [rbp - 88]");                       // reload the current key high word
     emitter.instruction("xor ecx, ecx");                                        // read quietly: a comparison must not warn
     abi::emit_call_label(emitter, "__rt_mixed_array_get"); // read the right value as an owned boxed cell
     emitter.instruction("mov QWORD PTR [rbp - 104], rax");                      // save the owned right value cell
+    abi::emit_guard_owned_at_stack(emitter, "rax", "__rt_exception_release_owned", 32);
     emitter.instruction("mov rdi, QWORD PTR [rbp - 96]");                       // reload the left value cell
     emitter.instruction("mov rsi, QWORD PTR [rbp - 104]");                      // reload the right value cell
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload the current recursion depth
     abi::emit_call_label(emitter, "__rt_mixed_loose_eq_d"); // compare the two element values loosely
     emitter.instruction("mov QWORD PTR [rbp - 112], rax");                      // save the element comparison result
+    abi::emit_unguard_owned_at_stack(emitter, 0);
     emitter.instruction("mov rax, QWORD PTR [rbp - 96]");                       // reload the owned left value cell
     abi::emit_call_label(emitter, "__rt_decref_mixed"); // release the left element copy
+    abi::emit_unguard_owned_at_stack(emitter, 32);
     emitter.instruction("mov rax, QWORD PTR [rbp - 104]");                      // reload the owned right value cell
     abi::emit_call_label(emitter, "__rt_decref_mixed"); // release the right element copy
     emitter.instruction("cmp QWORD PTR [rbp - 112], 0");                        // did the two element values compare equal?
@@ -348,7 +358,7 @@ fn emit_mixed_array_loose_eq_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor rax, rax");                                        // report that the two arrays differ
 
     emitter.label("__rt_male_done");
-    emitter.instruction("add rsp, 112");                                        // release the array comparison frame
+    emitter.instruction("add rsp, 176");                                        // release the array comparison frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the array loose-equality boolean
 }
