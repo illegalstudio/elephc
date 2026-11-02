@@ -1594,7 +1594,37 @@ fn run_binary_with_env_and_args(
         run_command_with_timeout(cmd)
     };
     append_macos_signal_diagnostics(&mut output, bin_path, dir, env, args);
+    #[cfg(target_os = "linux")]
+    append_linux_property_signal_diagnostics(&mut output, bin_path, dir, env, args);
     output
+}
+
+/// Replays the shared-property regression after a native Linux signal for CI diagnosis.
+#[cfg(target_os = "linux")]
+fn append_linux_property_signal_diagnostics(
+    output: &mut Output,
+    bin_path: &Path,
+    dir: &Path,
+    env: &[(&str, &std::ffi::OsStr)],
+    args: &[&str],
+) {
+    use std::os::unix::process::ExitStatusExt as _;
+
+    if target().platform != Platform::Linux || target().arch != Arch::X86_64
+        || output.status.signal().is_none()
+        || !std::thread::current().name().is_some_and(|name|
+            name.contains("test_shared_property_read_owners_bundle"))
+    { return; }
+    let mut command = Command::new("gdb");
+    command.current_dir(dir).envs(env.iter().copied()).args([
+        "--batch", "-ex", "set pagination off", "-ex", "run", "-ex", "bt",
+        "-ex", "info registers", "-ex", "x/32gx $rsp", "-ex", "x/16i $pc",
+        "-ex", "disassemble __rt_throw_current", "--args",
+    ]).arg(bin_path).args(args);
+    let diagnostic = run_command_with_timeout(command);
+    output.stderr.extend_from_slice(b"\nGDB replay after signal:\n");
+    output.stderr.extend_from_slice(&diagnostic.stdout);
+    output.stderr.extend_from_slice(&diagnostic.stderr);
 }
 
 /// Replays a signalled native macOS fixture under LLDB and appends its crash context.

@@ -62,7 +62,7 @@ unset($object, $dynamic, $magic);
     for (mode, out) in runs.iter().enumerate() {
         if !out.success || out.stdout != expected || !out.stderr.contains("HEAP DEBUG: leak summary: clean")
             || out.stderr.contains("Warning:")
-        { failures.push(format!("mode={mode}: stdout={} stderr={}", out.stdout, out.stderr)); }
+        { failures.push(format!("mode={mode}: status={} stdout={} stderr={}", out.status, out.stdout, out.stderr)); }
     }
     assert_eq!(runs.len(), 2);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
