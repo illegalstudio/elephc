@@ -387,7 +387,9 @@ fn emit_static_exception_at(
 
     emit_static_throwable_owner(ctx, class_id_symbol, message, creation_line);
     abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), "_exc_value", 0);
-    abi::emit_jump(ctx.emitter, "__rt_throw_current");
+    // This is an inline PHP-frame guard, so the runtime entry needs an ordinary call.
+    // On x86_64 its prologue relies on the return address for SysV stack alignment.
+    abi::emit_call_label(ctx.emitter, "__rt_throw_current");
 }
 
 /// Allocates an owned TypeError without throwing before guarded eval writeback has completed.
@@ -624,7 +626,7 @@ fn emit_dynamic_throwable_object(ctx: &mut FunctionContext<'_>, class_id_symbol:
             ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_exc_value", 0);
-            abi::emit_jump(ctx.emitter, "__rt_throw_current");
+            abi::emit_call_label(ctx.emitter, "__rt_throw_current");
         }
         Arch::X86_64 => {
             abi::emit_load_int_immediate(ctx.emitter, "rax", 56); // compact Throwable: message/code/previous
@@ -643,7 +645,7 @@ fn emit_dynamic_throwable_object(ctx: &mut FunctionContext<'_>, class_id_symbol:
             ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);
-            abi::emit_jump(ctx.emitter, "__rt_throw_current");
+            abi::emit_call_label(ctx.emitter, "__rt_throw_current");
         }
     }
 }
