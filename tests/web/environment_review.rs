@@ -7,6 +7,7 @@
 //! Key details:
 //! - Every fixture compiles separately so an observer cannot mask another missed demand path.
 //! - Computed eval names hide ENV access until later optimization, matching the original bug.
+//! - EIR optimization is unrelated to early demand and makes these eval-capable hosts costly.
 
 use super::*;
 
@@ -31,7 +32,8 @@ class ReviewApplication implements Elephc\Web\WorkerApplication {{
 }}
 Elephc\Web\Worker::register(new ReviewApplication());
 "#);
-    let binary = compile_web_with_flags(&dir.0, &source, "app", &["--web-lifecycle=application"]);
+    let binary = compile_web_with_flags(&dir.0, &source, "app",
+        &["--web-lifecycle=application", "--no-ir-opt"]);
     let addr = format!("127.0.0.1:{}", free_port());
     let _server = environment_server(&binary, &addr, false);
     for _ in 0..2 {
