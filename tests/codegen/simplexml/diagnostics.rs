@@ -97,3 +97,34 @@ restore_error_handler();
         warning("simplexml_load_string()", empty, "", "^"),
         "2:simplexml_load_file():|".repeat(3)));
 }
+
+/// Native writable offset selection retains eval's PHP-visible warning activation.
+#[test]
+fn test_simplexml_eval_dimension_selection_warning_caller_bundle() {
+    if skip_without_xml_native("test_simplexml_eval_dimension_selection_warning_caller_bundle") { return; }
+    let source = r#"<?php
+class WarningCallerXmlCapability extends SimpleXMLElement {}
+$code = $argc > 0 ? '
+set_error_handler(function(int $level, string $message): bool { echo $level, ":", $message, "|"; return true; });
+$node = new SimpleXMLElement("<r><a/></r>");
+$node->a[3]->b = 3;
+echo count($node->a), "|";
+function evalDimensionWarningCaller(): void {
+    $node = new SimpleXMLElement("<r><a/></r>");
+    $node->a[3]->b = 3;
+    echo count($node->a), "|";
+}
+evalDimensionWarningCaller();
+unset($node);
+restore_error_handler();
+' : '';
+eval($code);
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, concat!(
+        "2:Unknown: Cannot add element a number 3 when only 1 such elements exist|2|",
+        "2:evalDimensionWarningCaller(): Cannot add element a number 3 when only 1 such elements exist|2|",
+    ));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

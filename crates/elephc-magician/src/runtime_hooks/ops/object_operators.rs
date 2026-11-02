@@ -33,6 +33,7 @@ impl ElephcRuntimeOps {
         // Carry the caller only across SimpleXML's internal write boundary.
         let eval_method = match method {
             "__elephc_dimension_set" => Some("__elephc_eval_dimension_set"),
+            "__elephc_dimension_select" => Some("__elephc_eval_dimension_select"),
             "__elephc_property_set" => Some("__elephc_eval_property_set"),
             _ => None,
         };
@@ -46,7 +47,11 @@ impl ElephcRuntimeOps {
                 _ => "Unknown".to_string(),
             };
             let cell = self.string(&caller)?;
-            args.push(cell.borrowed());
+            if method == "__elephc_dimension_select" {
+                args.insert(1, cell.borrowed());
+            } else {
+                args.push(cell.borrowed());
+            }
             Some(cell)
         } else { None };
         let outcome = interpreter::execute_context_method_call_outcome(context, object.borrowed(),

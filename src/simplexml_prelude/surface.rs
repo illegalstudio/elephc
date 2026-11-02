@@ -364,7 +364,10 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         elephc_xml_sx_free($selected);
         return $present;
     }
-    final public function __elephc_dimension_select(mixed $offset, bool $throwOnFailure = true, bool $create = true, bool $numeric = true): mixed {
+    final public function __elephc_eval_dimension_select(mixed $offset, string $caller, bool $throwOnFailure = true, bool $create = true, bool $numeric = true): mixed {
+        return $this->__elephc_dimension_select($offset, $throwOnFailure, $create, $numeric, $caller);
+    }
+    final public function __elephc_dimension_select(mixed $offset, bool $throwOnFailure = true, bool $create = true, bool $numeric = true, string $caller = ''): mixed {
         $selected = $this->__elephc_dimension_get($offset);
         if ($selected !== null) {
             return !$throwOnFailure && $create && $numeric ? $selected->__elephc_number() : $selected;
@@ -384,7 +387,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
             $length = $mode === 0 ? 0 : $length;
             if ($offset < 0 || $offset > $length || $mode === 0) {
                 $name = elephc_xml_sx_string($handle, $mode === 1 ? 5 : 1);
-                __elephc_simplexml_write_warning('Cannot add element ' . $name . ' number ' . $offset . ' when only ' . $length . ' such elements exist');
+                __elephc_simplexml_write_warning('Cannot add element ' . $name . ' number ' . $offset . ' when only ' . $length . ' such elements exist', $caller);
             }
             if ($offset >= 0 && $mode !== 0) {
                 $added = elephc_xml_sx_mutate($handle, 24, '', '', '', 0, 0);
