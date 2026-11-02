@@ -329,6 +329,7 @@ class QuietCandidateOwner {{
     public array $third = [];
 }}
 function quietCandidateRead(object $owner, string $name): void {{ unset($owner->{{{name}}}['key']); }}
+$xmlCapability = new SimpleXMLElement('<r/>'); unset($xmlCapability);
 quietCandidateRead(new QuietCandidateOwner(), 'items');
 "#);
             let module = super::lower_source_at_for_target(&source, Path::new("main.php"),
