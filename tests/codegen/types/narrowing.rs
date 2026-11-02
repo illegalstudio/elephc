@@ -1074,6 +1074,8 @@ var_dump(g([1], false, 0));
 "#,
     );
     assert!(err.contains("return type expects int|string"), "{err}");
+}
+
 /// A guard on a `readonly` property of `$this` survives a call: `$this->plugin->name()` inside
 /// `if ($this->plugin instanceof Sold)` cannot write `$this->plugin` again, and `$this` cannot
 /// be rebound, so a later `$this->plugin->count()` still reads it as `Sold`. Every call used to
