@@ -3420,16 +3420,27 @@ jobs:
                 sudo apt-get update && sudo apt-get install -y gdb
               fi
               gdb --batch -ex run -ex bt -ex 'x/12i $pc-16' -ex 'info registers' -ex 'x/16gx $sp' \
+                -ex up -ex 'x/20i $pc-48' \
                 --args ./examples/date-json-regex/main || true
             else
               lldb --batch -o run -o bt -o 'register read' \
                 -o 'memory read --count 16 --format x --size 8 $sp' \
+                -o 'frame select 1' -o 'disassemble --frame --count 24' \
                 -- ./examples/date-json-regex/main || true
             fi
             exit "$smoke_status"
           fi
           grep -F "Valid email pattern" "$RUNNER_TEMP/date-json-regex.out"
           grep -F "Unicode letters detected" "$RUNNER_TEMP/date-json-regex.out"
+
+      - name: Preserve regex crash assembly
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: regex-crash-assembly-${{ matrix.target }}
+          path: examples/date-json-regex/main.s
+          if-no-files-found: ignore
+          retention-days: 3
 
       - name: Compile and run curl through the production resolver
         # Exercises the full chain the 194 curl codegen fixtures also need but
