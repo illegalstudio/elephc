@@ -44,12 +44,21 @@ try { evalArgNullable((new EvalArgReceiverThrowRead())->value); }
 catch (RuntimeException $error) { echo $error->getMessage(), "|"; unset($error); }
 try { evalArgNullable(evalArgFreshBox()->{evalArgThrowName()}); }
 catch (RuntimeException $error) { echo $error->getMessage(), "|"; unset($error); }
-unset($root, $box, $callback, $property);
+$indexed = new EvalArgReceiverXml("<r><a><b/></a></r>");
+evalArgNullable($indexed->a->b[0]);
+$box->inner->value = new ArrayObject([null]);
+evalArgNullable($box->inner->value[0]);
+try { evalArgNullable($indexed->a->b[evalArgThrowName()]); }
+catch (RuntimeException $error) { echo "index|"; unset($error); }
+$box->inner->value = new EvalArgReceiverBox();
+try { evalArgNullable($box->inner->value[0]); }
+catch (Error $error) { echo "offset|"; unset($error); }
+unset($root, $indexed, $box, $callback, $property);
 ' : '';
 eval($source); unset($source, $capability);
 "#;
     let (out, assembly) = compile_and_run_with_heap_debug_and_asm(source);
-    let expected = "typed|nullable|nullable|nullable|closure|set|write:throw|read|name|";
+    let expected = "typed|nullable|nullable|nullable|closure|set|write:throw|read|name|nullable|nullable|index|offset|";
     preserve_stdout_mismatches(source, &assembly, std::slice::from_ref(&out), &[expected]);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, expected);

@@ -97,7 +97,7 @@ pub(in crate::interpreter) fn eval_owned_call_arg_values(
 }
 
 /// Moves independently owned property receivers out of borrowed call reference metadata.
-fn capture_argument_receiver_owners(
+pub(super) fn capture_argument_receiver_owners(
     target: Option<&mut EvalReferenceTarget>, owners: &mut Vec<RuntimeCellHandle>,
 ) {
     match target {
@@ -109,5 +109,46 @@ fn capture_argument_receiver_owners(
             capture_argument_receiver_owners(Some(array_target.as_mut()), owners);
         }
         _ => {}
+    }
+}
+
+/// Retires keys as well as receivers when reference metadata will never reach a consumer.
+pub(super) fn capture_abandoned_reference_owners(
+    target: Option<&mut EvalReferenceTarget>, owners: &mut Vec<RuntimeCellHandle>,
+) {
+    match target {
+        Some(EvalReferenceTarget::ArrayElement { index, .. }) => {
+            if !index.is_borrowed() { owners.push(*index); *index = index.borrowed(); }
+        }
+        Some(EvalReferenceTarget::NestedArrayElement { array_target, index }) => {
+            capture_abandoned_reference_owners(Some(array_target.as_mut()), owners);
+            if !index.is_borrowed() { owners.push(*index); *index = index.borrowed(); }
+        }
+        target => capture_argument_receiver_owners(target, owners),
+    }
+}
+
+/// Retires intermediate lvalue operands without losing an owned result or abandoned target on failure.
+pub(super) fn finish_argument_reference_owners(
+    result: Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus>,
+    owners: Vec<RuntimeCellHandle>, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
+    let mut cleanup = Ok(());
+    for owner in owners.into_iter().rev() {
+        let released = release_expr_result(owner, context, values);
+        if cleanup.is_ok() { cleanup = released; }
+    }
+    match (result, cleanup) {
+        (Err(status), _) => Err(status),
+        (Ok((value, mut target)), Err(status)) => {
+            let _ = release_expr_result(value, context, values);
+            let mut abandoned = Vec::new();
+            capture_abandoned_reference_owners(target.as_mut(), &mut abandoned);
+            for owner in abandoned.into_iter().rev() {
+                let _ = release_expr_result(owner, context, values);
+            }
+            Err(status)
+        }
+        (Ok(result), Ok(())) => Ok(result),
     }
 }
