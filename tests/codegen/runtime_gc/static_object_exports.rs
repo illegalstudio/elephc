@@ -9,6 +9,31 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Caught static-property and hook type failures release each rejected temporary value.
+#[test]
+fn test_rejected_static_and_hook_stores_release_temporary_boxes() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+class RejectedStaticAndHookStores {
+    public static iterable $items = [];
+    public object $node { set { echo 'unexpected'; } }
+}
+function rejectedPropertyValue(): mixed { return null; }
+$box = new RejectedStaticAndHookStores();
+$caught = 0;
+for ($index = 0; $index < 8; $index++) {
+    try { RejectedStaticAndHookStores::$items = rejectedPropertyValue(); }
+    catch (TypeError $error) { $caught++; }
+    try { $box->node = rejectedPropertyValue(); }
+    catch (TypeError $error) { $caught++; }
+}
+echo $caught, ':', count(RejectedStaticAndHookStores::$items);
+unset($box, $error);
+"#);
+    assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "16:0");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
 /// Typed static stores preserve guarded Mixed payloads through replacement and source cleanup.
 #[test]
 fn test_static_typed_object_store_retires_mixed_source_cells() {

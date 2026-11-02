@@ -55,6 +55,7 @@ pub(super) fn store_static_property(
     }
     let name = format!("{}::{}", receiver_name(receiver), property);
     let data = ctx.intern_string(&name);
+    let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value], span);
     ctx.emit_void(
         Op::StoreStaticProperty,
         vec![value],
@@ -62,6 +63,7 @@ pub(super) fn store_static_property(
         Op::StoreStaticProperty.default_effects(),
         Some(span),
     );
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
 }
 
 /// Formats a static receiver for metadata immediates.

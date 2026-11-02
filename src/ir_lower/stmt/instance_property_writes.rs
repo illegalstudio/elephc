@@ -1021,6 +1021,7 @@ pub(super) fn lower_property_hook_set(
     span: Span,
 ) {
     let method_data = ctx.intern_string(&property_hook_set_method(property));
+    let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value.value], span);
     ctx.emit_void(
         Op::MethodCall,
         vec![object, value.value],
@@ -1028,6 +1029,7 @@ pub(super) fn lower_property_hook_set(
         Op::MethodCall.default_effects(),
         Some(span),
     );
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
     release_magic_set_value_after_call(ctx, value, span);
 }
 
