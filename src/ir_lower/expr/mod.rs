@@ -240,6 +240,7 @@ pub(crate) use call_operand_owners::{
     PinnedInFlightOwner,
 };
 pub(crate) use property_access::singular_object_class;
+pub(crate) use property_access::class_extends_class;
 pub(crate) use property_access::packed_receiver_class;
 pub(crate) use property_access::extern_receiver_class;
 pub(crate) use callable_tracking::{

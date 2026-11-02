@@ -992,7 +992,7 @@ pub(super) fn runtime_property_type_override(
 }
 
 /// Returns true when a class is or extends the target class.
-pub(super) fn class_extends_class(
+pub(crate) fn class_extends_class(
     ctx: &LoweringContext<'_, '_>,
     class_name: &str,
     target_class: &str,

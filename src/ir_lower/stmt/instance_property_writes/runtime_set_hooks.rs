@@ -1,32 +1,64 @@
 //! Purpose:
-//! Preserves property setters when a boxed receiver has lost its concrete PHP class.
+//! Preserves property setters when a receiver has lost its concrete PHP subclass.
 //!
 //! Called from:
 //! - Instance property assignment after the native XML and statically known hook paths.
 //!
 //! Key details:
 //! - Runtime guards select ordinary typed method calls without reevaluating receiver or RHS.
+//! - Exact classes leave eval-only subclass overrides on the ordinary runtime dispatcher.
 //! - Inaccessible descendant hooks retain their storage error instead of reaching a parent hook.
 //! - The caller owns the common receiver; each selected arm retires its own argument lease.
 
 use super::*;
+use crate::ir::{PhpTypePredicate, RuntimeCallTarget, RuntimeFnId};
+use crate::parser::ast::Visibility;
 
-/// Dispatches a boxed ordinary property write through the runtime class's setter hook.
+/// Dispatches an ordinary property write through a setter absent from its static class.
 pub(super) fn lower(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str,
     value: LoweredValue, preserve_property_operand: bool, span: Span,
 ) -> bool {
     let ty = ctx.builder.value_php_type(object.value);
-    if !matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
-        || crate::ir_lower::expr::singular_object_class(&ty).is_some()
+    if !matches!(ty.codegen_repr(), PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_))
         || ctx.in_own_property_accessor(property) { return false; }
     let method = property_hook_set_method(property);
     let key = php_symbol_key(&method);
+    let base = crate::ir_lower::expr::singular_object_class(&ty).map(|(class, _)| class)
+        .filter(|class| !class.is_empty() && !ctx.interfaces.contains_key(*class));
     let mut classes = ctx.classes.iter().filter_map(|(name, info)|
-        info.methods.contains_key(&key).then(|| name.clone())).collect::<Vec<_>>();
+        (info.methods.contains_key(&key) && base.is_none_or(|base|
+            crate::ir_lower::expr::class_extends_class(ctx, name, base)))
+            .then(|| name.clone())).collect::<Vec<_>>();
     classes.sort_by_key(|name| std::cmp::Reverse(ctx.classes[name].class_id));
     if classes.is_empty() { return false; }
-    dispatch(ctx, object, property, value, &method, &classes, preserve_property_operand, span);
+    let select = ctx.builder.create_named_block("property.setter.select", vec![]);
+    let fallback = ctx.builder.create_named_block("property.setter.nonobject", vec![]);
+    let done = ctx.builder.create_named_block("property.setter.merge", vec![]);
+    let initial = ctx.initialized_slots_snapshot();
+    let condition = ctx.emit_value(Op::TypePredicate, vec![object.value],
+        Some(Immediate::TypePredicate(PhpTypePredicate::Object)), PhpType::Bool,
+        Op::TypePredicate.default_effects(), Some(span));
+    ctx.builder.terminate(Terminator::CondBr { cond: condition.value,
+        then_target: select, then_args: vec![], else_target: fallback, else_args: vec![] });
+    ctx.builder.position_at_end(select);
+    let target = RuntimeFnId::GetClass;
+    let name = ctx.emit_value(Op::RuntimeCall, vec![object.value],
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target))),
+        PhpType::Str, target.effects(), Some(span));
+    let (name, owner) = crate::ir_lower::expr::root_owned_call_operand(ctx, name, span);
+    dispatch(ctx, object, property, value, name, &method, &classes, span);
+    if let Some(owner) = owner { crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span); }
+    branch_to(ctx, done);
+    let selected_slots = ctx.initialized_slots_snapshot();
+    ctx.builder.position_at_end(fallback);
+    ctx.restore_initialized_slots(initial.clone());
+    let retained = receiver_retains_abstract_setter(ctx, object.value, property);
+    lower_property_slot_assign(ctx, object, property, value, preserve_property_operand, retained, span);
+    branch_to(ctx, done);
+    let fallback_slots = ctx.initialized_slots_snapshot();
+    ctx.builder.position_at_end(done);
+    ctx.restore_initialized_slots(merge_initialized_slots(&initial, selected_slots, true, fallback_slots, true));
     true
 }
 
@@ -41,19 +73,36 @@ fn accessible(ctx: &LoweringContext<'_, '_>, class: &str, property: &str) -> boo
             crate::ir_lower::expr::ir_can_access_member(ctx, declaring, visibility))
 }
 
+/// Rejects an inaccessible asymmetric setter before the public read slot could accept the write.
+fn asymmetric_error(ctx: &LoweringContext<'_, '_>, class: &str, property: &str) -> Option<String> {
+    let info = &ctx.classes[class];
+    if !crate::ir_lower::expr::property_is_accessible_for_ir(ctx, class, info, property) { return None; }
+    let visibility = info.property_set_visibilities.get(property)?;
+    let declaring = info.property_declaring_classes.get(property).map(String::as_str).unwrap_or(class);
+    if crate::ir_lower::expr::ir_can_access_member(ctx, declaring, visibility) { return None; }
+    let visibility = match visibility {
+        Visibility::Private => "private", Visibility::Protected => "protected", Visibility::Public => return None,
+    };
+    let scope = ctx.current_class.as_ref().map_or_else(|| "global scope".to_string(), |class| format!("scope {class}"));
+    Some(format!("Cannot modify {visibility}(set) property {declaring}::${property} from {scope}"))
+}
+
 /// Calls one guarded setter or preserves the existing physical storage fallback.
 fn dispatch(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str,
-    value: LoweredValue, method: &str, classes: &[String], preserve_property_operand: bool, span: Span,
+    value: LoweredValue, class_name: LoweredValue, method: &str,
+    classes: &[String], span: Span,
 ) {
     let Some((class, rest)) = classes.split_first() else {
         let retained = receiver_retains_abstract_setter(ctx, object.value, property);
-        lower_property_slot_assign(ctx, object, property, value, preserve_property_operand, retained, span);
+        lower_property_slot_assign(ctx, object, property, value, true, retained, span);
         return;
     };
-    let data = ctx.intern_class_name(class);
-    let condition = ctx.emit_value(Op::InstanceOf, vec![object.value], Some(Immediate::Data(data)),
-        PhpType::Bool, Op::InstanceOf.default_effects(), Some(span));
+    let data = ctx.intern_string(class.trim_start_matches('\\'));
+    let expected = ctx.emit_value(Op::ConstStr, vec![], Some(Immediate::Data(data)), PhpType::Str,
+        Op::ConstStr.default_effects(), Some(span));
+    let condition = ctx.emit_value(Op::StrictEq, vec![class_name.value, expected.value], None,
+        PhpType::Bool, Op::StrictEq.default_effects(), Some(span));
     let yes = ctx.builder.create_named_block("property.setter", vec![]);
     let no = ctx.builder.create_named_block("property.setter.next", vec![]);
     let done = ctx.builder.create_named_block("property.setter.done", vec![]);
@@ -61,21 +110,25 @@ fn dispatch(
     ctx.builder.terminate(Terminator::CondBr { cond: condition.value,
         then_target: yes, then_args: vec![], else_target: no, else_args: vec![] });
     ctx.builder.position_at_end(yes);
-    if accessible(ctx, class, property) {
+    if let Some(message) = asymmetric_error(ctx, class, property) {
+        let _pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value.value], span);
+        crate::ir_lower::stmt::lower_throw_access_error(ctx, &message, span);
+    } else if accessible(ctx, class, property) {
         emit_setter(ctx, object, value, class, method, span);
     } else {
         let retained = receiver_retains_abstract_setter(ctx, object.value, property);
-        lower_property_slot_assign(ctx, object, property, value, preserve_property_operand, retained, span);
+        lower_property_slot_assign(ctx, object, property, value, true, retained, span);
     }
-    branch_to(ctx, done);
+    let yes_live = !ctx.builder.insertion_block_is_terminated();
+    if yes_live { branch_to(ctx, done); }
     let yes_slots = ctx.initialized_slots_snapshot();
     ctx.builder.position_at_end(no);
     ctx.restore_initialized_slots(initial.clone());
-    dispatch(ctx, object, property, value, method, rest, preserve_property_operand, span);
+    dispatch(ctx, object, property, value, class_name, method, rest, span);
     branch_to(ctx, done);
     let no_slots = ctx.initialized_slots_snapshot();
     ctx.builder.position_at_end(done);
-    ctx.restore_initialized_slots(merge_initialized_slots(&initial, yes_slots, true, no_slots, true));
+    ctx.restore_initialized_slots(merge_initialized_slots(&initial, yes_slots, yes_live, no_slots, true));
 }
 
 /// Extracts a typed receiver lease and lets the ordinary call ABI coerce the boxed RHS.
@@ -84,8 +137,15 @@ fn emit_setter(
     class: &str, method: &str, span: Span,
 ) {
     let ty = PhpType::Object(class.to_string());
-    let receiver = ctx.emit_owned_value(Op::MixedUnbox, vec![object.value], None, ty.clone(),
-        Op::mixed_unbox_effects(&ty), Some(span));
+    let receiver = if matches!(ctx.builder.value_php_type(object.value).codegen_repr(), PhpType::Object(_)) {
+        let receiver = ctx.emit_value(Op::Borrow, vec![object.value], None, ty,
+            Op::Borrow.default_effects(), Some(span));
+        ctx.builder.set_value_ownership(receiver.value, Ownership::Borrowed);
+        receiver
+    } else {
+        ctx.emit_owned_value(Op::MixedUnbox, vec![object.value], None, ty.clone(),
+            Op::mixed_unbox_effects(&ty), Some(span))
+    };
     let (receiver, owner) = crate::ir_lower::expr::root_owned_call_operand(ctx, receiver, span);
     let signature = ctx.classes[class].methods.get(&php_symbol_key(method)).cloned();
     let expression = Expr::new(ExprKind::Null, span);

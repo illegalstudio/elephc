@@ -12,6 +12,53 @@
 
 use super::*;
 
+/// An eval-only subclass retains its widened setter visibility and its own accessor body.
+#[test]
+fn test_mixed_property_setters_preserve_eval_subclass_overrides_bundle() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class RuntimeEvalSetterBase {
+    public protected(set) string $word {
+        get { return ''; }
+        set { echo 'unexpected-base|'; }
+    }
+}
+$code = $argc > 0 ? '
+class RuntimeEvalSetterChild extends RuntimeEvalSetterBase {
+    public string $word {
+        get { return ""; }
+        set { echo "child:", $value, "|"; }
+    }
+}
+$object = new RuntimeEvalSetterChild();
+' : '';
+eval($code);
+$object->word = 'value';
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "child:value|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A raw base-class receiver still reaches a property setter introduced by its runtime subclass.
+#[test]
+fn test_base_class_property_write_reaches_subclass_setter() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class RuntimeSetterBase {}
+class RuntimeSetterDerived extends RuntimeSetterBase {
+    public string $stored = '';
+    public string $data {
+        get { return $this->stored; }
+        set { echo 'set|'; $this->stored = $value; }
+    }
+}
+function runtimeSetterBaseWrite(RuntimeSetterBase $object): void { $object->data = 'written'; }
+$object = new RuntimeSetterDerived(); runtimeSetterBaseWrite($object); echo $object->stored;
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "set|written");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Boxed receivers invoke backed and virtual setters while ordinary objects keep their slots.
 #[test]
 fn test_mixed_property_setters_preserve_native_hook_dispatch() {
@@ -28,12 +75,13 @@ class RuntimeSetterChild extends RuntimeSetterBox {
     }
 }
 function runtimeSetterMake(string $class): mixed { return new $class(); }
+function runtimeSetterWriteData(mixed $object, mixed $value): void { $object->data = $value; }
 $box = runtimeSetterMake('RuntimeSetterBox');
 $box->value = 'a'; echo $box->value, '|';
 $child = runtimeSetterMake('RuntimeSetterChild');
 if ($child instanceof RuntimeSetterChild) {
     $child->value = 'b'; echo $child->data, '|';
-    $child->data = 12; echo $child->value, '|';
+    runtimeSetterWriteData($child, 12); echo $child->value, '|';
 }
 $plain = runtimeSetterMake('stdClass'); $plain->value = 'plain'; echo $plain->value, '|';
 "#);
@@ -51,6 +99,7 @@ class RuntimePrivateSetter {
         set { echo 'hook:', $value, '|'; $this->value = $value; }
     }
     public function assign(mixed $other): void { $other->value = 'inside'; }
+    public function __set(string $name, mixed $value): void { echo 'unexpected-magic|'; }
 }
 function runtimePrivateSetterMake(): mixed { return new RuntimePrivateSetter(); }
 $box = runtimePrivateSetterMake();
