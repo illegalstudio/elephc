@@ -225,6 +225,7 @@ impl Checker {
         };
         let ty = self.infer_type(receiver, env)?;
         if crate::types::param_binding::native_selection_reference_receiver_type(&ty, &self.classes) {
+            self.record_member_receiver_type(arg.span, &ty);
             return Ok(true);
         }
         self.is_native_selection_reference_argument(receiver, env)
