@@ -793,7 +793,10 @@ pub(in crate::interpreter) fn eval_object_has_to_string(
     if let Some(class) = context.dynamic_object_class(identity) {
         let called_class_name = class.name().to_string();
         let Some((_, method)) = context.class_method(&called_class_name, "__toString") else {
-            return Ok(false);
+            return match context.class_native_parent_name(&called_class_name) {
+                Some(parent) => eval_native_class_has_tostring(&parent, context, values),
+                None => Ok(false),
+            };
         };
         return Ok(method.visibility() == EvalVisibility::Public
             && !method.is_static()
@@ -801,17 +804,10 @@ pub(in crate::interpreter) fn eval_object_has_to_string(
             && method.params().is_empty());
     }
     let class_name = runtime_object_class_name(value, values)?;
-    if eval_runtime_object_has_interpreter_tostring(identity, &class_name, context)
-        || context
-            .native_method_signature(&class_name, "__toString")
-            .is_some()
-    {
+    if eval_runtime_object_has_interpreter_tostring(identity, &class_name, context) {
         return Ok(true);
     }
-    Ok(
-        eval_aot_method_dispatch_metadata_in_hierarchy(&class_name, "__toString", context, values)?
-            .is_some(),
-    )
+    eval_native_class_has_tostring(&class_name, context, values)
 }
 
 /// Converts objects in string contexts through the applicable `__toString()` dispatch path.
@@ -866,6 +862,14 @@ fn eval_dynamic_object_string_context_value(
     let called_class_name = class.name().to_string();
     let Some((declaring_class, method)) = context.class_method(&called_class_name, "__toString")
     else {
+        if let Some(parent) = context.class_native_parent_name(&called_class_name) {
+            if eval_native_class_has_tostring(&parent, context, values)? {
+                let result = eval_method_call_result_with_evaluated_args(
+                    value, "__toString", Vec::new(), context, values,
+                )?;
+                return eval_tostring_result_to_string(result, values);
+            }
+        }
         return eval_throw_object_to_string_error(&called_class_name, context, values);
     };
     if method.visibility() != EvalVisibility::Public
@@ -896,16 +900,7 @@ fn eval_runtime_object_string_context_value(
     let identity = values.object_identity(value)?;
     let class_name = runtime_object_class_name(value, values)?;
     if !eval_runtime_object_has_interpreter_tostring(identity, &class_name, context)
-        && context
-            .native_method_signature(&class_name, "__toString")
-            .is_none()
-        && eval_aot_method_dispatch_metadata_in_hierarchy(
-            &class_name,
-            "__toString",
-            context,
-            values,
-        )?
-        .is_none()
+        && !eval_native_class_has_tostring(&class_name, context, values)?
     {
         return eval_throw_object_to_string_error(&class_name, context, values);
     }
@@ -917,6 +912,20 @@ fn eval_runtime_object_string_context_value(
         values,
     )?;
     eval_tostring_result_to_string(result, values)
+}
+
+/// Checks the native hierarchy shared by runtime objects and eval-declared subclasses.
+fn eval_native_class_has_tostring(
+    class_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if context.native_method_signature(class_name, "__toString").is_some() {
+        return Ok(true);
+    }
+    Ok(eval_aot_method_dispatch_metadata_in_hierarchy(
+        class_name, "__toString", context, values,
+    )?.is_some())
 }
 
 /// Returns whether eval owns a synthetic `__toString()` implementation for the runtime object.
