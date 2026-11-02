@@ -20,19 +20,16 @@ function sharedGlobalReadOne(mixed $object, string $name): mixed { return $objec
 function sharedGlobalReadTwo(mixed $object, string $name): mixed { return $object->{$name}; }
 function sharedGlobalProbeOne(mixed $object, string $name): mixed { return $object->{$name} ?? null; }
 function sharedGlobalProbeTwo(mixed $object, string $name): mixed { return $object->{$name} ?? null; }
-function sharedGlobalQuietOne(mixed $object, string $name): void { unset($object->{$name}[1]); }
-function sharedGlobalQuietTwo(mixed $object, string $name): void { unset($object->{$name}[2]); }
 $object = new SharedPropertyScope();
 $object->one($object, "secret"); $object->two($object, "secret");
 sharedGlobalReadOne($object, "secret"); sharedGlobalReadTwo($object, "secret");
 sharedGlobalProbeOne($object, "secret"); sharedGlobalProbeTwo($object, "secret");
-sharedGlobalQuietOne($object, "secret"); sharedGlobalQuietTwo($object, "secret");
 try { sharedGlobalReadOne(new SharedPropertyEmpty(), "value"); } catch (Error $error) {}
 "#;
     let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
         std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-    for marker in ["scope=global mode=read", "scope=global mode=probe", "scope=global mode=quiet_read", "scope=SharedPropertyScope mode=read"] {
+    for marker in ["scope=global mode=read", "scope=global mode=probe", "scope=SharedPropertyScope mode=read"] {
         assert_eq!(assembly.matches(&format!("shared property read: {marker}")).count(), 1, "{target}: {marker}");
     }
     for name in ["sharedGlobalReadOne", "sharedGlobalReadTwo", "sharedGlobalProbeOne", "sharedGlobalProbeTwo"] {

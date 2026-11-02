@@ -7,7 +7,7 @@
 //! Key details:
 //! - Each ordinary synthetic EIR function reuses the existing DynamicPropGet implementation.
 //! - Caller operands are already evaluated; the helper borrows them and returns one owned cell.
-//! - Literal names, hook bodies and single-site scopes retain their current paths.
+//! - Literal names, hook bodies, quiet fetches and single-site scopes retain their current paths.
 
 use std::collections::HashMap;
 
@@ -39,7 +39,7 @@ fn fetch_mode(inst: &Instruction) -> PropertyFetchMode {
 fn is_shared_site(function: &Function, inst: &Instruction) -> bool {
     if function.name.starts_with(PREFIX)
         || function.name.contains("::__propget_") || function.name.contains("::__propset_")
-        || inst.op != Op::DynamicPropGet
+        || inst.op != Op::DynamicPropGet || fetch_mode(inst) == PropertyFetchMode::QuietRead
         || inst.result_php_type.codegen_repr() != PhpType::Mixed
     { return false; }
     let [object, name] = inst.operands.as_slice() else { return false; };
@@ -118,12 +118,8 @@ fn helper_function(helper: &ReadHelper) -> Function {
     let name = builder.emit_load_local(crate::ir::LocalSlotId::from_raw(1), IrType::Str, PhpType::Str);
     builder.set_value_ownership(object, Ownership::Borrowed);
     builder.set_value_ownership(name, Ownership::Borrowed);
-    let effects = Op::DynamicPropGet.default_effects() | if helper.mode == PropertyFetchMode::QuietRead {
-        crate::ir::Effects::WRITES_HEAP | crate::ir::Effects::ALLOC_HEAP | crate::ir::Effects::REFCOUNT_OP
-    } else { crate::ir::Effects::PURE };
-    let result = builder.emit_with_effects(Op::DynamicPropGet, vec![object, name],
-        Some(Immediate::PropertyFetchMode(helper.mode)), mixed, PhpType::Mixed, Ownership::Owned,
-        effects, None).expect("property read produces a value");
+    let result = builder.emit(Op::DynamicPropGet, vec![object, name], Some(Immediate::PropertyFetchMode(helper.mode)),
+        mixed, PhpType::Mixed, Ownership::Owned).expect("property read produces a value");
     builder.terminate(Terminator::Return { value: Some(result) });
     function
 }
