@@ -611,11 +611,11 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
             abi::emit_jump(ctx.emitter, &selected_label);
             ctx.emitter.label(&next_label);
         }
-        if let Some(message) = invalid_type_error {
-            super::exceptions::emit_type_error(ctx, message);
-        } else if eval_fallback_slot.is_some() {
+        if eval_fallback_slot.is_some() {
             abi::emit_release_temporary_stack(ctx.emitter, MIXED_VALUE_BYTES);
             abi::emit_jump(ctx.emitter, &fatal_label);
+        } else if let Some(message) = invalid_type_error {
+            super::exceptions::emit_type_error(ctx, message);
         } else {
             emit_mixed_callable_not_callable_fatal(ctx, op_name);
         }
