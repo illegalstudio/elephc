@@ -146,6 +146,17 @@ pub extern "C" fn __elephc_reference_sources_reset_v1() -> i32 {
 mod tests {
     use super::*;
 
+    /// All supported native targets use the same four-word source record layout.
+    #[test]
+    fn native_reference_source_record_matches_the_native_abi() {
+        assert_eq!(std::mem::size_of::<NativeReferenceTypeSource>(), 32);
+        assert_eq!(std::mem::align_of::<NativeReferenceTypeSource>(), 8);
+        assert_eq!(std::mem::offset_of!(NativeReferenceTypeSource, token), 0);
+        assert_eq!(std::mem::offset_of!(NativeReferenceTypeSource, binding), 8);
+        assert_eq!(std::mem::offset_of!(NativeReferenceTypeSource, cell), 16);
+        assert_eq!(std::mem::offset_of!(NativeReferenceTypeSource, validator), 24);
+    }
+
     /// Clone properties contribute independent sources even when they share their physical cell.
     #[test]
     fn native_reference_sources_keep_each_physical_binding() {
