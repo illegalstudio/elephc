@@ -70,6 +70,19 @@ pub(super) fn lower_nullsafe_method_call_from_receiver(
     let result_type = if container_miss && !nullable && result_type.codegen_repr() != PhpType::Mixed {
         nullable_result_type(result_type)
     } else { result_type };
+    lower_guarded_nullsafe_receiver(ctx, object, result_type, expr, |ctx, object| {
+        lower_method_call_with_receiver(ctx, object, method, args, Op::NullsafeMethodCall, expr)
+    })
+}
+
+/// Runs an already prepared call only for a non-null receiver, merging into nullable storage.
+pub(super) fn lower_guarded_nullsafe_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    result_type: PhpType,
+    expr: &Expr,
+    emit_call: impl FnOnce(&mut LoweringContext<'_, '_>, LoweredValue) -> LoweredValue,
+) -> LoweredValue {
     let temp_name = ctx.declare_hidden_temp(result_type.clone());
     let null_block = ctx.builder.create_named_block("nullsafe.method.null", Vec::new());
     let call_block = ctx.builder.create_named_block("nullsafe.method.call", Vec::new());
@@ -102,14 +115,7 @@ pub(super) fn lower_nullsafe_method_call_from_receiver(
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(call_block);
-    let call = lower_method_call_with_receiver(
-        ctx,
-        object,
-        method,
-        args,
-        Op::NullsafeMethodCall,
-        expr,
-    );
+    let call = emit_call(ctx, object);
     store_value_into_temp(ctx, &temp_name, result_type.clone(), call, expr.span);
     branch_to(ctx, merge);
 

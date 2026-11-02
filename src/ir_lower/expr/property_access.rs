@@ -1075,7 +1075,11 @@ pub(super) fn lower_dynamic_property_fetch(
             ctx, object, name, result_type, mode, known_native, expr,
         );
     }
-    let object = lower_expr(ctx, object);
+    let object = if mode.is_read() {
+        lower_expr(ctx, object)
+    } else {
+        lower_subscript_receiver_silently(ctx, object)
+    };
     lower_dynamic_property_fetch_from_value(ctx, object, property, mode, expr)
 }
 

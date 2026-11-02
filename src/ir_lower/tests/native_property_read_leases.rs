@@ -25,6 +25,10 @@ function nativeReadContainerMiss(int $index): mixed {
     $rows = [new SimpleXMLElement('<r/>')];
     return $rows[$index]->missing ?? 'fallback';
 }
+function nativeReadDynamicContainerMiss(int $index, string $name): mixed {
+    $rows = [new SimpleXMLElement('<r/>')];
+    return $rows[$index]->{$name} ?? 'fallback';
+}
 $xml = new SimpleXMLElement('<r/>');
 "#;
     let module = super::lower_source_at_for_target(
@@ -57,17 +61,19 @@ $xml = new SimpleXMLElement('<r/>');
         && matches!(inst.immediate, Some(Immediate::Data(name))
             if module.data.strings[name.as_raw() as usize] == "__elephc_property_probe")),
         "{target}: null coalesce receivers must skip native method dispatch");
-    let missing = module.functions.iter().find(|function| function.name == "nativeReadContainerMiss").unwrap();
-    let read = missing.instructions.iter().find(|inst| inst.op == Op::ArrayGetSilent)
-        .expect("a quiet probe must not warn about its absent array receiver");
-    assert!(!missing.instructions.iter().any(|inst| inst.op == Op::ArrayGet),
-        "{target}: the property probe must keep the array read silent");
-    assert!(missing.instructions.iter().any(|inst| inst.op == Op::IsNull
-        && (inst.operands == [read.result.unwrap()]
-            || inst.operands.first().is_some_and(|receiver| missing.instructions.iter().any(|acquire|
-                acquire.result == Some(*receiver) && acquire.op == Op::Acquire
-                    && acquire.operands == [read.result.unwrap()])))),
-        "{target}: the raw missing-container sentinel needs an explicit null branch");
+    for function_name in ["nativeReadContainerMiss", "nativeReadDynamicContainerMiss"] {
+        let missing = module.functions.iter().find(|function| function.name == function_name).unwrap();
+        let read = missing.instructions.iter().find(|inst| inst.op == Op::ArrayGetSilent)
+            .expect("a quiet probe must not warn about its absent array receiver");
+        assert!(!missing.instructions.iter().any(|inst| inst.op == Op::ArrayGet),
+            "{target}: the property probe must keep the array read silent");
+        assert!(missing.instructions.iter().any(|inst| inst.op == Op::IsNull
+            && (inst.operands == [read.result.unwrap()]
+                || inst.operands.first().is_some_and(|receiver| missing.instructions.iter().any(|acquire|
+                    acquire.result == Some(*receiver) && acquire.op == Op::Acquire
+                        && acquire.operands == [read.result.unwrap()])))),
+            "{target}: the raw missing-container sentinel needs an explicit null branch");
+    }
 }
 
 supported_target_cases!(native_property_read_leases, verify_native_property_read_leases);

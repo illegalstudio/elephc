@@ -248,6 +248,22 @@ fn emit_native_name_call(
     method: &str, expr: &Expr,
 ) -> LoweredValue {
     let result_type = method_call_result_type(ctx, object.value, method, Op::MethodCall, expr);
+    if matches!(method, "__elephc_property_probe" | "__elephc_property_presence")
+        && (value_is_nullable(ctx, object.value) || value_may_carry_container_miss(ctx, object.value))
+    {
+        return lower_guarded_nullsafe_receiver(ctx, object, result_type, expr, |ctx, object| {
+            emit_native_name_call_nonnull(ctx, object, name, method, expr)
+        });
+    }
+    emit_native_name_call_nonnull(ctx, object, name, method, expr)
+}
+
+/// Emits the native call after a silent receiver guard, keeping the prepared name borrowed.
+fn emit_native_name_call_nonnull(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, name: LoweredValue,
+    method: &str, expr: &Expr,
+) -> LoweredValue {
+    let result_type = method_call_result_type(ctx, object.value, method, Op::MethodCall, expr);
     let result_staging = prepublish_call_result(ctx, &result_type, expr.span);
     let (object, owner) = root_owned_call_operand(ctx, object, expr.span);
     let receiver = borrow_native_xml_property_receiver(ctx, object, expr.span);

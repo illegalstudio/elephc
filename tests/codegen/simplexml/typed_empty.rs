@@ -21,21 +21,28 @@ class NullableNativeProbeXml extends SimpleXMLElement {
 function nullableNativeProbe(?NullableNativeProbeXml $node): mixed {
     return $node->missing ?? 'fallback';
 }
+function nullableNativeName(): string { echo 'n|'; return 'a'; }
 echo nullableNativeProbe(new NullableNativeProbeXml('<r/>')), '|', nullableNativeProbe(null), '|';
 $rows = [new NullableNativeProbeXml('<r><a>ok</a></r>')];
 echo $rows[$argc + 20]->a ?? 'fb', '|';
 echo $rows[$argc - 1]->a ?? 'fb', '|';
 $named = ['known' => new NullableNativeProbeXml('<r/>')];
 echo $named[$argc > 0 ? 'absent' : 'known']->a ?? 'fb', '|';
-unset($rows, $named);
+$name = 'a';
+echo $rows[$argc + 20]->{$name} ?? 'fb', '|';
+echo $rows[$argc - 1]->{$name} ?? 'fb', '|';
+echo $named[$argc > 0 ? 'absent' : 'known']->{$name} ?? 'fb', '|';
+echo $rows[$argc + 20]->{nullableNativeName()} ?? 'fb', '|';
+var_dump(isset($rows[$argc + 20]->{$name}));
+unset($rows, $named, $name);
 "#;
     let renamed = source.replace("NullableNative", "EvalNullableNative")
         .replace("nullableNative", "evalNullableNative");
     let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
     assert_bundle_with(&[
-        BundleCase { name: "nullable_native_probe_aot", source, expected: "fallback|fallback|fb|ok|fb|" },
-        BundleCase { name: "nullable_native_probe_eval", source: &eval, expected: "fallback|fallback|fb|ok|fb|" },
+        BundleCase { name: "nullable_native_probe_aot", source, expected: "fallback|fallback|fb|ok|fb|fb|ok|fb|n|fb|bool(false)\n" },
+        BundleCase { name: "nullable_native_probe_eval", source: &eval, expected: "fallback|fallback|fb|ok|fb|fb|ok|fb|n|fb|bool(false)\n" },
     ], |source| {
         let out = compile_and_run_with_heap_debug(source);
         assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
