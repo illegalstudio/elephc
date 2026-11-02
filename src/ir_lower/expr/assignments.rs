@@ -640,6 +640,16 @@ fn lower_dynamic_property_assign_with_values(
     value: LoweredValue,
     span: Span,
 ) {
+    // A later eval can widen the name's local after this read was lowered, making the
+    // read detach an owned string. Publish its lifetime before any write guard can throw.
+    let (property, property_owner) = root_owned_call_operand(ctx, property, span);
+    let property = if property_owner.is_some() {
+        let ty = ctx.builder.value_php_type(property.value);
+        let borrowed = ctx.emit_value(Op::Borrow, vec![property.value], None, ty,
+            Op::Borrow.default_effects(), Some(span));
+        ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+        borrowed
+    } else { property };
     receiver.narrow_for_dynamic_assignment(ctx, property, value, span);
     let object = receiver.value;
     // The NAME is only known at run time, so a statically known receiver can still land this
@@ -685,7 +695,9 @@ fn lower_dynamic_property_assign_with_values(
     }
     crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
     if owns_value { crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span)); }
-    if ctx.value_is_owning_temporary(property) {
+    if let Some(owner) = property_owner {
+        retire_owned_call_operand(ctx, owner, span);
+    } else if ctx.value_needs_release_after_use(property) {
         crate::ir_lower::ownership::release_if_owned(ctx, property, Some(span));
     }
     receiver.finish(ctx, span);

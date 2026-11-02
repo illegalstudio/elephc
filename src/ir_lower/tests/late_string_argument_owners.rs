@@ -47,3 +47,36 @@ echo $argument;
 }
 
 supported_target_cases!(late_string_argument_owners, verify_late_string_argument_owner);
+
+/// A future eval barrier cannot leave an earlier throwing dynamic store's name unrooted.
+fn verify_late_property_name_owner(target: &str) {
+    let module = super::lower_source_at_for_target(r#"<?php
+class LateNameTarget { public int $value = 1; }
+function lateNameWrite(bool $reject): void {
+    $object = new LateNameTarget();
+    $name = 'value';
+    try { $object->{$name} = $reject ? 'bad' : 3; } catch (TypeError $error) {}
+    $code = $reject ? '$widened = 1;' : '';
+    eval($code);
+    echo $name;
+}
+lateNameWrite(false);
+"#, std::path::Path::new("main.php"), std::path::Path::new("."),
+        crate::codegen::platform::Target::parse(target).unwrap());
+    let function = module.functions.iter().find(|function| function.name == "lateNameWrite").unwrap();
+    let (store_index, store) = function.instructions.iter().enumerate()
+        .find(|(_, inst)| inst.op == Op::DynamicPropSet).expect("the runtime name must stay dynamic");
+    let borrowed = function.instructions.iter().find(|inst| inst.result == Some(store.operands[1])).unwrap();
+    assert_eq!(borrowed.op, Op::Borrow, "{target}: the write must borrow its independently rooted name");
+    let rooted = borrowed.operands[0];
+    let slot = function.instructions.iter().find_map(|inst| match inst.immediate {
+        Some(Immediate::LocalSlot(slot)) if inst.op == Op::StoreLocal && inst.operands == [rooted] => Some(slot),
+        _ => None,
+    }).expect("the name must have an unwind-visible owner slot");
+    assert!(function.instructions[..store_index].iter().any(|inst| inst.op == Op::PushCallOperandOwner
+        && inst.immediate == Some(Immediate::LocalSlot(slot))), "{target}: publish before the store can throw");
+    assert!(function.instructions[store_index + 1..].iter().any(|inst| inst.op == Op::ReleaseLocalSlot
+        && inst.immediate == Some(Immediate::LocalSlot(slot))), "{target}: retire after a successful store");
+}
+
+supported_target_cases!(late_property_name_owners, verify_late_property_name_owner);

@@ -1,5 +1,5 @@
 //! Purpose:
-//! Covers string argument leases whose caller storage widens after an earlier call.
+//! Covers string argument and property-name leases whose storage widens after an earlier use.
 //!
 //! Called from:
 //! - The executable runtime ownership CI suite.
@@ -9,6 +9,32 @@
 //! - A concrete-storage control preserves the caller value after each caught exception.
 
 use crate::support::*;
+
+/// Late-widened property names keep one owner across successful stores and caught type refusals.
+#[test]
+fn test_late_property_name_owners_bundle() {
+    let source = r#"<?php
+class LatePropertyNameBox { public int $value = 1; }
+function latePropertyNameStore(bool $reject): void {
+    $object = new LatePropertyNameBox();
+    $name = 'value';
+    try { $object->{$name} = $reject ? 'bad' : 3; }
+    catch (TypeError $error) { echo 'bad|'; unset($error); }
+    $code = $reject ? '$widened = 1;' : '';
+    eval($code);
+    echo $name, '|';
+    unset($name, $object, $code);
+}
+for ($i = 0; $i < 3; $i++) { latePropertyNameStore(false); latePropertyNameStore(true); }
+"#;
+    let (output, assembly) = compile_and_run_with_heap_debug_and_asm(source);
+    let expected = "value|bad|value|".repeat(3);
+    preserve_stdout_mismatches(source, &assembly, std::slice::from_ref(&output), &[&expected]);
+    assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, expected);
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+    assert!(!output.stderr.contains("Warning:"), "{}", output.stderr);
+}
 
 const SOURCE: &str = r#"<?php
 function lateLeaseAlias(string $value): string {
