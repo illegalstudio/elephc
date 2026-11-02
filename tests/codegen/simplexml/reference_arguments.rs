@@ -58,8 +58,17 @@ $dimensionCallback = replaceOneMissingXmlSelection(...);
 $dimensionCallback($xml->positionalDimension[0]);
 $dimensionCallback(value: $xml->namedDimension[0]);
 echo (int)isset($xml->positionalDimension), (int)isset($xml->namedDimension), '|';
+function runtimeMissingXmlReference(&$value, string $after): void { echo $after, '|'; $value = 'replacement'; }
+function runtimeMissingXmlValue($value, string $after): void { echo $after, '|'; }
+function runtimeMissingXmlCall(mixed $callback, SimpleXMLElement $root): void {
+    $callback($root->runtime, isset($root->runtime) ? 'created' : 'absent');
+    $callback(value: $root->runtimeNamed[0], after: isset($root->runtimeNamed) ? 'created' : 'absent');
+    echo (int)isset($root->runtime), (int)isset($root->runtimeNamed), '|';
+}
+runtimeMissingXmlCall(runtimeMissingXmlReference(...), new SimpleXMLElement('<r/>'));
+runtimeMissingXmlCall(runtimeMissingXmlValue(...), new SimpleXMLElement('<r/>'));
 "#;
-    let expected = "SimpleXMLElement:first|SimpleXMLElement:created|SimpleXMLElement:name|1:1:1|::|1:4|1111111|SimpleXMLElement|0|11|11|";
+    let expected = "SimpleXMLElement:first|SimpleXMLElement:created|SimpleXMLElement:name|1:1:1|::|1:4|1111111|SimpleXMLElement|0|11|11|created|created|11|absent|absent|00|";
     let native = format!("<?php {body}");
     let encoded = body.replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("<?php $xmlCapability = new SimpleXMLElement('<r/>'); unset($xmlCapability); $code = $argc > 0 ? '{encoded}' : ''; eval($code); unset($code);");

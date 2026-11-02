@@ -132,6 +132,18 @@ pub fn execute_context_is_callable(
     eval_is_callable_value(callback, None, context, values)
 }
 
+/// Reads a selected callback's passing mode without evaluating any of its PHP arguments.
+pub fn execute_context_callable_parameter_is_by_ref(
+    context: &mut ElephcEvalContext, callback: RuntimeCellHandle,
+    name: Option<&str>, position: usize, values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let callable = eval_callable(callback, context, values)?;
+    callable.with_values(context, values, |callable, context, values| {
+        let modes = CallArgumentModes::for_callable(&callable, context, values)?;
+        Ok(modes.by_reference(name, position))
+    })
+}
+
 /// Constructs a class declared in the shared eval context with prepared positional arguments.
 pub fn execute_context_new_object_outcome(
     context: &mut ElephcEvalContext,

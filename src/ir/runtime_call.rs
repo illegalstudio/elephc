@@ -81,6 +81,8 @@ pub enum RuntimeCallTarget {
     WeakReferenceGet,
     /// Tests whether a concrete object has a trusted attached internal SPL getter.
     SplStorageHasAttachedWriteFetch,
+    /// Snapshots whether a selected callable parameter binds by reference before argument effects.
+    CallableParameterIsByRef,
     /// Initializes a builtin Throwable constructor without assuming a compact receiver layout.
     ThrowableInitialize,
     /// Appends an exception to the END of another's `previous` chain, as php-src's
@@ -186,6 +188,10 @@ impl RuntimeCallTarget {
     /// Returns the logical signature shared by EIR validation and backend lowering.
     pub fn signature(self) -> Option<RuntimeCallSignature> {
         match self {
+            RuntimeCallTarget::CallableParameterIsByRef => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Mixed), IrType::Str, IrType::I64],
+                result: IrType::I64,
+            }),
             RuntimeCallTarget::SplStorageHasAttachedWriteFetch => Some(RuntimeCallSignature::Fixed {
                 parameters: &[IrType::Heap(IrHeapKind::Object)], result: IrType::I64,
         }),
@@ -323,6 +329,7 @@ impl RuntimeCallTarget {
     /// Returns the stable backend-neutral spelling used by textual EIR.
     pub fn as_eir(self) -> &'static str {
         match self {
+            RuntimeCallTarget::CallableParameterIsByRef => "callable.parameter_is_by_ref",
             RuntimeCallTarget::SplStorageHasAttachedWriteFetch => "object.spl_has_attached_write_fetch",
             RuntimeCallTarget::PhpextObjectRelease => "phpext.object_release",
             RuntimeCallTarget::PhpextPublishObjectRoots => "phpext.publish_object_roots",

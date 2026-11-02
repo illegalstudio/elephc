@@ -25,6 +25,8 @@ pub(super) fn lower(
     target: RuntimeCallTarget,
 ) -> Result<()> {
     match target {
+        RuntimeCallTarget::CallableParameterIsByRef =>
+            super::builtins::eval::lower_callable_parameter_is_by_ref(ctx, inst),
         RuntimeCallTarget::SplStorageHasAttachedWriteFetch => super::spl_storage_write_fetch::lower(ctx, inst),
         RuntimeCallTarget::PhpextObjectRelease => {
             ctx.load_value_to_result(expect_operand(inst, 0)?)?;

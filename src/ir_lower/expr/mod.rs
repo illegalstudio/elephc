@@ -112,6 +112,7 @@ pub(crate) use missing_string::loop_region_missing_string_names;
 mod closures;
 mod closure_calls;
 mod descriptor_calls;
+mod descriptor_native_selections;
 mod object_construction;
 mod property_access;
 mod property_probes;

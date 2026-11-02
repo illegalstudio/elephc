@@ -63,7 +63,7 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
         );
     }
     if instance_signature.is_none() {
-        let callable = root_descriptor_callback(ctx, callable, result_type, expr.span);
+        let mut callable = root_descriptor_callback(ctx, callable, result_type, expr.span);
         let arg_container = if descriptor_signature.is_some() {
             lower_descriptor_invoker_arg_container_for_call_user_func(
                 ctx,
@@ -73,7 +73,7 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
                 expr.span,
             )
         } else {
-            lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)
+            lower_untyped_descriptor_invoker_arg_container_for_callable(ctx, &mut callable, args, expr.span)
         };
         return emit_callable_descriptor_invoke(ctx, callable, arg_container, expr.span);
     }
@@ -235,8 +235,8 @@ pub(super) fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, 
         }
     }
     let result_type = dynamic_callable_result_type(ctx, lowered_callee.value, expr);
-    let lowered_callee = root_descriptor_callback(ctx, lowered_callee, result_type, expr.span);
-    let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span);
+    let mut lowered_callee = root_descriptor_callback(ctx, lowered_callee, result_type, expr.span);
+    let arg_container = lower_untyped_descriptor_invoker_arg_container_for_callable(ctx, &mut lowered_callee, args, expr.span);
     emit_callable_descriptor_invoke(ctx, lowered_callee, arg_container, expr.span)
 }
 

@@ -41,6 +41,28 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_callable_call_array(
     store_if_result(ctx, inst)
 }
 
+/// Captures a selected callback's reference flag before native argument effects.
+pub(in crate::codegen::lower_inst) fn lower_callable_parameter_is_by_ref(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction,
+) -> Result<()> {
+    let callback = expect_operand(inst, 0)?;
+    let name = expect_operand(inst, 1)?;
+    let position = expect_operand(inst, 2)?;
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    ensure_eval_context(ctx)?;
+    let target = ctx.emitter.target;
+    let position_arg = abi::int_arg_reg_name(target, 4);
+    ctx.load_value_to_reg(position, position_arg)?;
+    let name_pointer = abi::int_arg_reg_name(target, 2);
+    let name_length = abi::int_arg_reg_name(target, 3);
+    ctx.load_string_value_to_regs(name, name_pointer, name_length)?;
+    ctx.load_value_to_reg(callback, abi::int_arg_reg_name(target, 1))?;
+    load_eval_context_to_arg(ctx, 0);
+    abi::emit_call_label(ctx.emitter, &target.extern_symbol("__elephc_eval_callable_parameter_is_by_ref"));
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers an `is_callable()` probe through eval dynamic callable metadata.
 pub(in crate::codegen::lower_inst::builtins) fn lower_eval_is_callable(
     ctx: &mut FunctionContext<'_>,
