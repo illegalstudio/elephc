@@ -191,11 +191,11 @@
       "total": 329
     },
     "constants": {
-      "have": 1581,
+      "have": 1589,
       "total": 3181
     },
     "functions": {
-      "have": 1102,
+      "have": 1111,
       "total": 2169
     }
   },
@@ -626,8 +626,8 @@
       "docs": null,
       "extension": "ctype",
       "functions": {
-        "eval": 4,
-        "have": 4,
+        "eval": 11,
+        "have": 11,
         "total": 11
       },
       "name": "ctype",
@@ -1504,14 +1504,14 @@
       },
       "constants": {
         "eval": 142,
-        "have": 163,
+        "have": 171,
         "total": 400
       },
       "docs": null,
       "extension": "standard",
       "functions": {
-        "eval": 351,
-        "have": 390,
+        "eval": 353,
+        "have": 392,
         "total": 545
       },
       "name": "standard",

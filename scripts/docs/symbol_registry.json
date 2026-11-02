@@ -5083,6 +5083,26 @@
     },
     {
       "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "CODESET",
+      "route": "prelude",
+      "since": null,
+      "value": {
+        "target_dependent": "int"
+      }
+    },
+    {
+      "aot": {
         "kind": "language-intrinsic",
         "supported": true
       },
@@ -20936,6 +20956,146 @@
       "route": "predefined",
       "since": null,
       "value": 256
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "LC_ALL",
+      "route": "prelude",
+      "since": null,
+      "value": {
+        "target_dependent": "int"
+      }
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "LC_COLLATE",
+      "route": "prelude",
+      "since": null,
+      "value": {
+        "target_dependent": "int"
+      }
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "LC_CTYPE",
+      "route": "prelude",
+      "since": null,
+      "value": {
+        "target_dependent": "int"
+      }
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "LC_MESSAGES",
+      "route": "prelude",
+      "since": null,
+      "value": {
+        "target_dependent": "int"
+      }
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "LC_MONETARY",
+      "route": "prelude",
+      "since": null,
+      "value": {
+        "target_dependent": "int"
+      }
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "LC_NUMERIC",
+      "route": "prelude",
+      "since": null,
+      "value": {
+        "target_dependent": "int"
+      }
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "LC_TIME",
+      "route": "prelude",
+      "since": null,
+      "value": {
+        "target_dependent": "int"
+      }
     },
     {
       "aot": {

@@ -181,6 +181,48 @@ expect_builtin_arity_error!(
 );
 
 expect_builtin_arity_error!(
+    test_error_ctype_cntrl_wrong_args,
+    "<?php ctype_cntrl();",
+    "ctype_cntrl() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_ctype_graph_wrong_args,
+    "<?php ctype_graph();",
+    "ctype_graph() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_ctype_lower_wrong_args,
+    "<?php ctype_lower();",
+    "ctype_lower() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_ctype_print_wrong_args,
+    "<?php ctype_print();",
+    "ctype_print() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_ctype_punct_wrong_args,
+    "<?php ctype_punct();",
+    "ctype_punct() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_ctype_upper_wrong_args,
+    "<?php ctype_upper();",
+    "ctype_upper() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_ctype_xdigit_wrong_args,
+    "<?php ctype_xdigit();",
+    "ctype_xdigit() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
     test_error_chop_wrong_args,
     "<?php chop();",
     "chop() takes 1 or 2 arguments"

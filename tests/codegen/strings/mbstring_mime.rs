@@ -393,7 +393,7 @@ echo mb_encode_mimeheader("café", "UTF-8", null), "\n";
 "#;
     let expected = "mb_encode_mimeheader() expects at least 1 argument, 0 given\nmb_encode_mimeheader() expects at most 5 arguments, 6 given\nmb_encode_mimeheader(): Argument #1 ($string) must be of type string, array given\nmb_encode_mimeheader(): Argument #2 ($charset) \"UTF7-IMAP\" cannot be used for MIME header encoding\nmb_encode_mimeheader(): Passing null to parameter #2 ($charset) of type ?string is deprecated\nmb_encode_mimeheader(): Argument #2 ($charset) must be a valid encoding, \"\" given\nmb_encode_mimeheader(): Passing null to parameter #2 ($charset) of type ?string is deprecated\nmb_encode_mimeheader(): Passing null to parameter #3 ($transfer_encoding) of type ?string is deprecated\nmb_encode_mimeheader(): Argument #2 ($charset) must be a valid encoding, \"\" given\nmb_encode_mimeheader(): Passing null to parameter #3 ($transfer_encoding) of type ?string is deprecated\n=?UTF-8?B?Y2Fmw6k=?=\n";
     let stdout: String = expected.lines().filter(|line| !line.contains("Passing null")).map(|line| format!("{line}\n")).collect();
-    let stderr: String = expected.lines().filter(|line| line.contains("Passing null")).map(|line| format!("Deprecated: {line}\n")).collect();
+    let stderr: String = expected.lines().filter(|line| line.contains("Passing null")).map(|line| format!("\nDeprecated: {line}\n")).collect();
     for eval in [false, true] {
         let output = compile_and_run_capture(&program(body, eval));
         assert!(output.success, "{}", output.stderr);

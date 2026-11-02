@@ -9654,6 +9654,124 @@
         {
           "by_ref": false,
           "default": null,
+          "name": "item",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "__elephc_nl_langinfo",
+    "description": "Reads one libc locale information item for the nl_langinfo() prelude.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_nl_langinfo` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/__elephc_nl_langinfo.rs"
+    },
+    "module": "elephc",
+    "name": "__elephc_nl_langinfo",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_nl_langinfo"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_nl_langinfo"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "item",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "return_type": "string|false",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_nl_langinfo",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
           "name": "value",
           "optional": false,
           "type": "mixed"
@@ -14309,6 +14427,256 @@
     },
     "since": null,
     "slug": "__elephc_reflection_class_build",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "category",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "__elephc_setlocale_query",
+    "description": "Queries one libc locale category for the setlocale() prelude.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_setlocale_query` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/__elephc_setlocale_query.rs"
+    },
+    "module": "elephc",
+    "name": "__elephc_setlocale_query",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_setlocale_query"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_setlocale_query"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "category",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "return_type": "string|false",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_setlocale_query",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "category",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "locale",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "__elephc_setlocale_set",
+    "description": "Sets one libc locale category for the setlocale() prelude.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_setlocale_set` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/__elephc_setlocale_set.rs"
+    },
+    "module": "elephc",
+    "name": "__elephc_setlocale_set",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_setlocale_set"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_setlocale_set"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "category",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "locale",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "string|false",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_setlocale_set",
     "sub_area": "System"
   },
   {
@@ -36717,7 +37085,7 @@
           "default": null,
           "name": "text",
           "optional": false,
-          "type": "string"
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -36744,7 +37112,7 @@
           "default": null,
           "name": "text",
           "optional": false,
-          "type": "string"
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -36776,12 +37144,14 @@
     "semantics": {
       "argument_lowering": "standard",
       "callable": {
-        "kind": "static_only",
-        "reason": "typed backend operation has no runtime-selected wrapper contract"
+        "kind": "dynamic_target",
+        "target": "ctype_alnum"
       },
       "effects": {
         "kind": "static",
-        "names": []
+        "names": [
+          "may_warn"
+        ]
       },
       "lowering": {
         "kind": "runtime_call",
@@ -36819,7 +37189,7 @@
           "default": null,
           "name": "text",
           "optional": false,
-          "type": "string"
+          "type": "mixed"
         }
       ],
       "return_type": "bool",
@@ -36838,7 +37208,7 @@
           "default": null,
           "name": "text",
           "optional": false,
-          "type": "string"
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -36865,7 +37235,7 @@
           "default": null,
           "name": "text",
           "optional": false,
-          "type": "string"
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -36897,12 +37267,14 @@
     "semantics": {
       "argument_lowering": "standard",
       "callable": {
-        "kind": "static_only",
-        "reason": "typed backend operation has no runtime-selected wrapper contract"
+        "kind": "dynamic_target",
+        "target": "ctype_alpha"
       },
       "effects": {
         "kind": "static",
-        "names": []
+        "names": [
+          "may_warn"
+        ]
       },
       "lowering": {
         "kind": "runtime_call",
@@ -36940,7 +37312,7 @@
           "default": null,
           "name": "text",
           "optional": false,
-          "type": "string"
+          "type": "mixed"
         }
       ],
       "return_type": "bool",
@@ -36959,7 +37331,130 @@
           "default": null,
           "name": "text",
           "optional": false,
-          "type": "string"
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Type",
+    "canonical_name": "ctype_cntrl",
+    "description": "Checks if all characters in the string are control characters.",
+    "eval": {
+      "adapter_reason": "interpreter-specific-value-semantics",
+      "area": "string",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/string/ctype_cntrl.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "text",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.ctype_cntrl` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/string/ctype_cntrl.rs"
+    },
+    "module": "ctype",
+    "name": "ctype_cntrl",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic_target",
+        "target": "ctype_cntrl"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "may_warn"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "ctype_cntrl"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "ctype_cntrl"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "text",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "ctype_cntrl",
+    "sub_area": "Ctype"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "text",
+          "optional": false,
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -36986,7 +37481,7 @@
           "default": null,
           "name": "text",
           "optional": false,
-          "type": "string"
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -37018,12 +37513,14 @@
     "semantics": {
       "argument_lowering": "standard",
       "callable": {
-        "kind": "static_only",
-        "reason": "typed backend operation has no runtime-selected wrapper contract"
+        "kind": "dynamic_target",
+        "target": "ctype_digit"
       },
       "effects": {
         "kind": "static",
-        "names": []
+        "names": [
+          "may_warn"
+        ]
       },
       "lowering": {
         "kind": "runtime_call",
@@ -37061,7 +37558,7 @@
           "default": null,
           "name": "text",
           "optional": false,
-          "type": "string"
+          "type": "mixed"
         }
       ],
       "return_type": "bool",
@@ -37080,7 +37577,499 @@
           "default": null,
           "name": "text",
           "optional": false,
-          "type": "string"
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Type",
+    "canonical_name": "ctype_graph",
+    "description": "Checks if all characters in the string are printable characters except space.",
+    "eval": {
+      "adapter_reason": "interpreter-specific-value-semantics",
+      "area": "string",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/string/ctype_graph.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "text",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.ctype_graph` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/string/ctype_graph.rs"
+    },
+    "module": "ctype",
+    "name": "ctype_graph",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic_target",
+        "target": "ctype_graph"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "may_warn"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "ctype_graph"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "ctype_graph"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "text",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "ctype_graph",
+    "sub_area": "Ctype"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "text",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Type",
+    "canonical_name": "ctype_lower",
+    "description": "Checks if all characters in the string are lowercase.",
+    "eval": {
+      "adapter_reason": "interpreter-specific-value-semantics",
+      "area": "string",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/string/ctype_lower.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "text",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.ctype_lower` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/string/ctype_lower.rs"
+    },
+    "module": "ctype",
+    "name": "ctype_lower",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic_target",
+        "target": "ctype_lower"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "may_warn"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "ctype_lower"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "ctype_lower"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "text",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "ctype_lower",
+    "sub_area": "Ctype"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "text",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Type",
+    "canonical_name": "ctype_print",
+    "description": "Checks if all characters in the string are printable.",
+    "eval": {
+      "adapter_reason": "interpreter-specific-value-semantics",
+      "area": "string",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/string/ctype_print.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "text",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.ctype_print` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/string/ctype_print.rs"
+    },
+    "module": "ctype",
+    "name": "ctype_print",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic_target",
+        "target": "ctype_print"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "may_warn"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "ctype_print"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "ctype_print"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "text",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "ctype_print",
+    "sub_area": "Ctype"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "text",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Type",
+    "canonical_name": "ctype_punct",
+    "description": "Checks if all characters in the string are punctuation characters.",
+    "eval": {
+      "adapter_reason": "interpreter-specific-value-semantics",
+      "area": "string",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/string/ctype_punct.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "text",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.ctype_punct` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/string/ctype_punct.rs"
+    },
+    "module": "ctype",
+    "name": "ctype_punct",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic_target",
+        "target": "ctype_punct"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "may_warn"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "ctype_punct"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "ctype_punct"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "text",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "ctype_punct",
+    "sub_area": "Ctype"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "text",
+          "optional": false,
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -37107,7 +38096,7 @@
           "default": null,
           "name": "text",
           "optional": false,
-          "type": "string"
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -37139,12 +38128,14 @@
     "semantics": {
       "argument_lowering": "standard",
       "callable": {
-        "kind": "static_only",
-        "reason": "typed backend operation has no runtime-selected wrapper contract"
+        "kind": "dynamic_target",
+        "target": "ctype_space"
       },
       "effects": {
         "kind": "static",
-        "names": []
+        "names": [
+          "may_warn"
+        ]
       },
       "lowering": {
         "kind": "runtime_call",
@@ -37182,7 +38173,7 @@
           "default": null,
           "name": "text",
           "optional": false,
-          "type": "string"
+          "type": "mixed"
         }
       ],
       "return_type": "bool",
@@ -37190,6 +38181,252 @@
     },
     "since": null,
     "slug": "ctype_space",
+    "sub_area": "Ctype"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "text",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Type",
+    "canonical_name": "ctype_upper",
+    "description": "Checks if all characters in the string are uppercase.",
+    "eval": {
+      "adapter_reason": "interpreter-specific-value-semantics",
+      "area": "string",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/string/ctype_upper.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "text",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.ctype_upper` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/string/ctype_upper.rs"
+    },
+    "module": "ctype",
+    "name": "ctype_upper",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic_target",
+        "target": "ctype_upper"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "may_warn"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "ctype_upper"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "ctype_upper"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "text",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "ctype_upper",
+    "sub_area": "Ctype"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "text",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Type",
+    "canonical_name": "ctype_xdigit",
+    "description": "Checks if all characters in the string are hexadecimal digits.",
+    "eval": {
+      "adapter_reason": "interpreter-specific-value-semantics",
+      "area": "string",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/string/ctype_xdigit.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "text",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.ctype_xdigit` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/string/ctype_xdigit.rs"
+    },
+    "module": "ctype",
+    "name": "ctype_xdigit",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic_target",
+        "target": "ctype_xdigit"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "may_warn"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "ctype_xdigit"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "ctype_xdigit"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "text",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "ctype_xdigit",
     "sub_area": "Ctype"
   },
   {
@@ -111037,6 +112274,87 @@
   },
   {
     "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "item",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "String",
+    "canonical_name": "nl_langinfo",
+    "description": "Returns locale information for one item; elephc exposes the portable CODESET query.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "string",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/locale/nl_langinfo.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "item",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/locale_prelude.rs",
+      "codegen_function": "nl_langinfo",
+      "notes": [
+        "Implemented by the compiler-injected locale prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_locale.rs"
+    },
+    "module": "standard",
+    "name": "nl_langinfo",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "item",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "return_type": "string|false",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "nl_langinfo",
+    "sub_area": "String"
+  },
+  {
+    "aot": {
       "kind": "registry",
       "params": [
         {
@@ -130838,6 +132156,108 @@
     "since": null,
     "slug": "setcookie",
     "sub_area": "Web"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "category",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "locales",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": "rest"
+    },
+    "area": "String",
+    "canonical_name": "setlocale",
+    "description": "Sets the process locale from one or more candidates and returns the active locale, or false on failure.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "string",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/locale/setlocale.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "category",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "locales",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": "rest"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/locale_prelude.rs",
+      "codegen_function": "setlocale",
+      "notes": [
+        "Implemented by the compiler-injected locale prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_locale.rs"
+    },
+    "module": "standard",
+    "name": "setlocale",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "category",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "locales",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "string|false",
+      "variadic": "rest"
+    },
+    "since": null,
+    "slug": "setlocale",
+    "sub_area": "String"
   },
   {
     "aot": {

@@ -10,10 +10,17 @@ sidebar:
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
 | [`boolval()`](./type/boolval.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
-| [`ctype_alnum()`](./type/ctype_alnum.md) | `(string $text): bool` | `bool` | ✓ | ✓ |
-| [`ctype_alpha()`](./type/ctype_alpha.md) | `(string $text): bool` | `bool` | ✓ | ✓ |
-| [`ctype_digit()`](./type/ctype_digit.md) | `(string $text): bool` | `bool` | ✓ | ✓ |
-| [`ctype_space()`](./type/ctype_space.md) | `(string $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_alnum()`](./type/ctype_alnum.md) | `(mixed $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_alpha()`](./type/ctype_alpha.md) | `(mixed $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_cntrl()`](./type/ctype_cntrl.md) | `(mixed $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_digit()`](./type/ctype_digit.md) | `(mixed $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_graph()`](./type/ctype_graph.md) | `(mixed $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_lower()`](./type/ctype_lower.md) | `(mixed $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_print()`](./type/ctype_print.md) | `(mixed $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_punct()`](./type/ctype_punct.md) | `(mixed $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_space()`](./type/ctype_space.md) | `(mixed $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_upper()`](./type/ctype_upper.md) | `(mixed $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_xdigit()`](./type/ctype_xdigit.md) | `(mixed $text): bool` | `bool` | ✓ | ✓ |
 | [`floatval()`](./type/floatval.md) | `(mixed $value): float` | `float` | ✓ | ✓ |
 | [`get_resource_id()`](./type/get_resource_id.md) | `(resource $resource): int` | `int` | ✓ | ✓ |
 | [`get_resource_type()`](./type/get_resource_type.md) | `(resource $resource): string` | `string` | ✓ | ✓ |
