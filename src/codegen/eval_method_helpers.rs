@@ -116,6 +116,7 @@ const BUILTIN_THROWABLE_METHOD_CLASSES: &[&str] = &[
     "UnexpectedValueException",
     "ReflectionException",
     "JsonException",
+    "DOMException",
     "FiberError",
 ];
 const BUILTIN_THROWABLE_GET_MESSAGE_LABEL: &str = "__elephc_eval_builtin_throwable_getmessage";

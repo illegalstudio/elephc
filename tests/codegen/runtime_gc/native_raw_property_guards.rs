@@ -1,5 +1,5 @@
 //! Purpose:
-//! Checks nullable object diagnostics at native ReflectionProperty raw writes.
+//! Checks native reflected targets and DOM exception methods across eval boundaries.
 //!
 //! Called from:
 //! - Runtime GC integration tests on the executable CI targets.
@@ -35,6 +35,20 @@ fn test_reflection_property_target_owners_survive_argument_evaluation() {
 class ReflectionLeaseTarget {
     public string $value = '';
     public function __destruct() { echo 'drop:', $this->value, '|'; }
+}
+
+/// Eval can inspect an AOT DOMException's inherited accessors without losing native owners.
+#[test]
+fn test_native_dom_exception_accessors_from_eval() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$failure = new DOMException('Invalid Character Error', 5, new Exception('previous'));
+$source = $argc > 0 ? 'echo get_class($failure), ":", $failure->getCode(), ":", $failure->getMessage(), ":", $failure->getPrevious()->getMessage();' : '';
+eval($source);
+unset($failure, $source);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "DOMException:5:Invalid Character Error:previous");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 function reflectionLeaseThrow(): string { throw new RuntimeException('rhs'); }
 $property = new ReflectionProperty(ReflectionLeaseTarget::class, 'value');
