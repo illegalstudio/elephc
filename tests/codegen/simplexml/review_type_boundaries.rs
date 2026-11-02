@@ -166,3 +166,35 @@ fn test_simplexml_review_type_boundaries_bundle() {
         out.stdout
     });
 }
+
+/// Retains the native boundary corpus independently of the shared program's later eval barrier.
+#[test]
+fn test_simplexml_type_boundaries_native_bundle() {
+    if skip_without_xml_native("test_simplexml_type_boundaries_native_bundle") { return; }
+    let source = format!("{BOUNDARIES}\n{}\n{}",
+        REFERENCES.strip_prefix("<?php").unwrap(), GENERATORS.strip_prefix("<?php").unwrap());
+    let expected = format!("{BOUNDARIES_EXPECTED}{REFERENCES_EXPECTED}{GENERATORS_EXPECTED}");
+    assert_independent_boundary_program(&source, &expected);
+}
+
+/// Isolates eval boundary owners without dropping the original shared native/eval regression.
+#[test]
+fn test_simplexml_type_boundaries_eval_bundle() {
+    if skip_without_xml_native("test_simplexml_type_boundaries_eval_bundle") { return; }
+    let source = opaque_fixture(&BOUNDARIES.replace("BoundaryXml", "EvalBoundaryXml"));
+    let source = format!("<?php class IndependentBoundaryXmlCapability extends SimpleXMLElement {{}}\n{}",
+        source.strip_prefix("<?php").unwrap());
+    assert_independent_boundary_program(&source, &BOUNDARIES_EXPECTED.replace("BoundaryXml", "EvalBoundaryXml"));
+}
+
+/// Keeps wrong-output assembly and strict per-program heap and warning checks for attribution.
+fn assert_independent_boundary_program(source: &str, expected: &str) {
+    let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(source, &[&[]]);
+    preserve_stdout_mismatches(source, &assembly, &runs, &[expected]);
+    drop(assembly);
+    let output = &runs[0];
+    assert!(output.success, "status={} stdout={} stderr={}", output.status, output.stdout, output.stderr);
+    assert_eq!(output.stdout, expected);
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+    assert!(!output.stderr.contains("Warning:"), "{}", output.stderr);
+}
