@@ -22,6 +22,7 @@ mod mixed_payload;
 mod mixed_symbol;
 mod property_payload;
 mod canonical;
+pub(crate) use canonical::resolve_scalar_property;
 pub(crate) use property_unset::emit_owned_property_unset;
 pub(crate) use mixed_payload::follow_mixed_reference_slot;
 pub(crate) use mixed_symbol::publish_mixed_symbol;

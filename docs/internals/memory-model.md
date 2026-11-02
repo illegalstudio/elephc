@@ -583,6 +583,14 @@ uninitialized cells and raw `Iterable` payloads retain their existing ABI.
 The shape probe returns a borrowed wrapper and runs again on every read rather
 than caching a result across PHP callbacks. Typed scalar and union promotion
 still requires the matching assignment validators and property-source lifecycle.
+JSON and serialization/rendering rows separately mark owned scalar cells eligible
+for that shape check. Borrowed constructor slots have no such flag. These leaf
+walkers preserve their raw payload path and resolve a canonical scalar child as
+Mixed, without calls or unrelated register clobbers. Object projections recover
+the original managed cell before testing its visible owners; an interior wrapper
+child address must never be used as a cell header. Shared canonical scalars then
+retain the wrapper, while singleton wrappers copy their PHP value. Raw scalar
+projection never creates a wrapper through this path.
 
 Resolved reference-returning callees produce two distinct things at the `return`,
 and keeping them apart is what makes the boundary correct. `AcquireRefCell`

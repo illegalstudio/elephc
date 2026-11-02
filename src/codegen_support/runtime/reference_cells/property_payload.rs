@@ -26,6 +26,7 @@ pub(crate) fn resolve(
             emitter.label(&reference);
             emitter.instruction(&format!("ldr {address}, [{address}]"));        // follow the object's native reference-cell pointer
             emitter.instruction(&format!("ldr {marker}, [{address}]"));         // the low word is either the value or the uninitialized sentinel
+            super::resolve_scalar_property(emitter, address, tag, marker, prefix);
             emitter.label(&done);
             emitter.instruction(&format!("and {tag}, {tag}, #255"));            // keep storage flags out of value dispatch
         }
@@ -37,6 +38,7 @@ pub(crate) fn resolve(
             emitter.label(&reference);
             emitter.instruction(&format!("mov {address}, QWORD PTR [{address}]")); // follow the object's native reference-cell pointer
             emitter.instruction(&format!("mov {marker}, QWORD PTR [{address}]")); // the low word is either the value or the uninitialized sentinel
+            super::resolve_scalar_property(emitter, address, tag, marker, prefix);
             emitter.label(&done);
             emitter.instruction(&format!("and {tag}, 255"));                    // keep storage flags out of value dispatch
         }
@@ -46,7 +48,7 @@ pub(crate) fn resolve(
 #[cfg(test)]
 mod tests {
     use crate::codegen_support::{platform::Target, sentinels::{SERPROP_REFERENCE_PROPERTY_FLAG,
-        SERPROP_MIXED_REFERENCE_PROPERTY_FLAG}};
+        SERPROP_MIXED_REFERENCE_PROPERTY_FLAG, CANONICAL_SCALAR_PROPERTY_FLAG}};
 
     /// Serialization rows retain each logical tag independently of native cell indirection.
     #[test]
@@ -55,6 +57,7 @@ mod tests {
             public mixed $value = 1; public mixed $missing; public int|string $choice = 1; \
             public function &textRef(): string { return $this->text; } \
             public function &choiceRef(): int|string { return $this->choice; } } \
+            class BorrowedSerializationCell { public function __construct(public string &$text) {} } \
             $code = $argc > 0 ? '' : 'echo 1;'; eval($code);";
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let target = Target::parse(name).unwrap();
@@ -70,14 +73,21 @@ mod tests {
                 "{name}: Mixed value and uninitialized slots remain distinct from their cell pointers");
             assert_eq!(rows.matches(&format!("    .quad {}\n", SERPROP_REFERENCE_PROPERTY_FLAG | 7)).count(), 1,
                 "{name}: the constrained union keeps its existing payload representation");
-            assert!(rows.contains(&format!("    .quad {}\n", SERPROP_REFERENCE_PROPERTY_FLAG | 1)),
-                "{name}: a raw native string cell keeps the string payload tag");
+            let scalar_tag = SERPROP_REFERENCE_PROPERTY_FLAG | CANONICAL_SCALAR_PROPERTY_FLAG | 1;
+            assert!(rows.contains(&format!("    .quad {scalar_tag}\n")),
+                "{name}: owned scalar metadata authenticates physical shape without changing the logical tag");
+            let borrowed_class = &module.class_infos["BorrowedSerializationCell"];
+            let marker = format!("_class_serprop_{}:\n", borrowed_class.class_id);
+            let borrowed = assembly.split_once(&marker).unwrap().1
+                .split_once(".globl _class_serprop_declaring_").unwrap().0;
+            assert!(borrowed.contains(&format!("    .quad {}\n", SERPROP_REFERENCE_PROPERTY_FLAG | 1)),
+                "{name}: borrowed constructor slots must never grant header access");
             let marker = format!("_class_vd_desc_{}:\n", class.class_id);
             let dump = assembly.split_once(&marker).unwrap().1
                 .split_once(".globl _class_prop_desc_").unwrap().0;
             assert_eq!(dump.matches(&format!("    .quad {}\n", SERPROP_REFERENCE_PROPERTY_FLAG | 7)).count(), 3,
                 "{name}: dump and serialization agree on Mixed cell indirection");
-            assert!(dump.contains(&format!("    .quad {}\n", SERPROP_REFERENCE_PROPERTY_FLAG | 1)),
+            assert!(dump.contains(&format!("    .quad {scalar_tag}\n")),
                 "{name}: dump preserves the raw string's logical tag");
         }
     }

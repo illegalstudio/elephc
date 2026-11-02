@@ -33,7 +33,8 @@ echo json_encode($object);
         let marker = format!("_class_json_desc_{}:\n", class.class_id);
         let descriptor = assembly.split_once(&marker).unwrap().1;
         let descriptor = descriptor.split_once(".globl _class_gc_desc_").unwrap().0;
-        let tag = super::JSON_REFERENCE_PROPERTY_FLAG | super::JSON_DECLARED_PROPERTY_FLAG | 1;
+        let tag = super::JSON_REFERENCE_PROPERTY_FLAG | super::JSON_DECLARED_PROPERTY_FLAG
+            | crate::codegen_support::sentinels::CANONICAL_SCALAR_PROPERTY_FLAG | 1;
         assert!(descriptor.contains(&format!("    .quad {tag}\n")), "{name}: string tag survives promotion");
         let mut emitter = Emitter::new(target);
         super::emit_json_encode_object(&mut emitter);

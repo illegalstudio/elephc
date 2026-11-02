@@ -11,6 +11,85 @@
 
 use super::*;
 
+/// Resolves an owned scalar row to its canonical child without calls or unrelated scratch registers.
+/// The metadata flag proves the cell is managed; borrowed constructor slots must never carry it.
+pub(crate) fn resolve_scalar_property(
+    emitter: &mut Emitter, address: &str, tag: &str, marker: &str, prefix: &str,
+) {
+    use crate::codegen_support::sentinels::CANONICAL_SCALAR_PROPERTY_FLAG;
+    debug_assert!(address != tag && address != marker && tag != marker);
+    let raw = format!("{prefix}_scalar_raw");
+    let done = format!("{prefix}_scalar_done");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("tst {tag}, #{CANONICAL_SCALAR_PROPERTY_FLAG}"));// only metadata-authenticated scalar cells permit header inspection
+            emitter.instruction(&format!("b.eq {done}"));                       // preserve borrowed and container-specific reference layouts
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("test {tag}, {CANONICAL_SCALAR_PROPERTY_FLAG}"));// only metadata-authenticated scalar cells permit header inspection
+            emitter.instruction(&format!("jz {done}"));                         // preserve borrowed and container-specific reference layouts
+        }
+    }
+    abi::emit_push_reg(emitter, tag);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr {tag}, [{address}, #-8]"));       // inspect the metadata-authenticated cell header
+            emitter.instruction(&format!("ubfx {tag}, {tag}, #8, #7"));         // isolate the live cell's physical payload descriptor
+            emitter.instruction(&format!("cmp {tag}, #7"));                     // promoted scalar cells own a Mixed PHPRef wrapper
+            emitter.instruction(&format!("b.ne {raw}"));                        // raw scalars and strings retain their logical row tag
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov {tag}, QWORD PTR [{address} - 8]"));// inspect the metadata-authenticated cell header
+            emitter.instruction(&format!("shr {tag}, 8"));                      // position the live cell's physical payload descriptor
+            emitter.instruction(&format!("and {tag}, 127"));                    // remove heap and collector flags
+            emitter.instruction(&format!("cmp {tag}, 7"));                      // promoted scalar cells own a Mixed PHPRef wrapper
+            emitter.instruction(&format!("jne {raw}"));                         // raw scalars and strings retain their logical row tag
+        }
+    }
+    crate::codegen_support::sentinels::emit_branch_if_null_container(emitter, marker, tag, &raw);
+    abi::emit_load_int_immediate(emitter, tag, UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {marker}, {tag}"));               // unset owned cells carry a low-word initialization sentinel
+            emitter.instruction(&format!("b.eq {raw}"));                        // preserve uninitialized detection before any wrapper dereference
+            emitter.instruction(&format!("ldrb {tag}, [{marker}, #-8]", tag = word_register(tag)));// confirm the physical Mixed allocation kind
+            emitter.instruction(&format!("cmp {tag}, #5"));                     // raw Iterable containers are never canonical scalar wrappers
+            emitter.instruction(&format!("b.ne {raw}"));                        // leave other managed payload shapes unchanged
+            emitter.instruction(&format!("ldr {tag}, [{marker}]"));             // inspect the wrapper's logical tag
+            emitter.instruction(&format!("cmp {tag}, #7"));                     // canonical aliases own a nested Mixed child
+            emitter.instruction(&format!("b.ne {raw}"));                        // ordinary value boxes are not persistent aliases
+            emitter.instruction(&format!("ldr {tag}, [{marker}, #16]"));        // inspect the persistent-reference ABI marker
+            emitter.instruction(&format!("cmp {tag}, #1"));                     // only marker one owns reference identity
+            emitter.instruction(&format!("b.ne {raw}"));                        // preserve ordinary nested Mixed values
+            emitter.instruction(&format!("add {address}, {marker}, #8"));       // expose the canonical child's owning pointer slot
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {marker}, {tag}"));               // unset owned cells carry a low-word initialization sentinel
+            emitter.instruction(&format!("je {raw}"));                          // preserve uninitialized detection before any wrapper dereference
+            emitter.instruction(&format!("cmp BYTE PTR [{marker} - 8], 5"));    // confirm the physical Mixed allocation kind
+            emitter.instruction(&format!("jne {raw}"));                         // leave other managed payload shapes unchanged
+            emitter.instruction(&format!("cmp QWORD PTR [{marker}], 7"));       // canonical aliases own a nested Mixed child
+            emitter.instruction(&format!("jne {raw}"));                         // ordinary value boxes are not persistent aliases
+            emitter.instruction(&format!("cmp QWORD PTR [{marker} + 16], 1"));  // only marker one owns reference identity
+            emitter.instruction(&format!("jne {raw}"));                         // preserve ordinary nested Mixed values
+            emitter.instruction(&format!("lea {address}, [{marker} + 8]"));     // expose the canonical child's owning pointer slot
+        }
+    }
+    abi::emit_pop_reg(emitter, tag);
+    abi::emit_load_int_immediate(emitter, tag, 7);
+    abi::emit_load_from_address(emitter, marker, address, 0);
+    abi::emit_jump(emitter, &done);
+    emitter.label(&raw);
+    abi::emit_pop_reg(emitter, tag);
+    abi::emit_load_from_address(emitter, marker, address, 0);
+    emitter.label(&done);
+}
+
+/// Selects the 32-bit ARM register spelling used by a byte-sized heap-kind load.
+fn word_register(register: &str) -> String {
+    format!("w{}", register.strip_prefix('x').expect("ARM metadata tag uses an integer register"))
+}
+
 /// Returns a live marker-one Mixed wrapper, or zero for every raw or uninitialized layout.
 pub(super) fn emit(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
@@ -97,6 +176,26 @@ mod tests {
             assert_eq!(assembly.matches("__rt_reference_cell_owner").count(), 1,
                 "{target}: shape lookup must use the allocator identity index once");
             assert!(!assembly.contains("__rt_incref"), "{target}: the probe returns a borrowed wrapper");
+        }
+    }
+
+    /// Metadata walks stay leaf helpers and authenticate ownership before inspecting any header.
+    #[test]
+    fn canonical_scalar_property_resolution_preserves_leaf_abi_on_every_target() {
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = crate::codegen_support::platform::Target::parse(target).unwrap();
+            let mut emitter = Emitter::new(target);
+            let (address, tag, marker) = if target.arch == Arch::AArch64 { ("x14", "x17", "x15") }
+                else { ("r10", "r9", "r11") };
+            resolve_scalar_property(&mut emitter, address, tag, marker, "scalar_row_probe");
+            let assembly = emitter.output();
+            let metadata_guard = assembly.find("1024").unwrap();
+            let header = assembly.find(if target.arch == Arch::AArch64 { "#-8]" } else { " - 8]" }).unwrap();
+            assert!(metadata_guard < header, "{target:?}: borrowed rows must skip header reads");
+            assert!(!assembly.lines().any(|line| matches!(line.split_whitespace().next(), Some("bl" | "call"))),
+                "{target:?}: leaf renderers must not gain hidden calls or clobbers");
+            assert!(assembly.contains("scalar_row_probe_scalar_raw"),
+                "{target:?}: raw and uninitialized cells retain their original address and tag");
         }
     }
 }
