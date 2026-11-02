@@ -294,7 +294,7 @@ A nullable local must also be bound on every path reaching its use before its re
 
 Existing locals assigned inside nullsafe arguments or dynamic member names keep the skipped and evaluated alternatives in following reads. The assignment runs only when the receiver is non-null.
 
-An `instanceof` check against a second interface grants that interface inside the guarded branch. After the branch, the receiver keeps its original interface contract unless an assignment changes it.
+An `instanceof` check against a second interface grants that interface inside the guarded branch. After the branch, the receiver keeps its original interface contract unless an assignment changes it. A receiver whose concrete subclass is already known keeps that subclass when probing a parent class or an implemented interface.
 
 When a compound guard leaves several alternatives for an original `mixed` value, the read remains `mixed`. For example, `is_int($value) || is_string($value)` preserves existing weak conversions at parameters, returns and properties, including values copied into locals or captured by closures. The same applies to nullable alternatives and objects implementing `Stringable`. A single scalar guard still narrows: `is_float($value)` requires an explicit `(int)` cast at an integer parameter because a float conversion can lose precision. Declared union contracts and by-reference storage rules are unchanged. See [Parameter type coercion](#parameter-type-coercion).
 

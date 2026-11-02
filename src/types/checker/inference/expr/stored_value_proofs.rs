@@ -84,7 +84,8 @@ impl Checker {
                 crate::builtins::registry::lookup(name.as_str()).is_some_and(|def|
                     !type_admits_null(&def.return_type) || matches!(def.spec.semantics.lowering,
                         crate::builtins::semantics::BuiltinLowering::Runtime(
-                            crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::Fopen))))
+                            crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::Fopen
+                                | crate::ir::RuntimeFnId::ArrayValues))))
             }
             _ => false,
         }

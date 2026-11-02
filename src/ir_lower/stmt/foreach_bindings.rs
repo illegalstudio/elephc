@@ -35,6 +35,10 @@ pub(super) fn bind_current(
         root_value_for_later_use(ctx, value, span)
     });
     let key_owner = key.as_ref().and_then(|(_, owner)| *owner);
+    if by_ref {
+        // The backedge already carries a cell, while the first iteration can still be raw.
+        ctx.mark_ref_bound_local(value_name);
+    }
     let previous = root_displaced_binding(ctx, value_name, span);
     if by_ref {
         let slot = ctx.declare_local(value_name, foreach_ref_value_type(source));
@@ -66,7 +70,7 @@ pub(super) fn bind_current(
 fn root_displaced_binding(
     ctx: &mut LoweringContext<'_, '_>, name: &str, span: Span,
 ) -> Option<LocalSlotId> {
-    let previous = ctx.load_local(name, Some(span));
+    let previous = ctx.load_local_for_retirement_pin(name, Some(span));
     root_value_for_later_use(ctx, previous, span).1
 }
 

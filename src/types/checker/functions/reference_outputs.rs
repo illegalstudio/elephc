@@ -313,6 +313,15 @@ impl Checker {
             .is_some_and(|ty| ty.codegen_repr() == PhpType::Mixed)
     }
 
+    /// Finds an earlier boxed-layout promotion without reusing it after explicit reference rebinding.
+    pub(crate) fn boxed_reference_layout_precedes(&self, arg: &Expr) -> bool {
+        let ExprKind::Variable(name) = &arg.kind else { return false; };
+        !self.ref_assign_aliased_locals.contains(name) && arg.span.identifies_a_node()
+            && self.boxed_reference_promotion_sites.iter().any(|((scope, span), names)|
+                scope == &self.current_loop_storage_scope && span.identifies_a_node()
+                    && (span.line, span.col) < (arg.span.line, arg.span.col) && names.contains(name))
+    }
+
     /// Applies one successful call's storage changes before checking subsequent expressions.
     pub(crate) fn apply_boxed_reference_outputs(&mut self, span: Span, env: &mut TypeEnv) {
         let key = (self.current_loop_storage_scope.clone(), span);

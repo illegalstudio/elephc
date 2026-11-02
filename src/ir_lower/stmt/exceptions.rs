@@ -483,7 +483,7 @@ pub(super) fn lower_catch_bind(ctx: &mut LoweringContext<'_, '_>, catch: &CatchC
                 ctx.declare_local(name, php_type.clone());
             }
         }
-        let previous = ctx.load_local(name, Some(span));
+        let previous = ctx.load_local_for_retirement_pin(name, Some(span));
         crate::ir_lower::expr::root_value_for_later_use(ctx, previous, span).1
     });
     // Reorder only owner records, preserving their values: the incoming transfer must be

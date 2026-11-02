@@ -9,6 +9,18 @@
 
 use crate::ir::{Immediate, IrHeapKind, IrType, Op};
 
+/// Every target handles reference backedges and catch storage reused after unset.
+#[test]
+fn test_nullable_fallback_flow_ci_binding_storage_all_targets() {
+    let source = "<?php function run(): void { $items = [1, 2, 3]; foreach ($items as &$value) { $value *= 2; } unset($value); foreach ($items as $key => &$value) { $value += $key; } unset($value); for ($i = 0; $i < 2; $i++) { try { throw new Exception('one'); } catch (Exception $e) { echo $e->getMessage(); unset($e); } try { throw new Exception('two'); } catch (Exception $e) { echo $e->getMessage(); unset($e); } } } run();";
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = crate::codegen::platform::Target::parse(name).unwrap();
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), target);
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Every supported target emits fetched-operand unwind roots and precise reference retirement.
 #[test]
 fn test_nullable_fallback_flow_r53_foreach_protocol_all_targets() {

@@ -330,14 +330,14 @@ impl Checker {
         match current {
             PhpType::Union(members) => {
                 let kept: Vec<PhpType> =
-                    members.iter().filter(|m| guard_matches(m, target)).cloned().collect();
+                    members.iter().filter(|m| guard_matches(self, m, target)).cloned().collect();
                 if kept.is_empty() {
                     target.fallback_type()
                 } else {
                     self.normalize_union_type(kept)
                 }
             }
-            _ if guard_matches(current, target) => current.clone(),
+            _ if guard_matches(self, current, target) => current.clone(),
             _ => target.fallback_type(),
         }
     }
@@ -349,7 +349,7 @@ impl Checker {
         match current {
             PhpType::Union(members) => {
                 let kept: Vec<PhpType> =
-                    members.iter().filter(|m| !guard_matches(m, target)).cloned().collect();
+                    members.iter().filter(|m| !guard_matches(self, m, target)).cloned().collect();
                 if kept.is_empty() {
                     current.clone()
                 } else {
@@ -525,13 +525,13 @@ pub(in crate::types::checker) fn type_is_definitely_non_null(ty: &PhpType) -> bo
 
 /// Returns true when a union member is compatible with a guard target, used to keep (then) or drop
 /// (else) members. Exact targets require a matching variant; an `Object` target matches an object
-/// member with the same class name (inheritance-aware narrowing is left for the future), and
+/// member compatible with the target class or interface, and
 /// `AnyArray` matches either array shape.
-fn guard_matches(member: &PhpType, target: &GuardTarget) -> bool {
+fn guard_matches(checker: &Checker, member: &PhpType, target: &GuardTarget) -> bool {
     match target {
         GuardTarget::AnyArray => matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. }),
-        GuardTarget::Exact(PhpType::Object(target_class)) => {
-            matches!(member, PhpType::Object(member_class) if member_class == target_class)
+        GuardTarget::Exact(target @ PhpType::Object(_)) => {
+            matches!(member, PhpType::Object(_)) && checker.type_accepts(target, member)
         }
         GuardTarget::Exact(PhpType::Bool) => matches!(member, PhpType::Bool | PhpType::False),
         GuardTarget::Exact(target) => member == target,

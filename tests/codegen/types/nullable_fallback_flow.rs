@@ -2647,6 +2647,53 @@ run(5); run(null);
     }
 }
 
+/// A completed array-values call removes the nullable input alternative from its destination.
+#[test]
+fn test_nullable_fallback_flow_ci_guarded_array_values_runtime() {
+    let source = r#"<?php
+function normalize(?array $value): array {
+    if ($value === null) { return []; }
+    $value = array_values($value);
+    return $value;
+}
+echo json_encode(normalize(null)), '|', json_encode(normalize(['key' => 7])), "\n";
+"#;
+    assert_nullable_flow_cli_heap_output(source, "[]|[7]\n");
+}
+
+/// Foreach retirement reads the previous reference payload on every backedge.
+#[test]
+fn test_nullable_fallback_flow_ci_foreach_reference_backedges() {
+    let source = r#"<?php
+function run(): void {
+    $items = [1, 2, 3];
+    foreach ($items as &$value) { $value *= 2; }
+    unset($value);
+    echo implode(',', $items), '|';
+    foreach ($items as $key => &$value) { $value += $key; }
+    unset($value);
+    echo implode(',', $items), "\n";
+}
+run(); run();
+"#;
+    assert_nullable_flow_cli_heap_output(source, "2,4,6|2,5,8\n2,4,6|2,5,8\n");
+}
+
+/// Rebinding an unset catch name pins storage without reading an object as raw null.
+#[test]
+fn test_nullable_fallback_flow_ci_unset_catch_rebinding() {
+    let source = r#"<?php
+function run(): void {
+    for ($i = 0; $i < 2; $i++) {
+        try { throw new Exception('one'); } catch (Exception $error) { echo $error->getMessage(); unset($error); }
+        try { throw new Exception('two'); } catch (Exception $error) { echo $error->getMessage(), "\n"; unset($error); }
+    }
+}
+run();
+"#;
+    assert_nullable_flow_cli_heap_output(source, "onetwo\nonetwo\n");
+}
+
 /// Fixed incoming and captured cells can be forwarded after checked integer updates.
 #[test]
 fn test_nullable_fallback_flow_review_fixed_reference_runtime() {

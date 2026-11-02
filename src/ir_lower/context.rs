@@ -2124,6 +2124,23 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         LoweredValue { value, ir_type }
     }
 
+    /// Loads the physical occupant even when an earlier unset left a logical null fact.
+    pub(crate) fn load_local_for_retirement_pin(
+        &mut self, name: &str, span: Option<Span>,
+    ) -> LoweredValue {
+        let logical_type = self.local_types.get(name).cloned();
+        if logical_type == Some(PhpType::Void) {
+            if let Some(slot) = self.local_slots.get(name).copied() {
+                self.local_types.insert(name.to_string(), self.builder.local_php_type(slot));
+            }
+        }
+        let value = self.load_local(name, span);
+        if let Some(logical_type) = logical_type {
+            self.local_types.insert(name.to_string(), logical_type);
+        }
+        value
+    }
+
     /// Returns the PHP type `load_local` stamps on a read of `name`, without emitting the read.
     ///
     /// `None` means the read is not a frame, reference-cell or global slot load (an extern

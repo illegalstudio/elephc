@@ -338,6 +338,8 @@ impl Checker {
                 //
                 // The source container is aliased before inference. Capture the displaced
                 // value after source effects and before this statement creates its new alias.
+                let source_had_reference = matches!(&array.kind, ExprKind::Variable(name)
+                    if self.ref_aliased_locals.contains(name));
                 if *value_by_ref {
                     self.record_reference_alias_root(array);
                 }
@@ -351,6 +353,12 @@ impl Checker {
                         .insert(value_var.clone());
                 }
                 let arr_ty = arr_ty?;
+                // A refined Iterable view can still occupy a boxed reference-local, which
+                // already uses runtime dispatch for by-reference indexed and hash payloads.
+                let boxed_iterable_source = arr_ty == PhpType::Iterable
+                    && (self.guarded_local_storage_type(array, env)
+                        .is_some_and(|storage| storage.codegen_repr() == PhpType::Mixed)
+                        || (source_had_reference && self.boxed_reference_layout_precedes(array)));
                 self.record_foreach_entry_exception_flow(stmt, &arr_ty, env);
                 if *value_by_ref {
                     widen_by_ref_foreach_source_storage(self, array, env)?;
@@ -483,7 +491,8 @@ impl Checker {
                 if let Some(k) = key_var {
                     self.foreach_key_locals.insert(k.clone());
                 }
-                if *value_by_ref && matches!(arr_ty, PhpType::Object(_) | PhpType::Iterable) {
+                if *value_by_ref && (matches!(arr_ty, PhpType::Object(_))
+                    || (arr_ty == PhpType::Iterable && !boxed_iterable_source)) {
                     return Err(CompileError::new(
                         stmt.span,
                         "by-reference foreach over Iterator/IteratorAggregate objects or iterable-typed values is not supported; use an array source or remove &",

@@ -366,7 +366,8 @@ pub(super) fn lower_foreach(
 
         ctx.builder.position_at_end(first_nonempty);
         let value_slot = ctx.declare_local(value_var, PhpType::Mixed);
-        ctx.release_stored_local_value(value_var, value_slot, Some(array.span));
+        ctx.emit_void(Op::ReleaseLocalSlot, Vec::new(), Some(Immediate::LocalSlot(value_slot)),
+            Op::ReleaseLocalSlot.default_effects(), Some(array.span));
         branch_to(ctx, body_block);
     } else {
         branch_to(ctx, header);

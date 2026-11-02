@@ -9,6 +9,27 @@
 
 use super::*;
 
+/// A boxed reference-local retains dynamic foreach dispatch behind an Iterable read view.
+#[test]
+fn test_nullable_fallback_flow_ci_boxed_iterable_foreach_admission() {
+    let source = "<?php function keepBoxedIterable(iterable $items): iterable { return $items; } function touchBoxedIterable(&$items): void { $items = 123; } function run(iterable $input, int $flag): void { $items = keepBoxedIterable($input); if ($flag < 0) { touchBoxedIterable($items); return; } foreach ($items as &$value) { $value = 1; } unset($value); }";
+    check_source(source).unwrap();
+    for replacement in ["unset($items); $items = keepBoxedIterable($input);", "unset($items); $items =& $input;"] {
+        expect_error(&source.replace("foreach ($items", &format!("{replacement} foreach ($items")), "by-reference foreach");
+    }
+    expect_error("<?php function run(iterable $items): void { foreach ($items as &$value) {} }", "by-reference foreach");
+}
+
+/// A parent-class or interface probe preserves the receiver's concrete subclass contract.
+#[test]
+fn test_nullable_fallback_flow_ci_instanceof_subclass_views() {
+    for condition in ["$value instanceof ParentView", "$value instanceof ParentView && $flag"] {
+        let source = format!("<?php interface View {{}} class ParentView implements View {{}} class ChildView extends ParentView {{ public int $onlyChild = 7; }} function run(ChildView $value, bool $flag): ChildView {{ echo ({condition}) ? 'yes' : 'no'; echo $value->onlyChild; echo ($value instanceof View) ? 'view' : 'other'; return $value; }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+    check_source("<?php class A {} class B extends A { public int $onlyB = 7; } function run(A|null $value): int { if ($value instanceof B) { return $value->onlyB; } return 0; }").unwrap();
+}
+
 /// Creating a foreach reference cannot make the displaced proven scalar destructible.
 #[test]
 fn test_nullable_fallback_flow_r53_foreach_reference_retirement_precision() {
@@ -1630,10 +1651,12 @@ fn test_nullable_fallback_flow_review_rebinding_destinations() {
             let unsafe_ref = format!("<?php function resetValue(?int &$value): void {{ $value = null; }} function run(?int $value): void {{ {prefix} {binding} $value = 7; resetValue($value); }}");
             expect_error(&unsafe_ref, "requires a variable with mixed/union/nullable storage");
         }
-        for binding in ["[$value] = ['str'];", "['key' => $value] = ['key' => 'str'];"] {
-            let source = format!("<?php function appendValue(string &$value): void {{ $value .= '!'; }} function run(?int $value): void {{ {prefix} {binding} appendValue($value); }}");
-            check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
-        }
+        let indexed = format!("<?php function appendValue(string &$value): void {{ $value .= '!'; }} function run(?int $value): void {{ {prefix} [$value] = ['str']; appendValue($value); }}");
+        check_source(&indexed).unwrap_or_else(|error| panic!("{indexed}: {error}"));
+        // Keyed destructuring uses adaptive Mixed storage, including for a literal hash.
+        let keyed = format!("<?php function appendValue(mixed &$value): void {{ $value .= '!'; }} function run(?int $value): void {{ {prefix} ['key' => $value] = ['key' => 'str']; appendValue($value); }}");
+        check_source(&keyed).unwrap_or_else(|error| panic!("{keyed}: {error}"));
+        expect_error(&keyed.replace("mixed &$value", "string &$value"), "cannot bind typed by-reference storage");
     }
     check_source("<?php function run(?int $value): void { $value ??= 1; try { throw new Exception(); } catch (Exception $value) { $value = new Exception(); echo get_class($value); } }").unwrap();
 }
