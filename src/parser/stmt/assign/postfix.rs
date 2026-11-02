@@ -886,7 +886,12 @@ fn lower_computed_property_element_update(
     let rhs = if matches!(op, AssignmentOperator::Compound(_))
         && compound_rhs_can_disturb_index(&target, &rhs)
     { lowerer.stabilize_unconditionally(rhs) } else { rhs };
-    let target = lowerer.snapshot_update_dimension(target);
+    // This writer lowers one shared key after receiver handoff. A user variable must
+    // remain live until then, since a temporary parent's destructor can change it.
+    let target = if matches!(&target.kind, ExprKind::ArrayAccess { index, .. }
+        if matches!(&index.kind, ExprKind::Variable(name) if !crate::names::is_generated_local_name(name))) {
+        target
+    } else { lowerer.snapshot_update_dimension(target) };
     let value = assignment_value(target.clone(), op, rhs, span);
     let statement = assignment_target_store_stmt(target, value, span)?;
     Ok(lowerer.finish(statement))
