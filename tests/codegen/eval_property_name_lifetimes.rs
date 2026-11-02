@@ -46,3 +46,23 @@ eval($code);
     ));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A coalescing statement only converts its parent name again when the fallback writes.
+#[test]
+fn test_property_coalesce_keep_branch_does_not_replay_parent_name() {
+    let source = r#"<?php
+class CoalesceParentName {
+    public function __toString(): string { echo 'name|'; return 'child'; }
+}
+class CoalesceParentNode { public mixed $value = 1; }
+function coalesceParentWrite(mixed $root, mixed $name): void { $root->{$name}->value ??= 2; }
+$root = new stdClass(); $root->child = new CoalesceParentNode(); $name = new CoalesceParentName();
+coalesceParentWrite($root, $name); echo $root->child->value, '|';
+unset($root->child->value);
+coalesceParentWrite($root, $name); echo $root->child->value, '|';
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "name|1|name|name|2|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

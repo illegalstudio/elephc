@@ -59,6 +59,17 @@ pub(super) fn lower_property_assign(
             }
         }
     }
+    // A parser-generated ??= must not replay its write or receiver/name conversion on
+    // the keep branch. Explicit `$o->p = $o->p ?? $rhs` has a different RHS span.
+    if value.span.line == span.line && value.span.col == span.col {
+        if let ExprKind::NullCoalesce { value: read, default } = &value.kind {
+            if matches!(&read.kind, ExprKind::PropertyAccess { object: read_object, property: read_property }
+                if read_object.as_ref() == object && read_property == property) {
+                crate::ir_lower::expr::lower_null_coalesce_update_stmt(ctx, read, default, span);
+                return;
+            }
+        }
+    }
     let value_expr = value;
     let (mut receiver, lowered_value, deferred_value_owner) = if crate::ir_lower::expr::is_static_property_write_chain(object)
         || (!property.starts_with("__elephc_") && crate::ir_lower::expr::defer_native_property_write_receiver(ctx, object)) {
