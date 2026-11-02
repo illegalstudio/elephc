@@ -201,6 +201,8 @@ const CALLBACK_BOUNDARY_EXCEPTIONS: &[&str] = &[
 
 /// Joins shared callback roles with prelude hooks, XML setters and descriptor-producing escapes.
 fn callable_taking_builtin(name: &str) -> bool {
+    // Autoload registration is handled by introspection; neither SPL stub invokes its value.
+    if matches!(name, "spl_autoload_register" | "spl_autoload_unregister") { return false; }
     if CALLBACK_BOUNDARY_EXCEPTIONS.contains(&name) { return true; }
     crate::builtins::registry::lookup(name).is_some_and(|definition| {
         !crate::builtins::registry::callback_parameter_indices(definition).is_empty()
@@ -1421,6 +1423,43 @@ mod tests {
         let usage = collect(&parse("<?php xml_set_element_handler($parser, 'start_handler', 'end_handler');"));
         assert!(usage.references("start_handler"));
         assert!(usage.references("end_handler"));
+    }
+
+    /// Autoload registration preserves the complete prelude without implying a callback invoke.
+    #[test]
+    fn autoload_registration_preserves_introspection_without_callback_demand() {
+        for source in [
+            "<?php spl_autoload_register();",
+            "<?php spl_autoload_register(function ($class) { require __DIR__ . '/' . $class . '.php'; });",
+            "<?php spl_autoload_register('loader');",
+        ] {
+            let program = parse(source);
+            let usage = collect(&program);
+            assert!(usage.introspects, "{source}");
+            assert!(!usage.dynamic_function_call, "{source}");
+            assert!(!crate::web_prelude::program_observes_environment(&program), "{source}");
+        }
+        let import = parse("<?php use function spl_autoload_register as reg;");
+        assert!(!crate::web_prelude::program_observes_environment(&import));
+        let observer = parse("<?php spl_autoload_register(function () { echo $_ENV['PATH']; });");
+        assert!(crate::web_prelude::program_observes_environment(&observer));
+    }
+
+    /// Removing an autoload hook does not invoke or dynamically discover the supplied callable.
+    #[test]
+    fn autoload_unregistration_does_not_invoke_callbacks() {
+        for source in [
+            "<?php spl_autoload_unregister('loader');",
+            "<?php spl_autoload_unregister($callback);",
+            "<?php use function spl_autoload_unregister as unreg;",
+        ] {
+            let program = parse(source);
+            let usage = collect(&program);
+            assert!(!usage.introspects, "{source}");
+            assert!(!usage.dynamic_function_call, "{source}");
+            assert!(!crate::tokenizer_prelude::program_uses_surface(&program), "{source}");
+            assert!(!crate::web_prelude::program_observes_environment(&program), "{source}");
+        }
     }
 
     /// A literal eval contributes the names and literals of its source and is not introspection.
