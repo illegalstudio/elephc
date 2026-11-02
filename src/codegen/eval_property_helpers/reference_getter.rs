@@ -102,7 +102,7 @@ fn eligible(module: &Module, slot: &EvalPropertySlot) -> bool {
                 && class.properties.get((slot.offset - 8) / 16).is_some_and(|(_, ty)| ty == &PhpType::Mixed)
                 && !class.readonly_properties.contains(&slot.property)
                 && !class.property_set_visibilities.contains_key(&slot.property)
-                && !class.property_hooks.contains_key(&slot.property))
+                && class.property_hooks.get(&slot.property).is_none_or(|hooks| !hooks.any()))
 }
 
 #[cfg(test)]

@@ -215,7 +215,7 @@ class NativeProtectedMixedParent {
     public function writeValue(mixed $next): void { $this->value = $next; }
     public function __destruct() { echo 'retired|'; }
 }
-function bindNativeMixedThroughForeignContext(mixed $object): callable { return $object->bind(); }
+function bindNativeMixedThroughForeignContext(mixed $object): mixed { return $object->bind(); }
 function exerciseNativeMixedScopes(bool $run): void {
     $child = new NativeHiddenMixedChild();
     $raw = new NativeHiddenRawChild();
@@ -448,6 +448,7 @@ $escapedRendered = captureRenderedNativeReference($object->value);
     ob_start(); var_dump($object); $dump = ob_get_clean();
     $printed = print_r($object, true);
     $exported = var_export($object, true);
+    if (!str_contains($exported, "'text'")) { echo '[export:', $exported, ']'; }
     echo (int)str_contains($dump, 'uninitialized(mixed)'),
         (int)str_contains($dump, 'string(4) "text"'),
         (int)str_contains($dump, 'int(7)'),
@@ -458,11 +459,13 @@ $escapedRendered = captureRenderedNativeReference($object->value);
     echo json_encode($vars), '|';
     $vars['value'] = ['key' => 'vars'];
     echo json_encode($object->value), '|';
+    $replaced = array_replace($vars, ['value' => ['key' => 'replacement']]);
+    echo json_encode($object->value), ':', json_encode($replaced['value']), '|';
     $cast = (array)$object;
     $cast['value'] = ['key' => 'cast'];
     $code = $run ? 'echo json_encode($escapedRendered()), "|"; unset($escapedRendered);' : '';
     eval($code);
-    unset($vars, $cast);
+    unset($vars, $cast, $replaced);
     $nativeVars = get_object_vars($object);
     $nativeVars['value'] = ['key' => 'native-only'];
     echo json_encode($nativeValue), '|';
@@ -481,7 +484,7 @@ exerciseRenderedNativeReferences($argc > 0);
 "#;
     let output = compile_and_run_with_heap_debug(source);
     assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
-    assert_eq!(output.stdout, "111111|{\"value\":{\"key\":\"value\"},\"text\":\"text\",\"number\":7}|{\"key\":\"vars\"}|{\"key\":\"cast\"}|{\"key\":\"native-only\"}|1|{\"key\":\"value\"}|");
+    assert_eq!(output.stdout, "111111|{\"value\":{\"key\":\"value\"},\"text\":\"text\",\"number\":7}|{\"key\":\"vars\"}|{\"key\":\"vars\"}:{\"key\":\"replacement\"}|{\"key\":\"cast\"}|{\"key\":\"native-only\"}|1|{\"key\":\"value\"}|");
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
     assert!(!output.stderr.contains("Warning:"), "{}", output.stderr);
 }

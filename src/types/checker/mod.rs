@@ -1547,7 +1547,7 @@ fn apply_reference_property_promotions(checker: &mut Checker) {
                             && info.promoted_properties.contains(property)))
                     && !info.readonly_properties.contains(property)
                     && !info.property_set_visibilities.contains_key(property)
-                    && !info.property_hooks.contains_key(property)
+                    && info.property_hooks.get(property).is_none_or(|hooks| !hooks.any())
                     && classes.get(declaring).is_some_and(|owner| !owner.is_internal))
                     .then(|| (name.clone(), property.clone()))
             })

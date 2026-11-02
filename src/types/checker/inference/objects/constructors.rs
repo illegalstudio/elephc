@@ -187,6 +187,15 @@ impl Checker {
                     effective_sig
                 };
                 for (i, arg) in normalized_args.iter().enumerate() {
+                    let mixed_owner = self.classes.get(declaring_class).unwrap_or(owner_info);
+                    let owns_mixed_reference = param_to_prop.get(i).and_then(Option::as_ref)
+                        .is_some_and(|property| mixed_owner.visible_property(property)
+                            .is_some_and(|(slot, (_, ty))| ty == &PhpType::Mixed
+                                && mixed_owner.property_slot_is_declared(slot, property)
+                                && !mixed_owner.is_internal
+                                && !mixed_owner.readonly_properties.contains(property)
+                                && !mixed_owner.property_set_visibilities.contains_key(property)
+                                && mixed_owner.property_hooks.get(property).is_none_or(|hooks| !hooks.any())));
                     let persistent_reference = param_to_prop
                         .get(i)
                         .is_some_and(|mapped| mapped.is_some())
@@ -195,7 +204,7 @@ impl Checker {
                         || matches!(&arg.kind, ExprKind::Variable(name)
                             if self.active_ref_params.contains(name)
                                 || self.ref_aliased_locals.contains(name));
-                    if persistent_reference && unstable_reference_source {
+                    if persistent_reference && unstable_reference_source && !owns_mixed_reference {
                         let param_name = effective_sig
                             .params
                             .get(i)

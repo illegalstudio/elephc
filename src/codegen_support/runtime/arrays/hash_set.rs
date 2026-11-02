@@ -28,6 +28,8 @@ use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use super::hash_layout;
 
+mod persistent_references;
+
 /// hash_set: insert or update a normalized int/string key-value pair in the hash table.
 /// Grows the table automatically if load factor exceeds 75%, persists newly
 /// inserted string keys, and releases overwritten heap-backed values on update.
@@ -227,6 +229,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("ldr x15, [x14]");                                      // inspect the boxed Mixed runtime tag
     emitter.instruction(&format!("cmp x15, #{}", INVOKER_ARG_REF_CELL_TAG));    // does this box alias caller storage for a ref argument?
     emitter.instruction("b.eq __rt_hash_set_invoker_reference_write");          // preserve the marker and write through to its caller local
+    persistent_references::emit_probe(emitter);
     emitter.label("__rt_hash_set_check_reference");
     emitter.instruction(&format!("cmp x13, #{}", INVOKER_ARG_REF_CELL_TAG));    // does the existing entry belong to a PHP reference set?
     emitter.instruction("b.eq __rt_hash_set_reference_write");                  // reference entries are written through, never detached
@@ -257,6 +260,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("b __rt_hash_set_write_value");                         // ordinary released payloads must not fall into reference-cell write-through
 
     // -- write through a boxed descriptor-invoker marker stored in a Mixed hash entry --
+    persistent_references::emit_write(emitter);
     emitter.label("__rt_hash_set_invoker_reference_write");
     emitter.instruction("ldr x15, [x14, #16]");                                 // load the caller storage's runtime representation tag
     emitter.instruction("cmp x15, #7");                                         // does the caller local hold a boxed Mixed handle?
@@ -413,8 +417,7 @@ fn emit_hash_set_value_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_hash_get");                                    // x0 = found, x4 = matching entry address
     emitter.instruction("cbz x0, __rt_hash_set_value_forward");                 // a missing key is an ordinary insert
     emitter.instruction("ldr x9, [x4, #40]");                                   // load the existing entry's runtime value tag
-    emitter.instruction("cmp x9, #11");                                         // does this entry belong to a PHP reference set?
-    emitter.instruction("b.ne __rt_hash_set_value_forward");                    // ordinary entries need no detach
+    persistent_references::emit_value_detach_probe(emitter);
     emitter.instruction("ldr x0, [x4, #24]");                                   // load the managed reference cell this entry owns
     emitter.instruction("str xzr, [x4, #24]");                                  // retire the detached payload before releasing it
     emitter.instruction("str xzr, [x4, #32]");                                  // reference entries carry no high payload word
@@ -600,6 +603,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     let boxed_marker_compare = format!("cmp QWORD PTR [r14], {}", INVOKER_ARG_REF_CELL_TAG);
     emitter.instruction(&boxed_marker_compare);                                 // does this box alias caller storage for a ref argument?
     emitter.instruction("je __rt_hash_set_invoker_reference_write_x");          // preserve the marker and write through to its caller local
+    persistent_references::emit_probe(emitter);
     emitter.label("__rt_hash_set_check_reference_x");
     emitter.instruction(&format!("cmp r13, {}", INVOKER_ARG_REF_CELL_TAG));     // does the existing entry belong to a PHP reference set?
     emitter.instruction("je __rt_hash_set_reference_write_x");                  // reference entries are written through, never detached
@@ -628,6 +632,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     hash_layout::emit_entry_address(emitter, "r12", "r10", "r11");
     emitter.instruction("jmp __rt_hash_set_write_value_x");                     // ordinary released payloads must not fall into reference-cell write-through
 
+    persistent_references::emit_write(emitter);
     emitter.label("__rt_hash_set_invoker_reference_write_x");
     emitter.instruction("mov r13, QWORD PTR [r14 + 16]");                       // load the caller storage's runtime representation tag
     emitter.instruction("cmp r13, 7");                                          // does the caller local hold a boxed Mixed handle?
@@ -782,8 +787,7 @@ fn emit_hash_set_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_hash_get");                                  // rax = found, r8 = matching entry address
     emitter.instruction("test rax, rax");                                       // did the destination already contain this key?
     emitter.instruction("jz __rt_hash_set_value_forward_x");                    // a missing key is an ordinary insert
-    emitter.instruction("cmp QWORD PTR [r8 + 40], 11");                         // does this entry belong to a PHP reference set?
-    emitter.instruction("jne __rt_hash_set_value_forward_x");                   // ordinary entries need no detach
+    persistent_references::emit_value_detach_probe(emitter);
     emitter.instruction("mov rax, QWORD PTR [r8 + 24]");                        // load the managed reference cell this entry owns
     emitter.instruction("mov QWORD PTR [r8 + 24], 0");                          // retire the detached payload before releasing it
     emitter.instruction("mov QWORD PTR [r8 + 32], 0");                          // reference entries carry no high payload word
