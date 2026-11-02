@@ -120,6 +120,18 @@ ignored function and method calls, including direct and dynamic instance calls i
 eval. Warning masks and user handlers apply; assign to `$_` to consume a
 deliberately ignored result.
 `DelayedTargetValidation` defers Core target errors until `newInstance()`.
+Core target errors include the allowed declarations, at compile time and from
+`newInstance()`, for example:
+`Attribute "AllowDynamicProperties" cannot target parameter (allowed targets: class)`.
+Compile-time errors point at the offending attribute, while PHP reports the line of
+the declaration it is attached to.
+
+Target validation follows `--php-version`: `Override` targets methods only before
+8.5, `Deprecated` targets functions, methods, and class constants on 8.4, and an
+attribute the selected version does not predefine (`NoDiscard` before 8.5, for
+example) is treated as a user attribute. Elsewhere its Core semantics still apply:
+below 8.3 `Override` is still enforced, and runtime `NoDiscard` warnings ignore the
+selected version.
 Attribute execution and Reflection limits
 are documented in [Classes](classes.md#attributes).
 

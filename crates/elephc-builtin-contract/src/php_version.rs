@@ -80,6 +80,11 @@ impl PhpVersion {
             .find(|profile| profile.spelling() == value)
     }
 
+    /// Finds the profile whose `PHP_VERSION_ID` is `version_id`.
+    pub fn from_version_id(version_id: u32) -> Option<Self> {
+        Self::ALL.into_iter().find(|version| version.version_id() == version_id)
+    }
+
     /// Returns the comma-separated values accepted by `--php-version`.
     pub fn accepted_values() -> String {
         Self::ALL
@@ -204,6 +209,15 @@ mod tests {
         for version in PhpVersion::ALL {
             assert_eq!(version.as_str().parse::<PhpVersion>(), Ok(version));
         }
+    }
+
+    /// Verifies every profile round-trips through its numeric `PHP_VERSION_ID`.
+    #[test]
+    fn version_ids_round_trip() {
+        for version in PhpVersion::ALL {
+            assert_eq!(PhpVersion::from_version_id(version.version_id()), Some(version));
+        }
+        assert_eq!(PhpVersion::from_version_id(80401), None);
     }
 
     /// Verifies patch versions are rejected so compatibility selection is never ambiguous.

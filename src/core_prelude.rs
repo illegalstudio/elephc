@@ -27,15 +27,12 @@ pub(crate) fn core_declarations() -> Program {
         for &(name, value) in elephc_builtin_contract::CORE_ATTRIBUTE_CONSTANTS {
             attribute = attribute.constant(name, e_int(value));
         }
-        let mut declarations = vec![as_attribute(attribute.build(), 1)];
-        for (name, targets) in [
-            ("AllowDynamicProperties", 1), ("ReturnTypeWillChange", 4),
-            ("SensitiveParameter", 32), ("Override", 12),
-        ] {
+        let mut declarations = vec![as_attribute(attribute.build())];
+        for name in ["AllowDynamicProperties", "ReturnTypeWillChange", "SensitiveParameter", "Override"] {
             declarations.push(as_attribute(class(name).final_()
-                .method(method("__construct")).build(), targets));
+                .method(method("__construct")).build()));
         }
-        declarations.push(as_attribute(class("DelayedTargetValidation").final_().build(), elephc_builtin_contract::CORE_ATTRIBUTE_TARGET_ALL));
+        declarations.push(as_attribute(class("DelayedTargetValidation").final_().build()));
         let nullable_string = t_nullable(TypeExpr::Str);
         declarations.push(as_attribute(class("Deprecated").final_()
             .readonly_prop("message", nullable_string.clone())
@@ -47,13 +44,13 @@ pub(crate) fn core_declarations() -> Program {
                     s_prop_assign(crate::synthetic_class::e_this(), "message", e_var("message")),
                     s_prop_assign(crate::synthetic_class::e_this(), "since", e_var("since")),
                 ]))
-            .build(), 87));
+            .build()));
         declarations.push(as_attribute(class("NoDiscard").final_()
             .readonly_prop("message", nullable_string.clone())
             .method(method("__construct")
                 .param_default("message", nullable_string, e_null())
                 .body(vec![s_prop_assign(crate::synthetic_class::e_this(), "message", e_var("message"))]))
-            .build(), 6));
+            .build()));
 
         let mut sensitive = class("SensitiveParameterValue").final_()
             .private_prop("value", t_mixed(), None)
@@ -149,8 +146,16 @@ pub(crate) fn core_declarations() -> Program {
     })
 }
 
-/// Attaches PHP's Attribute metadata to a built class declaration.
-fn as_attribute(mut declaration: Stmt, targets: i64) -> Stmt {
+/// Attaches PHP's Attribute metadata for the compile profile, or the newest mask on a profile
+/// predating the class, which elephc still declares for introspection.
+fn as_attribute(mut declaration: Stmt) -> Stmt {
+    let StmtKind::ClassDecl { name, .. } = &declaration.kind else {
+        unreachable!("Core attributes are classes");
+    };
+    let targets = [crate::codegen_support::compile_php_version(), crate::php_version::PhpVersion::default()]
+        .into_iter()
+        .find_map(|version| elephc_builtin_contract::core_attribute_flags(name, version))
+        .expect("Core attribute classes have a target mask");
     declaration.attributes.push(attr("\\Attribute", vec![e_int(targets)]));
     declaration
 }
