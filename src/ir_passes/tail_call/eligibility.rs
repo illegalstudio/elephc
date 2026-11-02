@@ -92,7 +92,8 @@ pub(super) fn activation_chain_is_observable(module: &Module) -> bool {
                 || function.instructions.iter().any(|inst| {
                     inst.op == Op::CoreBuiltin && matches!(inst.immediate,
                         Some(Immediate::I64(selector)) if matches!(CoreBuiltinOp::from_i64(selector),
-                            Some(CoreBuiltinOp::DebugBacktrace | CoreBuiltinOp::DebugPrintBacktrace)))
+                            Some(CoreBuiltinOp::DebugBacktrace | CoreBuiltinOp::DebugPrintBacktrace
+                                | CoreBuiltinOp::DiagnosticCallerLine)))
                 })
         })
 }

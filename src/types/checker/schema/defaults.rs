@@ -29,6 +29,7 @@ pub(crate) fn validate_deferred_declaration_defaults(
     program: &Program,
 ) -> Vec<CompileError> {
     let mut errors = Vec::new();
+    validate_direct_class_name_defaults(program, &mut errors);
 
     for class in flattened_classes {
         validate_class_defaults(checker, &class.name, &mut errors);
@@ -88,8 +89,37 @@ pub(crate) fn validate_deferred_declaration_defaults(
     }
 
     normalize_method_default_receivers(checker);
+    super::property_default_selectors::normalize(checker, program);
 
     errors
+}
+
+/// Direct method defaults reject late-static receivers and unbound parent class names.
+fn validate_direct_class_name_defaults(program: &Program, errors: &mut Vec<CompileError>) {
+    for statement in program {
+        let (name, parent, methods) = match &statement.kind {
+            StmtKind::ClassDecl { name, extends, methods, .. } => (name, extends.as_deref(), methods),
+            StmtKind::InterfaceDecl { name, methods, .. }
+            | StmtKind::EnumDecl { name, methods, .. } => (name, None, methods),
+            // A trait parent is a discarded validation placeholder, not a binding.
+            StmtKind::TraitDecl { name, methods, .. } => (name, Some(name.as_str()), methods),
+            StmtKind::NamespaceBlock { body, .. } => {
+                validate_direct_class_name_defaults(body, errors);
+                continue;
+            }
+            _ => continue,
+        };
+        for method in methods {
+            for (_, _, default, _) in &method.params {
+                let Some(default) = default else { continue };
+                if let Err(error) = super::classes::validate_compile_time_default_in_scope(
+                    default, name, parent,
+                ) {
+                    errors.push(error);
+                }
+            }
+        }
+    }
 }
 
 /// Rewrites relative receivers in stored method defaults to their declaration scope.
@@ -123,6 +153,8 @@ fn normalize_method_default_receivers(checker: &mut Checker) {
             let parent = class_parents.get(owner).and_then(Option::as_deref);
             normalize_signature_default_receivers(signature, owner, parent);
         }
+        // Parsed declarations retain the spelling exposed by ReflectionParameter metadata.
+        // Only semantic signatures bind relative receivers for call-site materialization.
     }
 
     for interface_info in checker.interfaces.values_mut() {
@@ -141,33 +173,54 @@ fn normalize_method_default_receivers(checker: &mut Checker) {
             normalize_signature_default_receivers(signature, owner, None);
         }
     }
+    for (owner, methods) in &mut checker.declared_trait_methods {
+        for signature in methods.values_mut() {
+            normalize_signature_default_receivers(signature, owner, None);
+        }
+    }
 }
 
-/// Resolves direct `self::`, `static::`, and `parent::` defaults for one stored signature.
-fn normalize_signature_default_receivers(
+/// Binds nested class-name and constant defaults to one signature's lexical scope.
+pub(crate) fn normalize_signature_default_receivers(
     signature: &mut FunctionSig,
     owner_class: &str,
     parent_class: Option<&str>,
 ) {
     for default in &mut signature.defaults {
-        let Some(Expr {
-            kind: ExprKind::ScopedConstantAccess { receiver, .. },
-            ..
-        }) = default
-        else {
-            continue;
-        };
+        normalize_default_tree(default, owner_class, parent_class);
+    }
+}
+
+/// Binds a private callable-default copy without evaluating a missing lexical receiver scope.
+pub(crate) fn normalize_lexical_callable_default(
+    default: &Option<Expr>, owner_class: Option<&str>, parent_class: Option<&str>,
+) -> Result<Option<Expr>, CompileError> {
+    default.as_ref().map(|value| {
+        super::classes::normalize_lexical_default_in_scope(value, owner_class, parent_class)
+    }).transpose()
+}
+
+/// Keeps unresolved trait parent defaults lazy, independent of the eventual caller scope.
+fn normalize_default_tree(default: &mut Option<Expr>, owner_class: &str, parent_class: Option<&str>) {
+    let Some(value) = default.as_ref() else { return };
+    match super::classes::normalize_lexical_default_in_scope(value, Some(owner_class), parent_class) {
+        Ok(normalized) => { *default = Some(normalized); return; }
+        Err(_) => {}
+    }
+    // Retain the existing direct scoped-constant normalization for non-property method defaults.
+    if let Some(Expr { kind: ExprKind::ScopedConstantAccess { receiver, .. }, .. }) = default {
         // This site REWRITES the receiver, so the normalized copy is a separate binding: a
         // generic receiver keeps its type arguments, and only the relative keywords below are
         // replaced. A receiver written `Box<int>::of()` names `Box`, which is already the
-        // `Named(_) => None` case — nothing to substitute.
+        // `Named(_) => None` case, nothing to substitute.
         let written = receiver.written_class_receiver();
         let resolved = match &written {
             StaticReceiver::Generic(_) => unreachable!(
                 "written_class_receiver leaves no generic receiver behind"
             ),
             StaticReceiver::Named(_) => None,
-            StaticReceiver::Self_ | StaticReceiver::Static => Some(owner_class),
+            StaticReceiver::Self_ => Some(owner_class),
+            StaticReceiver::Static => None,
             StaticReceiver::Parent => parent_class,
         };
         if let Some(class_name) = resolved {
@@ -309,6 +362,14 @@ fn validate_deferred_default(
     context: &str,
     errors: &mut Vec<CompileError>,
 ) {
+    if let (ExprKind::ScopedConstantAccess { receiver: StaticReceiver::Parent, .. }, Some(owner)) =
+        (&default.kind, checker.current_class.as_deref())
+    {
+        if checker.classes.get(owner).is_some_and(|class| class.parent.is_none())
+            || checker.interfaces.contains_key(owner) {
+            return;
+        }
+    }
     if matches!(default.kind, ExprKind::ScopedConstantAccess { .. }) {
         if let Err(error) = checker.validate_resolved_declared_default_type(
             expected_ty,

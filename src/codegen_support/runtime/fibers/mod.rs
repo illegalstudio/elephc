@@ -37,6 +37,7 @@
 mod alloc;
 mod api;
 mod entry;
+pub(crate) mod force_close;
 mod switch;
 
 pub(crate) use alloc::{emit_fiber_alloc_stack, emit_fiber_free_stack};

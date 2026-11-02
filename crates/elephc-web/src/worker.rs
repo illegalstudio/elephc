@@ -12,7 +12,7 @@
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use http_body_util::{BodyExt, Full, Limited};
@@ -47,6 +47,35 @@ fn reuseport_listener(addr: SocketAddr) -> std::io::Result<std::net::TcpListener
 /// Number of requests this worker has served, used by `--max-requests` recycling.
 /// Process-local (each forked worker has its own copy starting at 0).
 static SERVED: AtomicUsize = AtomicUsize::new(0);
+
+/// Application workers stop accepting and drain connections when a termination signal arrives.
+static APPLICATION_STOP: AtomicBool = AtomicBool::new(false);
+
+/// Records a stop request using only async-signal-safe operations.
+extern "C" fn application_shutdown_signal(_: libc::c_int) {
+    APPLICATION_STOP.store(true, Ordering::Relaxed);
+}
+
+/// Installs cooperative worker shutdown before running the post-fork PHP bootstrap.
+pub(crate) fn install_application_shutdown() {
+    unsafe {
+        let mut action: libc::sigaction = std::mem::zeroed();
+        action.sa_sigaction = application_shutdown_signal as extern "C" fn(libc::c_int) as libc::sighandler_t;
+        elephc_process_context::__elephc_process_register_worker_handler(action.sa_sigaction);
+        libc::sigemptyset(&mut action.sa_mask);
+        action.sa_flags = libc::SA_RESTART;
+        libc::sigaction(libc::SIGTERM, &action, std::ptr::null_mut());
+        libc::sigaction(libc::SIGINT, &action, std::ptr::null_mut());
+    }
+}
+
+/// Defers termination signals until PHP returns, including reads with socket receive deadlines.
+pub(crate) fn with_application_signals_blocked<T>(callback: impl FnOnce() -> T) -> T {
+    let guard = elephc_process_context::Deferral::new();
+    let result = callback();
+    drop(guard);
+    result
+}
 
 /// Records one completed handler and broadcasts a graceful recycle at the quota.
 fn record_completed_request(max_requests: usize, recycle: &watch::Sender<bool>) {
@@ -122,6 +151,22 @@ const GZIP_MIN_LEN: usize = 256;
 /// current-thread tokio runtime and loops accepting connections, serving each
 /// with the PHP handler per `WorkerConfig`.
 pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
+    serve_inner::<false>(listen, handler, cfg);
+}
+
+/// Serves with cooperative signal draining for a bootstrapped application worker.
+pub(crate) fn serve_application(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
+    serve_inner::<true>(listen, handler, cfg);
+}
+
+/// Polls application shutdown without constructing timers in the legacy specialization.
+async fn application_tick<const APPLICATION: bool>() {
+    if APPLICATION { tokio::time::sleep(Duration::from_millis(50)).await; }
+    else { std::future::pending::<()>().await; }
+}
+
+/// Shares HTTP transport while compiling application-only signal checks out of the default path.
+fn serve_inner<const APPLICATION: bool>(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
     let WorkerConfig {
         max_body,
         max_requests,
@@ -179,10 +224,17 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
             });
             // --max-requests recycling: stop accepting once the cap is reached so
             // the master respawns a fresh worker (bounds memory growth over time).
+            if APPLICATION && APPLICATION_STOP.load(Ordering::Relaxed) {
+                let _ = recycle.send(true);
+                break;
+            }
             if *recycle_requested.borrow() {
                 break;
             }
             let accepted = tokio::select! {
+                _ = application_tick::<APPLICATION>(), if APPLICATION => {
+                    continue;
+                }
                 changed = recycle_requested.changed() => {
                     if changed.is_err() || *recycle_requested.borrow() {
                         break;
@@ -191,6 +243,11 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                 }
                 accepted = listener.accept() => accepted,
             };
+            // The accept future and quota notification can become ready in the same poll.
+            if APPLICATION && (APPLICATION_STOP.load(Ordering::Relaxed) || *recycle_requested.borrow()) {
+                drop(accepted);
+                break;
+            }
             let (stream, peer) = match accepted {
                 Ok(pair) => pair,
                 Err(_) => continue,
@@ -339,7 +396,11 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                     // meant an idle service paid for a trace id every request.
                     probe_route::profile_request_kind(if profile_this { 1 } else { 2 });
                     probe_route::trace_begin(req_traceparent.as_deref(), &probe_route);
-                    let resp_body = run_handler(handler);
+                    let resp_body = if APPLICATION {
+                        with_application_signals_blocked(|| run_handler(handler))
+                    } else {
+                        run_handler(handler)
+                    };
                     // Unconditional and idempotent: a request that started no
                     // slice ends none, and consecutive profiled requests stay
                     // separate captures.

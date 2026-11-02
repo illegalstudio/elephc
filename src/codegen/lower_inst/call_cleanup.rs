@@ -343,7 +343,7 @@ pub(super) fn emit_borrowed_stack_mixed_arg_release(
 
 /// Converts the currently loaded indexed-array argument into boxed Mixed slots.
 pub(super) fn emit_loaded_indexed_array_to_mixed(ctx: &mut FunctionContext<'_>, source_elem_ty: &PhpType) {
-    let value_tag = runtime_value_tag(source_elem_ty) as i64;
+    let value_tag = crate::codegen::container_value_tag(source_elem_ty);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_int_immediate(ctx.emitter, "x1", value_tag);

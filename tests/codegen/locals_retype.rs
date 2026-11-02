@@ -417,8 +417,19 @@ fn test_constant_retype() {
 /// null-tolerant — the unset path may have nulled the old slot already).
 #[test]
 fn test_retype_after_conditional_unset_of_heap_local() {
-    let out = compile_and_run(fixtures::RETYPE_AFTER_CONDITIONAL_UNSET);
-    assert_eq!(out, "7");
+    let argvs: &[&[&str]] = &[&[], &["unset"]];
+    let outputs = compile_and_run_with_heap_debug_per_argv(
+        fixtures::RETYPE_AFTER_CONDITIONAL_UNSET,
+        argvs,
+    );
+    for (out, args) in outputs.into_iter().zip(argvs) {
+        assert!(out.success, "program failed for {args:?}: {}", out.stderr);
+        assert_eq!(out.stdout, "7", "arguments: {args:?}");
+        assert!(
+            out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+            "expected a clean heap for {args:?}, got: {}", out.stderr,
+        );
+    }
 }
 
 /// The compound-assignment shape (`$x .= "a"`), which the parser lowers into
@@ -1015,27 +1026,29 @@ fn test_reference_detach_in_included_function_keeps_its_source_identity() {
 /// Same-name mixed-storage decisions at equal coordinates in different files remain independent.
 #[test]
 fn test_mixed_storage_decisions_in_different_files_are_not_stripped() {
-    let out = compile_and_run_files(
+    let outputs = compile_and_run_files_per_argv(
         &[
             ("main.php", "<?php\nrequire 'lib.php';\n\n$a = 42;\necho \"|\";\n$a = 99;\necho $a;\n"),
             ("lib.php", "<?php\nfunction f($n) {\n    if ($n > 1) {\n$a = 42;\n    } else {\n$a = \"hello\";\n    }\n    echo strlen($a), \"|\";\n}\nf($argc);\n"),
         ],
         "main.php",
+        &[&[], &["int"]],
     );
-    assert_eq!(out, "5||99");
+    assert_eq!(outputs, ["5||99", "2||99"]);
 }
 
 /// A partial same-coordinate match across files cannot retire another source's mixed-storage key.
 #[test]
 fn test_partial_mixed_storage_decisions_in_different_files_stay_independent() {
-    let error = compile_files_error_message(
+    let outputs = compile_and_run_files_per_argv(
         &[
             ("main.php", "<?php\nrequire 'lib.php';\n\n$a = 5;\necho $a, \"|\";\n"),
             ("lib.php", "<?php\nfunction f($n) {\n    $q = 2;\n$a = 123456789;\n    for ($i = 1; $i < $n; $i++) {\n$a = \"s\";\n    }\n    var_dump($a);\n    return $q;\n}\nf($argc);\n"),
         ],
         "main.php",
+        &[&[], &["loop"]],
     );
-    assert!(error.is_none(), "included mixed-storage decisions must stay source-local: {error:?}");
+    assert_eq!(outputs, ["int(123456789)\n5|", "string(1) \"s\"\n5|"]);
 }
 
 /// Compatible rebinds in two source files keep their own binding decisions and still compile.
@@ -1950,13 +1963,14 @@ fn eval_aot_fragment_body(module_text: &str) -> String {
     body
 }
 
-/// The same program still prints PHP's answer.
+/// Both outer storage types survive a colliding eval fragment's local decision.
 #[test]
 fn test_eval_aot_fragment_with_a_colliding_outer_decision_runs() {
-    let out = compile_and_run(
+    let outputs = compile_and_run_per_argv(
         "<?php\n$b = \"s\";\nif ($argc > 1) { $b = 1; }\necho $b;\necho eval(\"\\n\\$b = 9;\\nreturn \\$b;\");\n",
+        &[&[], &["int"]],
     );
-    assert_eq!(out, "s9");
+    assert_eq!(outputs, ["s9", "19"]);
 }
 
 /// Two DIFFERENT locals killed at one (line, column) both keep their decision.

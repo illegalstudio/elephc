@@ -8,6 +8,88 @@
 //! - Preserves compile-time metadata, target-aware object layout, and ownership.
 
 use super::*;
+use crate::codegen::lower_inst::emit_runtime_callable_invoker_with_string_owner;
+use crate::codegen_support::callable_descriptor;
+use crate::names::function_symbol;
+
+/// Renders the `__toString()` dump for a `getDeclaringFunction()` reflector.
+///
+/// That reflector is built from metadata with NO parameters on purpose: emitting them would emit a
+/// `ReflectionParameter` for each, and each of those emits its own declaring function, which does
+/// not terminate. So the dump cannot be rendered from the metadata: it would claim
+/// `Parameters [0]` for a method that has some. The member is rebuilt from its names here and
+/// rendered to a STRING, which carries no such cycle.
+fn reflection_declaring_function_dump(
+    ctx: &FunctionContext<'_>,
+    declaring_class_name: Option<&str>,
+    name: &str,
+) -> Option<String> {
+    let Some(class_name) = declaring_class_name else {
+        // A source declaration shadows extension builtins, including in strict-php mode. Consult
+        // the builtin signature table only when no generated function with this name exists.
+        if let Some(function) = ctx.function_by_name(name) {
+            let signature = function.signature.as_ref()?;
+            let parameters = reflection_parameter_members_with_declaring_function(
+                ctx, signature, "", None, None, None, &[], Some(&function.source_defaults),
+            )
+            .ok()?;
+            return Some(reflection_function_to_string(
+                name,
+                false,
+                signature.deprecation.is_some(),
+                signature.by_ref_return,
+                &parameters,
+                reflection_return_type_metadata(signature).as_ref(),
+            ));
+        }
+
+        let (_, signature) = reflection_builtin_function_signature(name)?;
+        let parameters = reflection_parameter_members_with_declaring_function(
+            ctx, &signature, "", None, None, None, &[], None,
+        )
+        .ok()?;
+        return Some(reflection_function_to_string(
+            name,
+            true,
+            signature.deprecation.is_some(),
+            signature.by_ref_return,
+            &parameters,
+            reflection_return_type_metadata(&signature).as_ref(),
+        ));
+    };
+
+    if let Some(info) = ctx.module.class_infos.get(class_name) {
+        if let Some(member) = reflection_class_method_member(ctx, class_name, info, name)
+            .ok()
+            .flatten()
+        {
+            return Some(reflection_listed_method_to_string(ctx, &member));
+        }
+    }
+    if let Some(interface_name) = resolve_reflection_interface(ctx, class_name) {
+        if let Some(info) = ctx.module.interface_infos.get(interface_name) {
+            if let Some(member) =
+                reflection_interface_method_member(ctx, info, interface_name, name)
+                    .ok()
+                    .flatten()
+            {
+                return Some(reflection_listed_method_to_string(ctx, &member));
+            }
+        }
+    }
+    if let Some(trait_name) = resolve_reflection_trait(ctx, class_name) {
+        if let Some(methods) = ctx.module.declared_trait_methods.get(trait_name) {
+            if let Some(member) =
+                reflection_trait_method_member(ctx, methods, trait_name, name)
+                    .ok()
+                    .flatten()
+            {
+                return Some(reflection_listed_method_to_string(ctx, &member));
+            }
+        }
+    }
+    None
+}
 
 /// Writes one ReflectionParameter object's private metadata properties.
 pub(super) fn emit_reflection_parameter_properties(
@@ -32,6 +114,12 @@ pub(super) fn emit_reflection_parameter_properties(
         public_name_offset + 8,
     );
     emit_reflection_string_property(ctx, &parameter.name, name_offset, name_offset + 8);
+    let parameter_string = reflection_parameter_to_string(parameter);
+    emit_reflection_owner_dump_property(
+        ctx,
+        "ReflectionParameter",
+        &parameter_string,
+    )?;
     emit_reflection_attrs_property(
         ctx,
         "ReflectionParameter",
@@ -173,6 +261,7 @@ pub(super) fn emit_reflection_parameter_declaring_function_property(
             metadata.is_deprecated = *is_deprecated;
             metadata.is_generator = *is_generator;
             metadata.returns_reference = *returns_reference;
+            metadata.rendered_to_string = reflection_declaring_function_dump(ctx, None, name);
             emit_reflection_owner_object(ctx, "ReflectionFunction", &metadata)?;
             emit_box_current_value_as_mixed(
                 ctx.emitter,
@@ -203,6 +292,11 @@ pub(super) fn emit_reflection_parameter_declaring_function_property(
             metadata.is_deprecated = *is_deprecated;
             metadata.is_generator = *is_generator;
             metadata.returns_reference = *returns_reference;
+            metadata.rendered_to_string = reflection_declaring_function_dump(
+                ctx,
+                declaring_class_name.as_deref(),
+                name,
+            );
             emit_reflection_owner_object(ctx, "ReflectionMethod", &metadata)?;
             emit_box_current_value_as_mixed(
                 ctx.emitter,
@@ -407,6 +501,52 @@ pub(super) fn emit_reflection_owner_default_value_property(
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, default_offset);
     abi::emit_store_zero_to_address(ctx.emitter, object_reg, default_offset + 8);
     abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
+    if matches!(class_name, "ReflectionProperty" | "ReflectionParameter") {
+        let message = match default_value {
+            Some(ReflectionParameterDefaultValue::DeferredError(message)) => message.as_str(),
+            _ => "",
+        };
+        emit_reflection_owner_string_property_by_name(ctx, class_name, "__default_error", message)?;
+    }
+    if class_name == "ReflectionParameter" {
+        emit_reflection_default_factory(ctx, default_value)?;
+    }
     Ok(())
 }
 
+/// Stores a persistent internal factory without evaluating the tree or minting a PHP Closure id.
+fn emit_reflection_default_factory(
+    ctx: &mut FunctionContext<'_>, default: Option<&ReflectionParameterDefaultValue>,
+) -> Result<()> {
+    let info = ctx.module.class_infos.get("ReflectionParameter")
+        .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+    let offset = reflection_property_offset(info, "__default_factory")?;
+    let result = abi::int_result_reg(ctx.emitter);
+    let object = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result);
+    if let Some(ReflectionParameterDefaultValue::EirHelper(name)) = default {
+        let helper = ctx.module.functions.iter().chain(ctx.module.closures.iter())
+            .find(|function| function.name == *name)
+            .ok_or_else(|| CodegenIrError::missing_entry("default factory", 0))?;
+        let signature = helper.signature.clone()
+            .ok_or_else(|| CodegenIrError::missing_entry("default factory signature", 0))?;
+        let invoker = emit_runtime_callable_invoker_with_string_owner(ctx, &signature, &[], false, true);
+        let entry = function_symbol(name);
+        let descriptor = callable_descriptor::static_descriptor_with_optional_invoker_meta(
+            ctx.data, &entry, Some(name), callable_descriptor::CALLABLE_DESC_KIND_FUNCTION,
+            Some(&signature), &[], &[],
+            callable_descriptor::CallableDescriptorInvocation::new(
+                callable_descriptor::CallableDescriptorShape::Function,
+            ), Some(&invoker),
+        );
+        abi::emit_symbol_address(ctx.emitter, result, &descriptor);
+        emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Callable);
+    } else {
+        emit_boxed_null_literal_to_result(ctx);
+    }
+    abi::emit_pop_reg(ctx.emitter, object);
+    abi::emit_store_to_address(ctx.emitter, result, object, offset);
+    abi::emit_store_zero_to_address(ctx.emitter, object, offset + 8);
+    abi::emit_reg_move(ctx.emitter, result, object);
+    Ok(())
+}

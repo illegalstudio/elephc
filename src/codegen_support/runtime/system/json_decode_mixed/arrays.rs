@@ -14,19 +14,21 @@ use crate::codegen_support::emit::Emitter;
 /// recursive-descent parser for non-empty JSON arrays. Walks the slice between
 /// the leading `[` and trailing `]`, finds each element boundary using a
 /// depth-and-string-aware scanner, then recursively calls `__rt_json_decode_mixed`
-/// on each element sub-slice. Mixed pointers are pushed into a fresh array
+/// on each element sub-slice. A raw integer prefix is kept packed; other children are pushed into a fresh array
 /// created by `__rt_array_new(cap=4, elem_size=8)`; the array is finally boxed
 /// as `Mixed(tag=4)` and returned.
 ///
-/// # Frame layout (64 bytes, sp-relative)
+/// # Frame layout (80 bytes, sp-relative)
 /// - `[sp + 0..8]`   = slice_ptr
 /// - `[sp + 8..16]`  = slice_len
 /// - `[sp + 16..24]` = cursor (running scan position)
 /// - `[sp + 24..32]` = arr_ptr (allocated via `__rt_array_new`, may grow on push)
 /// - `[sp + 32..40]` = elem_start (saved across the recursive decode call)
 /// - `[sp + 40..48]` = after_comma flag
-/// - `[sp + 48..56]` = saved x29
-/// - `[sp + 56..64]` = saved x30
+/// - `[sp + 48..56]` = accepted raw integer
+/// - `[sp + 56..64]` = consumed token bytes
+/// - `[sp + 64..72]` = saved x29
+/// - `[sp + 72..80]` = saved x30
 ///
 /// # Input registers
 /// - `x1` = slice ptr (with leading `[` and trailing `]`)
@@ -43,26 +45,28 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: json_decode_mixed_array_real ---");
     emitter.label_global("__rt_json_decode_mixed_array_real");
 
-    // Frame layout (64 bytes):
+    // Frame layout (80 bytes):
     //   [sp + 0]  = slice_ptr
     //   [sp + 8]  = slice_len
     //   [sp + 16] = cursor (running scan position)
     //   [sp + 24] = arr_ptr (allocated via __rt_array_new, may grow on push)
     //   [sp + 32] = elem_start (saved across the recursive decode call)
     //   [sp + 40] = after_comma flag
-    //   [sp + 48] = saved x29
-    //   [sp + 56] = saved x30
-    emitter.instruction("sub sp, sp, #64");                                     // update the JSON decoder cursor or counter
-    emitter.instruction("stp x29, x30, [sp, #48]");                             // store updated JSON decoder state
-    emitter.instruction("add x29, sp, #48");                                    // update the JSON decoder cursor or counter
+    //   [sp + 48] = accepted raw integer
+    //   [sp + 56] = consumed token bytes
+    //   [sp + 64] = saved x29
+    //   [sp + 72] = saved x30
+    emitter.instruction("sub sp, sp, #80");                                     // update the JSON decoder cursor or counter
+    emitter.instruction("stp x29, x30, [sp, #64]");                             // store updated JSON decoder state
+    emitter.instruction("add x29, sp, #64");                                    // update the JSON decoder cursor or counter
     emitter.instruction("str x1, [sp, #0]");                                    // park the array slice ptr for downstream loads
     emitter.instruction("str x2, [sp, #8]");                                    // park the array slice length for the boundary scanner
 
     // Allocate the destination array up-front so failure paths can free
     // it consistently. capacity=4 is a reasonable starting point; the
-    // push_refcounted helper grows the array if needed.
+    // scalar or refcounted append helper grows the array if needed.
     emitter.instruction("mov x0, #4");                                          // initial capacity
-    emitter.instruction("mov x1, #8");                                          // elem_size = 8 (Mixed-pointer slots)
+    emitter.instruction("mov x1, #8");                                          // elem_size = 8 (raw integers, later Mixed pointers)
     emitter.instruction("bl __rt_array_new");                                   // call the array new helper
     emitter.instruction("str x0, [sp, #24]");                                   // park the array pointer
 
@@ -96,6 +100,8 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     // Save elem_start, then run the boundary scanner.
     emitter.instruction("str xzr, [sp, #40]");                                  // seeing an element clears the trailing-comma guard
     emitter.instruction("str x9, [sp, #32]");                                   // elem_start
+
+    super::integer_prefix::emit_aarch64(emitter);
 
     // Boundary scanner: advance cursor until we hit ',' or ']' at depth 0,
     // accounting for nested `[`/`]` and `{`/`}` plus JSON string state.
@@ -183,6 +189,7 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #32]");                                   // recover the parser's fresh child owner
     emitter.instruction("bl __rt_decref_mixed");                                // retire the reference retained by the destination array
 
+    emitter.label("__rt_json_array_prefix_separator");
     // Look at the separator.
     emitter.instruction("ldr x1, [sp, #0]");                                    // slice_ptr
     emitter.instruction("ldr x9, [sp, #16]");                                   // cursor at separator
@@ -216,8 +223,8 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #4");                                          // tag = indexed array
     emitter.instruction("mov x2, #0");                                          // load or prepare JSON decoder state
     emitter.instruction("bl __rt_json_box_owned_container");                    // call the mixed from value helper
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // load or prepare JSON decoder state
-    emitter.instruction("add sp, sp, #64");                                     // update the JSON decoder cursor or counter
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // load or prepare JSON decoder state
+    emitter.instruction("add sp, sp, #80");                                     // update the JSON decoder cursor or counter
     emitter.instruction("ret");                                                 // return from the JSON decoder helper
 
     emitter.label("__rt_json_decode_array_real_fail");
@@ -231,8 +238,8 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #24]");                                   // recover the partial array owner
     emitter.instruction("bl __rt_decref_array");                                // release the array and every child already adopted
     emitter.instruction("mov x0, #0");                                          // signal decode failure to the caller
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // load or prepare JSON decoder state
-    emitter.instruction("add sp, sp, #64");                                     // update the JSON decoder cursor or counter
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // load or prepare JSON decoder state
+    emitter.instruction("add sp, sp, #80");                                     // update the JSON decoder cursor or counter
     emitter.instruction("ret");                                                 // return from the JSON decoder helper
 }
 
@@ -240,13 +247,15 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
 /// a recursive-descent parser for non-empty JSON arrays. Identical semantics to the
 /// ARM64 version; see `emit_aarch64` for the full parser description.
 ///
-/// # Frame layout (48 bytes, rbp-relative)
+/// # Frame layout (64 bytes, rbp-relative)
 /// - `[rbp - 8]`   = slice_ptr
 /// - `[rbp - 16]`  = slice_len
 /// - `[rbp - 24]`  = cursor
 /// - `[rbp - 32]`  = arr_ptr
 /// - `[rbp - 40]`  = elem_start
 /// - `[rbp - 48]`  = after_comma flag
+/// - `[rbp - 56]`  = accepted raw integer
+/// - `[rbp - 64]`  = consumed token bytes
 ///
 /// # Input registers (System V ABI)
 /// - `rax` = slice ptr
@@ -263,21 +272,23 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: json_decode_mixed_array_real ---");
     emitter.label_global("__rt_json_decode_mixed_array_real");
 
-    // Frame layout (rbp-relative, 48 bytes reserved):
+    // Frame layout (rbp-relative, 64 bytes reserved):
     //   [rbp - 8]  = slice_ptr
     //   [rbp - 16] = slice_len
     //   [rbp - 24] = cursor
     //   [rbp - 32] = arr_ptr
     //   [rbp - 40] = elem_start
     //   [rbp - 48] = after_comma flag
+    //   [rbp - 56] = accepted raw integer
+    //   [rbp - 64] = consumed token bytes
     emitter.instruction("push rbp");                                            // save the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame
-    emitter.instruction("sub rsp, 48");                                         // reserve aligned scratch
+    emitter.instruction("sub rsp, 64");                                         // reserve aligned scratch
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // park slice_ptr
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // park slice_len
 
     emitter.instruction("mov rdi, 4");                                          // initial capacity
-    emitter.instruction("mov rsi, 8");                                          // elem_size = 8 (Mixed-pointer slots)
+    emitter.instruction("mov rsi, 8");                                          // elem_size = 8 (raw integers, later Mixed pointers)
     emitter.instruction("call __rt_array_new");                                 // rax = array pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // park array pointer
 
@@ -304,6 +315,8 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     // Save elem_start, then run the boundary scanner.
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // seeing an element clears the trailing-comma guard
     emitter.instruction("mov QWORD PTR [rbp - 40], rcx");                       // elem_start
+
+    super::integer_prefix::emit_x86_64(emitter);
 
     // Boundary scanner. Registers:
     //   rcx = cursor
@@ -392,6 +405,7 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // recover the parser's fresh child owner
     emitter.instruction("call __rt_decref_mixed");                              // retire the reference retained by the destination array
 
+    emitter.label("__rt_json_array_prefix_separator_x");
     // Look at the separator.
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // load or prepare JSON decoder state
     emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                       // load or prepare JSON decoder state

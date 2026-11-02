@@ -2,13 +2,13 @@
 title: "preg_replace_callback()"
 description: "Performs a regular expression search and replace using a callback."
 sidebar:
-  order: 764
+  order: 839
 ---
 
 ## preg_replace_callback()
 
 ```php
-function preg_replace_callback(string $pattern, callable $callback, string $subject): string
+function preg_replace_callback(string $pattern, callable $callback, string $subject): mixed
 ```
 
 Performs a regular expression search and replace using a callback.
@@ -18,7 +18,7 @@ Performs a regular expression search and replace using a callback.
 - `$callback` (`callable`)
 - `$subject` (`string`)
 
-**Returns**: `string`
+**Returns**: `mixed`
 
 ## Availability
 

@@ -19,7 +19,7 @@
 ///
 /// Far above any plausible source file, so a synthetic span can never equal one the lexer
 /// produced. That matters because spans are used as MAP KEYS, not just as coordinates.
-const SYNTHETIC_LINE_BASE: u32 = 1_000_000;
+pub(crate) const SYNTHETIC_LINE_BASE: u32 = 1_000_000;
 
 /// Counts synthetic lines handed out this process. A compile is one process, so a given
 /// program always gets the same numbering.
@@ -90,14 +90,31 @@ std::thread_local! {
     static NEXT_SOURCE_ID: std::cell::Cell<u32> = const { std::cell::Cell::new(1) };
     /// Source identities for synthetic parses (literal `eval` fragments).
     ///
-    /// A SEPARATE counter from [`NEXT_SOURCE_ID`], which [`Span::reset_source_ids`] rewinds per
-    /// include-resolution unit: sharing it let a fragment parsed after a reset alias an included
-    /// file's identity in span-keyed maps such as `builtin_call_types` (issue #1291). Starting
-    /// above [`SOURCE_ID_MASK`] keeps every synthetic id clear of the include range for any
-    /// realistic include count (an include id only reaches that range after 16_383 includes in
-    /// one resolution unit, which is pathological).
+    /// A SEPARATE counter from [`NEXT_SOURCE_ID`], which [`Span::reset_source_ids`] rewinds at
+    /// the start of every compile: sharing it let a fragment parsed after a reset alias an
+    /// included file's identity in span-keyed maps such as `builtin_call_types` (issue #1291).
+    /// Starting above [`SOURCE_ID_MASK`] keeps every synthetic id clear of the include range for
+    /// any realistic file count (an include or autoload id only reaches that range after 16_383
+    /// file parses in one compile, which is pathological).
     static NEXT_SYNTHETIC_SOURCE_ID: std::cell::Cell<u32> =
         const { std::cell::Cell::new(SOURCE_ID_MASK + 1) };
+    /// The physical file each source identity was lexed from, for diagnostics.
+    /// Per thread like `NEXT_SOURCE_ID`, so parallel compilations name their own files.
+    /// The pipeline registers the entry file under identity 0 before frontend processing.
+    ///
+    /// A checker error carries only a span; without this a diagnostic from an included or
+    /// autoloaded file printed `error[line:col]` with no way to tell which of thousands of files
+    /// it came from. Entries are overwritten when an identity is handed out again after
+    /// [`Span::reset_source_ids`], so a lookup always names the latest file lexed with that id.
+    static SOURCE_PATHS: std::cell::RefCell<std::collections::HashMap<u32, String>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// The thread-local source-ID counters at one moment; see [`Span::counters_checkpoint`].
+#[derive(Debug, Clone, Copy)]
+pub struct SpanCounters {
+    next_source_id: u32,
+    next_synthetic_source_id: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -168,9 +185,43 @@ impl Span {
         })
     }
 
-    /// Resets source identities at the beginning of a new include-resolution unit.
+    /// Records the physical file a source identity was lexed from.
+    pub fn register_source_path(source_id: u32, path: impl Into<String>) {
+        let path = path.into();
+        SOURCE_PATHS.with(|paths| {
+            paths.borrow_mut().insert(source_id, path);
+        });
+    }
+
+    /// Returns the physical file this span was lexed from, when one was registered.
+    pub fn source_path(self) -> Option<String> {
+        let source_id = self.source_id();
+        SOURCE_PATHS.with(|paths| paths.borrow().get(&source_id).cloned())
+    }
+
+    /// Resets source identities at the beginning of a compile's root include resolution.
+    ///
+    /// Only the root resolver resets the counter. Autoloaded files and their includes continue
+    /// allocating fresh identities, so span-keyed checker results cannot leak between files.
     pub fn reset_source_ids() {
         NEXT_SOURCE_ID.with(|next| next.set(1));
+    }
+
+    /// Captures thread-local include and synthetic source IDs for discarded work.
+    ///
+    /// Process-global synthetic lines stay monotonic: another thread may allocate live spans
+    /// while an autoload prelude probe is in progress.
+    pub fn counters_checkpoint() -> SpanCounters {
+        SpanCounters {
+            next_source_id: NEXT_SOURCE_ID.with(|next| next.get()),
+            next_synthetic_source_id: NEXT_SYNTHETIC_SOURCE_ID.with(|next| next.get()),
+        }
+    }
+
+    /// Restores thread-local source IDs after a discarded parse, leaving global spans fresh.
+    pub fn restore_counters(checkpoint: SpanCounters) {
+        NEXT_SOURCE_ID.with(|next| next.set(checkpoint.next_source_id));
+        NEXT_SYNTHETIC_SOURCE_ID.with(|next| next.set(checkpoint.next_synthetic_source_id));
     }
 
     /// Returns a source identity for a synthetic parse that [`Span::reset_source_ids`] must not
@@ -338,6 +389,24 @@ impl Span {
 mod tests {
     use super::*;
 
+    /// Restoring discarded source IDs must not recycle synthetic spans allocated on another thread.
+    #[test]
+    fn probe_source_restore_keeps_concurrent_synthetic_spans_monotonic() {
+        let checkpoint = Span::counters_checkpoint();
+        let source_id = Span::fresh_source_id();
+        let synthetic_source_id = Span::fresh_synthetic_source_id();
+        let concurrent_span = std::thread::spawn(Span::synthetic).join().unwrap();
+
+        Span::restore_counters(checkpoint);
+
+        assert_eq!(Span::fresh_source_id(), source_id);
+        assert_eq!(Span::fresh_synthetic_source_id(), synthetic_source_id);
+        assert!(
+            Span::synthetic().line > concurrent_span.line,
+            "restoring thread-local IDs must preserve another thread's synthetic span"
+        );
+    }
+
     /// Spans are embedded in every token and AST node and flow through the
     /// recursive-descent parser's stack frames; growing this struct directly
     /// deepens no recursion but fattens every frame, and 2 MiB test threads
@@ -357,6 +426,23 @@ mod tests {
         assert_ne!(first, second);
         assert!(first > SOURCE_ID_MASK, "synthetic ids stay clear of the include range");
         assert!(second > SOURCE_ID_MASK);
+    }
+
+    /// A registered identity names its file through every span lexed with it, an unregistered
+    /// one and an entry identity not yet registered by the pipeline name none. Registering the
+    /// same identity after a reset replaces the earlier file.
+    #[test]
+    fn registered_source_paths_name_the_file_of_their_spans() {
+        Span::register_source_path(9_101, "src/Counter.lfc");
+        let span = Span::with_end_from(
+            Span::new_in_source(9, 9, 9_101),
+            Span::new_in_source(9, 47, 9_101),
+        );
+        assert_eq!(span.source_path().as_deref(), Some("src/Counter.lfc"));
+        assert_eq!(Span::new_in_source(9, 9, 9_102).source_path(), None);
+        assert_eq!(Span::new(9, 9).source_path(), None, "source 0 is unregistered outside the pipeline");
+        Span::register_source_path(9_101, "src/Fixed.lfc");
+        assert_eq!(span.source_path().as_deref(), Some("src/Fixed.lfc"));
     }
 
     /// A column past the inline 16 bits keeps its value and its source identity (#1292), and

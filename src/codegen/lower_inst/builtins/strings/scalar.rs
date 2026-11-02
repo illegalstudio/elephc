@@ -267,7 +267,8 @@ pub(crate) fn emit_weak_float_result_to_int(
 /// Jumps to `not_representable` for `NaN`, the infinities, and anything outside the PHP int
 /// range, which php-src refuses rather than wrapping. Otherwise it emits PHP 8.5's
 /// `Implicit conversion from float ... to int loses precision` deprecation when truncation is
-/// lossy and falls through, leaving the conversion itself to the caller.
+/// lossy and falls through, leaving final storage materialization to the caller.
+/// The accepted integer is restored in the integer-result register after diagnostic handlers.
 ///
 /// Split out of `emit_weak_float_result_to_int` so the typed-property guard raises its OWN
 /// `TypeError` wording for an unrepresentable float instead of a builtin-argument one, while
@@ -305,6 +306,11 @@ pub(crate) fn emit_float_result_int_coercion_diagnostics(
     }
     emit_float_precision_deprecation(ctx);
     ctx.emitter.label(&exact);
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        FLOAT_TO_INT_VALUE_OFFSET,
+    );
     abi::emit_release_temporary_stack(ctx.emitter, FLOAT_TO_INT_FRAME_BYTES);
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&invalid);

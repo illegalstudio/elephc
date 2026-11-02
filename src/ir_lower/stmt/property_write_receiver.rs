@@ -105,6 +105,27 @@ impl PropertyWriteReceiver {
         child
     }
 
+    /// Dispatches a delayed interface receiver by its current class after RHS/name effects.
+    ///
+    /// A guard observed before those effects may describe an object the static slot no longer
+    /// holds. Keep the raw slot unchanged and lend boxing a borrow of its independently held
+    /// pointer, then transfer the receiver lease to the runtime-shaped cell.
+    pub(crate) fn into_runtime_interface_view(
+        self, ctx: &mut LoweringContext<'_, '_>, span: Span,
+    ) -> Self {
+        let ty = ctx.builder.value_php_type(self.value.value);
+        if !matches!(&ty, PhpType::Object(name) if ctx.interfaces.contains_key(name.as_str())) {
+            return self;
+        }
+        ctx.with_independent_write_receiver(|ctx| {
+            let borrowed = ctx.emit_value(Op::Borrow, vec![self.value.value], None, ty,
+                Op::Borrow.default_effects(), Some(span));
+            ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+            let boxed = ctx.box_value_as_mixed(borrowed, PhpType::Mixed, Some(span));
+            self.handoff(ctx, boxed, span)
+        })
+    }
+
     /// Retires an earlier operand window without popping it through newer receiver records.
     pub(crate) fn finish_operand_window(
         &mut self, ctx: &mut LoweringContext<'_, '_>,

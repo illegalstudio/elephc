@@ -191,7 +191,7 @@ pub(super) fn dynamic_new_candidate(
     } else {
         return Ok(None);
     };
-    let property_defaults = collect_property_defaults(class_info, inst)?;
+    let property_initialization = collect_property_initialization(class_info, inst);
     Ok(Some(DynamicNewCandidate {
         class_name: class_name.to_string(),
         class_id: class_info.class_id,
@@ -199,7 +199,7 @@ pub(super) fn dynamic_new_candidate(
         allow_dynamic_properties: class_info.has_property_hash_storage(),
         uninitialized_marker_offsets: uninitialized_property_marker_offsets(class_info),
         owned_reference_property_offsets: owned_reference_property_offsets(class_info),
-        property_defaults,
+        property_initialization,
         constructor_impl,
     }))
 }
@@ -223,7 +223,7 @@ pub(super) fn dynamic_new_without_constructor_candidate(
     if class_interfaces_require_missing_method_symbols(ctx, class_name, class_info) {
         return Ok(None);
     }
-    let property_defaults = collect_property_defaults(class_info, inst)?;
+    let property_initialization = collect_property_initialization(class_info, inst);
     Ok(Some(DynamicNewCandidate {
         class_name: class_name.to_string(),
         class_id: class_info.class_id,
@@ -231,7 +231,7 @@ pub(super) fn dynamic_new_without_constructor_candidate(
         allow_dynamic_properties: class_info.has_property_hash_storage(),
         uninitialized_marker_offsets: uninitialized_property_marker_offsets(class_info),
         owned_reference_property_offsets: owned_reference_property_offsets(class_info),
-        property_defaults,
+        property_initialization,
         constructor_impl: None,
     }))
 }
@@ -260,7 +260,7 @@ pub(super) fn spl_runtime_storage_dynamic_new_candidate(
         allow_dynamic_properties: class_info.has_property_hash_storage(),
         uninitialized_marker_offsets: Vec::new(),
         owned_reference_property_offsets: Vec::new(),
-        property_defaults: Vec::new(),
+        property_initialization: PropertyInitialization::Inline(Vec::new()),
         constructor_impl: None,
     })
 }
@@ -374,7 +374,14 @@ pub(super) fn emit_dynamic_new_candidate(
         &candidate.owned_reference_property_offsets,
     )?;
     ctx.store_result_value(result)?;
-    emit_property_defaults(ctx, result, &candidate.property_defaults)?;
+    let needs_construction_guard = candidate.constructor_impl.is_some()
+        || candidate.property_initialization.uses_thunk();
+    let construction_guard_bytes = if needs_construction_guard {
+        ctx.load_value_to_result(result)?;
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        super::super::callable_guards::begin_unconstructed_object(ctx.emitter)
+    } else { 0 };
+    emit_property_initialization(ctx, result, &candidate.property_initialization)?;
     if super::super::is_throwable_like_class(ctx, &candidate.class_name) {
         ctx.load_value_to_result(result)?;
         emit_regular_throwable_creation_line(ctx, result, abi::int_result_reg(ctx.emitter), candidate.class_id);
@@ -391,6 +398,10 @@ pub(super) fn emit_dynamic_new_candidate(
             &constructor.ref_params,
             constructor.padding_thunk.as_deref(),
         )?;
+    }
+    if needs_construction_guard {
+        super::super::callable_guards::end_unconstructed_object(ctx.emitter, construction_guard_bytes);
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
     }
     Ok(())
 }

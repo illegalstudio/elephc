@@ -32,7 +32,9 @@ pub(super) fn lower_switch(
             subject = captured;
         }
     }
-    let (subject, owner) = if preserve_subject {
+    let (subject, owner) = if preserve_subject
+        || ctx.builder.value_defining_op(subject.value) == Some(Op::StrCharAt)
+    {
         crate::ir_lower::expr::root_owned_call_operand(ctx, subject, span)
     } else { (subject, None) };
     let exit = ctx.builder.create_named_block("switch.exit", Vec::new());
@@ -123,13 +125,17 @@ pub(super) fn lower_dynamic_switch_dispatch(
     blocks: &[BlockId],
     default_block: BlockId,
 ) {
+    // A packed record address compares as the pointer word the checker types it as.
+    let subject = ctx.retype_packed_address_for_pointer_sink(subject, &PhpType::Pointer(None), None);
+    let subject_php = ctx.builder.value_php_type(subject.value).codegen_repr();
+    let subject_is_pointer = matches!(subject_php, PhpType::Pointer(_));
     let subject_is_str = subject.ir_type == IrType::Str;
     let subject_is_mixed = matches!(subject.ir_type, IrType::Heap(crate::ir::IrHeapKind::Mixed));
     let subject_is_object = matches!(subject.ir_type, IrType::Heap(crate::ir::IrHeapKind::Object));
     // Integer-like subjects are coerced once and reused by the ICmp path.
     // Mixed subjects must use loose equality for every case because the runtime tag may be
     // float, string, bool, etc. — coercing to int would truncate a float (issue #397).
-    let int_subject = if subject_is_str || subject_is_mixed || subject_is_object {
+    let int_subject = if subject_is_str || subject_is_mixed || subject_is_object || subject_is_pointer {
         None
     } else {
         Some(coerce_to_int(ctx, subject, None))
@@ -137,6 +143,55 @@ pub(super) fn lower_dynamic_switch_dispatch(
     for ((case_exprs, _), case_block) in cases.iter().zip(blocks) {
         for case_expr in case_exprs {
             let case_value = lower_expr(ctx, case_expr);
+            // A PHP null case keeps its `Void` type unless the subject is a pointer (where the
+            // null sentinel must stay a pointer word). Retyping it into `Pointer(None)` hid it
+            // from the mixed/string loose-equality paths and made the backend refuse the whole
+            // switch (#1994). Packed cases still need the pointer sink below.
+            let case_is_null = !subject_is_pointer
+                && matches!(
+                    ctx.builder.value_php_type(case_value.value).codegen_repr(),
+                    PhpType::Void
+                );
+            let case_value = if case_is_null {
+                // `int == null` and `bool == null` are `int == 0`; materialize that cast so the
+                // integer fast path never compares a `Void` operand.
+                if matches!(subject_php, PhpType::Int | PhpType::Bool) {
+                    lower_expr(ctx, &Expr::new(ExprKind::IntLiteral(0), case_expr.span))
+                } else {
+                    case_value
+                }
+            } else {
+                ctx.retype_packed_address_for_pointer_sink(
+                    case_value,
+                    &PhpType::Pointer(None),
+                    None,
+                )
+            };
+            // Two pointers (packed record addresses are retyped above) match by address identity;
+            // the integer `icmp` path does not accept pointer words. A pointer against a
+            // non-pointer takes the loose-equality path below, which keeps its diagnostic.
+            let case_is_pointer =
+                matches!(ctx.builder.value_php_type(case_value.value).codegen_repr(), PhpType::Pointer(_));
+            if subject_is_pointer && case_is_pointer {
+                let matched = ctx.emit_value(
+                    Op::StrictEq,
+                    vec![subject.value, case_value.value],
+                    None,
+                    PhpType::Bool,
+                    Op::StrictEq.default_effects(),
+                    Some(case_expr.span),
+                );
+                let miss_block = ctx.builder.create_named_block("switch.next", Vec::new());
+                ctx.builder.terminate(Terminator::CondBr {
+                    cond: matched.value,
+                    then_target: *case_block,
+                    then_args: Vec::new(),
+                    else_target: miss_block,
+                    else_args: Vec::new(),
+                });
+                ctx.builder.position_at_end(miss_block);
+                continue;
+            }
             // Strings and floats must use loose equality: coercing a string to int
             // collapses every case to `0 == 0`, and coercing a float to int would
             // truncate the subject (so `switch (1.5) { case 1.5; }` would wrongly
@@ -145,9 +200,16 @@ pub(super) fn lower_dynamic_switch_dispatch(
             let use_loose_eq = subject_is_str
                 || subject_is_mixed
                 || subject_is_object
+                || subject_is_pointer
+                || case_is_pointer
                 || matches!(case_value.ir_type, IrType::Heap(crate::ir::IrHeapKind::Object | crate::ir::IrHeapKind::Mixed))
                 || case_value.ir_type == IrType::Str
-                || float_loose_eq_pair(subject.ir_type, case_value.ir_type);
+                || float_loose_eq_pair(subject.ir_type, case_value.ir_type)
+                // `case null` compares as `== null`. The integer fast path is only
+                // PHP-equivalent for an int/bool subject (where `int == null` is `int == 0`);
+                // a string/array/object/float subject must use the loose comparison.
+                || (case_is_null
+                    && !matches!(subject_php, PhpType::Int | PhpType::Bool));
             let matched = if use_loose_eq {
                 // Loose equality handles string/string, string/scalar, float/numeric,
                 // and mixed cases exactly as PHP's `==` would inside an if/elseif chain.

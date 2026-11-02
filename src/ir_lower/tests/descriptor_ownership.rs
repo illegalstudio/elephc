@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Frame roots must survive exceptional calls and retire after ordinary returns on all targets.
+//! - Descriptor source-profile flags are non-heap metadata, not argument-container owners.
 
 use crate::ir::{Immediate, LocalKind, Op, Ownership};
 
@@ -587,7 +588,11 @@ fn descriptor_invocations_root_and_retire_temporary_operands_on_all_targets() {
         );
         let function = module.functions.iter().find(|function| function.name == "invoke_rooted_descriptor").unwrap();
         let invoke = function.instructions.iter().position(|inst| inst.op == Op::CallableDescriptorInvoke).unwrap();
-        for operand in &function.instructions[invoke].operands {
+        let operands = &function.instructions[invoke].operands;
+        assert_eq!(operands.len(), 3, "{target}: callback, container and source profile");
+        assert_eq!(function.value(operands[2]).unwrap().ownership, Ownership::NonHeap,
+            "{target}: a scalar profile must not become a heap root");
+        for operand in operands.iter().take(2) {
             let store = function.instructions[..invoke].iter().find(|inst| {
                 inst.op == Op::StoreLocal && inst.operands == [*operand]
             }).expect("the invocation operand needs an owning frame root");

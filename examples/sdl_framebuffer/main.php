@@ -4,24 +4,24 @@
 // elephc -l SDL2 -L /opt/homebrew/lib examples/sdl_framebuffer/main.php
 
 extern "SDL2" {
-    function SDL_Init(int $flags): int;
+    function SDL_Init(u32 $flags): i32;
     function SDL_Quit(): void;
-    function SDL_CreateWindow(string $title, int $x, int $y, int $w, int $h, int $flags): ptr;
+    function SDL_CreateWindow(string $title, i32 $x, i32 $y, i32 $w, i32 $h, u32 $flags): ptr;
     function SDL_DestroyWindow(ptr $window): void;
-    function SDL_CreateRenderer(ptr $window, int $index, int $flags): ptr;
+    function SDL_CreateRenderer(ptr $window, i32 $index, u32 $flags): ptr;
     function SDL_DestroyRenderer(ptr $renderer): void;
-    function SDL_SetRenderDrawColor(ptr $renderer, int $r, int $g, int $b, int $a): int;
-    function SDL_RenderClear(ptr $renderer): int;
-    function SDL_RenderDrawPoint(ptr $renderer, int $x, int $y): int;
+    function SDL_SetRenderDrawColor(ptr $renderer, u8 $r, u8 $g, u8 $b, u8 $a): i32;
+    function SDL_RenderClear(ptr $renderer): i32;
+    function SDL_RenderDrawPoint(ptr $renderer, i32 $x, i32 $y): i32;
     function SDL_RenderPresent(ptr $renderer): void;
-    function SDL_Delay(int $ms): void;
+    function SDL_Delay(u32 $ms): void;
     function SDL_GetError(): string;
 }
 
 extern "System" {
-    function malloc(int $size): ptr;
+    function malloc(u64 $size): ptr;
     function free(ptr $p): void;
-    function memset(ptr $dest, int $byte, int $count): ptr;
+    function memset(ptr $dest, i32 $byte, u64 $count): ptr;
 }
 
 $SDL_INIT_VIDEO = 32;

@@ -36,6 +36,7 @@ pub(crate) mod repl;
 mod return_type_compat;
 mod return_values;
 mod runtime_ops;
+pub(crate) use runtime_ops::{EVAL_TAG_BOOL, EVAL_TAG_FLOAT, EVAL_TAG_INT, EVAL_TAG_NULL, EVAL_TAG_STRING};
 mod scope_cells;
 mod persistent_references;
 mod superglobals;

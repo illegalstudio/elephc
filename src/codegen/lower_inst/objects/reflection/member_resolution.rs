@@ -62,15 +62,21 @@ pub(super) fn reflection_class_method_prototype_member(
     method_key: &str,
     flags: ReflectionMemberFlags,
 ) -> Result<Option<Box<ReflectionListedMember>>> {
-    if !reflection_method_is_declared_on_class(info, class_name, method_key, flags.is_static) {
-        return Ok(None);
-    }
     if let Some(member) =
-        reflection_parent_method_prototype_member(ctx, info, method_key, flags.is_static)?
+        reflection_interface_method_prototype_member(ctx, info, method_key, flags.is_static)?
     {
         return Ok(Some(Box::new(member)));
     }
-    reflection_interface_method_prototype_member(ctx, info, method_key, flags.is_static)
+    if !reflection_method_is_declared_on_class(info, class_name, method_key, flags.is_static) {
+        // An inherited implementation keeps the parent's prototype, including interfaces
+        // introduced after the method's original declaring class.
+        let Some((parent, parent_info)) = reflection_parent_class_name(ctx, info)
+            .as_deref().and_then(|parent| resolve_reflection_class(ctx, parent))
+        else { return Ok(None); };
+        return reflection_class_method_member(ctx, parent, parent_info, method_key)
+            .map(|member| member.and_then(|member| member.prototype_member));
+    }
+    reflection_parent_method_prototype_member(ctx, info, method_key, flags.is_static)
         .map(|member| member.map(Box::new))
 }
 
@@ -94,7 +100,7 @@ pub(super) fn reflection_method_is_declared_on_class(
         .unwrap_or(false)
 }
 
-/// Finds the nearest parent-class method that is a valid PHP prototype.
+/// Finds the inherited root contract exposed by PHP's prototype API.
 pub(super) fn reflection_parent_method_prototype_member(
     ctx: &FunctionContext<'_>,
     info: &crate::types::ClassInfo,
@@ -116,13 +122,25 @@ pub(super) fn reflection_parent_method_prototype_member(
                 reflection_class_method_member(ctx, resolved_parent_name, parent_info, method_key)?
             {
                 if !member.flags.is_private && member.flags.is_static == is_static {
-                    return Ok(Some(member));
+                    if member.prototype_member.is_some() {
+                        return Ok(member.prototype_member.map(|prototype| reflection_prototype_view(*prototype)));
+                    }
+                    if method_key.eq_ignore_ascii_case("__construct") && !member.flags.is_abstract {
+                        return Ok(None);
+                    }
+                    return Ok(Some(reflection_prototype_view(member)));
                 }
             }
         }
         current = reflection_parent_class_name(ctx, parent_info);
     }
     Ok(None)
+}
+
+/// Shows a prototype from its declaring scope instead of the intermediate lookup scope.
+fn reflection_prototype_view(mut member: ReflectionListedMember) -> ReflectionListedMember {
+    member.flags.is_inherited = false;
+    member
 }
 
 /// Returns whether a class metadata entry has a method with the requested staticness.
@@ -138,14 +156,20 @@ pub(super) fn reflection_class_has_method_kind(
     }
 }
 
-/// Finds the first implemented interface method that is a valid PHP prototype.
+/// Finds the last newly implemented interface method in PHP's direct-clause order.
 pub(super) fn reflection_interface_method_prototype_member(
     ctx: &FunctionContext<'_>,
     info: &crate::types::ClassInfo,
     method_key: &str,
     is_static: bool,
 ) -> Result<Option<ReflectionListedMember>> {
-    for interface_name in &info.interfaces {
+    let parent_interfaces = reflection_parent_class_name(ctx, info)
+        .as_deref().and_then(|parent| resolve_reflection_class(ctx, parent))
+        .map(|(_, parent)| parent.interfaces.as_slice()).unwrap_or(&[]);
+    for interface_name in info.declared_interfaces.iter().rev() {
+        if parent_interfaces.iter().any(|parent| php_symbol_key(parent) == php_symbol_key(interface_name)) {
+            continue;
+        }
         let Some(interface_name) = resolve_reflection_interface(ctx, interface_name) else {
             continue;
         };
@@ -164,7 +188,7 @@ pub(super) fn reflection_interface_method_prototype_member(
             reflection_interface_method_member(ctx, interface_info, interface_name, method_key)?
         {
             if member.flags.is_static == is_static {
-                return Ok(Some(member));
+                return Ok(Some(reflection_prototype_view(member)));
             }
         }
     }

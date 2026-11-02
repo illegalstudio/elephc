@@ -4,13 +4,13 @@
 // elephc -l SDL2 -L /opt/homebrew/lib examples/sdl_input/main.php
 
 extern "SDL2" {
-    function SDL_Init(int $flags): int;
+    function SDL_Init(u32 $flags): i32;
     function SDL_Quit(): void;
-    function SDL_CreateWindow(string $title, int $x, int $y, int $w, int $h, int $flags): ptr;
+    function SDL_CreateWindow(string $title, i32 $x, i32 $y, i32 $w, i32 $h, u32 $flags): ptr;
     function SDL_DestroyWindow(ptr $window): void;
     function SDL_PumpEvents(): void;
     function SDL_GetKeyboardState(ptr $numkeys): ptr;
-    function SDL_Delay(int $ms): void;
+    function SDL_Delay(u32 $ms): void;
     function SDL_GetError(): string;
 }
 

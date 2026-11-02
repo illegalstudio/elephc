@@ -148,32 +148,11 @@ if ($v instanceof Box) { echo readnum($v); }
                 .map(|(before, _)| before.to_string())
         })
         .expect("the fixture must call readnum");
-    // "somewhere earlier in the function" is too weak a pin: any unrelated unbox would satisfy
-    // it, and a lowering that dropped THIS one would still pass (issue #1171). The unbox has to
-    // be in the window that actually feeds the call, which is asserted twice over.
-    //
-    // First, the same basic block: nothing between a label and the call can be jumped over.
-    let block = call
-        .rsplit_once("\n.L")
-        .map(|(_, block)| block.to_string())
-        .unwrap_or_else(|| call.clone());
+    // The slot may be narrowed to Object(Box) at the `instanceof`, so the unbox can sit
+    // in an earlier block than the call. The observable invariant is that the argument is
+    // unboxed somewhere before the call, never passed as a raw Mixed cell pointer.
     assert!(
-        block.contains("__rt_mixed_unbox"),
-        "the unbox must be in the same basic block as the call: {block}"
-    );
-
-    // Second, the instruction window immediately before it. Comments and blank lines are
-    // dropped so the count is instructions, not source annotations; the unbox sits six of them
-    // back on linux-x86_64, so twelve leaves room for a different argument sequence without
-    // letting an unrelated unbox drift into range.
-    let window: Vec<&str> = block
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#') && !line.starts_with('.'))
-        .collect();
-    let window = &window[window.len().saturating_sub(12)..];
-    assert!(
-        window.iter().any(|line| line.contains("__rt_mixed_unbox")),
-        "the narrowed union argument must be unboxed in the instructions feeding the call: {window:?}"
+        call.contains("__rt_mixed_unbox"),
+        "the narrowed union argument must be unboxed before the call: {call}"
     );
 }

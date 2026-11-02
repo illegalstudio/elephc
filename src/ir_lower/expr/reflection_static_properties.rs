@@ -90,8 +90,11 @@ pub(super) fn lower_reflection_class_set_static_property_value(
     expr: &Expr,
 ) -> Option<LoweredValue> {
     let (property, value) = reflection_class_set_static_property_value_args(args)?;
-    let (declaring_class, _) = reflection_class_static_property_target(ctx, class_name, &property)?;
+    let (declaring_class, property_ty) =
+        reflection_class_static_property_target(ctx, class_name, &property)?;
     let value = lower_expr(ctx, &value);
+    // PHP null or a packed record address bound for a pointer slot becomes the stored word.
+    let value = ctx.retype_packed_address_for_pointer_sink(value, &property_ty, Some(expr.span));
     store_reflection_static_property_by_class_name(
         ctx,
         &declaring_class,
@@ -145,7 +148,7 @@ pub(super) fn reflection_class_static_property_map_entries(
                     .get(property)
                     .cloned()
                     .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
-                let property_ty = normalize_value_php_type(property_ty.codegen_repr());
+                let property_ty = normalize_value_php_type(crate::types::eir_value_php_type(property_ty));
                 (property.clone(), declaring_class, property_ty)
             })
             .collect(),
@@ -249,7 +252,7 @@ pub(super) fn reflection_class_static_property_target(
         .static_properties
         .iter()
         .find(|(name, _)| name == property)
-        .map(|(_, property_ty)| normalize_value_php_type(property_ty.codegen_repr()))?;
+        .map(|(_, property_ty)| normalize_value_php_type(crate::types::eir_value_php_type(property_ty)))?;
     let declaring_class = class_info
         .static_property_declaring_classes
         .get(property)
@@ -302,6 +305,9 @@ pub(super) fn lower_static_property_get_by_class_name_with_op(
     expr: &Expr,
     op: Op,
 ) -> LoweredValue {
+    if let Some(error) = crate::ir_lower::property_default_errors::for_class(ctx, class_name, expr.span) {
+        return error;
+    }
     let data = ctx.intern_string(&format!("{}::{}", class_name, property));
     ctx.emit_value(
         op,
@@ -331,6 +337,23 @@ pub(super) fn store_reflection_static_property_by_class_name(
     );
 }
 
+/// Rewrites a PHP null or packed record address bound for a pointer static property into the
+/// pointer word its slot stores, as a direct `Class::$prop = ...` assignment does.
+pub(super) fn retype_reflection_static_property_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    property: &str,
+    value: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    match reflection_class_static_property_target(ctx, class_name, property) {
+        Some((_, property_ty)) => {
+            ctx.retype_packed_address_for_pointer_sink(value, &property_ty, Some(span))
+        }
+        None => value,
+    }
+}
+
 /// Emits a static-property write using the requested static-property opcode.
 pub(super) fn store_static_property_by_class_name_with_op(
     ctx: &mut LoweringContext<'_, '_>,
@@ -340,6 +363,9 @@ pub(super) fn store_static_property_by_class_name_with_op(
     span: Span,
     op: Op,
 ) {
+    if crate::ir_lower::property_default_errors::for_class(ctx, class_name, span).is_some() {
+        return;
+    }
     let data = ctx.intern_string(&format!("{}::{}", class_name, property));
     ctx.emit_void(
         op,
@@ -349,4 +375,3 @@ pub(super) fn store_static_property_by_class_name_with_op(
         Some(span),
     );
 }
-

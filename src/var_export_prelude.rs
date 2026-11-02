@@ -35,7 +35,7 @@
 use crate::parser::ast::{BinOp, CastType, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
     e_array, e_binop, e_bool, e_call, e_cast, e_float, e_index, e_int, e_neg, e_null,
-    e_post_inc, e_str, e_ternary, e_var, function, internal_declarations, s_assign, s_break,
+    e_post_inc, e_str, e_ternary, e_var, function, internal_declarations, s_array_push, s_assign, s_break,
     s_continue, s_echo, s_expr, s_for, s_foreach, s_if, s_return, t_mixed,
 };
 
@@ -262,7 +262,12 @@ fn decl_fn_elephc_var_export_str() -> Stmt {
                 e_call("is_array", vec![e_var("value")]),
                 vec![
                     s_assign("pad", e_call("str_repeat", vec![e_str(" "), e_var("indent")])),
-                    s_assign("out", e_str("array (\n")),
+                    // One PART per entry, joined once at the end. Growing a single `$out` with
+                    // `$out = $out . …` copied the whole rendering for every entry: quadratic
+                    // work, and each superseded copy a block the fixed heap could not reuse for
+                    // the next, larger one, so `var_export(range(1, 50000))` died with "heap
+                    // memory exhausted" at the default 128 MB while PHP prints its 877 KB.
+                    s_assign("parts", e_array(vec![e_str("array (\n")])),
                     s_foreach(e_var("value"), Some("k"), "v", vec![
                         s_if(
                             e_call("is_int", vec![e_var("k")]),
@@ -275,21 +280,20 @@ fn decl_fn_elephc_var_export_str() -> Stmt {
                             s_assign("key", e_binop(e_binop(e_str("'"), BinOp::Concat, e_call("__elephc_var_export_escape", vec![e_var("keytext")])), BinOp::Concat, e_str("'"))),
                         ]),
                         ),
-                        s_assign("out", e_binop(e_binop(e_binop(e_binop(e_var("out"), BinOp::Concat, e_var("pad")), BinOp::Concat, e_str("  ")), BinOp::Concat, e_var("key")), BinOp::Concat, e_str(" => "))),
+                        s_assign("head", e_binop(e_binop(e_binop(e_var("pad"), BinOp::Concat, e_str("  ")), BinOp::Concat, e_var("key")), BinOp::Concat, e_str(" => "))),
                         s_if(
                             e_binop(e_call("is_array", vec![e_var("v")]), BinOp::Or, e_call("is_object", vec![e_var("v")])),
                             vec![
-                                s_assign("out", e_binop(e_binop(e_binop(e_binop(e_var("out"), BinOp::Concat, e_str("\n")), BinOp::Concat, e_var("pad")), BinOp::Concat, e_str("  ")), BinOp::Concat, e_call("__elephc_var_export_str", vec![e_var("v"), e_binop(e_var("indent"), BinOp::Add, e_int(2))]))),
+                                s_array_push("parts", e_binop(e_binop(e_binop(e_binop(e_binop(e_var("head"), BinOp::Concat, e_str("\n")), BinOp::Concat, e_var("pad")), BinOp::Concat, e_str("  ")), BinOp::Concat, e_call("__elephc_var_export_str", vec![e_var("v"), e_binop(e_var("indent"), BinOp::Add, e_int(2))])), BinOp::Concat, e_str(",\n"))),
                             ],
                             vec![],
                             Some(vec![
-                            s_assign("out", e_binop(e_var("out"), BinOp::Concat, e_call("__elephc_var_export_str", vec![e_var("v"), e_binop(e_var("indent"), BinOp::Add, e_int(2))]))),
+                            s_array_push("parts", e_binop(e_binop(e_var("head"), BinOp::Concat, e_call("__elephc_var_export_str", vec![e_var("v"), e_binop(e_var("indent"), BinOp::Add, e_int(2))])), BinOp::Concat, e_str(",\n"))),
                         ]),
                         ),
-                        s_assign("out", e_binop(e_var("out"), BinOp::Concat, e_str(",\n"))),
                     ]),
-                    s_assign("out", e_binop(e_binop(e_var("out"), BinOp::Concat, e_var("pad")), BinOp::Concat, e_str(")"))),
-                    s_return(e_var("out")),
+                    s_array_push("parts", e_binop(e_var("pad"), BinOp::Concat, e_str(")"))),
+                    s_return(e_call("implode", vec![e_str(""), e_var("parts")])),
                 ],
                 vec![],
                 None,
@@ -424,21 +428,39 @@ pub const ECHO_HELPER: &str = "__elephc_var_export_echo";
 /// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): its usage scan walks the
 /// whole program, so an embedder calling it without the CLI driver's wrapper gets the same stack
 /// budget.
+#[allow(dead_code)] // The CLI calls the `_or_referenced_elsewhere` form; embedders and tests call this.
 pub fn inject_if_used(
     program: Program,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Program {
+    inject_if_used_or_referenced_elsewhere(program, false, inventory)
+}
+
+/// [`inject_if_used`], also injecting when `referenced_elsewhere` says a file the autoload pass
+/// loads later calls `var_export` (`crate::autoload::prelude_probe`). A program that declares
+/// its own `var_export` still gets nothing.
+pub fn inject_if_used_or_referenced_elsewhere(
+    program: Program,
+    referenced_elsewhere: bool,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> Program {
     crate::compiler_stack::with_compiler_stack(|| {
-        inject_if_used_on_compiler_stack(program, inventory)
+        inject_if_used_on_compiler_stack(program, referenced_elsewhere, inventory)
     })
+}
+
+/// Whether `program` calls `var_export` without declaring its own.
+pub(crate) fn program_uses_surface(program: &[crate::parser::ast::Stmt]) -> bool {
+    detect::program_references_var_export(program) && !detect::program_declares_var_export(program)
 }
 
 /// The body of [`inject_if_used`], run on the stack `with_compiler_stack` sized.
 fn inject_if_used_on_compiler_stack(
     program: Program,
+    referenced_elsewhere: bool,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Program {
-    if !detect::program_references_var_export(&program)
+    if !(referenced_elsewhere || detect::program_references_var_export(&program))
         || detect::program_declares_var_export(&program)
     {
         return program;

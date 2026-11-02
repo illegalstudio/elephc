@@ -2,7 +2,7 @@
 title: "array_udiff()"
 description: "Returns entries from the first of exactly two arrays whose values are absent from the second according to an integer-cast callback comparator, preserving keys."
 sidebar:
-  order: 41
+  order: 43
 ---
 
 ## array_udiff()

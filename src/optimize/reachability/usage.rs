@@ -38,6 +38,11 @@ pub struct Usage {
     pub(crate) global_aliases: HashSet<String>,
     pub(crate) dynamic_global_alias: bool,
     pub(crate) variable_methods: HashMap<String, HashSet<(String, bool)>>,
+    /// Classes a literal `eval` fragment names, or declares over an existing declaration. The
+    /// interpreter resolves their members from runtime metadata (constructors, destructors,
+    /// clone hooks, static properties, abstract/final checks, duplicate-declaration checks), so
+    /// the graph keeps them whole rather than member by member.
+    pub(crate) fragment_classes: HashSet<String>,
 }
 
 /// Runtime lookup shapes that require conservative keep-set widening.
@@ -47,6 +52,10 @@ pub struct Hazards {
     pub dynamic_function: bool,
     pub dynamic_method: bool,
     pub dynamic_class: bool,
+    /// A literal `eval` fragment that parsed was scanned as inline code instead of widening the
+    /// dynamic hazards. The interpreter still runs it, so the graph roots the core classes the
+    /// interpreter can conjure without the fragment naming them.
+    pub literal_eval: bool,
 }
 
 impl Usage {
@@ -64,6 +73,7 @@ impl Usage {
         self.required_libraries.extend(other.required_libraries);
         self.global_aliases.extend(other.global_aliases);
         self.dynamic_global_alias |= other.dynamic_global_alias;
+        self.fragment_classes.extend(other.fragment_classes);
         for (variable, methods) in other.variable_methods {
             self.variable_methods
                 .entry(variable)
@@ -74,6 +84,7 @@ impl Usage {
         self.hazards.dynamic_function |= other.hazards.dynamic_function;
         self.hazards.dynamic_method |= other.hazards.dynamic_method;
         self.hazards.dynamic_class |= other.hazards.dynamic_class;
+        self.hazards.literal_eval |= other.hazards.literal_eval;
     }
 
     /// Returns whether a free function is referenced using PHP lookup semantics.
@@ -92,6 +103,17 @@ pub fn scan_program(program: &[Stmt]) -> Usage {
 #[allow(dead_code)]
 pub fn scan_stmt(stmt: &Stmt) -> Usage {
     Scanner::default().scan_program(std::slice::from_ref(stmt), true)
+}
+
+/// Scans a parsed literal `eval` fragment as the inline code it will run as, declarations
+/// included, with a runtime `include` widened to every dynamic hazard because the included
+/// file's contents are not readable here.
+pub fn scan_eval_fragment(program: &[Stmt]) -> Usage {
+    Scanner {
+        in_eval_fragment: true,
+        ..Scanner::default()
+    }
+    .scan_program(program, true)
 }
 
 /// Scans only executable roots, omitting declaration bodies until their nodes become live.
@@ -239,6 +261,9 @@ struct Scanner<'a> {
     current_method: Option<String>,
     parent_class: Option<String>,
     call_signatures: Option<&'a CallSignatureIndex>,
+    /// True while scanning the parsed source of a literal `eval`, where an `include` is a
+    /// runtime lookup rather than something the resolver already inlined.
+    in_eval_fragment: bool,
 }
 
 /// Checker-validated signatures used to recognize callable and by-reference arguments.
@@ -387,8 +412,16 @@ impl Scanner<'_> {
         }
         match &stmt.kind {
             StmtKind::Echo(e) | StmtKind::Throw(e) | StmtKind::ExprStmt(e)
-            | StmtKind::ConstDecl { value: e, .. } | StmtKind::Return(Some(e))
-            | StmtKind::Include { path: e, .. } => self.scan_expr(e),
+            | StmtKind::ConstDecl { value: e, .. } | StmtKind::Return(Some(e)) => self.scan_expr(e),
+            StmtKind::Include { path: e, .. } => {
+                // The resolver inlines every include it can read before this walk runs, so one
+                // that is still here resolves at runtime. Inside a literal eval fragment that is
+                // the normal case, and the included file can name anything.
+                if self.in_eval_fragment {
+                    self.widen_dynamic_hazards();
+                }
+                self.scan_expr(e)
+            }
             StmtKind::StaticPropertyArrayPush { receiver, property, value } => {
                 let source = Expr::new(ExprKind::StaticPropertyAccess {
                     receiver: receiver.clone(), property: property.clone(),
@@ -452,6 +485,7 @@ impl Scanner<'_> {
                     receiver: receiver.clone(), property: property.clone(),
                 }, stmt.span);
                 self.record_protocol_methods(&source, &["__elephc_reference"]);
+                self.scan_receiver(receiver);
                 self.scan_expr(index);
                 self.scan_expr(value);
             }
@@ -552,7 +586,15 @@ impl Scanner<'_> {
                 }
                 if let Some(body) = default { self.scan_nested(body, declarations); }
             }
-            StmtKind::Synthetic(body) | StmtKind::NamespaceBlock { body, .. }
+            StmtKind::NamespaceBlock { body, .. } => {
+                // A fragment that opens a namespace resolves its names through imports this
+                // walk does not perform, so it is read as opaque.
+                if self.in_eval_fragment {
+                    self.widen_dynamic_hazards();
+                }
+                self.scan_nested(body, declarations)
+            }
+            StmtKind::Synthetic(body)
             | StmtKind::IncludeOnceGuard { body, .. } => self.scan_nested(body, declarations),
             StmtKind::Try { try_body, catches, finally_body } => {
                 self.scan_nested(try_body, declarations);
@@ -565,7 +607,16 @@ impl Scanner<'_> {
                 }
                 if let Some(body) = finally_body { self.scan_nested(body, declarations); }
             }
-            StmtKind::FunctionDecl { params, variadic_type, return_type, body, .. } if declarations => {
+            StmtKind::FunctionDecl {
+                name, params, param_attributes, variadic_type, return_type, body, ..
+            } if declarations => {
+                if self.in_eval_fragment {
+                    // Declared at runtime: an existing function of the same name must stay so
+                    // the interpreter can refuse the duplicate as PHP does.
+                    self.record_callable(name);
+                }
+                // Parameter attributes name classes like `scan_function` records them inline.
+                self.scan_parameter_attributes(param_attributes);
                 self.scan_params(params, variadic_type.as_ref(), return_type.as_ref());
                 self.scan_nested(body, true);
             }
@@ -573,8 +624,20 @@ impl Scanner<'_> {
             | StmtKind::EnumDecl { name, methods, .. }
             | StmtKind::InterfaceDecl { name, methods, .. }
             | StmtKind::TraitDecl { name, methods, .. } if declarations => {
+                if self.in_eval_fragment {
+                    // Declared at runtime: an existing declaration of the same name must stay
+                    // whole so the interpreter can refuse the duplicate as PHP does.
+                    let key = php_symbol_key(name);
+                    self.usage.fragment_classes.insert(key);
+                }
                 let prior = self.current_class.replace(name.clone());
-                self.usage.merge(scan_class_shell(stmt));
+                let shell = scan_class_shell(stmt);
+                if self.in_eval_fragment {
+                    // The shell walk runs on its own scanner: carry the parent, interfaces and
+                    // traits it named over as fragment classes so they stay whole.
+                    self.usage.fragment_classes.extend(shell.classes.iter().cloned());
+                }
+                self.usage.merge(shell);
                 for method in methods { self.scan_method(method); }
                 self.current_class = prior;
             }
@@ -586,6 +649,10 @@ impl Scanner<'_> {
             }
             StmtKind::ExternFunctionDecl { name, .. } if declarations => {
                 self.record_callable(name);
+            }
+            StmtKind::NamespaceDecl { .. } | StmtKind::UseDecl { .. } if self.in_eval_fragment => {
+                // Imports and namespaces inside a fragment alias names this walk cannot resolve.
+                self.widen_dynamic_hazards();
             }
             StmtKind::Return(None) | StmtKind::Break(_) | StmtKind::Continue(_)
             | StmtKind::NamespaceDecl { .. } | StmtKind::UseDecl { .. }
@@ -737,7 +804,7 @@ impl Scanner<'_> {
                 }
             }
             TypeExpr::Ptr(Some(name)) => {
-                self.record_class(name.as_str());
+                self.record_class(crate::names::pointer_target_leaf(name.as_str()));
             }
             TypeExpr::Array(inner) | TypeExpr::Buffer(inner) | TypeExpr::Nullable(inner) => self.scan_type(inner),
             // Both halves reach the class recorder: `array<string, Foo>` keeps `Foo` alive, and

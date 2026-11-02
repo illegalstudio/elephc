@@ -7,11 +7,14 @@
 //! Key details:
 //! - Legacy callbacks share references; other calls snapshot the populated registry on the stack.
 //! - A guarded dispatch restores state before propagating a callback exception.
+//! - Each call owns a growable output stream (`_ser_stream`, see `stream.rs`) whose descriptor
+//!   lives in this frame, so a `serialize()` inside a hook gets its own stream. The enclosing
+//!   stream is reinstated on every exit, and a grown buffer is freed when a hook throws.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::runtime::exceptions::emit_guarded_cleanup_call;
 
-const FRAME: usize = 96;
+const FRAME: usize = 144;
 const PENDING: usize = 8;
 const LEGACY: usize = 16;
 const COUNTER: usize = 24;
@@ -22,6 +25,8 @@ const POINTER: usize = 56;
 const HIGH: usize = 64;
 const LOW: usize = 72;
 const TAG: usize = 80;
+const STREAM: usize = 120; // 32-byte `__rt_strbuf_*` descriptor owned by this call (spans 120 down to 89)
+const OUTER: usize = 128; // the enclosing call's `_ser_stream`, reinstated on every exit
 
 /// Emits an exception-safe public entry and its unary guarded dispatch adapter.
 pub(super) fn emit(emitter: &mut Emitter) {
@@ -35,6 +40,14 @@ pub(super) fn emit(emitter: &mut Emitter) {
         abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
     }
     abi::emit_store_zero_to_local_slot(emitter, PENDING);
+    // -- open this call's output stream at the scratch tail and install it as the active one --
+    let arg0 = abi::int_arg_reg_name(emitter.target, 0);
+    abi::emit_load_symbol_to_reg(emitter, result, "_ser_stream", 0);
+    abi::store_at_offset(emitter, result, OUTER);
+    abi::emit_frame_slot_address(emitter, arg0, STREAM);
+    abi::emit_call_label(emitter, "__rt_strbuf_init");
+    abi::emit_frame_slot_address(emitter, result, STREAM);
+    abi::emit_store_reg_to_symbol(emitter, result, "_ser_stream", 0);
     abi::emit_load_symbol_to_reg(emitter, result, "_ser_legacy_active", 0);
     abi::store_at_offset(emitter, result, LEGACY);
     abi::emit_branch_if_int_result_nonzero(emitter, "__rt_serialize_context_ready");
@@ -48,6 +61,22 @@ pub(super) fn emit(emitter: &mut Emitter) {
     // -- guard callback execution, then restore state before returning or rethrowing --
     abi::emit_frame_slot_address(emitter, result, TAG);
     emit_guarded_cleanup_call(emitter, "__rt_serialize_guarded_dispatch", result, PENDING);
+    // -- publish the finished stream, or free its grown buffer when a hook threw, then reinstate
+    //    the enclosing stream --
+    abi::load_at_offset(emitter, result, PENDING);
+    abi::emit_branch_if_int_result_zero(emitter, "__rt_serialize_stream_finish");
+    abi::emit_frame_slot_address(emitter, arg0, STREAM);
+    abi::emit_call_label(emitter, "__rt_strbuf_release");
+    abi::emit_jump(emitter, "__rt_serialize_stream_closed");
+    emitter.label("__rt_serialize_stream_finish");
+    abi::emit_frame_slot_address(emitter, arg0, STREAM);
+    abi::emit_call_label(emitter, "__rt_strbuf_finish_owned");
+    let (stream_pointer, stream_length) = abi::string_result_regs(emitter);
+    abi::store_at_offset(emitter, stream_pointer, POINTER);
+    abi::store_at_offset(emitter, stream_length, LENGTH);
+    emitter.label("__rt_serialize_stream_closed");
+    abi::load_at_offset(emitter, result, OUTER);
+    abi::emit_store_reg_to_symbol(emitter, result, "_ser_stream", 0);
     abi::load_at_offset(emitter, result, LEGACY);
     abi::emit_branch_if_int_result_nonzero(emitter, "__rt_serialize_context_restored");
     emit_reference_copy(emitter, true);
@@ -160,4 +189,31 @@ fn emit_reference_copy(emitter: &mut Emitter, restore: bool) {
         }
     }
     emitter.label(&done);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// The public entry opens its own stream before the guarded dispatch, then either publishes
+    /// the finished slice as an owned string or frees the grown buffer when a hook threw, and
+    /// reinstates the enclosing stream on both exits, on every supported target.
+    #[test]
+    fn public_entry_owns_and_releases_its_output_stream() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit(&mut emitter);
+            let asm = emitter.output();
+            let (entry, _) = asm.split_once("__rt_serialize_guarded_dispatch:").unwrap();
+            let init = entry.find("__rt_strbuf_init").unwrap();
+            let dispatch = entry.find("__rt_cleanup_invoke").unwrap();
+            let release = entry.find("__rt_strbuf_release").unwrap();
+            let finish = entry.find("__rt_strbuf_finish_owned").unwrap();
+            let closed = entry.find("__rt_serialize_stream_closed:").unwrap();
+            assert!(init < dispatch && dispatch < release && release < finish && finish < closed, "{name}");
+            // Three accesses: save the outer stream, install this one, reinstate the outer one.
+            assert!(entry.matches("ser_stream").count() >= 3, "{name}: save, install, and reinstate the outer stream");
+        }
+    }
 }

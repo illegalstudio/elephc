@@ -179,6 +179,7 @@ fn emit_array_iter_next_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_array_iter_next_packed_ret");                   // return the synthesized tagged-scalar entry
 
     emitter.label("__rt_array_iter_next_packed_ret");
+    crate::codegen_support::sentinels::emit_normalize_pointer_word_tag(emitter, "x3", "x4", "x9", "__rt_array_iter_next_packed_tag_ready");
     emitter.instruction("mov x0, x13");                                         // x0 = next cursor
     emitter.instruction("mov x2, #-1");                                         // key high word = -1 marks an integer key
     emitter.instruction("ret");                                                 // x1 already holds the integer key = the index
@@ -199,6 +200,7 @@ fn emit_array_iter_next_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x3, x9");                                          // value tag into the uniform slot
     emitter.instruction("mov x4, x10");                                         // value low word into the uniform slot
     emitter.instruction("mov x5, x11");                                         // value high word into the uniform slot
+    crate::codegen_support::sentinels::emit_normalize_pointer_word_tag(emitter, "x3", "x4", "x9", "__rt_array_iter_next_hash_tag_ready");
     emitter.instruction("ret");                                                 // x0/x1/x2 already carry next cursor and key (lo, hi)
 }
 
@@ -343,6 +345,7 @@ fn emit_array_strict_eq_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_array_iter_next_packed_ret");                 // return the synthesized tagged-scalar entry
 
     emitter.label("__rt_array_iter_next_packed_ret");
+    crate::codegen_support::sentinels::emit_normalize_pointer_word_tag(emitter, "r8", "r9", "r11", "__rt_array_iter_next_packed_tag_ready");
     emitter.instruction("lea rax, [rsi + 1]");                                  // next cursor = index + 1
     emitter.instruction("ret");                                                 // rcx/rdx carry the integer key; r8/r9/r10 the value
 
@@ -358,5 +361,6 @@ fn emit_array_strict_eq_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, r9");                                          // value tag from the hash entry
     emitter.instruction("mov r9, rcx");                                         // value low word from the hash entry
     emitter.instruction("mov rcx, rdi");                                        // key low word = the entry key pointer / int value
+    crate::codegen_support::sentinels::emit_normalize_pointer_word_tag(emitter, "r8", "r9", "r11", "__rt_array_iter_next_hash_tag_ready");
     emitter.instruction("ret");                                                 // rax=next cursor, rdx already holds the key high word
 }

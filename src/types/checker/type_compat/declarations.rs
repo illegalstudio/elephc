@@ -351,6 +351,23 @@ impl Checker {
                 ),
             ));
         }
+        // A pointer by-reference parameter writes a raw pointer word back through the caller's
+        // storage. Only a whole local can receive it (lowering then checks that its frame slot
+        // is a pointer word); an array element lives in boxed or null element storage.
+        if matches!(expected_ty.codegen_repr(), PhpType::Pointer(_))
+            && !matches!(by_ref_storage_place(arg).kind, ExprKind::Variable(_))
+        {
+            let shown = crate::types::pointer_param_display(expected_ty);
+            return Err(CompileError::new(
+                arg.span,
+                &format!(
+                    "{} expects {}: a pointer by-reference parameter writes a pointer word back \
+                     through its argument, so pass a variable (bind the element to a `{} $p` \
+                     variable first)",
+                    context, shown, shown
+                ),
+            ));
+        }
         if *actual_ty == PhpType::Void && !Self::declared_type_accepts_null(expected_ty) {
             return Err(CompileError::new(
                 arg.span,
@@ -427,6 +444,10 @@ impl Checker {
 
     /// Preserves known global constant types before a declaration is specialized by a call.
     fn declaration_default_type(&self, expression: &Expr) -> PhpType {
+        if crate::types::deferred_defaults::deferred_error_message(expression).is_some() {
+            // A normalized lexical Error has no result to constrain an untyped parameter.
+            return PhpType::Mixed;
+        }
         if let ExprKind::ConstRef(name) = &expression.kind {
             if let Some(ty) = self.constants.get(name.as_str()) {
                 return ty.clone();
@@ -448,6 +469,11 @@ impl Checker {
         let Some(default_expr) = default_expr else {
             return Ok(());
         };
+        // PHP permits even a scalar-typed parameter to use an unbound object factory.
+        // An explicit argument bypasses it; omission raises the scope Error before type binding.
+        if crate::types::deferred_defaults::deferred_error_message(default_expr).is_some() {
+            return Ok(());
+        }
         let default_ty = match &default_expr.kind {
             ExprKind::ScopedConstantAccess { receiver, name } => {
                 self.infer_scoped_constant_access(receiver, name, default_expr)?
@@ -648,6 +674,8 @@ impl Checker {
 
         self.active_ref_params = ref_param_names.into_iter().collect();
         self.active_external_ref_bindings = self.active_ref_params.clone();
+        self.non_builtin_ref_aliased_locals
+            .extend(self.active_ref_params.iter().cloned());
         self.boxed_ref_aliased_locals.extend(
             self.active_ref_params.iter()
                 .filter(|name| pre_bound_own_storage.get(*name)
@@ -677,6 +705,9 @@ impl Checker {
         // name with something outside. A marked name from this map is announced only when
         // `--strict-locals` would really reject the body; see `run_mixed_storage_scan`.
         self.run_mixed_storage_scan(body, &pre_bound_own_storage);
+        let (sites, dependents) = super::super::numeric_regions::find(body, &pre_bound_own_storage);
+        self.numeric_region_sites = sites;
+        self.numeric_region_dependents = dependents;
 
         let result = f(self);
 
@@ -693,6 +724,15 @@ impl Checker {
 
         result
     }
+}
+
+/// Returns the storage place a by-reference argument names, past named-argument wrappers.
+fn by_ref_storage_place(arg: &Expr) -> &Expr {
+    let mut arg = arg;
+    while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &arg.kind {
+        arg = value;
+    }
+    arg
 }
 
 /// Returns true when a by-reference parameter can write values that need boxed or nullable storage.

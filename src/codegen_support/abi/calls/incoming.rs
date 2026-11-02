@@ -60,7 +60,7 @@ pub fn emit_store_incoming_param(
     }
 
     match ty {
-        PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Resource(_) => {
+        PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Resource(_) | PhpType::Narrow(_) => {
             if !cursor.int_stack_only && cursor.int_reg_idx < int_reg_limit {
                 let reg = int_arg_reg_name(emitter.target, cursor.int_reg_idx);
                 emitter.comment(&format!("param ${} from {}", name, reg));

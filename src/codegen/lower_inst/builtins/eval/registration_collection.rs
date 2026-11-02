@@ -245,7 +245,15 @@ pub(super) fn eval_native_member_attribute_registrations(
         collect_eval_native_property_attributes(class_name, class_info, &mut registrations);
         collect_eval_native_class_constant_attributes(class_name, class_info, &mut registrations);
     }
-    dedupe_eval_native_member_attribute_registrations(registrations)
+    let mut registrations = dedupe_eval_native_member_attribute_registrations(registrations);
+    // Free functions have no inherited duplicates; repeatable attributes must retain every entry.
+    for function in ctx.module.functions.iter().filter(|function| function_has_eval_metadata(function)) {
+        collect_eval_native_member_attributes(
+            NATIVE_MEMBER_ATTRIBUTE_FUNCTION, &function.name, "",
+            &function.attribute_names, &function.attribute_args, &mut registrations,
+        );
+    }
+    registrations
 }
 
 /// Removes inherited duplicate member-attribute registrations by normalized metadata key.

@@ -8,11 +8,17 @@
 //! Key details:
 //! - `__METHOD__` and `__TRAIT__` keep trait identity while only `__CLASS__` is rebound.
 
-use crate::parser::ast::{ClassMethod, ClassProperty, ExprKind, MagicConstant};
+use crate::parser::ast::{ClassConst, ClassMethod, ClassProperty, ExprKind, MagicConstant};
 use crate::span::Span;
 
-use super::walker::{walk_class_method, walk_class_property, Pass};
+use super::walker::{walk_class_constant, walk_class_method, walk_class_property, Pass};
 use super::TRAIT_CLASS_PLACEHOLDER;
+
+/// Binds trait-origin class placeholders inside constant initializer trees to their consumer.
+pub(super) fn bind_trait_constant_values(constants: Vec<ClassConst>, class_name: &str) -> Vec<ClassConst> {
+    let mut pass = TraitClassPass { class_name: class_name.to_string() };
+    constants.into_iter().map(|constant| walk_class_constant(constant, &mut pass)).collect()
+}
 
 /// Rebinds `__CLASS__` magic constant placeholders in trait members to the concrete class name.
 ///

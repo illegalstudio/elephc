@@ -14,6 +14,8 @@
 //!   temp to array-of-boxed-Mixed elements instead of letting the last arm's
 //!   element type relabel every other arm's runtime array.
 //! - `gettype` probes assert PHP's per-arm type preservation across arms.
+//! - A merge boxed into a `mixed` temp and returned through a declared container type must
+//!   release that temp once the return boundary has unboxed it.
 //! - Explicit `UnhandledMatchError` construction is distinct from the current
 //!   fatal terminator used when no match arm and no default arm succeeds.
 
@@ -428,13 +430,10 @@ echo gettype(pick(0)), "|", gettype(pick(1));
     assert_eq!(out, "object|string");
 }
 
-/// Pins the documented int/bool arm-merge incompatibility (see "Known
-/// incompatibilities with PHP" in docs/php/types.md): int and bool arms share
-/// one runtime representation, so both arms observe it — PHP would print
-/// "integer|boolean" here. If this test starts failing with PHP's output, the
-/// incompatibility got fixed: update the docs entry alongside.
+/// Verifies an int arm and a bool arm of `match` keep their own PHP types, as in PHP: the merge
+/// boxes them instead of collapsing both into one boolean representation.
 #[test]
-fn test_match_int_and_bool_arms_merge_documented_divergence() {
+fn test_match_int_and_bool_arms_keep_their_types() {
     let out = compile_and_run(
         r#"<?php
 $r = match($argc) {
@@ -448,7 +447,7 @@ $w = match($argc) {
 echo gettype($r), "|", gettype($w);
 "#,
     );
-    assert_eq!(out, "boolean|boolean");
+    assert_eq!(out, "integer|boolean");
 }
 
 /// Tests that heterogeneous scalar match arms stay heap-balanced: the boxed
@@ -735,6 +734,57 @@ echo $count, "|", $a[0], "|", $a[1];
 "#,
     );
     assert_eq!(out.stdout, "40|1|2");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap summary, got: {}",
+        out.stderr
+    );
+}
+
+/// Heap balance for a merge returned through a declared container type: a call arm beside a
+/// by-value parameter arm merges into a boxed `mixed` temp, and the return boundary unboxes that
+/// cell with a reference of its own. The cell was never released, so every call leaked it with
+/// the array it held. Covers typed and `mixed` indexed and associative returns, a ternary, and the
+/// caller's arrays staying intact after the parameter arm shared them.
+#[test]
+fn test_match_call_and_parameter_arms_returned_as_containers_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function ib() { $a = [1]; return $a; }
+function hb() { $h = ["k" => 1]; return $h; }
+function mi(int $i, array<int> $is): array<int> {
+    return match ($i) { 0 => ib(), default => $is };
+}
+function ti(bool $b, array<int> $is): array<int> {
+    return $b ? ib() : $is;
+}
+function ma(int $i, array $a): array {
+    return match ($i) { 0 => ib(), default => $a };
+}
+function mh(int $i, array<string, int> $h): array<string, int> {
+    return match ($i) { 0 => hb(), default => $h };
+}
+function mhm(int $i, array<string, mixed> $h): array<string, mixed> {
+    return match ($i) { 0 => hb(), default => $h };
+}
+$is = [5];
+$a = [6, "x"];
+$h = ["k" => 7];
+$s = "";
+for ($n = 0; $n < 3; $n++) {
+    foreach ([0, 1] as $i) {
+        $r1 = mi($i, $is);
+        $r2 = ti($i === 0, $is);
+        $r3 = ma($i, $a);
+        $r4 = mh($i, $h);
+        $r5 = mhm($i, $h);
+        $s .= $r1[0] . $r2[0] . $r3[0] . $r4["k"] . $r5["k"] . ",";
+    }
+}
+echo $s, $is[0], $a[1], $h["k"], "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "11111,55677,11111,55677,11111,55677,5x7\n");
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected clean heap summary, got: {}",

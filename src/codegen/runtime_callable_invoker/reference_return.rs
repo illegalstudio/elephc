@@ -21,7 +21,8 @@ pub(super) fn emit_boxed_reference_return(emitter: &mut Emitter, php_type: &PhpT
     if matches!(repr, PhpType::Mixed | PhpType::Union(_)) {
         abi::emit_call_label(emitter, "__rt_mixed_clone");
     } else {
-        super::emit_box_current_value_as_mixed(emitter, &repr);
+        // The declared type, so a `?ptr<T>` result boxes address 0 as PHP null.
+        super::emit_box_current_value_as_mixed(emitter, php_type);
     }
     abi::emit_push_reg(emitter, result);
     abi::emit_load_temporary_stack_slot(emitter, result, 16);

@@ -104,13 +104,17 @@ pub(super) fn reflection_class_property_names_for_filter(
     filter: Option<i64>,
 ) -> Option<Vec<String>> {
     let class_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
+    let contract = elephc_builtin_contract::lookup_class(class_name);
     Some(
         class_info
             .properties
             .iter()
             .chain(class_info.static_properties.iter())
             .map(|(name, _)| name)
-            .filter(|name| reflection_property_matches_filter(class_info, name, filter))
+            .filter(|name| {
+                contract.is_none_or(|class| !class.property_is_hidden(name))
+                    && reflection_property_matches_filter(class_info, name, filter)
+            })
             .cloned()
             .collect(),
     )
@@ -123,6 +127,23 @@ pub(super) fn reflection_class_method_names_for_filter(
     filter: Option<i64>,
 ) -> Option<Vec<String>> {
     let class_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
+    let contract = elephc_builtin_contract::lookup_class(class_name);
+    // A reviewed internal surface reports php-src's declaration order, not the hash order the
+    // synthetic prelude happens to use. GMP is the first class with such a contract.
+    if let Some(visible) = contract.and_then(|class| class.php_visible_methods) {
+        return Some(
+            visible
+                .iter()
+                .filter(|name| {
+                    let key = php_symbol_key(name);
+                    class_info.methods.contains_key(&key)
+                        || class_info.static_methods.contains_key(&key)
+                })
+                .filter(|name| reflection_method_matches_filter(class_info, name, filter))
+                .map(|name| (*name).to_string())
+                .collect(),
+        );
+    }
     let mut names = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for name in class_info

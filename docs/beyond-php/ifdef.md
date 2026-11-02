@@ -33,7 +33,7 @@ ifdef DEBUG {
 <?php
 ifdef USE_SDL {
     extern "SDL2" {
-        function SDL_Init(int $flags): int;
+        function SDL_Init(u32 $flags): i32;
     }
     SDL_Init(0x20);
 }
@@ -75,7 +75,7 @@ ifdef PLATFORM_MAC {
 | Flag | Description |
 |---|---|
 | `--target TARGET` | Compile for `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, or `linux-x86_64` instead of auto-detecting the host target |
-| `--heap-size=BYTES` | Set heap buffer size (default 8MB, min 64KB) |
+| `--heap-size=BYTES` | Set heap buffer size (default 128 MB, min 64KB) |
 | `--gc-stats` | Print GC allocation/free statistics at exit |
 | `--heap-debug` | Enable runtime heap verification (slow) |
 | `--emit-asm` | Write the generated assembly and skip assemble/link |

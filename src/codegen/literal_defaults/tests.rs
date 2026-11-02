@@ -54,6 +54,22 @@ fn nested_literal_defaults_reject_incompatible_scalar_storage() {
     ).is_err());
 }
 
+/// Nullable/union floats widen integers, while an explicit int arm or Mixed preserves them.
+#[test]
+fn numeric_property_literal_defaults_respect_declared_union_members() {
+    for ty in [PhpType::Float, PhpType::Union(vec![PhpType::Float, PhpType::Void]),
+        PhpType::Union(vec![PhpType::Str, PhpType::Float])]
+    {
+        let result = literal_default_value("test", &ty, &ExprKind::IntLiteral(6), "test").unwrap();
+        assert!(matches!(result, LiteralDefaultValue::Float(value) | LiteralDefaultValue::BoxedFloat(value)
+            if value == 6.0));
+    }
+    for ty in [PhpType::Mixed, PhpType::Union(vec![PhpType::Float, PhpType::Int])] {
+        let result = literal_default_value("test", &ty, &ExprKind::IntLiteral(6), "test").unwrap();
+        assert!(matches!(result, LiteralDefaultValue::BoxedInt(6)));
+    }
+}
+
 /// Nested defaults stamp typed arrays and transfer each allocated container owner on every target.
 #[test]
 fn nested_literal_defaults_emit_owned_containers_on_all_targets() {

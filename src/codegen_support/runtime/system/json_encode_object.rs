@@ -40,10 +40,8 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     super::json_encode_enum::emit_dispatch(emitter);
 
     // -- set up stack frame --
-    // Stack layout (128 bytes):
+    // Stack layout (160 bytes):
     //   [sp, #0]   = object pointer
-    //   [sp, #8]   = output start ptr
-    //   [sp, #16]  = current write pos
     //   [sp, #24]  = descriptor pointer
     //   [sp, #32]  = property index (loop counter)
     //   [sp, #40]  = property count
@@ -57,7 +55,8 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     //   [sp, #104] = JsonSerializable saved _json_indent_depth
     //   [sp, #112] = saved x29
     //   [sp, #120] = saved x30
-    emitter.instruction("sub sp, sp, #128");                                    // allocate the object encoder scratch frame
+    //   [sp, #128..#159] = output-buffer descriptor (start, cursor, end, opening offset)
+    emitter.instruction("sub sp, sp, #160");                                    // allocate the object encoder scratch frame plus the output-buffer descriptor
     emitter.instruction("stp x29, x30, [sp, #112]");                            // save frame pointer and return address
     emitter.instruction("add x29, sp, #112");                                   // establish a stable frame pointer for the encoder
     emitter.instruction("str x0, [sp, #0]");                                    // save the object pointer for downstream loads
@@ -65,13 +64,10 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     // -- enter the recursion-depth check --
     emitter.instruction("bl __rt_json_depth_enter");                            // increment _json_active_depth and throw on overflow when requested
 
-    // -- get current write position in concat_buf --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // load the current concat-buffer offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_concat_buf");
-    emitter.instruction("add x11, x11, x10");                                   // compute the write pointer for the encoded object
-    emitter.instruction("str x11, [sp, #8]");                                   // save the start pointer for the final result slice
-    emitter.instruction("str x11, [sp, #16]");                                  // save the running write pointer for the encoder loop
+    // -- open the output buffer at the scratch tail --
+    emitter.instruction("add x0, sp, #128");                                    // address of the output-buffer descriptor
+    emitter.instruction("bl __rt_strbuf_init");                                 // open the buffer at the current scratch offset
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer the helper call clobbered
 
     // -- bounds-check the class id and resolve the JSON descriptor --
     emitter.instruction("ldr x12, [x0]");                                       // load class_id from the object header
@@ -189,12 +185,14 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_json_depth_exit");                             // balance object entry after recursive result encoding
     emitter.instruction("ldp x1, x2, [sp, #32]");                               // restore the encoded result slice after cleanup
     emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address after JsonSerializable encoding
-    emitter.instruction("add sp, sp, #128");                                    // deallocate the object encoder scratch frame
+    emitter.instruction("add sp, sp, #160");                                    // deallocate the object encoder scratch frame
     emitter.instruction("ret");                                                 // return the JSON encoded result produced by mixed encoding
 
     // -- empty object fallback (missing class id) --
     emitter.label("__rt_json_obj_open_only");
-    emitter.instruction("ldr x11, [sp, #16]");                                  // reload the running write pointer for the open-brace fallback
+    emitter.instruction("add x0, sp, #128");                                    // address of the output-buffer descriptor
+    emitter.instruction("mov x1, #2");                                          // room for the empty object literal
+    emitter.instruction("bl __rt_json_buf_ensure");                             // x11 = cursor with headroom reserved
     emitter.instruction("mov w12, #123");                                       // ASCII '{'
     emitter.instruction("strb w12, [x11]");                                     // emit the opening brace for the empty object literal
     emitter.instruction("add x11, x11, #1");                                    // advance past the opening brace
@@ -209,11 +207,13 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("ldr x14, [x13, #16]");                                 // load the public property count
     emitter.instruction("str x14, [sp, #40]");                                  // save the public property count for the loop guard
 
-    emitter.instruction("ldr x11, [sp, #16]");                                  // reload the running write pointer for the opening brace
+    emitter.instruction("add x0, sp, #128");                                    // address of the output-buffer descriptor
+    emitter.instruction("mov x1, #1");                                          // room for the opening brace
+    emitter.instruction("bl __rt_json_buf_ensure");                             // x11 = cursor with headroom reserved
     emitter.instruction("mov w12, #123");                                       // ASCII '{'
     emitter.instruction("strb w12, [x11]");                                     // emit the opening brace before the first property
     emitter.instruction("add x11, x11, #1");                                    // advance past the opening brace
-    emitter.instruction("str x11, [sp, #16]");                                  // save the running write pointer after the opening brace
+    emitter.instruction("str x11, [sp, #136]");                                 // save the running write pointer after the opening brace
     emitter.instruction("bl __rt_json_pretty_push");                            // enter one pretty-print indentation level after the object opens
     emitter.instruction("str xzr, [sp, #32]");                                  // initialize the property loop index to zero
 
@@ -238,34 +238,40 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("str x16, [sp, #48]");                                  // save the property slot index for value loading
     emitter.instruction("str x17, [sp, #56]");                                  // save the property type tag for runtime dispatch
 
+    // Reserve room for the separator, the indentation, and the key punctuation.
+    emitter.instruction("add x0, sp, #128");                                    // address of the output-buffer descriptor
+    emitter.instruction("mov x1, #1");                                          // room for the comma separator
+    emitter.instruction("bl __rt_json_buf_ensure");                             // grow first: every punctuation byte of this key prefix fits after it
+
     // Comma separator before all but the first property
+    emitter.instruction("ldr x10, [sp, #32]");                                  // reload the property loop index after the reservation
     emitter.instruction("cbz x10, __rt_json_obj_key");                          // skip the comma before the first property entry
-    emitter.instruction("ldr x11, [sp, #16]");                                  // reload the running write pointer
+    emitter.instruction("ldr x11, [sp, #136]");                                 // reload the running write pointer
     emitter.instruction("mov w12, #44");                                        // ASCII ','
     emitter.instruction("strb w12, [x11]");                                     // emit the comma between encoded property entries
     emitter.instruction("add x11, x11, #1");                                    // advance past the comma separator
-    emitter.instruction("str x11, [sp, #16]");                                  // save the running write pointer after the comma
+    emitter.instruction("str x11, [sp, #136]");                                 // save the running write pointer after the comma
 
     emitter.label("__rt_json_obj_key");
-    emitter.instruction("ldr x11, [sp, #16]");                                  // reload the running write pointer for the key prefix
+    emitter.instruction("ldr x11, [sp, #136]");                                 // reload the running write pointer for the key prefix
     emitter.instruction("bl __rt_json_pretty_line");                            // append newline and indentation for this property when pretty-printing
-    emitter.instruction("str x11, [sp, #16]");                                  // save the write pointer after any pretty indentation
+    emitter.instruction("str x11, [sp, #136]");                                 // save the write pointer after any pretty indentation
     emitter.instruction("mov w12, #34");                                        // ASCII '"'
     emitter.instruction("strb w12, [x11]");                                     // emit the opening quote for the property name
     emitter.instruction("add x11, x11, #1");                                    // advance past the opening quote
+    emitter.instruction("str x11, [sp, #136]");                                 // record the cursor past the opening quote
 
-    // Copy property name bytes to the concat buffer (no escaping — PHP property
-    // names cannot legally contain JSON-significant control or escape chars).
-    emitter.instruction("mov x9, #0");                                          // initialize the property-name copy index
-    emitter.label("__rt_json_obj_key_copy");
-    emitter.instruction("cmp x9, x15");                                         // have we copied every byte of the property name?
-    emitter.instruction("b.ge __rt_json_obj_key_done");                         // exit the copy loop once the name is fully written
-    emitter.instruction("ldrb w12, [x14, x9]");                                 // load the next property-name byte from the descriptor string
-    emitter.instruction("strb w12, [x11, x9]");                                 // copy the byte into the concat buffer
-    emitter.instruction("add x9, x9, #1");                                      // advance the copy index
-    emitter.instruction("b __rt_json_obj_key_copy");                            // continue copying the property name
-    emitter.label("__rt_json_obj_key_done");
-    emitter.instruction("add x11, x11, x15");                                   // advance the write pointer past the copied property name
+    // Append the property name bytes (no escaping — PHP property names cannot
+    // legally contain JSON-significant control or escape chars). The append grows
+    // the buffer first, so a long name cannot run past it.
+    emitter.instruction("ldr x13, [sp, #24]");                                  // reload the descriptor pointer
+    emitter.instruction("add x13, x13, #24");                                   // skip the leading flags / jsonSerialize / count words
+    emitter.instruction("ldr x10, [sp, #32]");                                  // reload the property loop index
+    emitter.instruction("add x13, x13, x10, lsl #5");                           // advance to the current 32-byte property descriptor entry
+    emitter.instruction("ldr x1, [x13]");                                       // property name pointer
+    emitter.instruction("ldr x2, [x13, #8]");                                   // property name length
+    emitter.instruction("add x0, sp, #128");                                    // address of the output-buffer descriptor
+    emitter.instruction("bl __rt_json_buf_append");                             // copy the name to the cursor; x11 = advanced cursor
     emitter.instruction("mov w12, #34");                                        // ASCII '"'
     emitter.instruction("strb w12, [x11]");                                     // emit the closing quote for the property name
     emitter.instruction("add x11, x11, #1");                                    // advance past the closing quote
@@ -273,13 +279,11 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("strb w12, [x11]");                                     // emit the colon separating key and value
     emitter.instruction("add x11, x11, #1");                                    // advance past the colon
     emitter.instruction("bl __rt_json_pretty_colon_space");                     // append the pretty-print key/value space when requested
-    emitter.instruction("str x11, [sp, #16]");                                  // save the running write pointer after the key prefix
+    emitter.instruction("str x11, [sp, #136]");                                 // save the running write pointer after the key prefix
 
-    // Sync concat_off so nested encoders append after the existing prefix.
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_buf");
-    emitter.instruction("sub x12, x11, x9");                                    // compute the absolute concat-buffer offset for the prefix tail
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_concat_off");
-    emitter.instruction("str x12, [x10]");                                      // publish the concat offset for nested value encoders
+    // Sync concat_off so nested encoders do not format over the existing prefix.
+    emitter.instruction("add x0, sp, #128");                                    // address of the output-buffer descriptor
+    emitter.instruction("bl __rt_strbuf_sync");                                 // publish the scratch offset for nested value encoders
 
     // Load property value from the object instance.
     // Property slot offset = 8 + prop_index * 16
@@ -366,22 +370,12 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_json_encode_null");                            // encode unsupported tags as the JSON null literal
 
     emitter.label("__rt_json_obj_val_copy");
-    // Copy the encoded value bytes from (x1, x2) into the running write
-    // position. Most encoders already write into concat_buf at the prefix
-    // tail, but we copy unconditionally so this stays correct for helpers
-    // whose result lives elsewhere.
-    emitter.instruction("ldr x11, [sp, #16]");                                  // reload the running write pointer
-    emitter.instruction("mov x9, #0");                                          // initialize the value copy index
-    emitter.label("__rt_json_obj_val_copy_loop");
-    emitter.instruction("cmp x9, x2");                                          // have we copied every byte of the encoded value?
-    emitter.instruction("b.ge __rt_json_obj_val_copy_done");                    // exit the value copy loop once finished
-    emitter.instruction("ldrb w12, [x1, x9]");                                  // load the next encoded value byte
-    emitter.instruction("strb w12, [x11, x9]");                                 // store it into the concat buffer at the running write pointer
-    emitter.instruction("add x9, x9, #1");                                      // advance the value copy index
-    emitter.instruction("b __rt_json_obj_val_copy_loop");                       // continue copying the encoded value
-    emitter.label("__rt_json_obj_val_copy_done");
-    emitter.instruction("add x11, x11, x2");                                    // advance the write pointer past the copied value
-    emitter.instruction("str x11, [sp, #16]");                                  // save the running write pointer for the next iteration
+    // Append the encoded value bytes from (x1, x2) at the running write
+    // position. Scalar encoders write in place at the prefix tail, but a
+    // grown container or a long string comes back in its own transient block,
+    // which the append copies and releases.
+    emitter.instruction("add x0, sp, #128");                                    // address of the output-buffer descriptor
+    emitter.instruction("bl __rt_json_buf_append");                             // copy the encoded value to the cursor, growing first
 
     // Advance the loop index and continue.
     emitter.instruction("ldr x10, [sp, #32]");                                  // reload the property loop index
@@ -390,7 +384,9 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("b __rt_json_obj_loop");                                // continue with the next property entry
 
     emitter.label("__rt_json_obj_close");
-    emitter.instruction("ldr x11, [sp, #16]");                                  // reload the running write pointer for the closing brace
+    emitter.instruction("add x0, sp, #128");                                    // address of the output-buffer descriptor
+    emitter.instruction("mov x1, #1");                                          // room for the closing brace
+    emitter.instruction("bl __rt_json_buf_ensure");                             // x11 = cursor with headroom for the closing line
     emitter.instruction("bl __rt_json_pretty_pop");                             // leave the object indentation level before closing it
     emitter.instruction("ldr x14, [sp, #40]");                                  // reload public property count to decide whether closing needs its own line
     emitter.instruction("cbz x14, __rt_json_obj_close_emit");                   // empty objects stay compact even under JSON_PRETTY_PRINT
@@ -401,19 +397,13 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("add x11, x11, #1");                                    // advance past the closing brace
 
     emitter.label("__rt_json_obj_finalize");
-    emitter.instruction("str x11, [sp, #16]");                                  // checkpoint the write pointer across the depth-exit helper call
+    emitter.instruction("str x11, [sp, #136]");                                 // checkpoint the write pointer across the depth-exit helper call
     emitter.instruction("bl __rt_json_depth_exit");                             // decrement _json_active_depth before computing the result slice
-    emitter.instruction("ldr x11, [sp, #16]");                                  // reload the write pointer after the helper call
-    // Compute the result slice from the saved start pointer and updated
-    // write pointer, then publish the new concat offset for the caller.
-    emitter.instruction("ldr x1, [sp, #8]");                                    // reload the encoded-object start pointer
-    emitter.instruction("sub x2, x11, x1");                                     // compute the encoded-object byte length
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_concat_buf");
-    emitter.instruction("sub x10, x11, x10");                                   // compute the absolute concat-buffer offset after the closing brace
-    emitter.instruction("str x10, [x9]");                                       // publish the concat-buffer offset for the next encoder
+    // Return the finished slice and publish the scratch offset for the caller.
+    emitter.instruction("add x0, sp, #128");                                    // address of the output-buffer descriptor
+    emitter.instruction("bl __rt_strbuf_finish");                               // x1/x2 = encoded object, _concat_off published
     emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #128");                                    // deallocate the object encoder scratch frame
+    emitter.instruction("add sp, sp, #160");                                    // deallocate the object encoder scratch frame
     emitter.instruction("ret");                                                 // return the encoded object slice in the standard string registers
 }
 
@@ -429,10 +419,9 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
 /// Output:
 ///   rax = ptr in concat_buf, rdx = length
 ///
-/// Stack layout (rbp-relative, 96 bytes):
+/// Stack layout (rbp-relative, 128 bytes):
 ///   [rbp - 8]  = object pointer
-///   [rbp - 16] = output start ptr
-///   [rbp - 24] = current write pos
+///   [rbp - 128..-97] = output-buffer descriptor (start, cursor, end, opening offset)
 ///   [rbp - 32] = descriptor pointer / prefix length
 ///   [rbp - 40] = property loop index / _json_last_error
 ///   [rbp - 48] = property count / _json_active_flags
@@ -451,10 +440,9 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_json_encode_object");
     super::json_encode_enum::emit_dispatch(emitter);
 
-    // Stack layout (rbp-relative, 96 bytes reserved):
+    // Stack layout (rbp-relative, 128 bytes reserved):
     //   [rbp - 8]  = object pointer
-    //   [rbp - 16] = output start ptr
-    //   [rbp - 24] = current write pos
+    //   [rbp - 128..-97] = output-buffer descriptor (start, cursor, end, opening offset)
     //   [rbp - 32] = descriptor pointer
     //   [rbp - 40] = property loop index
     //   [rbp - 48] = property count
@@ -466,18 +454,15 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     //   [rbp - 96] = scratch (prop name_len)
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the object encoder
-    emitter.instruction("sub rsp, 96");                                         // reserve the encoder scratch frame
+    emitter.instruction("sub rsp, 128");                                        // reserve the encoder scratch frame plus the output-buffer descriptor at [rbp - 128]
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the object pointer
 
     // Enter the recursion-depth check.
     emitter.instruction("call __rt_json_depth_enter");                          // increment _json_active_depth and throw on overflow when requested
 
-    // Get the current write position in the concat buffer.
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // load the current concat-buffer offset
-    abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // materialize the concat buffer base
-    emitter.instruction("add r11, r10");                                        // compute the write pointer for the encoded object
-    emitter.instruction("mov QWORD PTR [rbp - 16], r11");                       // save the start pointer for the final result slice
-    emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the running write pointer for the encoder loop
+    // Open the output buffer at the scratch tail.
+    emitter.instruction("lea rdi, [rbp - 128]");                                // address of the output-buffer descriptor
+    emitter.instruction("call __rt_strbuf_init");                               // open the buffer at the current scratch offset
 
     // Bounds-check the class id and resolve the JSON descriptor.
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the receiver for descriptor lookup
@@ -580,17 +565,20 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_json_obj_jsonserialize_mixed_x");
     emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // reload a non-self result for ordinary recursive encoding
     emitter.instruction("call __rt_json_encode_mixed");                         // encode the boxed mixed return value as JSON
-    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // checkpoint the encoded result pointer
+    // Save the (rax, rdx) result across __rt_json_depth_exit.
+    emitter.instruction("mov QWORD PTR [rbp - 120], rax");                      // checkpoint the encoded result pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // checkpoint the encoded result length
-    emitter.instruction("call __rt_json_depth_exit");                           // balance object entry after recursive result encoding
-    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // restore the encoded result pointer
+    emitter.instruction("call __rt_json_depth_exit");                           // decrement _json_active_depth so a sibling encoder can re-enter cleanly
+    emitter.instruction("mov rax, QWORD PTR [rbp - 120]");                      // restore the encoded result pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // restore the encoded result length
     emitter.instruction("mov rsp, rbp");                                        // unwind the encoder scratch frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the encoded result produced by mixed encoding
 
     emitter.label("__rt_json_obj_open_only_x");
-    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the running write pointer for the open-brace fallback
+    emitter.instruction("lea rdi, [rbp - 128]");                                // address of the output-buffer descriptor
+    emitter.instruction("mov esi, 2");                                          // room for the empty object literal
+    emitter.instruction("call __rt_json_buf_ensure");                           // r11 = cursor with headroom reserved
     emitter.instruction("mov BYTE PTR [r11], 123");                             // emit the opening brace for the empty object literal
     emitter.instruction("add r11, 1");                                          // advance past the opening brace
     emitter.instruction("mov BYTE PTR [r11], 125");                             // emit the closing brace for the empty object literal
@@ -602,10 +590,12 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [rdi + 16]");                       // load the public property count
     emitter.instruction("mov QWORD PTR [rbp - 48], rcx");                       // save the public property count for the loop guard
 
-    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the running write pointer for the opening brace
+    emitter.instruction("lea rdi, [rbp - 128]");                                // address of the output-buffer descriptor
+    emitter.instruction("mov esi, 1");                                          // room for the opening brace
+    emitter.instruction("call __rt_json_buf_ensure");                           // r11 = cursor with headroom reserved
     emitter.instruction("mov BYTE PTR [r11], 123");                             // emit the opening brace before the first property
     emitter.instruction("add r11, 1");                                          // advance past the opening brace
-    emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the running write pointer after the opening brace
+    emitter.instruction("mov QWORD PTR [rbp - 120], r11");                      // save the running write pointer after the opening brace
     emitter.instruction("call __rt_json_pretty_push");                          // enter one pretty-print indentation level after the object opens
     emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // initialize the property loop index to zero
 
@@ -632,46 +622,40 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 56], r8");                        // save the property slot index for value loading
     emitter.instruction("mov QWORD PTR [rbp - 64], r9");                        // save the property type tag for runtime dispatch
 
+    // Reserve room for the separator, the indentation, and the key punctuation.
+    emitter.instruction("lea rdi, [rbp - 128]");                                // address of the output-buffer descriptor
+    emitter.instruction("mov esi, 1");                                          // room for the comma separator
+    emitter.instruction("call __rt_json_buf_ensure");                           // grow first: every punctuation byte of this key prefix fits after it
+
     // Comma separator before all but the first property.
-    emitter.instruction("test rcx, rcx");                                       // is this the first property entry?
+    emitter.instruction("cmp QWORD PTR [rbp - 40], 0");                         // is this the first property entry?
     emitter.instruction("je __rt_json_obj_key_x");                              // skip the comma before the first property
-    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the running write pointer
+    emitter.instruction("mov r11, QWORD PTR [rbp - 120]");                      // reload the running write pointer
     emitter.instruction("mov BYTE PTR [r11], 44");                              // emit the comma separator between properties
     emitter.instruction("add r11, 1");                                          // advance past the comma
-    emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the running write pointer after the comma
+    emitter.instruction("mov QWORD PTR [rbp - 120], r11");                      // save the running write pointer after the comma
 
     emitter.label("__rt_json_obj_key_x");
-    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the running write pointer for the key prefix
+    emitter.instruction("mov r11, QWORD PTR [rbp - 120]");                      // reload the running write pointer for the key prefix
     emitter.instruction("call __rt_json_pretty_line");                          // append newline and indentation for this property when pretty-printing
-    emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the write pointer after any pretty indentation
+    emitter.instruction("mov QWORD PTR [rbp - 120], r11");                      // save the write pointer after any pretty indentation
     emitter.instruction("mov BYTE PTR [r11], 34");                              // emit the opening quote for the property name
     emitter.instruction("add r11, 1");                                          // advance past the opening quote
+    emitter.instruction("mov QWORD PTR [rbp - 120], r11");                      // record the cursor past the opening quote
     emitter.instruction("mov rsi, QWORD PTR [rbp - 88]");                       // reload the property name pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 96]");                       // reload the property name length
-    emitter.instruction("xor rcx, rcx");                                        // initialize the key copy index
-
-    emitter.label("__rt_json_obj_key_copy_x");
-    emitter.instruction("cmp rcx, rdx");                                        // have we copied every byte of the property name?
-    emitter.instruction("jae __rt_json_obj_key_done_x");                        // exit the copy loop once the name is fully written
-    emitter.instruction("mov r8b, BYTE PTR [rsi + rcx]");                       // load the next property-name byte from the descriptor string
-    emitter.instruction("mov BYTE PTR [r11 + rcx], r8b");                       // copy the byte into the concat buffer
-    emitter.instruction("add rcx, 1");                                          // advance the copy index
-    emitter.instruction("jmp __rt_json_obj_key_copy_x");                        // continue copying the property name
-
-    emitter.label("__rt_json_obj_key_done_x");
-    emitter.instruction("add r11, rdx");                                        // advance the write pointer past the copied property name
+    emitter.instruction("lea rdi, [rbp - 128]");                                // address of the output-buffer descriptor
+    emitter.instruction("call __rt_json_buf_append");                           // copy the name to the cursor, growing first; r11 = advanced cursor
     emitter.instruction("mov BYTE PTR [r11], 34");                              // emit the closing quote for the property name
     emitter.instruction("add r11, 1");                                          // advance past the closing quote
     emitter.instruction("mov BYTE PTR [r11], 58");                              // emit the colon separating key and value
     emitter.instruction("add r11, 1");                                          // advance past the colon
     emitter.instruction("call __rt_json_pretty_colon_space");                   // append the pretty-print key/value space when requested
-    emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the running write pointer after the key prefix
+    emitter.instruction("mov QWORD PTR [rbp - 120], r11");                      // save the running write pointer after the key prefix
 
-    // Sync concat_off so nested encoders append after the existing prefix.
-    abi::emit_symbol_address(emitter, "rdi", "_concat_buf");                    // materialize the concat buffer base
-    emitter.instruction("mov rcx, r11");                                        // copy the running write pointer for the offset computation
-    emitter.instruction("sub rcx, rdi");                                        // compute the absolute concat offset for the prefix tail
-    abi::emit_store_reg_to_symbol(emitter, "rcx", "_concat_off", 0);            // publish the concat offset for nested value encoders
+    // Sync concat_off so nested encoders do not format over the existing prefix.
+    emitter.instruction("lea rdi, [rbp - 128]");                                // address of the output-buffer descriptor
+    emitter.instruction("call __rt_strbuf_sync");                               // publish the scratch offset for nested value encoders
 
     // Load property value from the object instance (slot offset = 8 + prop_index * 16).
     emitter.instruction("mov r8, QWORD PTR [rbp - 56]");                        // reload the property runtime slot index
@@ -752,20 +736,9 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_json_encode_null");                          // encode unsupported tags as the JSON null literal
 
     emitter.label("__rt_json_obj_val_copy_x");
-    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the running write pointer
-    emitter.instruction("xor rcx, rcx");                                        // initialize the value copy index
-
-    emitter.label("__rt_json_obj_val_copy_loop_x");
-    emitter.instruction("cmp rcx, rdx");                                        // have we copied every byte of the encoded value?
-    emitter.instruction("jae __rt_json_obj_val_copy_done_x");                   // exit the value copy loop once finished
-    emitter.instruction("mov r8b, BYTE PTR [rax + rcx]");                       // load the next encoded value byte
-    emitter.instruction("mov BYTE PTR [r11 + rcx], r8b");                       // store it into the concat buffer at the running write pointer
-    emitter.instruction("add rcx, 1");                                          // advance the value copy index
-    emitter.instruction("jmp __rt_json_obj_val_copy_loop_x");                   // continue copying the encoded value
-
-    emitter.label("__rt_json_obj_val_copy_done_x");
-    emitter.instruction("add r11, rdx");                                        // advance the write pointer past the copied value
-    emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the running write pointer for the next iteration
+    emitter.instruction("mov rsi, rax");                                        // pass the encoded value pointer to the append helper (rdx = length)
+    emitter.instruction("lea rdi, [rbp - 128]");                                // address of the output-buffer descriptor
+    emitter.instruction("call __rt_json_buf_append");                           // copy the encoded value to the cursor, growing first, and release a transient child buffer
 
     // Advance the loop index and continue.
     emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // reload the property loop index
@@ -774,7 +747,9 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_json_obj_loop_x");                            // continue with the next property entry
 
     emitter.label("__rt_json_obj_close_x");
-    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the running write pointer for the closing brace
+    emitter.instruction("lea rdi, [rbp - 128]");                                // address of the output-buffer descriptor
+    emitter.instruction("mov esi, 1");                                          // room for the closing brace
+    emitter.instruction("call __rt_json_buf_ensure");                           // r11 = cursor with headroom for the closing line
     emitter.instruction("call __rt_json_pretty_pop");                           // leave the object indentation level before closing it
     emitter.instruction("cmp QWORD PTR [rbp - 48], 0");                         // did the object contain any public properties?
     emitter.instruction("je __rt_json_obj_close_emit_x");                       // empty objects stay compact even under JSON_PRETTY_PRINT
@@ -784,16 +759,10 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r11, 1");                                          // advance past the closing brace
 
     emitter.label("__rt_json_obj_finalize_x");
-    emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // checkpoint the write pointer across the depth-exit helper call
+    emitter.instruction("mov QWORD PTR [rbp - 120], r11");                      // checkpoint the write pointer across the depth-exit helper call
     emitter.instruction("call __rt_json_depth_exit");                           // decrement _json_active_depth before computing the result slice
-    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the write pointer after the helper call
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the encoded-object start pointer
-    emitter.instruction("mov rdx, r11");                                        // copy the final write pointer for the length computation
-    emitter.instruction("sub rdx, rax");                                        // compute the encoded-object byte length
-    abi::emit_symbol_address(emitter, "rdi", "_concat_buf");                    // materialize the concat buffer base
-    emitter.instruction("mov rcx, r11");                                        // copy the final write pointer for the offset update
-    emitter.instruction("sub rcx, rdi");                                        // compute the absolute concat-buffer offset after the closing brace
-    abi::emit_store_reg_to_symbol(emitter, "rcx", "_concat_off", 0);            // publish the concat-buffer offset for the next encoder
+    emitter.instruction("lea rdi, [rbp - 128]");                                // address of the output-buffer descriptor
+    emitter.instruction("call __rt_strbuf_finish");                             // rax/rdx = encoded object, _concat_off published
     emitter.instruction("mov rsp, rbp");                                        // unwind the encoder scratch frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the encoded object slice in the standard string registers

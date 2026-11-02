@@ -130,6 +130,27 @@ impl PhpModule {
             .find(|module| module.php_name().eq_ignore_ascii_case(name))
     }
 
+    /// Returns the name PHP registers this module under, which is the spelling a Reflection dump
+    /// prints (`<internal:SPL>`) and `get_loaded_extensions()` lists. It differs from the lowercase
+    /// `php_name()` key only for the modules below. Measured with `get_loaded_extensions()` on a
+    /// PHP 8.5.10 build that loads the bundled modules, `uri` and `lexbor` included; the four PECL
+    /// modules (`imagick`, `gmagick`, `cairo`, `pdo_ibm`) were not loaded there, so their lowercase
+    /// spelling is taken from their own sources rather than measured.
+    pub const fn registered_name(self) -> &'static str {
+        match self {
+            Self::Core => "Core",
+            Self::Spl => "SPL",
+            Self::Ffi => "FFI",
+            Self::ZendOpcache => "Zend OPcache",
+            Self::Pdo => "PDO",
+            Self::PdoOdbc => "PDO_ODBC",
+            Self::Phar => "Phar",
+            Self::Reflection => "Reflection",
+            Self::Simplexml => "SimpleXML",
+            _ => self.php_name(),
+        }
+    }
+
     /// Returns whether this module is a real PHP module rather than the elephc pseudo-module.
     pub const fn is_php(self) -> bool {
         !matches!(self, Self::Elephc)
@@ -165,5 +186,39 @@ mod tests {
         assert!(!PhpModule::Elephc.is_php());
         assert_eq!(PhpModule::ALL.len(), 68 + 4 + 1);
         assert!(!PhpModule::Imagick.is_bundled() && PhpModule::Imagick.is_php());
+    }
+
+    /// Verifies each registered spelling is only a recasing of the module's key.
+    #[test]
+    fn registered_names_recase_the_reflection_key() {
+        for module in PhpModule::ALL {
+            assert_eq!(module.registered_name().to_ascii_lowercase(), module.php_name());
+            assert_eq!(PhpModule::parse(module.registered_name()), Some(*module));
+        }
+        assert_eq!(PhpModule::Standard.registered_name(), "standard");
+    }
+
+    /// Pins every recased spelling, since the round-trip above cannot catch a wrong capital.
+    #[test]
+    fn registered_names_match_php_spelling() {
+        let expected = [
+            (PhpModule::Core, "Core"),
+            (PhpModule::Spl, "SPL"),
+            (PhpModule::Ffi, "FFI"),
+            (PhpModule::ZendOpcache, "Zend OPcache"),
+            (PhpModule::Pdo, "PDO"),
+            (PhpModule::PdoOdbc, "PDO_ODBC"),
+            (PhpModule::Phar, "Phar"),
+            (PhpModule::Reflection, "Reflection"),
+            (PhpModule::Simplexml, "SimpleXML"),
+        ];
+        for (module, name) in expected {
+            assert_eq!(module.registered_name(), name);
+        }
+        let recased = PhpModule::ALL
+            .iter()
+            .filter(|module| module.registered_name() != module.php_name())
+            .count();
+        assert_eq!(recased, expected.len(), "a recased module is missing from this list");
     }
 }

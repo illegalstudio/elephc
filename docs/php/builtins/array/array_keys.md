@@ -2,7 +2,7 @@
 title: "array_keys()"
 description: "Returns all the keys of an array."
 sidebar:
-  order: 22
+  order: 23
 ---
 
 ## array_keys()

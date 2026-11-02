@@ -6,7 +6,8 @@
 //!
 //! Key details:
 //! - User methods return either an owned string pair or a boxed nullable string.
-//! - Callback concat scratch is discarded before writing the final envelope.
+//! - Callback concat scratch is discarded before writing the final envelope; the active
+//!   serialize stream is parked across the callback and every envelope byte goes through it.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::runtime::data::SerializableReturnAbi;
@@ -60,6 +61,11 @@ pub(super) fn emit(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, scratch, "_concat_off", 0);
     abi::store_at_offset(emitter, scratch, 24);
     abi::emit_store_zero_to_local_slot(emitter, 48);
+    // -- the legacy hook may run serialize() and uses the concat scratch: park the active stream
+    //    and move `_concat_off` past a scratch-backed stream so the hook cannot overwrite it --
+    abi::emit_load_symbol_to_reg(emitter, arg0, "_ser_stream", 0);
+    abi::store_at_offset(emitter, arg0, 80);
+    abi::emit_call_label(emitter, "__rt_strbuf_sync");
     load_table_entry(emitter, "_class_serializable_serialize_ptrs");
     abi::emit_reg_move(emitter, arg1, scratch);
     abi::load_at_offset(emitter, arg0, 8);
@@ -78,6 +84,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
     }
     abi::load_at_offset(emitter, result, 24);
     abi::emit_store_reg_to_symbol(emitter, result, "_concat_off", 0);
+    abi::load_at_offset(emitter, result, 80);
+    abi::emit_store_reg_to_symbol(emitter, result, "_ser_stream", 0);
     load_table_entry(emitter, "_class_serializable_serialize_return_abi");
     abi::emit_reg_move(emitter, result, scratch);
     abi::emit_branch_if_int_result_zero(emitter, "__rt_serializable_string_ready");
@@ -150,14 +158,14 @@ pub(super) fn emit(emitter: &mut Emitter) {
     literal(emitter, b":\"");
     abi::load_at_offset(emitter, arg0, 32);
     abi::load_at_offset(emitter, arg1, 40);
-    abi::emit_call_label(emitter, "__rt_concat_append");
+    abi::emit_call_label(emitter, "__rt_ser_append");
     literal(emitter, b"\":");
     abi::load_at_offset(emitter, result, 64);
     abi::emit_call_label(emitter, "__rt_serialize_uint");
     literal(emitter, b":{");
     abi::load_at_offset(emitter, arg0, 56);
     abi::load_at_offset(emitter, arg1, 64);
-    abi::emit_call_label(emitter, "__rt_concat_append");
+    abi::emit_call_label(emitter, "__rt_ser_append");
     literal(emitter, b"}");
     abi::emit_jump(emitter, "__rt_serializable_cleanup");
     emitter.label("__rt_serializable_tagged");

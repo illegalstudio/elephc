@@ -434,6 +434,11 @@ impl ElephcEvalScope {
         self.visible_cell(name).is_some()
     }
 
+    /// Borrows scope entries without allocating or changing their ownership and reference flags.
+    pub(crate) fn entries_iter(&self) -> impl Iterator<Item = (&str, ScopeEntry)> {
+        self.entries.iter().map(|(name, entry)| (name.as_str(), *entry))
+    }
+
     /// Returns visible scope entries in stable variable-name order.
     pub(crate) fn visible_entries(&self) -> Vec<(String, RuntimeCellHandle)> {
         let mut entries = self

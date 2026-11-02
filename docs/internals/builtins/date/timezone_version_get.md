@@ -2,7 +2,7 @@
 title: "timezone_version_get() - internals"
 description: "Compiler internals for timezone_version_get(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 252
+  order: 255
 ---
 
 ## `timezone_version_get()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:895](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L895) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:1019](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L1019) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

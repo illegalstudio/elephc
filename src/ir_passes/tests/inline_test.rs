@@ -15,9 +15,10 @@
 //! - Uses $argc-style "runtime unknown" motivation only at e2e layer.
 
 use crate::ir::{
-    validate_module, Builder, Function, FunctionParam, Immediate, IrHeapKind, IrType, LocalKind,
-    Module, Op, Terminator,
+    validate_module, Builder, CoreBuiltinOp, Function, FunctionParam, Immediate, IrHeapKind, IrType,
+    LocalKind, Module, Op, Terminator,
 };
+use crate::span::Span;
 use crate::codegen::platform::{Arch, Platform, Target};
 use crate::ir::Ownership;
 use crate::ir_passes::inline::inline_small_functions;
@@ -83,6 +84,108 @@ fn make_simple_caller_callee_module() -> (Module, String /*caller name*/) {
     let caller_name = caller.name.clone();
     module.add_function(caller);
     (module, caller_name)
+}
+
+/// Builds a void callee that reports `trigger_error` at `span`.
+fn make_notice_callee(module: &mut Module, span: Span) -> Function {
+    let message_data = module.data.intern_string("notice");
+    let file_data = module.data.intern_string("test.php");
+    let mut f = Function::new("notice".to_string(), IrType::Void, PhpType::Void);
+    let mut b = Builder::new(&mut f);
+    let entry = b.create_named_block("entry", vec![]);
+    b.set_entry(entry);
+    b.position_at_end(entry);
+    let message = b.emit_const_str(message_data);
+    let level = b.emit_const_i64(1024);
+    let file = b.emit_const_str(file_data);
+    let line = b.emit_const_i64(2);
+    let _ = b
+        .emit_with_effects(
+            Op::CoreBuiltin,
+            vec![message, level, file, line],
+            Some(Immediate::I64(CoreBuiltinOp::TriggerError.as_i64())),
+            IrType::I64,
+            PhpType::Bool,
+            Ownership::NonHeap,
+            Op::CoreBuiltin.default_effects(),
+            Some(span),
+        )
+        .expect("trigger_error yields a bool");
+    b.terminate(Terminator::Return { value: None });
+    f
+}
+
+/// Builds a void caller that invokes the `notice` callee, registering its name.
+fn make_notice_caller(module: &mut Module) -> String {
+    let mut caller = Function::new("main_notice".to_string(), IrType::Void, PhpType::Void);
+    {
+        let mut b = Builder::new(&mut caller);
+        let entry = b.create_named_block("entry", vec![]);
+        b.set_entry(entry);
+        b.position_at_end(entry);
+        let data_id = module.data.intern_function_name("notice");
+        assert!(
+            b.emit(
+                Op::Call,
+                vec![],
+                Some(Immediate::Data(data_id)),
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            )
+            .is_none(),
+            "a void call yields no value"
+        );
+        b.terminate(Terminator::Return { value: None });
+    }
+    let name = caller.name.clone();
+    module.add_function(caller);
+    name
+}
+
+/// Verifies a callee that reports at a compiler-injected span keeps its call frame.
+///
+/// The notice is an internal function's diagnostic: only a real `Call` publishes the user's
+/// call site, so splicing the body would leave the synthetic span with nothing to report.
+#[test]
+fn injected_span_notice_callee_is_not_inlined() {
+    let mut module = Module::new(Target::new(Platform::MacOS, Arch::AArch64));
+    let notice = make_notice_callee(&mut module, Span::synthetic());
+    module.add_function(notice);
+    let caller_name = make_notice_caller(&mut module);
+
+    let changed = inline_small_functions(&mut module);
+    assert!(!changed, "an injected-span notice must keep its call");
+    let caller = module
+        .functions
+        .iter()
+        .find(|f| f.name == caller_name)
+        .expect("caller present");
+    assert!(
+        caller.instructions.iter().any(|i| i.op == Op::Call),
+        "the call site must remain to publish the user's location"
+    );
+}
+
+/// Verifies the guard is specific: a source-span `trigger_error` stays inlinable.
+#[test]
+fn source_span_notice_callee_is_still_inlined() {
+    let mut module = Module::new(Target::new(Platform::MacOS, Arch::AArch64));
+    let notice = make_notice_callee(&mut module, Span::new(2, 1));
+    module.add_function(notice);
+    let caller_name = make_notice_caller(&mut module);
+
+    let changed = inline_small_functions(&mut module);
+    assert!(changed, "a source-written notice may still inline");
+    let caller = module
+        .functions
+        .iter()
+        .find(|f| f.name == caller_name)
+        .expect("caller present");
+    assert!(
+        !caller.instructions.iter().any(|i| i.op == Op::Call),
+        "the call should be spliced away"
+    );
 }
 
 /// Verifies a small const-returning callee is inlined: the caller's `Call` is

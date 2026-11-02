@@ -28,6 +28,7 @@ const PENDING: usize = 88;
 const NEXT: usize = 96;
 const BORROWED: usize = 104;
 const ORIGINAL_TAG: usize = 112;
+const ESCAPED: usize = 120;
 
 /// Static diagnostic fragments shared with runtime data emission.
 pub const ARRAY_AGGREGATE_MESSAGES: &[(&str, &str)] = &[
@@ -68,7 +69,7 @@ fn emit_aggregate(emitter: &mut Emitter, product: bool) {
     branch(emitter, "hi", "a", &format!("{prefix}_invalid"));
     sentinels::emit_branch_if_null_container(emitter, low, abi::secondary_scratch_reg(emitter), &format!("{prefix}_invalid"));
     abi::store_at_offset(emitter, low, PAYLOAD);
-    for slot in [SOURCE, CARRY, CURSOR, PENDING, NEXT] { clear_slot(emitter, slot); }
+    for slot in [SOURCE, CARRY, CURSOR, PENDING, NEXT, ESCAPED] { clear_slot(emitter, slot); }
     install_boundary(emitter, prefix);
     abi::load_at_offset(emitter, result, BORROWED);
     abi::emit_call_label(emitter, "__rt_mixed_unbox");
@@ -105,7 +106,47 @@ fn emit_aggregate(emitter: &mut Emitter, product: bool) {
         ins(emitter, &format!("cmp x0, #{tag}"), &format!("cmp rax, {tag}"));
         branch(emitter, "eq", "e", &format!("{prefix}_{suffix}"));
     }
+    // -- a reviewed internal numeric cast keeps GMP objects in the sum instead of skipping them --
+    ins(emitter, "cmp x0, #6", "cmp rax, 6");
+    branch(emitter, "eq", "e", &format!("{prefix}_object"));
     abi::emit_jump(emitter, &format!("{prefix}_unsupported"));
+
+    emitter.label(&format!("{prefix}_object"));
+    if emitter.target.arch == Arch::AArch64 {
+        abi::load_at_offset(emitter, "x0", ENTRY - 8);                        // load the object pointer from the unboxed entry payload
+        emitter.instruction("ldr x9, [x0]");                                   // load the object's runtime class id
+        abi::emit_symbol_address(emitter, "x10", "_class_to_number_ptrs");     // resolve the per-class numeric cast table
+        emitter.instruction("ldr x10, [x10, x9, lsl #3]");                     // read this class's numeric cast adapter
+        emitter.instruction(&format!("cbz x10, {prefix}_unsupported"));         // classes without a cast keep the warning path
+        emitter.instruction("blr x10");                                        // x0 = boxed int-or-float PHP number
+        emitter.instruction("str x0, [sp, #-16]!");                            // park the number box and keep the stack aligned
+        emitter.instruction("bl __rt_mixed_unbox");                            // x0=tag, x1=lo, x2=hi for the cast value
+        abi::store_at_offset(emitter, "x0", ENTRY);                           // store the cast tag into the entry cell
+        abi::store_at_offset(emitter, "x1", ENTRY - 8);                       // store the cast low payload word into the entry cell
+        abi::store_at_offset(emitter, "x2", ENTRY - 16);                      // store the cast high payload word into the entry cell
+        emitter.instruction("ldr x0, [sp], #16");                              // recover the number box after the entry cell is written
+        emitter.instruction("bl __rt_decref_mixed");                           // release the temporary cast box
+        abi::emit_jump(emitter, &format!("{prefix}_combine"));                 // add the cast number to the running total
+    } else {
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                  // load the object pointer from the unboxed entry payload
+        emitter.instruction("mov r9, QWORD PTR [rdi]");                        // load the object's runtime class id
+        abi::emit_symbol_address(emitter, "r10", "_class_to_number_ptrs");     // resolve the per-class numeric cast table
+        emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");              // read this class's numeric cast adapter
+        emitter.instruction("test r10, r10");                                  // does this class provide a numeric cast?
+        emitter.instruction(&format!("jz {prefix}_unsupported"));              // classes without a cast keep the warning path
+        emitter.instruction("call r10");                                       // rax = boxed int-or-float PHP number
+        emitter.instruction("sub rsp, 16");                                    // reserve an aligned slot for the number box
+        emitter.instruction("mov QWORD PTR [rsp], rax");                       // park the number box across the unbox call
+        emitter.instruction("mov rdi, rax");                                   // pass the boxed number to the unbox helper
+        emitter.instruction("call __rt_mixed_unbox");                          // rax=tag, rdi=lo, rdx=hi for the cast value
+        emitter.instruction("mov QWORD PTR [rbp - 64], rax");                  // store the cast tag into the entry cell
+        emitter.instruction("mov QWORD PTR [rbp - 56], rdi");                  // store the cast low payload word into the entry cell
+        emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                  // store the cast high payload word into the entry cell
+        emitter.instruction("mov rax, QWORD PTR [rsp]");                       // recover the number box after the entry cell is written
+        emitter.instruction("add rsp, 16");                                    // release the temporary box slot
+        emitter.instruction("call __rt_decref_mixed");                         // release the temporary cast box
+        emitter.instruction(&format!("jmp {prefix}_combine"));                 // add the cast number to the running total
+    }
 
     emitter.label(&format!("{prefix}_scalar"));
     abi::emit_frame_slot_address(emitter, result, ENTRY);
@@ -215,12 +256,23 @@ fn emit_cleanup(emitter: &mut Emitter, prefix: &str) {
     emitter.label(&format!("{prefix}_release_source"));
     release_slot(emitter, SOURCE);
     abi::load_at_offset(emitter, result, PENDING);
-    abi::emit_branch_if_int_result_zero(emitter, &format!("{prefix}_return"));
+    abi::emit_branch_if_int_result_zero(emitter, &format!("{prefix}_maybe_escape"));
     abi::load_at_offset(emitter, low_reg(emitter), PREVIOUS);
     clear_slot(emitter, PREVIOUS);
     abi::emit_call_label(emitter, "__rt_exception_chain");
     abi::load_at_offset(emitter, result, PENDING);
     abi::emit_store_reg_to_symbol(emitter, result, "_exc_value", 0);
+    restore_boundary(emitter);
+    abi::emit_frame_restore(emitter, FRAME);
+    abi::emit_jump(emitter, "__rt_throw_current");
+    emitter.label(&format!("{prefix}_maybe_escape"));
+    abi::load_at_offset(emitter, result, ESCAPED);
+    abi::emit_branch_if_int_result_zero(emitter, &format!("{prefix}_return"));
+    release_slot(emitter, CARRY);
+    abi::load_at_offset(emitter, low_reg(emitter), PREVIOUS);
+    clear_slot(emitter, PREVIOUS);
+    abi::emit_load_int_immediate(emitter, result, 0);
+    abi::emit_call_label(emitter, "__rt_exception_chain");
     restore_boundary(emitter);
     abi::emit_frame_restore(emitter, FRAME);
     abi::emit_jump(emitter, "__rt_throw_current");
@@ -234,6 +286,12 @@ fn emit_cleanup(emitter: &mut Emitter, prefix: &str) {
     emitter.label(&format!("{prefix}_caught"));
     abi::emit_load_symbol_to_reg(emitter, result, "_exc_value", 0);
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+    let caught_object = format!("{prefix}_caught_object");
+    abi::emit_branch_if_int_result_nonzero(emitter, &caught_object);
+    abi::emit_load_int_immediate(emitter, result, 1);
+    abi::store_at_offset(emitter, result, ESCAPED);
+    abi::emit_load_int_immediate(emitter, result, 0);
+    emitter.label(&caught_object);
     abi::load_at_offset(emitter, low_reg(emitter), PENDING);
     abi::store_at_offset(emitter, result, PENDING);
     abi::emit_call_label(emitter, "__rt_exception_chain");
@@ -259,7 +317,7 @@ fn install_boundary(emitter: &mut Emitter, prefix: &str) {
     abi::emit_frame_slot_address(emitter, result, HANDLER);
     abi::emit_store_reg_to_symbol(emitter, result, "_exc_handler_top", 0);
     abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter.target, 0), HANDLER - TRY_HANDLER_JMP_BUF_OFFSET);
-    emitter.bl_c("setjmp");                                                     // preserve the snapshot and partial number when a warning handler throws
+    emitter.save_exception_handler();                                           // preserve the snapshot and partial number when a warning handler throws
     abi::emit_branch_if_int_result_nonzero(emitter, &format!("{prefix}_caught"));
 }
 
@@ -325,7 +383,8 @@ mod tests {
                 let mut emitter = Emitter::new(target);
                 emit_aggregate(&mut emitter, product);
                 let asm = emitter.output();
-                let boundary = asm.find(&target.extern_symbol("setjmp")).unwrap();
+                let prefix = if product { "__rt_array_product_boxed" } else { "__rt_array_sum_boxed" };
+                let boundary = asm.find(&target.extern_symbol("_setjmp")).unwrap();
                 let acquire = asm.find("__rt_mixed_from_value").unwrap();
                 let warning = asm.find("__rt_diag_warning").unwrap();
                 assert!(boundary < acquire && acquire < warning, "{name}");
@@ -333,6 +392,8 @@ mod tests {
                 assert!(asm.contains("__rt_str_numeric_value"), "{name}");
                 assert!(asm.contains("__rt_exception_chain"), "{name}");
                 assert!(asm.contains("__rt_throw_current"), "{name}");
+                assert!(asm.contains(&format!("{prefix}_maybe_escape")), "{name}");
+                assert!(asm.contains(&format!("{prefix}_caught_object")), "{name}");
                 let operation = if product { "__rt_mixed_numeric_mul" } else { "__rt_mixed_numeric_add" };
                 assert!(asm.contains(operation), "{name}");
                 assert!(!asm.contains("__rt_mixed_clone"), "{name}: stack cells stay borrowed");

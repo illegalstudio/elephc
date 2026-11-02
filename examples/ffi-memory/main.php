@@ -3,10 +3,10 @@
 // This example uses libc allocation plus byte, 16-bit word, and raw string helpers.
 
 extern "System" {
-    function malloc(int $size): ptr;
+    function malloc(u64 $size): ptr;
     function free(ptr $p): void;
-    function memset(ptr $dest, int $byte, int $count): ptr;
-    function memcpy(ptr $dest, ptr $src, int $count): ptr;
+    function memset(ptr $dest, i32 $byte, u64 $count): ptr;
+    function memcpy(ptr $dest, ptr $src, u64 $count): ptr;
 }
 
 $src = malloc(64);
@@ -32,3 +32,11 @@ echo "request = " . ptr_read_string(ptr_offset($dst, 8), $request_len);
 
 free($dst);
 free($src);
+
+// 32-bit floats: C `float` struct fields and vertex data are 4 bytes each.
+$floats = malloc(8);
+ptr_write_f32($floats, 1.5);
+ptr_write_f32(ptr_offset($floats, 4), 0.1);
+echo "f32[0] = " . ptr_read_f32($floats) . "\n";
+echo "f32[1] = " . ptr_read_f32(ptr_offset($floats, 4)) . "\n";   // 0.1 rounded to single precision
+free($floats);

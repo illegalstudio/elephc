@@ -432,6 +432,30 @@ foreach ($m as $k => $v) { echo "$k:$v "; }
     assert_eq!(out, "0:1 1:2 2:3 3:4 ");
 }
 
+/// Verifies an indexed operand converted to a temporary hash is the one released after the call.
+/// On x86_64 the release once loaded the temporary into `rdi` while `__rt_decref_hash` reads
+/// `rax`, which still held the result: the result was freed under the caller (a reused block
+/// made the next read fault) and the temporary leaked.
+#[test]
+fn test_two_hash_builtins_release_converted_temporaries_not_the_result() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$r = array_replace([10, 20, 30], [1 => 99]);
+$m = array_merge_recursive([1, 2], [3, 4]);
+$x = array_replace(["k" => 1], [5, 6]);
+foreach ($r as $k => $v) { echo "$k:$v "; }
+echo "| ";
+foreach ($m as $k => $v) { echo "$k:$v "; }
+echo "| ";
+foreach ($x as $k => $v) { echo "$k:$v "; }
+echo "\n";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "0:10 1:99 2:30 | 0:1 1:2 2:3 3:4 | k:1 0:5 1:6 \n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Issue #1738: the array helpers that retain heap-backed elements must not leak when the
 /// retained element outlives an overwrite, reverse, or uniqueness filter. `array_unique`
 /// (indexed, nested-array elements), `array_reverse($a, true)`, `array_replace`, and

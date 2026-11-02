@@ -19,9 +19,7 @@ builtin! {
     contract: "min",
     check: check,
     semantics: crate::builtins::semantics::with_argument_lowering(
-        crate::builtins::semantics::runtime_fn_semantics(
-            crate::ir::RuntimeFnId::Min,
-        ),
+        super::min_max_gmp::semantics(crate::ir::RuntimeFnId::Min),
         crate::builtins::semantics::BuiltinArgumentLowering::BareArrayValues {
             arg: 0,
             sole: true,
@@ -36,11 +34,18 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         return super::min_max_array_element_type(cx, "min");
     }
     let mut has_float = false;
+    let mut has_gmp = false;
     for arg in cx.args {
         let t = cx.checker.infer_type(arg, cx.env)?;
+        if matches!(&t, PhpType::Object(class) if class.trim_start_matches('\\').eq_ignore_ascii_case("GMP")) {
+            has_gmp = true;
+        }
         if t == PhpType::Float {
             has_float = true;
         }
+    }
+    if has_gmp {
+        return Ok(PhpType::Mixed);
     }
     if has_float {
         Ok(PhpType::Float)

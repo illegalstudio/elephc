@@ -107,6 +107,21 @@ impl Checker {
         bindings: generics::Bindings,
         span: crate::span::Span,
     ) -> Result<String, CompileError> {
+        self.finish_generic_instantiation_with_site(name, decl, bindings, span, true)
+    }
+
+    /// Instantiates a public call or a private include variant, recording only the public site.
+    fn finish_generic_instantiation_with_site(
+        &mut self,
+        name: &str,
+        decl: &crate::types::checker::FnDecl,
+        bindings: generics::Bindings,
+        span: crate::span::Span,
+        record_site: bool,
+    ) -> Result<String, CompileError> {
+        if let Some(error) = self.failed_variant_contracts.get(name) {
+            return Err(error.clone());
+        }
         // Bounds are checked HERE rather than inside inference, because satisfying a bound is a
         // subtyping question and only the checker holds the class table: `type_accepts` already
         // answers it for subclasses, implemented interfaces and interface inheritance. Inference
@@ -124,8 +139,8 @@ impl Checker {
             // its own included: `<T : Cmp<T>>` asks for `Cmp<Word>` once `T` is `Word`.
             // Resolving it unsubstituted asked whether `Word` implements `Cmp<T>`, a class that
             // does not exist, and rejected every F-bounded call.
-            let bound_ty = self.resolve_type_expr(&bound.substitute_type_params(&bindings), span)?;
-            let argument_ty = self.resolve_type_expr(argument, span)?;
+            let bound_ty = self.resolve_type_expr(&generics::substitute_value_type(bound, &bindings), span)?;
+            let argument_ty = self.resolve_generic_bound_argument(argument, span)?;
             if !self.type_accepts(&bound_ty, &argument_ty) {
                 return Err(CompileError::new(
                     span,
@@ -158,7 +173,7 @@ impl Checker {
         //
         // The checker re-walks a body once per call-site specialization, so the same key being
         // re-recorded with the SAME answer is normal and must not be flagged.
-        if let Some(previous) = self.generic_call_sites.get(&site) {
+        if let Some(previous) = self.generic_call_sites.get(&site).filter(|_| record_site) {
             if previous != &instantiated {
                 return Err(CompileError::new(
                     span,
@@ -172,13 +187,34 @@ impl Checker {
                 ));
             }
         }
-        self.generic_call_sites.insert(site, instantiated.clone());
+        if record_site {
+            self.generic_call_sites.insert(site, instantiated.clone());
+        }
         // Recorded on EVERY call, not just the first. The pipeline re-checks after splicing, and
         // on that pass the declaration already exists — skipping the request then left the final
         // result with an empty list, and the pruner dropped every instantiation as unreferenced
         // because no call site names one.
         self.requested_instantiations
             .push((name.to_string(), bindings.clone()));
+        if let Some(variants) = self.function_variant_groups.get(name).cloned() {
+            // The public specialization keeps runtime dispatch. Binding only the first body
+            // would silently select it regardless of which include actually executed.
+            self.function_variant_groups.insert(
+                instantiated.clone(),
+                variants.iter().map(|variant| generics::instantiated_name(variant, &bindings)).collect(),
+            );
+            for variant in variants {
+                let variant_decl = self.fn_decls.get(&variant).cloned().ok_or_else(|| {
+                    CompileError::new(span, &format!("Missing generic function variant: {}", variant))
+                })?;
+                let variant_bindings = variant_decl.type_params.iter().zip(&bindings)
+                    .map(|(param, (_, ty))| (param.name.clone(), ty.clone())).collect();
+                self.finish_generic_instantiation_with_site(
+                    &variant, &variant_decl, variant_bindings, span, false,
+                )?;
+            }
+            return Ok(instantiated);
+        }
         if self.fn_decls.contains_key(&instantiated) {
             return Ok(instantiated);
         }
@@ -196,17 +232,17 @@ impl Checker {
             .map(|declared| {
                 declared
                     .as_ref()
-                    .map(|ty| ty.substitute_type_params(&bindings))
+                    .map(|ty| generics::substitute_value_type(ty, &bindings))
             })
             .collect();
         instantiated_decl.return_type = decl
             .return_type
             .as_ref()
-            .map(|ty| ty.substitute_type_params(&bindings));
+            .map(|ty| generics::substitute_value_type(ty, &bindings));
         instantiated_decl.variadic_type = decl
             .variadic_type
             .as_ref()
-            .map(|ty| ty.substitute_type_params(&bindings));
+            .map(|ty| generics::substitute_value_type(ty, &bindings));
         self.fn_decls
             .insert(instantiated.clone(), instantiated_decl);
         Ok(instantiated)

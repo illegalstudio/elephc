@@ -12,13 +12,13 @@ use super::*;
 /// Emits one native constructor parameter-name registration call.
 pub(super) fn register_eval_native_constructor_param(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     class_name_label: &str,
     class_name_len: usize,
     param_index: usize,
     param_name: &str,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     abi::emit_symbol_address(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 1),
@@ -55,14 +55,14 @@ pub(super) fn register_eval_native_constructor_param(
 /// Emits one native constructor parameter-flags registration call.
 pub(super) fn register_eval_native_constructor_param_flags(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     class_name_label: &str,
     class_name_len: usize,
     param_index: usize,
     is_by_ref: bool,
     is_variadic: bool,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     abi::emit_symbol_address(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 1),
@@ -98,13 +98,13 @@ pub(super) fn register_eval_native_constructor_param_flags(
 /// Emits one native constructor parameter-type registration call.
 pub(super) fn register_eval_native_constructor_param_type(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     class_name_label: &str,
     class_name_len: usize,
     param_index: usize,
     type_spec: &str,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     abi::emit_symbol_address(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 1),
@@ -141,13 +141,13 @@ pub(super) fn register_eval_native_constructor_param_type(
 /// Emits one native constructor parameter-default registration call.
 pub(super) fn register_eval_native_constructor_param_default(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     class_name_label: &str,
     class_name_len: usize,
     param_index: usize,
     default: &EvalNativeCallableDefault,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     abi::emit_symbol_address(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 1),
@@ -180,7 +180,8 @@ pub(super) fn register_eval_native_constructor_param_default(
                 .extern_symbol("__elephc_eval_register_native_constructor_param_default_scalar")
         }
         EvalNativeCallableDefault::String(value) => {
-            let (default_label, default_len) = ctx.data.add_string(value.as_bytes());
+            let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
+            let (default_label, default_len) = ctx.data.add_string(&bytes);
             abi::emit_symbol_address(
                 ctx.emitter,
                 abi::int_arg_reg_name(ctx.emitter.target, 4),
@@ -236,12 +237,12 @@ pub(super) fn register_eval_native_constructor_param_default(
 /// Emits one native constructor explicit PHP signature shape registration call.
 pub(super) fn register_eval_native_constructor_shape(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     class_name_label: &str,
     class_name_len: usize,
     shape: &EvalNativeSignatureShape,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     abi::emit_symbol_address(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 1),

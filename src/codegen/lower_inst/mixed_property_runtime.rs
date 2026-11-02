@@ -307,7 +307,8 @@ pub(super) fn cast_loaded_mixed_pointer_to_result(
     let label = match target_ty {
         PhpType::Mixed | PhpType::Union(_) => return Ok(()),
         PhpType::Str => "__rt_mixed_cast_string",
-        PhpType::Int => "__rt_mixed_cast_int",
+        // Pointers and typed buffer handles are raw words whose missing value is 0.
+        PhpType::Int | PhpType::Pointer(_) | PhpType::Buffer(_) => "__rt_mixed_cast_int",
         PhpType::Float => "__rt_mixed_cast_float",
         PhpType::Bool => "__rt_mixed_cast_bool",
         PhpType::TaggedScalar => {
@@ -329,9 +330,21 @@ pub(super) fn cast_loaded_mixed_pointer_to_result(
             )))
         }
     };
+    // Runtime-name property dispatch supplies an owned cell. A buffer result needs only its
+    // handle, so retire that cell after extracting the payload without losing element metadata.
+    let buffer_result = matches!(target_ty, PhpType::Buffer(_));
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    if buffer_result { abi::emit_push_reg(ctx.emitter, result_reg); }
     if matches!(ctx.emitter.target.arch, Arch::X86_64) {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the returned boxed Mixed pointer as the SysV first argument
     }
     abi::emit_call_label(ctx.emitter, label);
+    if buffer_result {
+        abi::emit_push_reg(ctx.emitter, result_reg);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
+        abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+        abi::emit_pop_reg(ctx.emitter, result_reg);
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+    }
     Ok(())
 }

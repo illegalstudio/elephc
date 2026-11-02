@@ -25,7 +25,10 @@
 //! - `json_support` holds shared helpers for the JSON/serialize check hooks.
 //! - Add `pub mod <name>;` here for every new system builtin home.
 
+pub mod __elephc_builtin_deprecated;
+pub mod __elephc_builtin_warning;
 pub mod __elephc_class_has_constructor;
+pub mod __elephc_class_is_abstract;
 pub mod __elephc_gmmktime_raw;
 pub mod __elephc_initialize_pdo_statement;
 pub mod __elephc_invoke_pdo_statement_constructor;
@@ -45,6 +48,7 @@ pub mod __elephc_opcache_rt_swap;
 pub mod __elephc_pdo_called_class_status;
 pub mod __elephc_pdo_statement_class_status;
 pub mod __elephc_strtotime_raw;
+pub mod __elephc_tokenizer_error_location;
 pub mod attr_support;
 pub mod checkdate;
 pub mod class_attribute_args;
@@ -94,6 +98,12 @@ pub mod json_last_error_msg;
 pub mod json_support;
 pub mod json_validate;
 pub mod localtime;
+pub mod memory_get_allocations;
+pub mod memory_get_frees;
+pub mod memory_get_peak_usage;
+pub mod memory_get_usage;
+pub mod memory_reset_peak_usage;
+mod memory_support;
 pub mod microtime;
 pub mod mktime;
 pub mod passthru;

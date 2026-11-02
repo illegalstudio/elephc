@@ -16,10 +16,13 @@ mod stmt;
 mod types;
 
 pub use expr::{
-    is_compound_assignment_self_read, ArrayEntry, CallableTarget, CastType, Expr, ExprKind,
+    is_compound_assignment_self_read, is_compound_property_assignment_self_read, ArrayEntry,
+    CallableTarget, CastType, Expr, ExprKind,
     InstanceOfTarget, MagicConstant, StaticReceiver,
 };
-pub use ffi::{CType, ExternField, ExternParam, PackedField};
+pub use ffi::{
+    c_width_type_names, is_c_width_type_name, CIntWidth, CType, ExternField, ExternParam, PackedField,
+};
 pub use operators::BinOp;
 pub use oop::{
     Attribute, AttributeGroup, ClassConst, ClassMethod, ClassProperty, EnumCaseDecl,

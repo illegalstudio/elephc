@@ -9,6 +9,7 @@
 //! - Setter argument guards run, but an abstract setter never initializes the backing slot.
 
 use super::*;
+use crate::types::diagnostic_names::php_type_name;
 
 /// Validates and retires an abstract setter argument without publishing it into storage.
 pub(super) fn emit_hook_aware_property_store(
@@ -27,7 +28,7 @@ pub(super) fn emit_hook_aware_property_store(
     parameter.php_type = parameter_type;
     parameter.abstract_setter_type_error_prefix = Some(format!(
         "{owner}::${}::set(): Argument #1 ($value) must be of type {}, ",
-        slot.property, mixed_property_type_guard::php_type_name(&parameter.php_type),
+        slot.property, php_type_name(&parameter.php_type),
     ));
     // Materialization creates the owner a physical slot would have adopted.
     // Retire that owner here; EIR still owns the original evaluated argument.

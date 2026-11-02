@@ -189,7 +189,7 @@ fn install_boundary(emitter: &mut Emitter) {
     abi::emit_frame_slot_address(emitter, result, HANDLER);
     abi::emit_store_reg_to_symbol(emitter, result, "_exc_handler_top", 0);
     abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter.target, 0), HANDLER - TRY_HANDLER_JMP_BUF_OFFSET);
-    emitter.bl_c("setjmp");                                                     // keep intermediate owners reachable when a callback or destructor throws
+    emitter.save_exception_handler();                                           // keep intermediate owners reachable when a callback or destructor throws
     abi::emit_branch_if_int_result_nonzero(emitter, "__rt_array_reduce_boxed_caught");
 }
 
@@ -242,7 +242,7 @@ mod tests {
             let mut emitter = Emitter::new(target);
             emit_array_reduce_boxed(&mut emitter);
             let asm = emitter.output();
-            let boundary = asm.find(&target.extern_symbol("setjmp")).unwrap();
+            let boundary = asm.find(&target.extern_symbol("_setjmp")).unwrap();
             let acquire = asm.find("__rt_mixed_from_value").unwrap();
             let invoke = asm.find("__rt_callable_invoke_owned_args").unwrap();
             assert!(boundary < acquire && acquire < invoke, "{name}");

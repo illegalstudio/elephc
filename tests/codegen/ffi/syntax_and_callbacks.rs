@@ -41,7 +41,7 @@ echo abs(-1);
 fn test_ffi_extern_void_return() {
     let out = compile_and_run(
         r#"<?php
-extern function abs(int $n): int;
+extern function abs(i32 $n): i32;
 $x = abs(-5);
 echo $x;
 "#,
@@ -66,7 +66,7 @@ echo sqrt(144.0);
 fn test_ffi_extern_multiple_args() {
     let out = compile_and_run(
         r#"<?php
-extern function strtol(string $s, ptr $endptr, int $base): int;
+extern function strtol(string $s, ptr $endptr, i32 $base): int;
 echo strtol("FF", ptr_null(), 16);
 "#,
     );
@@ -78,7 +78,7 @@ echo strtol("FF", ptr_null(), 16);
 fn test_ffi_extern_multiple_string_args() {
     let out = compile_and_run(
         r#"<?php
-extern function strcmp(string $left, string $right): int;
+extern function strcmp(string $left, string $right): i32;
 echo strcmp("aa", "ab") < 0 ? "ok" : "bad";
 "#,
     );
@@ -90,7 +90,7 @@ echo strcmp("aa", "ab") < 0 ? "ok" : "bad";
 fn test_ffi_extern_multiple_string_args_free_all_borrowed_cstr_temps() {
     let baseline = compile_and_run_with_gc_stats(
         r#"<?php
-extern function strcmp(string $left, string $right): int;
+extern function strcmp(string $left, string $right): i32;
 "#,
     );
     assert!(
@@ -100,7 +100,7 @@ extern function strcmp(string $left, string $right): int;
     );
     let out = compile_and_run_with_gc_stats(
         r#"<?php
-extern function strcmp(string $left, string $right): int;
+extern function strcmp(string $left, string $right): i32;
 strcmp("aa", "ab");
 strcmp("bb", "bb");
 "#,
@@ -134,8 +134,8 @@ echo ptr_is_null($environ) ? "fail" : "ok";
 fn test_ffi_callback_signal_handler() {
     let out = compile_and_run(
         r#"<?php
-extern function signal(int $sig, callable $handler): ptr;
-extern function raise(int $sig): int;
+extern function signal(i32 $sig, callable $handler): ptr;
+extern function raise(i32 $sig): i32;
 
 function on_signal($sig) {
     echo $sig;
@@ -153,8 +153,8 @@ raise(15);
 fn test_ffi_callback_signal_handler_first_class_callable() {
     let out = compile_and_run(
         r#"<?php
-extern function signal(int $sig, callable $handler): ptr;
-extern function raise(int $sig): int;
+extern function signal(i32 $sig, callable $handler): ptr;
+extern function raise(i32 $sig): i32;
 
 function on_signal(int $sig): void {
     echo $sig + 1;
@@ -173,8 +173,8 @@ raise(15);
 fn test_ffi_callback_signal_handler_closure_descriptor() {
     let out = compile_and_run(
         r#"<?php
-extern function signal(int $sig, callable $handler): ptr;
-extern function raise(int $sig): int;
+extern function signal(i32 $sig, callable $handler): ptr;
+extern function raise(i32 $sig): i32;
 
 $handler = function(int $sig): void {
     echo $sig + 2;
@@ -192,8 +192,8 @@ raise(15);
 fn test_ffi_callback_signal_handler_closure_capture_descriptor() {
     let out = compile_and_run(
         r#"<?php
-extern function signal(int $sig, callable $handler): ptr;
-extern function raise(int $sig): int;
+extern function signal(i32 $sig, callable $handler): ptr;
+extern function raise(i32 $sig): i32;
 
 $delta = 3;
 $handler = function(int $sig) use ($delta): void {
@@ -212,8 +212,8 @@ raise(15);
 fn test_ffi_callback_signal_handler_first_class_method_receiver_descriptor() {
     let out = compile_and_run(
         r#"<?php
-extern function signal(int $sig, callable $handler): ptr;
-extern function raise(int $sig): int;
+extern function signal(i32 $sig, callable $handler): ptr;
+extern function raise(i32 $sig): i32;
 
 class Handler {
     public int $delta;
@@ -240,8 +240,8 @@ raise(15);
 fn test_ffi_callback_signal_handler_branch_selected_descriptor() {
     let out = compile_and_run(
         r#"<?php
-extern function signal(int $sig, callable $handler): ptr;
-extern function raise(int $sig): int;
+extern function signal(i32 $sig, callable $handler): ptr;
+extern function raise(i32 $sig): i32;
 
 $delta = 5;
 $handler = true
@@ -255,12 +255,12 @@ raise(15);
     assert_eq!(out, "20");
 }
 
-/// Smoke test: verifies non-string FFI extern function returning `int` is callable and returns a positive pid.
+/// Smoke test: verifies non-string FFI extern function returning a C `int` (`i32`) is callable and returns a positive pid.
 #[test]
 fn test_ffi_extern_non_string_global_smoke() {
     let out = compile_and_run(
         r#"<?php
-extern function getpid(): int;
+extern function getpid(): i32;
 $pid = getpid();
 echo $pid > 0 ? "ok" : "fail";
 "#,
@@ -273,7 +273,7 @@ echo $pid > 0 ? "ok" : "fail";
 fn test_ffi_extern_in_function() {
     let out = compile_and_run(
         r#"<?php
-extern function abs(int $n): int;
+extern function abs(i32 $n): i32;
 function my_abs($x) {
     return abs($x);
 }
@@ -281,4 +281,36 @@ echo my_abs(-10);
 "#,
     );
     assert_eq!(out, "10");
+}
+
+/// Verifies program exit releases the descriptor each extern callback slot retains, so a
+/// captured object is destroyed and the heap report is clean.
+#[test]
+fn test_ffi_callback_slot_descriptors_released_at_exit() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+extern function signal(int $sig, callable $handler): ptr;
+extern function raise(int $sig): int;
+
+class Probe {
+    public function __construct(public int $delta) {}
+    public function __destruct() { echo "[gone {$this->delta}]"; }
+}
+
+function plain(int $sig): void { echo $sig, ";"; }
+
+for ($i = 0; $i < 3; $i++) {
+    $probe = new Probe($i);
+    signal(15, function(int $sig) use ($probe): void { echo $sig + $probe->delta, ";"; });
+    raise(15);
+}
+unset($probe);
+signal(10, "plain");
+raise(10);
+echo "end";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "15;[gone 0]16;[gone 1]17;10;end[gone 2]");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

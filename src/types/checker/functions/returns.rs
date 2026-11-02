@@ -9,7 +9,7 @@
 //! - Diagnostics should map shared planner errors back to source spans without duplicating call semantics.
 
 use crate::errors::CompileError;
-use crate::parser::ast::{Stmt, StmtKind};
+use crate::parser::ast::{Stmt, StmtKind, TypeExpr};
 use crate::types::checker::type_compat::unions::normalize_union_members;
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
@@ -352,6 +352,28 @@ impl Checker {
         }
     }
 
+    /// Null-only declarations require an explicit value return despite sharing void storage.
+    pub(crate) fn require_return_hint_coverage(
+        &self, hint: &TypeExpr, expected: &PhpType, body: &[Stmt],
+        span: crate::span::Span, context: &str,
+    ) -> Result<(), CompileError> {
+        let null_only = matches!(hint, TypeExpr::Named(name) if name.as_str().eq_ignore_ascii_case("null"));
+        let coverage_type = if null_only { &PhpType::Mixed } else { expected };
+        self.require_declared_return_coverage(coverage_type, body, span, context)
+    }
+
+    /// Keeps source null and void return rules separate while retaining their shared runtime value.
+    pub(crate) fn require_compatible_return_hint(
+        &self, hint: &TypeExpr, expected: &PhpType, actual: &PhpType, has_value: bool,
+        span: crate::span::Span, context: &str,
+    ) -> Result<(), CompileError> {
+        if matches!(hint, TypeExpr::Named(name) if name.as_str().eq_ignore_ascii_case("null")) {
+            if has_value && *actual == PhpType::Void { return Ok(()); }
+            return Err(CompileError::new(span, &format!("{context} must return a null value")));
+        }
+        self.require_compatible_return_type(expected, actual, has_value, span, context)
+    }
+
     /// Checks that an actual return type is compatible with the declared return type.
     /// Handles three cases: void-returning functions (no value allowed), value-returning
     /// functions (value required and must be assignable to `expected`), and nullability
@@ -455,6 +477,13 @@ impl Checker {
         let expected_repr = expected_elem.codegen_repr();
         let actual_repr = actual_elem.codegen_repr();
         if expected_repr == actual_repr || matches!(**actual_elem, PhpType::Never) {
+            return Ok(());
+        }
+        // A `null` element of a pointer array is the null pointer word, so `return [null]` from
+        // `: array<ptr<T>|null>` shares the declared pointer storage.
+        if matches!(expected_repr, PhpType::Pointer(_))
+            && crate::types::merge_pointer_elements(expected_elem, actual_elem).is_some()
+        {
             return Ok(());
         }
         Err(CompileError::new(
@@ -692,7 +721,9 @@ impl Checker {
         }
         match (left, right) {
             (PhpType::Never, other) | (other, PhpType::Never) => other.clone(),
-            _ => PhpType::Mixed,
+            // Pointers and `null` share the pointer word, so `[null]` passed to an
+            // `array<?ptr<T>>` keeps pointer storage instead of boxing every element.
+            _ => crate::types::merge_pointer_elements(left, right).unwrap_or(PhpType::Mixed),
         }
     }
 }

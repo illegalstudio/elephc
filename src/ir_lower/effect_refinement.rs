@@ -25,8 +25,15 @@ struct RefinementContext<'a> {
     data: &'a crate::ir::DataPool,
     classes: &'a HashMap<String, ClassInfo>,
     summaries: &'a HashMap<String, Effects>,
+    parameters: &'a HashMap<String, Vec<CallParameter>>,
     /// True when the runtime eval bridge can register subclasses absent from `classes`.
     has_dynamic_class_barrier: bool,
+}
+
+/// Caller-visible parameter facts needed to model backend call-boundary coercions.
+struct CallParameter {
+    php_type: PhpType,
+    by_ref: bool,
 }
 
 /// Refines every eligible instruction from whole-module callable and class metadata.
@@ -35,12 +42,28 @@ pub(super) fn refine_module(module: &mut Module) {
     let mut summaries = all_functions(module)
         .map(|function| (callable_key(&function.name), Effects::PURE))
         .collect::<HashMap<_, _>>();
+    let parameters = all_functions(module)
+        .map(|function| {
+            let hidden_prefix = usize::from(function.flags.is_static);
+            let parameters = function
+                .params
+                .iter()
+                .skip(hidden_prefix)
+                .map(|parameter| CallParameter {
+                    php_type: parameter.php_type.clone(),
+                    by_ref: parameter.by_ref,
+                })
+                .collect();
+            (callable_key(&function.name), parameters)
+        })
+        .collect::<HashMap<_, _>>();
 
     for iteration in 0..MAX_EFFECT_ITERATIONS {
         let context = RefinementContext {
             data: &module.data,
             classes: &module.class_infos,
             summaries: &summaries,
+            parameters: &parameters,
             has_dynamic_class_barrier,
         };
         let next = all_functions(module)
@@ -68,6 +91,7 @@ pub(super) fn refine_module(module: &mut Module) {
         data,
         classes,
         summaries: &summaries,
+        parameters: &parameters,
         has_dynamic_class_barrier,
     };
     for function in &mut module.functions {
@@ -109,6 +133,12 @@ fn all_functions(module: &Module) -> impl Iterator<Item = &Function> {
 /// Computes the caller-visible union of instruction and terminator effects for one body.
 fn summarize_function(function: &Function, context: &RefinementContext<'_>) -> Effects {
     let mut effects = Effects::PURE;
+    let borrowed_roots = if context.has_dynamic_class_barrier {
+        // Dynamic scope operations may write a parameter by name instead of a visible slot op.
+        std::collections::HashSet::new()
+    } else {
+        crate::ir::parameter_roots::borrowed_parameter_roots(function)
+    };
     // A literal false signature has a throwing call-boundary guard even if its body is empty.
     if function.params.iter().any(|parameter| parameter.php_type == PhpType::False) {
         effects |= Effects::READS_HEAP | Effects::ALLOC_HEAP | Effects::MAY_THROW | Effects::MAY_DEOPT;
@@ -119,7 +149,16 @@ fn summarize_function(function: &Function, context: &RefinementContext<'_>) -> E
         if instruction.op == Op::ConcatReset {
             continue;
         }
-        effects |= refined_instruction_effects(function, instruction, context);
+        if instruction.op == Op::ReleaseLocalSlot
+            && matches!(instruction.immediate, Some(Immediate::LocalSlot(slot))
+                if borrowed_roots.contains(&slot))
+        {
+            // The unchanged parameter or its caller still owns the payload at this release.
+            // Keep the instruction's full effects; only the caller-visible summary is narrower.
+            effects |= Op::Release.default_effects();
+        } else {
+            effects |= refined_instruction_effects(function, instruction, context);
+        }
     }
     for block in &function.blocks {
         effects |= match block.terminator.as_ref() {
@@ -136,13 +175,18 @@ fn summarize_function(function: &Function, context: &RefinementContext<'_>) -> E
 
 /// Rewrites refinable instructions in one function to their final fixed-point effects.
 fn refine_function(function: &mut Function, context: &RefinementContext<'_>) {
+    // A packed field store is refined although `prop_set` is otherwise default-only.
     let refined = function
         .instructions
         .iter()
-        .map(|instruction| refined_instruction_effects(function, instruction, context))
+        .map(|instruction| {
+            let refinable = instruction.op.allows_effect_refinement()
+                || function.is_packed_field_access(instruction);
+            refinable.then(|| refined_instruction_effects(function, instruction, context))
+        })
         .collect::<Vec<_>>();
     for (instruction, effects) in function.instructions.iter_mut().zip(refined) {
-        if instruction.op.allows_effect_refinement() {
+        if let Some(effects) = effects {
             instruction.effects = effects;
         }
     }
@@ -155,12 +199,31 @@ fn refined_instruction_effects(
     context: &RefinementContext<'_>,
 ) -> Effects {
     match instruction.op {
-        Op::Call => direct_call_effects(instruction, context).unwrap_or(instruction.effects),
+        // Float and boxed truthiness may dispatch a PHP 8.5 NaN warning handler.
+        Op::IsTruthy if instruction.operands.first().and_then(|&value| function.value(value))
+            .is_none_or(|value| matches!(value.php_type, PhpType::Float | PhpType::Mixed | PhpType::Union(_))) => {
+            instruction.effects | Effects::MAY_WARN
+        }
+        Op::Call => {
+            direct_call_effects(function, instruction, context).unwrap_or(instruction.effects)
+        }
         Op::StaticMethodCall => {
-            static_call_effects(instruction, context).unwrap_or(instruction.effects)
+            static_call_effects(function, instruction, context).unwrap_or(instruction.effects)
         }
         Op::MethodCall | Op::NullsafeMethodCall => {
             instance_call_effects(function, instruction, context).unwrap_or(instruction.effects)
+        }
+        Op::PropGet | Op::PropSet if function.is_packed_field_access(instruction) => {
+            if instruction.op == Op::PropSet && instruction.operands.get(1)
+                .and_then(|&value| function.value(value))
+                .is_some_and(|value| matches!(value.php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)))
+            {
+                // A boxed source still needs the declared field's typed-value guard.
+                // Keep exceptions and ownership effects until materialization is explicit.
+                instruction.op.default_effects()
+            } else {
+                instruction.op.packed_field_access_effects()
+            }
         }
         Op::PropGet | Op::NullsafePropGet => {
             named_property_effects(function, instruction, context).unwrap_or(instruction.effects)
@@ -175,6 +238,7 @@ fn refined_instruction_effects(
 /// Resolves an explicitly named static receiver through its inherited implementation.
 /// Forwarding self/parent/static receivers and runtime-selected callables keep their defaults.
 fn static_call_effects(
+    function: &Function,
     instruction: &crate::ir::Instruction,
     context: &RefinementContext<'_>,
 ) -> Option<Effects> {
@@ -188,13 +252,13 @@ fn static_call_effects(
         .find(|(name, _)| php_symbol_key(name) == class_key)?;
     let method_key = php_symbol_key(method);
     let implementation = class.static_method_impl_classes.get(&method_key)?;
-    context.summaries
-        .get(&callable_key(&format!("{implementation}::{method_key}")))
-        .copied()
+    let target = callable_key(&format!("{implementation}::{method_key}"));
+    resolved_callable_effects(function, instruction, &target, context)
 }
 
 /// Resolves a direct user-function call through the function-name data pool.
 fn direct_call_effects(
+    function: &Function,
     instruction: &crate::ir::Instruction,
     context: &RefinementContext<'_>,
 ) -> Option<Effects> {
@@ -202,7 +266,7 @@ fn direct_call_effects(
         return None;
     };
     let name = context.data.function_names.get(name_id.as_raw() as usize)?;
-    context.summaries.get(&callable_key(name)).copied()
+    resolved_callable_effects(function, instruction, &callable_key(name), context)
 }
 
 /// Resolves and unions all concrete implementations reachable by one instance call.
@@ -223,9 +287,48 @@ fn instance_call_effects(
         let class = context.classes.get(&runtime_class)?;
         let implementation = class.method_impl_classes.get(&method_key)?;
         let target = callable_key(&format!("{implementation}::{method_key}"));
-        effects |= context.summaries.get(&target).copied()?;
+        effects |= resolved_callable_effects(function, instruction, &target, context)?;
     }
     Some(effects)
+}
+
+/// Combines one callee summary with warning effects from its caller-side argument coercions.
+fn resolved_callable_effects(
+    function: &Function,
+    instruction: &crate::ir::Instruction,
+    target: &str,
+    context: &RefinementContext<'_>,
+) -> Option<Effects> {
+    let summary = context.summaries.get(target).copied()?;
+    let parameters = context.parameters.get(target)?;
+    Some(summary | call_argument_coercion_effects(function, instruction, parameters))
+}
+
+/// Models warning-capable conversions performed only while the backend materializes call args.
+fn call_argument_coercion_effects(
+    function: &Function,
+    instruction: &crate::ir::Instruction,
+    parameters: &[CallParameter],
+) -> Effects {
+    let warns = instruction
+        .operands
+        .iter()
+        .zip(parameters)
+        .any(|(&operand, parameter)| {
+            !parameter.by_ref
+                && parameter.php_type == PhpType::Bool
+                && function.value(operand).is_none_or(|value| {
+                    matches!(
+                        value.php_type.codegen_repr(),
+                        PhpType::Mixed | PhpType::Union(_)
+                    )
+                })
+        });
+    if warns {
+        Effects::MAY_WARN
+    } else {
+        Effects::PURE
+    }
 }
 
 /// Resolves a named property read, including typed-slot throws and `__get` dispatch.
@@ -612,10 +715,12 @@ mod tests {
         let (function, receiver) = function_with_receiver(PhpType::Object("D".to_string()));
         let data = crate::ir::DataPool::default();
         let summaries = HashMap::new();
+        let parameters = HashMap::new();
         let context = RefinementContext {
             data: &data,
             classes: &classes,
             summaries: &summaries,
+            parameters: &parameters,
             has_dynamic_class_barrier: false,
         };
         for mode in [PropertyFetchMode::Read, PropertyFetchMode::Probe] {
@@ -629,4 +734,44 @@ mod tests {
             assert!(effects.contains(Effects::READS_HEAP), "{mode:?}");
         }
     }
+
+    /// A packed write cannot lose the typed-value guard's effects while its source stays boxed.
+    #[test]
+    fn numeric_continuation_boxed_packed_store_keeps_throw_effects() {
+        use crate::ir::{Builder, FunctionParam, IrType, LocalKind, Ownership};
+        for php_type in [PhpType::Mixed, PhpType::Float] {
+            let receiver_type = PhpType::Packed("Cell".into());
+            let mut function = Function::new("store".into(), IrType::Void, PhpType::Void);
+            for (name, php) in [("receiver", receiver_type.clone()), ("value", php_type.clone())] {
+                function.params.push(FunctionParam { name: name.into(), ir_type: IrType::from_php(&php),
+                    php_type: php.clone(), by_ref: false, variadic: false });
+                function.add_local(Some(name.into()), IrType::from_php(&php), php, LocalKind::PhpLocal);
+            }
+            let mut data = crate::ir::DataPool::default();
+            data.property_names.push("value".into());
+            let property = crate::ir::DataId::from_raw(0);
+            {
+                let mut builder = Builder::new(&mut function);
+                let entry = builder.create_named_block("entry", vec![]);
+                builder.set_entry(entry); builder.position_at_end(entry);
+                let receiver = builder.emit_load_local(crate::ir::LocalSlotId::from_raw(0),
+                    IrType::from_php(&receiver_type), receiver_type);
+                let value = builder.emit_load_local(crate::ir::LocalSlotId::from_raw(1),
+                    IrType::from_php(&php_type), php_type.clone());
+                builder.emit(Op::PropSet, vec![receiver, value], Some(Immediate::Data(property)),
+                    IrType::Void, PhpType::Void, Ownership::NonHeap);
+                builder.terminate(Terminator::Return { value: None });
+            }
+            crate::ir::validate_function(&function).unwrap();
+            let classes = HashMap::new(); let summaries = HashMap::new();
+            let parameters = HashMap::new();
+            let context = RefinementContext { data: &data, classes: &classes, summaries: &summaries,
+                parameters: &parameters, has_dynamic_class_barrier: false };
+            let store = function.instructions.iter().find(|inst| inst.op == Op::PropSet).unwrap();
+            let effects = refined_instruction_effects(&function, store, &context);
+            assert_eq!(effects, if php_type == PhpType::Mixed { Op::PropSet.default_effects() }
+                else { Op::PropSet.packed_field_access_effects() });
+        }
+    }
+
 }

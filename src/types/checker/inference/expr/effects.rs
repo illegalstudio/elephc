@@ -7,6 +7,8 @@
 //!
 //! Key details:
 //! - Expression inference shares environments with statement checking, so variable and effect updates must stay synchronized.
+//! - Call surfaces that own runtime iteration visit spread-source effects without imposing the
+//!   ordinary direct-call array-only constraint before their authoritative checker runs.
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
@@ -15,8 +17,11 @@ use crate::types::{PhpType, TypeEnv};
 
 use super::super::super::null_probe;
 use super::super::super::Checker;
+use super::buffer_merges::buffer_merge_result_type;
 use super::merge_match_arm_result_type;
-use super::null_coalesce::{null_coalesce_result_type, operand_is_never_null};
+use super::null_coalesce::{
+    null_coalesce_buffer_merge_type, null_coalesce_result_type, operand_is_never_null,
+};
 
 /// Returns what a local holds after `++`/`--`, or `None` when the update cannot retype it.
 ///
@@ -147,12 +152,23 @@ impl Checker {
                     merge_array_storage_effects(env, &default_env);
                     default_ty
                 };
-                Ok(null_coalesce_result_type(
+                match null_coalesce_buffer_merge_type(
                     self,
+                    value,
+                    &value_ty,
                     value_is_never_null,
-                    value_ty,
-                    default_ty,
-                ))
+                    default,
+                    &default_ty,
+                    expr.span,
+                )? {
+                    Some(buffer) => Ok(buffer),
+                    None => Ok(null_coalesce_result_type(
+                        self,
+                        value_is_never_null,
+                        value_ty,
+                        default_ty,
+                    )),
+                }
             }
             ExprKind::ShortTernary { value, default } => {
                 let value_ty = self.infer_type_with_assignment_effects(value, env)?;
@@ -187,7 +203,16 @@ impl Checker {
                 merge_array_storage_effects(&mut else_env, &then_env);
                 let else_ty = self.infer_type_with_assignment_effects(else_expr, &mut else_env)?;
                 merge_array_storage_effects(env, &else_env);
-                Ok(merge_match_arm_result_type(self, then_ty, else_ty))
+                // A `throw` arm types as `null` here, so the buffer merge skips it by its shape,
+                // as `infer_type` does through `match_arm_result_type`.
+                let arms = [(&**then_expr, then_ty), (&**else_expr, else_ty)];
+                match buffer_merge_result_type("a ternary", &arms, expr.span)? {
+                    Some(buffer) => Ok(buffer),
+                    None => {
+                        let [(_, then_ty), (_, else_ty)] = arms;
+                        Ok(merge_match_arm_result_type(self, then_ty, else_ty))
+                    }
+                }
             }
             ExprKind::ArrayLiteral(elems) => {
                 for elem in elems {
@@ -333,10 +358,13 @@ impl Checker {
                             effects?;
                             continue;
                         }
-                        if php_symbol_key(builtin_name) == "call_user_func"
-                            && idx > 0
+                        let runtime_iterated_spread = idx > 0
                             && matches!(arg.kind, ExprKind::Spread(_))
-                        {
+                            && matches!(
+                                php_symbol_key(builtin_name).as_str(),
+                                "array_push" | "call_user_func"
+                            );
+                        if runtime_iterated_spread {
                             self.infer_spread_source_assignment_effects(arg, env)?;
                         } else {
                             self.infer_type_with_assignment_effects(arg, env)?;
@@ -345,8 +373,9 @@ impl Checker {
                 }
                 let ty = self.infer_type(expr, env)?;
                 // The callee may mutate any reachable object; drop property narrowings. (The
-                // call's own argument checking above still saw them.)
-                Self::purge_property_narrowings(env);
+                // call's own argument checking above still saw them.) A `readonly` property's
+                // narrowing survives: no call can reassign it.
+                self.purge_property_narrowings_after_call(env);
                 for (idx, arg) in expanded_args.iter().enumerate() {
                     if let Some(output_ty) = preg_output_type(builtin_name, arg, idx) {
                         if let Some(name) = output_variable(arg) {
@@ -416,6 +445,8 @@ impl Checker {
                                     self.active_ref_params.remove(var);
                                     self.active_external_ref_bindings.remove(var);
                                     self.ref_aliased_locals.remove(var);
+                                    self.non_builtin_ref_aliased_locals.remove(var);
+                                    self.ref_assign_aliased_locals.remove(var);
                                 } else if let Some(names) = self.local_ref_detach_sites.get_mut(&arg.span) {
                                     if names.remove(var.as_str()) {
                                         self.retired_ref_detach_sites.insert((arg.span, var.clone()));
@@ -494,7 +525,7 @@ impl Checker {
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
                 let ty = self.infer_type(expr, env)?;
-                Self::purge_property_narrowings(env);
+                self.purge_property_narrowings_after_call(env);
                 Ok(ty)
             }
             ExprKind::ClosureCall { var, args } => {
@@ -514,7 +545,7 @@ impl Checker {
                     }
                 }
                 let ty = self.infer_type(expr, env)?;
-                Self::purge_property_narrowings(env);
+                self.purge_property_narrowings_after_call(env);
                 Ok(ty)
             }
             ExprKind::ExprCall { callee, args } => {
@@ -533,7 +564,7 @@ impl Checker {
                     }
                 }
                 let ty = self.infer_type(expr, env)?;
-                Self::purge_property_narrowings(env);
+                self.purge_property_narrowings_after_call(env);
                 Ok(ty)
             }
             ExprKind::NamedArg { value, .. } => {
@@ -568,7 +599,7 @@ impl Checker {
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
                 let ty = self.infer_type(expr, env)?;
-                Self::purge_property_narrowings(env);
+                self.purge_property_narrowings_after_call(env);
                 Ok(ty)
             }
             ExprKind::NullsafeDynamicMethodCall {
@@ -594,7 +625,7 @@ impl Checker {
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
                 let ty = self.infer_type(expr, env)?;
-                Self::purge_property_narrowings(env);
+                self.purge_property_narrowings_after_call(env);
                 Ok(ty)
             }
             _ => self.infer_type(expr, env),

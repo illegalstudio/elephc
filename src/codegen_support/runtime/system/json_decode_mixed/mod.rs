@@ -13,6 +13,8 @@ use crate::codegen_support::platform::Arch;
 
 mod aarch64;
 mod arrays;
+mod integer_prefix;
+mod integers;
 mod objects;
 mod ownership;
 mod whitespace;
@@ -20,6 +22,8 @@ mod x86_64;
 
 #[cfg(test)]
 mod ownership_tests;
+#[cfg(test)]
+mod integer_tests;
 
 /// __rt_json_decode_mixed: checked structural JSON decoder that returns a boxed
 /// Mixed cell pointer, or 0 after recording a JSON error. The outer boundary
@@ -47,6 +51,7 @@ mod ownership_tests;
 /// Output: x0/rax = boxed Mixed pointer or 0 on error
 pub(crate) fn emit_json_decode_mixed(emitter: &mut Emitter) {
     ownership::emit(emitter);
+    integers::emit(emitter);
     if emitter.target.arch == Arch::X86_64 {
         whitespace::emit(emitter);
         x86_64::emit(emitter);

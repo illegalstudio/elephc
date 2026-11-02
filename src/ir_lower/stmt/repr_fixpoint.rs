@@ -232,7 +232,7 @@ pub(in crate::ir_lower) fn conversion_op(entry: &PhpType, target: &PhpType) -> O
 /// retains the payload. Hoisted conversions preserve those ownership rules: consuming helpers
 /// use `store_mutated_local`, and boxing uses normal replacement cleanup without cursor reset.
 ///
-/// Both helpers are idempotent on an already-converted array — `__rt_array_to_mixed` re-stamps a
+/// Both helpers are idempotent on an already-converted array: `__rt_array_to_mixed` re-stamps a
 /// Mixed array without re-boxing it, and `Op::ArrayToHash` reuses a hash payload as-is — so a
 /// canonicalization inside an outer loop stays correct on every iteration.
 fn canonicalize_array_locals(
@@ -261,7 +261,12 @@ fn canonicalize_array_locals(
             op.default_effects(),
             Some(span),
         );
-        ctx.store_mutated_local(name, converted, target.clone(), Some(span));
+        if op == Op::ArrayToHash {
+            // Keep the established raw pointer frame, as the ordinary promotion does.
+            ctx.store_retyped_container_local(name, converted, target.clone(), Some(span));
+        } else {
+            ctx.store_mutated_local(name, converted, target.clone(), Some(span));
+        }
     }
 }
 

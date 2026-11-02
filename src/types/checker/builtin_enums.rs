@@ -4,6 +4,8 @@
 //!
 //! Called from:
 //! - `crate::types::checker::driver::check_types_impl()`
+//! - `crate::types::checker::type_compat::pointers` (`is_builtin_enum_name`, for `ptr<T>` targets
+//!   resolved before the builtin enums are injected)
 //!
 //! Key details:
 //! - Builtin enum names share PHP's class-like namespace and reject userland redeclarations.
@@ -88,9 +90,7 @@ pub(crate) fn inject_builtin_enums(
         next_class_id,
     )?;
 
-    if checker.target.platform == crate::codegen::platform::Platform::MacOS
-        && !checker.target.is_ios()
-    {
+    if pcntl_qos_class_is_builtin(checker) {
         ensure_builtin_enum_name_available(program, checker, PCNTL_QOS_CLASS)?;
         insert_enum_metadata(
             PCNTL_QOS_CLASS,
@@ -123,6 +123,26 @@ pub(crate) fn inject_builtin_enums(
     }
 
     Ok(())
+}
+
+/// Returns whether `name` is a builtin enum that `inject_builtin_enums` registers for the
+/// checker's target.
+///
+/// The packed and extern prescan resolves `ptr<T>` targets before the builtin enums are
+/// injected, so it consults this list where it would otherwise find the enum in `classes`. The
+/// match is exact, like that `classes` lookup. The names are deliberately not pre-declared in
+/// `declared_classes`: the prescan's duplicate check reads that set, and a user packed or extern
+/// class named like a builtin enum must keep the builtin redeclaration diagnostic.
+pub(crate) fn is_builtin_enum_name(checker: &Checker, name: &str) -> bool {
+    name == SORT_DIRECTION
+        || name == PROPERTY_HOOK_TYPE
+        || (name == PCNTL_QOS_CLASS && pcntl_qos_class_is_builtin(checker))
+}
+
+/// Returns whether the target registers `Pcntl\QosClass`, matching php-src's macOS-only guard.
+fn pcntl_qos_class_is_builtin(checker: &Checker) -> bool {
+    checker.target.platform == crate::codegen::platform::Platform::MacOS
+        && !checker.target.is_ios()
 }
 
 /// Ensures a builtin enum name does not collide with any user-visible class-like symbol.

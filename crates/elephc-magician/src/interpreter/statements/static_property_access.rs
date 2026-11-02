@@ -9,6 +9,18 @@
 
 use super::*;
 
+/// Raises native initialization failures after access checks, without invoking a throwing getter.
+fn validate_native_static_class_defaults(
+    class: &str, declaring: &str, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let message = context.native_class_default_error(class)
+        .or_else(|| context.native_class_default_error(declaring)).map(str::to_owned)
+        .or_else(|| context.class_native_parent_name(class).and_then(|parent|
+            context.native_class_default_error(&parent).map(str::to_owned)));
+    if let Some(message) = message { return throwables::eval_throw_error(&message, context, values); }
+    Ok(())
+}
+
 /// Stores a borrowed reflection argument under an independent static-property owner.
 /// Same-cell writes preserve the existing owner; replacements release the displaced value.
 pub(in crate::interpreter) fn store_borrowed_static_property(
@@ -87,6 +99,7 @@ pub(in crate::interpreter) fn eval_static_property_get_result_with_ownership(
                 values,
             );
         }
+        validate_native_static_class_defaults(&class_name, &declaring_class, context, values)?;
         if let Some(target) = context
             .static_property_alias(&declaring_class, property.name())
             .cloned()
@@ -133,6 +146,7 @@ pub(in crate::interpreter) fn eval_static_property_get_result_with_ownership(
                         values,
                     );
                 }
+                validate_native_static_class_defaults(&class_name, &declaring_class, context, values)?;
                 if let Some(target) = context
                     .static_property_alias(&declaring_class, property_name)
                     .cloned()
@@ -186,6 +200,7 @@ pub(in crate::interpreter) fn eval_static_property_get_result_with_ownership(
                     values,
                 );
             }
+            validate_native_static_class_defaults(&class_name, &declaring_class, context, values)?;
             if let Some(target) = context
                 .static_property_alias(&declaring_class, property_name)
                 .cloned()
@@ -230,6 +245,7 @@ pub(in crate::interpreter) fn eval_static_property_isset_result(
         if validate_eval_member_access(&declaring_class, property.visibility(), context).is_err() {
             return Ok(false);
         }
+        validate_native_static_class_defaults(&class_name, &declaring_class, context, values)?;
         let value = if let Some(target) = context
             .static_property_alias(&declaring_class, property.name())
             .cloned()
@@ -259,6 +275,7 @@ pub(in crate::interpreter) fn eval_static_property_isset_result(
                 if validate_eval_member_access(&declaring_class, visibility, context).is_err() {
                     return Ok(false);
                 }
+                validate_native_static_class_defaults(&class_name, &declaring_class, context, values)?;
                 if let Some(target) = context
                     .static_property_alias(&declaring_class, property_name)
                     .cloned()
@@ -296,6 +313,7 @@ pub(in crate::interpreter) fn eval_static_property_isset_result(
         if validate_eval_member_access(&declaring_class, visibility, context).is_err() {
             return Ok(false);
         }
+        validate_native_static_class_defaults(&class_name, &declaring_class, context, values)?;
         if let Some(target) = context
             .static_property_alias(&declaring_class, property_name)
             .cloned()
@@ -767,6 +785,7 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
                 values,
             );
         }
+        validate_native_static_class_defaults(&class_name, &declaring_class, context, values)?;
         if let Some(target) = context
             .static_property_alias(&declaring_class, property.name())
             .cloned()
@@ -811,6 +830,7 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
                         values,
                     );
                 }
+                validate_native_static_class_defaults(&class_name, &declaring_class, context, values)?;
                 super::instance_property_access::validate_eval_native_array_property_assignment(
                     &declaring_class,
                     property_name,
@@ -865,6 +885,7 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
             );
         }
         if is_static {
+            validate_native_static_class_defaults(&class_name, &declaring_class, context, values)?;
             super::instance_property_access::validate_eval_native_array_property_assignment(
                 &declaring_class,
                 property_name,

@@ -60,6 +60,7 @@ mod type_predicates;
 pub(crate) mod is_numeric;
 pub(crate) mod json;
 pub(crate) mod math;
+pub(crate) mod memory;
 pub(crate) mod object_props;
 pub(crate) mod opcache_runtime;
 pub(crate) mod openssl;
@@ -76,10 +77,15 @@ pub(crate) mod serialize;
 pub(crate) mod spl;
 pub(crate) mod system;
 pub(crate) mod strings;
+pub(crate) mod tokenizer;
 pub(crate) mod types;
 
 pub(crate) use count_empty::*;
 pub(in crate::codegen::lower_inst) use eval_facade::*;
+// The eval inventory helper lives at the `codegen` level, so the facade entry
+// point that reaches the eval registration body has to be visible there too.
+pub(in crate::codegen) use eval_facade::register_eval_inventory;
+pub(in crate::codegen) use eval_facade::emit_eval_status_helper_body;
 pub(crate) use function_queries::*;
 pub(crate) use member_queries::*;
 pub(crate) use scalar_metadata::*;

@@ -96,7 +96,9 @@ fn dummy_check_result() -> CheckResult {
         ExternFunctionSig {
             name: "ef".to_string(),
             params: vec![("x".to_string(), PhpType::Int)],
+            abi_params: vec![crate::types::ExternAbiType::INT64],
             return_type: PhpType::Int,
+            abi_return: crate::types::ExternAbiType::INT64,
             library: Some("c".to_string()),
         },
     );
@@ -117,7 +119,7 @@ fn dummy_check_result() -> CheckResult {
     let mut packed_classes = HashMap::new();
     packed_classes.insert(
         "P".to_string(),
-        PackedClassInfo { fields: Vec::new(), total_size: 0 },
+        PackedClassInfo { fields: Vec::new(), total_size: 0, align: 1 },
     );
 
     CheckResult {
@@ -146,6 +148,8 @@ fn dummy_check_result() -> CheckResult {
         warnings: Vec::new(),
         throw_access_sites: HashMap::new(),
         builtin_call_types: HashMap::new(),
+        array_push_property_plans: HashMap::new(),
+        member_receiver_types: HashMap::new(),
         boxed_reference_promotion_sites: HashMap::new(),
         buffer_read_sites: Default::default(),
         first_class_builtin_call_types: HashMap::new(),
@@ -210,6 +214,7 @@ fn class_info(_class_name: &str) -> ClassInfo {
         property_offsets: HashMap::new(),
         property_declaring_classes: HashMap::new(),
         defaults: Vec::new(),
+        deferred_property_default_error: None,
         property_visibilities: HashMap::new(),
         property_set_visibilities: HashMap::new(),
         declared_properties: Default::default(),
@@ -250,6 +255,7 @@ fn class_info(_class_name: &str) -> ClassInfo {
         abstract_static_methods: Default::default(),
         static_vtable_methods: Vec::new(),
         static_vtable_slots: HashMap::new(),
+        declared_interfaces: Vec::new(),
         interfaces: Vec::new(),
         constructor_param_to_prop: Vec::new(),
     }

@@ -550,6 +550,8 @@ def validate_presentation_overrides(repo: Path, entries: list[dict]) -> None:
 # ``prelude_contracts_match_their_injected_signatures`` proves each contract is declared
 # by exactly one of them.
 PRELUDE_SOURCES: dict[str, tuple[str | tuple[str, ...], str, str]] = {
+    "io": ("fileinfo_prelude/build.rs", "fileinfo", "crates/elephc-builtin-contract/src/catalog_surfaces.rs"),
+    "tokenizer": ("tokenizer_prelude.rs", "tokenizer", "crates/elephc-builtin-contract/src/catalog_data.rs"),
     "curl": (
         "curl_prelude.rs",
         "curl",
@@ -584,6 +586,11 @@ PRELUDE_SOURCES: dict[str, tuple[str | tuple[str, ...], str, str]] = {
     "system": (
         "version_prelude.rs",
         "version",
+        "crates/elephc-builtin-contract/src/catalog_data.rs",
+    ),
+    "random": (
+        "random_prelude.rs",
+        "random",
         "crates/elephc-builtin-contract/src/catalog_data.rs",
     ),
     "opcache": (
@@ -635,6 +642,7 @@ def resolve_non_registry_lowering(
     canonical: str,
     aot_support: dict,
     area: str,
+    module: str | None = None,
 ) -> LoweringInfo:
     """Describe a compiler route that intentionally has no ``builtin!`` home."""
     contract_file = "crates/elephc-builtin-contract/src/catalog_surfaces.rs"
@@ -656,7 +664,7 @@ def resolve_non_registry_lowering(
     kind = aot_support.get("kind")
     if kind == "prelude":
         try:
-            source, label, sig_file = PRELUDE_SOURCES[area]
+            source, label, sig_file = PRELUDE_SOURCES[module if module in PRELUDE_SOURCES else area]
         except KeyError:
             raise ValueError(
                 f"prelude-provided builtin {canonical!r} is in contract area {area!r}, which "
@@ -742,7 +750,16 @@ def build_registry(repo: Path) -> list[Builtin]:
         in_catalog = not is_internal
 
         refine = PARAM_TYPES.get(canonical)
-        signature = aot_support if aot_support.get("supported") else entry
+        # A `runtime-arity-validation` shim accepts PHP's full call shape and reports the
+        # argument count itself, so the PHP-visible contract, not the shim, is the signature
+        # to document. Other divergences (a narrower prelude subset) do change the documented
+        # compiled surface and keep using the AOT profile.
+        documented_signature = (
+            entry
+            if aot_support.get("signature_override_reason") == "runtime-arity-validation"
+            else aot_support
+        )
+        signature = documented_signature if aot_support.get("supported") else entry
         params: list[Parameter] = []
         for i, p in enumerate(signature.get("params", [])):
             php_type = _normalize_type(p["type"])
@@ -777,7 +794,7 @@ def build_registry(repo: Path) -> list[Builtin]:
             lowering = resolve_registry_lowering(repo, read, entry, home_rel)
         else:
             lowering = resolve_non_registry_lowering(
-                repo, read, dispatch, lowering_dir, canonical, aot_support, entry["area"]
+                repo, read, dispatch, lowering_dir, canonical, aot_support, entry["area"], entry.get("module")
             )
         if canonical in RUNTIME_HELPER_OVERRIDES:
             lowering.runtime_helpers = RUNTIME_HELPER_OVERRIDES[canonical]

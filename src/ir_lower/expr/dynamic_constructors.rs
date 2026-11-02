@@ -23,7 +23,7 @@ use super::*;
 /// bridge, and PHP's class-not-found fatal behave exactly as before.
 pub(super) fn lower_new_dynamic_planned_dispatch(
     ctx: &mut LoweringContext<'_, '_>,
-    name_expr: &Expr,
+    name_value: LoweredValue,
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
@@ -32,7 +32,6 @@ pub(super) fn lower_new_dynamic_planned_dispatch(
         return None;
     }
 
-    let name_value = lower_expr(ctx, name_expr);
     Some(lower_new_dynamic_planned_value(ctx, name_value, &candidates, args, expr))
 }
 
