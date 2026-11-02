@@ -3,7 +3,7 @@
   "suite": "magician",
   "branch": "main",
   "sampling": "latest-per-UTC-day-and-platform",
-  "points": 98,
+  "points": 99,
   "series": [
     {
       "date": "2026-07-14",
@@ -98260,12 +98260,12 @@
     },
     {
       "date": "2026-11-01",
-      "timestamp": "2026-11-01T22:30:45Z",
-      "measurement_timestamp": "2026-11-01T22:27:02Z",
-      "commit": "6d9acbfb4103396a7e18f02c14fa639e8899d265",
-      "run_id": 41355512465,
+      "timestamp": "2026-11-01T23:15:16Z",
+      "measurement_timestamp": "2026-11-01T23:11:48Z",
+      "commit": "a9526cd4bfb98a591880dd881f8072137647c318",
+      "run_id": 41359594624,
       "run_attempt": 1,
-      "artifact_id": 13103443971,
+      "artifact_id": 13105525880,
       "environment": {
         "runner": "macos-15",
         "os": "Darwin",
@@ -98301,41 +98301,41 @@
           },
           "variants": {
             "elephc-native": {
-              "median_ms": 5.856167000047208,
+              "median_ms": 3.199500000050648,
               "samples_ms": [
-                13.130999999930282,
-                5.856167000047208,
-                5.57341700005054
+                3.199500000050648,
+                3.1842089999827294,
+                3.3674999999675492
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "elephc-eval": {
-              "median_ms": 9.305083000072045,
+              "median_ms": 5.331875000024411,
               "samples_ms": [
-                12.428207999846563,
-                7.837333999987095,
-                9.305083000072045
+                4.890208999995593,
+                7.525167000039801,
+                5.331875000024411
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "php-native": {
-              "median_ms": 81.29983399999219,
+              "median_ms": 82.04658399995424,
               "samples_ms": [
-                81.29983399999219,
-                86.31983299983403,
-                79.54829200002678
+                76.59895799997685,
+                82.04658399995424,
+                88.47416599996905
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "php-eval": {
-              "median_ms": 96.26283300008254,
+              "median_ms": 94.50362500001575,
               "samples_ms": [
-                93.19708300017737,
-                96.26283300008254,
-                118.06470800001989
+                94.50362500001575,
+                90.03591700002289,
+                97.2410829999717
               ],
               "skipped": false,
               "detail": "3 runs"
@@ -98364,41 +98364,41 @@
           },
           "variants": {
             "elephc-native": {
-              "median_ms": 6.2186669999846345,
+              "median_ms": 5.097834000025614,
               "samples_ms": [
-                12.678832999881706,
-                4.685082999912993,
-                6.2186669999846345
+                5.142749999890839,
+                4.417750000015985,
+                5.097834000025614
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "elephc-eval": {
-              "median_ms": 29.635708999876442,
+              "median_ms": 20.280416999980844,
               "samples_ms": [
-                25.504541999907815,
-                30.88137499980803,
-                29.635708999876442
+                20.280416999980844,
+                24.634792000028938,
+                17.32395799990627
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "php-native": {
-              "median_ms": 109.15825000006407,
+              "median_ms": 94.8139159999073,
               "samples_ms": [
-                82.26491699997496,
-                109.15825000006407,
-                117.64045800009626
+                89.92387499995402,
+                94.8139159999073,
+                100.22174999994604
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "php-eval": {
-              "median_ms": 104.94575000006989,
+              "median_ms": 108.64795800000593,
               "samples_ms": [
-                123.93295900005796,
-                104.94575000006989,
-                95.21475000019564
+                96.88349999998991,
+                114.90058300000783,
+                108.64795800000593
               ],
               "skipped": false,
               "detail": "3 runs"
@@ -98427,41 +98427,41 @@
           },
           "variants": {
             "elephc-native": {
-              "median_ms": 5.401084000141054,
+              "median_ms": 6.3108329999295165,
               "samples_ms": [
-                5.9394580000571295,
-                5.401084000141054,
-                3.839290999849254
+                8.825999999999112,
+                4.2350410000153715,
+                6.3108329999295165
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "elephc-eval": {
-              "median_ms": 16.82054100001551,
+              "median_ms": 13.693666999984089,
               "samples_ms": [
-                21.097499999996217,
-                15.935208999962924,
-                16.82054100001551
+                13.693666999984089,
+                12.908707999940816,
+                13.974624999946172
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "php-native": {
-              "median_ms": 95.962290999978,
+              "median_ms": 78.44004200001109,
               "samples_ms": [
-                80.09720799987008,
-                98.43504199989184,
-                95.962290999978
+                72.34283399998276,
+                78.44004200001109,
+                83.6968749999869
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "php-eval": {
-              "median_ms": 91.25908300006813,
+              "median_ms": 75.75104199997895,
               "samples_ms": [
-                101.17637500002274,
-                91.25908300006813,
-                84.01066600004015
+                84.05712499995843,
+                75.75104199997895,
+                72.97158300002593
               ],
               "skipped": false,
               "detail": "3 runs"
@@ -98490,41 +98490,41 @@
           },
           "variants": {
             "elephc-native": {
-              "median_ms": 6.993917000045258,
+              "median_ms": 5.105917000037152,
               "samples_ms": [
-                5.11004200006937,
-                6.993917000045258,
-                10.189584000045215
+                5.105917000037152,
+                4.5504580000397254,
+                7.514625000112574
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "elephc-eval": {
-              "median_ms": 31.955207999999402,
+              "median_ms": 28.121291999923415,
               "samples_ms": [
-                24.57629199989242,
-                33.735582999952385,
-                31.955207999999402
+                25.283041999955458,
+                29.723083000135375,
+                28.121291999923415
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "php-native": {
-              "median_ms": 103.42537499991522,
+              "median_ms": 85.2564589999929,
               "samples_ms": [
-                103.42537499991522,
-                104.30908299986186,
-                89.94708299997001
+                82.6092500001323,
+                89.85983299999134,
+                85.2564589999929
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "php-eval": {
-              "median_ms": 95.80545800008622,
+              "median_ms": 86.26075000006495,
               "samples_ms": [
-                95.80545800008622,
-                108.71016700002656,
-                84.9142499998834
+                86.26075000006495,
+                77.47587500011832,
+                96.71716599996216
               ],
               "skipped": false,
               "detail": "3 runs"
@@ -98561,41 +98561,41 @@
           },
           "variants": {
             "elephc-native": {
-              "median_ms": 5.94825000007404,
+              "median_ms": 5.772292000074231,
               "samples_ms": [
-                5.1609170000119775,
-                5.94825000007404,
-                8.089375000054133
+                5.1723329997912515,
+                5.772292000074231,
+                8.580875000006927
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "elephc-eval": {
-              "median_ms": 45.44770899997275,
+              "median_ms": 37.7123749999555,
               "samples_ms": [
-                28.986917000111134,
-                45.44770899997275,
-                55.051542000001064
+                37.7123749999555,
+                39.598999999952866,
+                30.051957999830847
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "php-native": {
-              "median_ms": 97.33954099988296,
+              "median_ms": 83.97208299993508,
               "samples_ms": [
-                102.16091600000254,
-                68.85262499986311,
-                97.33954099988296
+                82.73508299998866,
+                87.16099999992366,
+                83.97208299993508
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "php-eval": {
-              "median_ms": 122.2522079999635,
+              "median_ms": 87.00137499999983,
               "samples_ms": [
-                122.2522079999635,
-                101.34079199997359,
-                133.07529199983037
+                95.50929099987115,
+                86.28625000005741,
+                87.00137499999983
               ],
               "skipped": false,
               "detail": "3 runs"
@@ -98632,41 +98632,41 @@
           },
           "variants": {
             "elephc-native": {
-              "median_ms": 8.318458000076134,
+              "median_ms": 4.530375000058484,
               "samples_ms": [
-                5.795167000087531,
-                8.318458000076134,
-                11.74916599984499
+                4.874583999935567,
+                4.350041999941823,
+                4.530375000058484
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "elephc-eval": {
-              "median_ms": 34.005499999921085,
+              "median_ms": 23.75983299998552,
               "samples_ms": [
-                37.136124999960884,
-                33.080416999837325,
-                34.005499999921085
+                23.75983299998552,
+                25.454209000145056,
+                23.307833999979266
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "php-native": {
-              "median_ms": 114.36804199979633,
+              "median_ms": 70.01562499999636,
               "samples_ms": [
-                118.66895799994381,
-                114.36804199979633,
-                108.89529099995343
+                70.01562499999636,
+                74.81183300001248,
+                68.03170900002442
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "php-eval": {
-              "median_ms": 94.25670799987529,
+              "median_ms": 78.69887500010009,
               "samples_ms": [
-                90.9619169999587,
-                112.60645799984559,
-                94.25670799987529
+                72.05050000015945,
+                86.39829100002316,
+                78.69887500010009
               ],
               "skipped": false,
               "detail": "3 runs"
@@ -98695,41 +98695,41 @@
           },
           "variants": {
             "elephc-native": {
-              "median_ms": 4.662000000053013,
+              "median_ms": 3.66791600004035,
               "samples_ms": [
-                3.8470840001991746,
-                4.82570899998791,
-                4.662000000053013
+                3.463000000010652,
+                3.66791600004035,
+                4.836500000010346
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "elephc-eval": {
-              "median_ms": 31.68491700012055,
+              "median_ms": 41.27762499979326,
               "samples_ms": [
-                34.27879200012285,
-                31.409624999923835,
-                31.68491700012055
+                44.39841700013858,
+                39.772999999968306,
+                41.27762499979326
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "php-native": {
-              "median_ms": 82.08437500002219,
+              "median_ms": 86.74804200018116,
               "samples_ms": [
-                82.5171250000949,
-                71.48845799997616,
-                82.08437500002219
+                83.65283299986004,
+                92.28425000014795,
+                86.74804200018116
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "php-eval": {
-              "median_ms": 101.85470800001895,
+              "median_ms": 111.84104199992362,
               "samples_ms": [
-                101.85470800001895,
-                90.96133299999565,
-                105.51016699992033
+                173.86575000000448,
+                111.84104199992362,
+                108.30254200004674
               ],
               "skipped": false,
               "detail": "3 runs"
@@ -98758,41 +98758,41 @@
           },
           "variants": {
             "elephc-native": {
-              "median_ms": 4.064834000018891,
+              "median_ms": 6.060250000018641,
               "samples_ms": [
-                5.791040999838515,
-                4.064834000018891,
-                3.886040999987017
+                5.285417000095549,
+                6.060250000018641,
+                8.426749999898675
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "elephc-eval": {
-              "median_ms": 4.5801670000855665,
+              "median_ms": 6.018832999870938,
               "samples_ms": [
-                5.1085840000268945,
-                4.5801670000855665,
-                4.379583999934766
+                6.018832999870938,
+                7.635250000021188,
+                5.953208999926574
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "php-native": {
-              "median_ms": 96.07570799994392,
+              "median_ms": 88.22645800000828,
               "samples_ms": [
-                79.73762499977965,
-                96.07570799994392,
-                105.53854199997659
+                88.20558299998993,
+                88.22645800000828,
+                97.3927080001431
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "php-eval": {
-              "median_ms": 107.83050000009098,
+              "median_ms": 95.46016700005566,
               "samples_ms": [
-                107.83050000009098,
-                107.9008750000412,
-                105.92362500005947
+                97.30745900014881,
+                95.46016700005566,
+                94.82670800002779
               ],
               "skipped": false,
               "detail": "3 runs"
@@ -98821,41 +98821,41 @@
           },
           "variants": {
             "elephc-native": {
-              "median_ms": 6.548500000008062,
+              "median_ms": 4.5000420000178565,
               "samples_ms": [
-                4.128916000126992,
-                6.548500000008062,
-                8.556667000220841
+                4.51962499982983,
+                4.5000420000178565,
+                3.720707999946171
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "elephc-eval": {
-              "median_ms": 15.149167000117814,
+              "median_ms": 5.666249999876527,
               "samples_ms": [
-                15.149167000117814,
-                16.71995800006698,
-                7.873000000017782
+                8.022417000120186,
+                5.666249999876527,
+                5.303041999923153
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "php-native": {
-              "median_ms": 92.81979100001081,
+              "median_ms": 87.47529100014617,
               "samples_ms": [
-                94.16504099999656,
-                82.95866699995713,
-                92.81979100001081
+                83.95841700007622,
+                93.99120800003402,
+                87.47529100014617
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "php-eval": {
-              "median_ms": 94.56029200009652,
+              "median_ms": 81.26604099993529,
               "samples_ms": [
-                100.38808300009805,
-                89.65850000004139,
-                94.56029200009652
+                89.87508399991384,
+                81.26604099993529,
+                76.5753749999476
               ],
               "skipped": false,
               "detail": "3 runs"
@@ -98884,41 +98884,41 @@
           },
           "variants": {
             "elephc-native": {
-              "median_ms": 4.561292000062167,
+              "median_ms": 3.604208999831826,
               "samples_ms": [
-                4.561292000062167,
-                5.601916999921741,
-                4.046499999958542
+                3.604208999831826,
+                3.5419170001205202,
+                4.568666000068333
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "elephc-eval": {
-              "median_ms": 4.448499999853084,
+              "median_ms": 4.837124999994558,
               "samples_ms": [
-                4.631541999970068,
-                4.448499999853084,
-                4.311541000106445
+                6.104166000113764,
+                4.837124999994558,
+                4.48470800006362
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "php-native": {
-              "median_ms": 77.23445800002082,
+              "median_ms": 68.28191599993261,
               "samples_ms": [
-                78.57916700004353,
-                75.46341700003723,
-                77.23445800002082
+                66.85929200011742,
+                68.28191599993261,
+                75.65333299999111
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "php-eval": {
-              "median_ms": 79.0272910001022,
+              "median_ms": 69.75920800005042,
               "samples_ms": [
-                79.0272910001022,
-                82.75695899988023,
-                62.76441599993632
+                82.9494170000089,
+                66.61895800016282,
+                69.75920800005042
               ],
               "skipped": false,
               "detail": "3 runs"
@@ -98947,41 +98947,41 @@
           },
           "variants": {
             "elephc-native": {
-              "median_ms": 3.357999999934691,
+              "median_ms": 3.33825000006982,
               "samples_ms": [
-                3.357999999934691,
-                3.433541000049445,
-                3.145791999941139
+                3.222749999849839,
+                3.33825000006982,
+                3.7191249998613785
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "elephc-eval": {
-              "median_ms": 18.760749999955806,
+              "median_ms": 24.12899999990259,
               "samples_ms": [
-                18.760749999955806,
-                23.87941699998919,
-                18.678291000014724
+                22.05370799993034,
+                24.164790999975594,
+                24.12899999990259
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "php-native": {
-              "median_ms": 86.03133300016452,
+              "median_ms": 92.34183300009136,
               "samples_ms": [
-                66.2887910000336,
-                86.03133300016452,
-                93.22212500001115
+                101.46616599990921,
+                89.90912500007653,
+                92.34183300009136
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "php-eval": {
-              "median_ms": 81.06720900013897,
+              "median_ms": 98.10737499992683,
               "samples_ms": [
-                67.78120800004217,
-                85.34854200001973,
-                81.06720900013897
+                94.23212499996225,
+                98.10737499992683,
+                103.54533300005642
               ],
               "skipped": false,
               "detail": "3 runs"
@@ -99010,41 +99010,836 @@
           },
           "variants": {
             "elephc-native": {
-              "median_ms": 6.4552090000233875,
+              "median_ms": 4.77237499990224,
               "samples_ms": [
-                6.593957999939448,
-                6.4552090000233875,
-                3.805499999998574
+                4.77237499990224,
+                8.278374999918015,
+                4.6368340001663455
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "elephc-eval": {
-              "median_ms": 16.89424999995026,
+              "median_ms": 12.621124999895983,
               "samples_ms": [
-                16.89424999995026,
-                14.915207999820268,
-                21.0320410001259
+                14.901084000030096,
+                12.621124999895983,
+                12.20195800010515
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "php-native": {
-              "median_ms": 66.34366699995553,
+              "median_ms": 82.67254199995477,
               "samples_ms": [
-                66.34366699995553,
-                58.409499999925174,
-                71.4018329999817
+                68.30091599999832,
+                82.67254199995477,
+                87.93879199993171
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "php-eval": {
-              "median_ms": 76.95658400007233,
+              "median_ms": 77.011167000137,
               "samples_ms": [
-                76.95658400007233,
-                76.12341700018987,
-                85.49041600008422
+                77.011167000137,
+                71.43974999985403,
+                80.83979200000613
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "date": "2026-11-02",
+      "timestamp": "2026-11-02T21:19:34Z",
+      "measurement_timestamp": "2026-11-02T21:16:29Z",
+      "commit": "80c4125960bd533bfda9dad57298e0617bc4451f",
+      "run_id": 41522685672,
+      "run_attempt": 1,
+      "artifact_id": 13180995010,
+      "environment": {
+        "runner": "macos-15",
+        "os": "Darwin",
+        "architecture": "arm64",
+        "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "php": "PHP 8.5.12 (cli) (built: Oct 19 2026 17:02:46) (NTS)",
+        "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+        "php_mode": "CLI; OPcache/JIT disabled",
+        "measurement": "process-wall",
+        "iterations": 3,
+        "warmup": 1
+      },
+      "cases": [
+        {
+          "case": "algebra_heavy",
+          "fixture_sha256": "e184e9a5470a4db22481a949a05e10e6d1b3a3efe005f43b345dafb8dc66929b",
+          "metadata": {
+            "description": "Single literal eval fragment running an algebraically heavy integer recurrence loop.",
+            "eval_fragments": [
+              {
+                "label": "algebra-loop",
+                "source": "$acc = 17; $x = 3; $y = 5; $z = 7; $i = 0; while ($i < 5000) { $x = ($x * 31 + $y * 17 + $i) % 1000003; $y = ($y * 13 + $z * 19 + $x) % 1000033; $z = ($z * 7 + $x * 11 - $y + 100003700) % 1000037; $acc = ($acc + $x * $x + $y * 3 - $z * 2 + $i + 10000019) % 10000019; $i += 1; } echo $acc . \":\" . $x . \":\" . $y . \":\" . $z . \"\\n\";",
+                "invocations": 1,
+                "source_kind": "literal",
+                "parse_cache_should_hit": false,
+                "size_bytes": 328
+              }
+            ],
+            "eval_invocations": 1,
+            "max_fragment_size_bytes": 328,
+            "literal_or_dynamic": "literal",
+            "parse_cache": "no hit expected"
+          },
+          "variants": {
+            "elephc-native": {
+              "median_ms": 5.3183750001153385,
+              "samples_ms": [
+                5.3183750001153385,
+                4.817458000161423,
+                5.984750000152417
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "elephc-eval": {
+              "median_ms": 6.10283400010303,
+              "samples_ms": [
+                5.573292000008223,
+                8.461500000066735,
+                6.10283400010303
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "php-native": {
+              "median_ms": 89.9497909999809,
+              "samples_ms": [
+                70.5299159999413,
+                101.24266699995133,
+                89.9497909999809
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "php-eval": {
+              "median_ms": 94.54091699990386,
+              "samples_ms": [
+                84.49166700006572,
+                94.54091699990386,
+                118.40366700016602
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        },
+        {
+          "case": "arithmetic_loop",
+          "fixture_sha256": "6ad1b588d5d5921f724d21ba5876fc29cbcd83c6e70be8f697751fa38a40763b",
+          "metadata": {
+            "description": "Arithmetic-only loop through a repeated dynamic eval fragment.",
+            "eval_fragments": [
+              {
+                "label": "arithmetic-step",
+                "source": "$value = ($value * 3 + $i) % 1000003;",
+                "invocations": 4000,
+                "source_kind": "dynamic",
+                "parse_cache_should_hit": true,
+                "size_bytes": 37
+              }
+            ],
+            "eval_invocations": 4000,
+            "max_fragment_size_bytes": 37,
+            "literal_or_dynamic": "dynamic",
+            "parse_cache": "hit expected"
+          },
+          "variants": {
+            "elephc-native": {
+              "median_ms": 7.3860830000285205,
+              "samples_ms": [
+                18.797542000129397,
+                7.3860830000285205,
+                6.917959000020346
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "elephc-eval": {
+              "median_ms": 20.46270799996819,
+              "samples_ms": [
+                27.85116600011861,
+                19.67179100006433,
+                20.46270799996819
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "php-native": {
+              "median_ms": 96.09779199990953,
+              "samples_ms": [
+                96.09779199990953,
+                81.76595899999484,
+                98.5360419999779
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "php-eval": {
+              "median_ms": 100.40449999996781,
+              "samples_ms": [
+                103.12541700000111,
+                97.4497079998855,
+                100.40449999996781
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        },
+        {
+          "case": "array_reads_writes",
+          "fixture_sha256": "51a57bf8137967aa02d2d51aede0ede4f1086e929088464aa22d63629c5c2f83",
+          "metadata": {
+            "description": "Array appends and indexed reads inside one literal eval fragment.",
+            "eval_fragments": [
+              {
+                "label": "array-loop",
+                "source": "$data = []; $i = 0; while ($i < 100) { $data[] = $i % 31; $i += 1; } $sum = 0; $i = 0; while ($i < count($data)) { $sum += $data[$i]; $i += 1; }",
+                "invocations": 1,
+                "source_kind": "literal",
+                "parse_cache_should_hit": false,
+                "size_bytes": 144
+              }
+            ],
+            "eval_invocations": 1,
+            "max_fragment_size_bytes": 144,
+            "literal_or_dynamic": "literal",
+            "parse_cache": "no hit expected"
+          },
+          "variants": {
+            "elephc-native": {
+              "median_ms": 5.453332999877603,
+              "samples_ms": [
+                5.453332999877603,
+                5.052624999962063,
+                6.670875000054366
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "elephc-eval": {
+              "median_ms": 16.821292000031463,
+              "samples_ms": [
+                13.547292000112066,
+                16.821292000031463,
+                20.389875000091706
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "php-native": {
+              "median_ms": 97.59529199982353,
+              "samples_ms": [
+                94.64070900003207,
+                104.82733399999233,
+                97.59529199982353
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "php-eval": {
+              "median_ms": 89.86491600012414,
+              "samples_ms": [
+                86.493333999897,
+                89.86491600012414,
+                93.97612499992647
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        },
+        {
+          "case": "builtin_calls",
+          "fixture_sha256": "434d2c15af571056ef2b8cdff091df7a78cca4f403dcaa76b6080f18409fe3f9",
+          "metadata": {
+            "description": "Repeated eval-side calls to common scalar builtins.",
+            "eval_fragments": [
+              {
+                "label": "builtin-step",
+                "source": "$sum += strlen(\"abcdef\") + intval(\"7\");",
+                "invocations": 3000,
+                "source_kind": "dynamic",
+                "parse_cache_should_hit": true,
+                "size_bytes": 39
+              }
+            ],
+            "eval_invocations": 3000,
+            "max_fragment_size_bytes": 39,
+            "literal_or_dynamic": "dynamic",
+            "parse_cache": "hit expected"
+          },
+          "variants": {
+            "elephc-native": {
+              "median_ms": 5.3608750001785666,
+              "samples_ms": [
+                4.71625000000131,
+                9.270791000062673,
+                5.3608750001785666
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "elephc-eval": {
+              "median_ms": 33.31862499999261,
+              "samples_ms": [
+                33.31862499999261,
+                33.718374999807565,
+                28.173375000051237
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "php-native": {
+              "median_ms": 74.21704200010026,
+              "samples_ms": [
+                91.58508299992718,
+                72.63624999995955,
+                74.21704200010026
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "php-eval": {
+              "median_ms": 71.0098750000725,
+              "samples_ms": [
+                66.11049999992247,
+                71.52766699982749,
+                71.0098750000725
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        },
+        {
+          "case": "callable_dispatch",
+          "fixture_sha256": "3da99f99118b11572c46c04be8ce35db0dcef660c242de825cf4d9ab16695ebd",
+          "metadata": {
+            "description": "Repeated eval-side callable dispatch through call_user_func.",
+            "eval_fragments": [
+              {
+                "label": "declaration",
+                "source": "function magician_callback_add($x) { return $x + 2; }",
+                "invocations": 1,
+                "source_kind": "literal",
+                "parse_cache_should_hit": false,
+                "size_bytes": 53
+              },
+              {
+                "label": "callable-dispatch",
+                "source": "$sum += call_user_func($callback, $i);",
+                "invocations": 2500,
+                "source_kind": "dynamic",
+                "parse_cache_should_hit": true,
+                "size_bytes": 38
+              }
+            ],
+            "eval_invocations": 2501,
+            "max_fragment_size_bytes": 53,
+            "literal_or_dynamic": "mixed",
+            "parse_cache": "hit expected"
+          },
+          "variants": {
+            "elephc-native": {
+              "median_ms": 3.7450410000019474,
+              "samples_ms": [
+                6.037082999910126,
+                3.7450410000019474,
+                3.7097080000876304
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "elephc-eval": {
+              "median_ms": 37.561167000149,
+              "samples_ms": [
+                42.50879199980773,
+                32.50120799998513,
+                37.561167000149
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "php-native": {
+              "median_ms": 89.45712500008085,
+              "samples_ms": [
+                89.45712500008085,
+                85.01379099993756,
+                94.13820899999337
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "php-eval": {
+              "median_ms": 76.37983399990844,
+              "samples_ms": [
+                76.37983399990844,
+                73.05795799993575,
+                93.55595800002448
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        },
+        {
+          "case": "eval_declared_function",
+          "fixture_sha256": "510badfd93fab50aab3a170a3c90b26011d03a42c6dbfae5198ea51e3f3e868a",
+          "metadata": {
+            "description": "Function declaration through eval followed by repeated eval-side calls to the declared symbol.",
+            "eval_fragments": [
+              {
+                "label": "declaration",
+                "source": "function magician_declared_add($x) { return $x + 4; }",
+                "invocations": 1,
+                "source_kind": "literal",
+                "parse_cache_should_hit": false,
+                "size_bytes": 53
+              },
+              {
+                "label": "call",
+                "source": "$sum += magician_declared_add($i);",
+                "invocations": 3000,
+                "source_kind": "dynamic",
+                "parse_cache_should_hit": true,
+                "size_bytes": 34
+              }
+            ],
+            "eval_invocations": 3001,
+            "max_fragment_size_bytes": 53,
+            "literal_or_dynamic": "mixed",
+            "parse_cache": "hit expected"
+          },
+          "variants": {
+            "elephc-native": {
+              "median_ms": 9.10137500000019,
+              "samples_ms": [
+                9.10137500000019,
+                21.01649999985966,
+                4.766917000097237
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "elephc-eval": {
+              "median_ms": 28.189499999825784,
+              "samples_ms": [
+                28.189499999825784,
+                28.857249999873602,
+                26.411666999820227
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "php-native": {
+              "median_ms": 66.73916699992333,
+              "samples_ms": [
+                66.73916699992333,
+                67.49270799991791,
+                64.57708299990372
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "php-eval": {
+              "median_ms": 68.47241699983897,
+              "samples_ms": [
+                66.2341249999372,
+                68.47241699983897,
+                69.01187499988737
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        },
+        {
+          "case": "include_repeated",
+          "fixture_sha256": "448ed62a09b5f5af5eb5f9b69bd64d5f3cd47675477cc2b180c780c201301999",
+          "metadata": {
+            "description": "Repeated eval fragments that include the same PHP code block from disk.",
+            "eval_fragments": [
+              {
+                "label": "include",
+                "source": "include \"piece.php\";",
+                "invocations": 1000,
+                "source_kind": "dynamic",
+                "parse_cache_should_hit": true,
+                "size_bytes": 20
+              }
+            ],
+            "eval_invocations": 1000,
+            "max_fragment_size_bytes": 20,
+            "literal_or_dynamic": "dynamic",
+            "parse_cache": "hit expected"
+          },
+          "variants": {
+            "elephc-native": {
+              "median_ms": 4.606375000093976,
+              "samples_ms": [
+                4.192999999986569,
+                4.663666999931593,
+                4.606375000093976
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "elephc-eval": {
+              "median_ms": 30.979417000025933,
+              "samples_ms": [
+                30.087874999935593,
+                30.979417000025933,
+                31.099792000077287
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "php-native": {
+              "median_ms": 55.671000000074855,
+              "samples_ms": [
+                55.671000000074855,
+                56.30662500016115,
+                54.90687499991509
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "php-eval": {
+              "median_ms": 70.8577499999592,
+              "samples_ms": [
+                70.86695800012421,
+                70.8577499999592,
+                70.1070410000284
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        },
+        {
+          "case": "large_eval_loop",
+          "fixture_sha256": "5b0c7cc815241bcc03b47a6ef0e76668e7687a78a5bbc751adb14be52ff1e96e",
+          "metadata": {
+            "description": "One literal eval fragment containing a compute-heavy loop, isolating interpreter dispatch after a single parse.",
+            "eval_fragments": [
+              {
+                "label": "loop",
+                "source": "$sum = 0; $i = 0; while ($i < 6000) { $sum += ($i % 17) * 3; $i += 1; }",
+                "invocations": 1,
+                "source_kind": "literal",
+                "parse_cache_should_hit": false,
+                "size_bytes": 71
+              }
+            ],
+            "eval_invocations": 1,
+            "max_fragment_size_bytes": 71,
+            "literal_or_dynamic": "literal",
+            "parse_cache": "no hit expected"
+          },
+          "variants": {
+            "elephc-native": {
+              "median_ms": 2.293416999918918,
+              "samples_ms": [
+                2.5056670001504244,
+                2.293416999918918,
+                2.2366670000337763
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "elephc-eval": {
+              "median_ms": 3.0134999999518186,
+              "samples_ms": [
+                3.0460839998340816,
+                3.0134999999518186,
+                2.9230419997929857
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "php-native": {
+              "median_ms": 57.55537500022001,
+              "samples_ms": [
+                51.01262499988479,
+                57.55537500022001,
+                58.96083299990096
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "php-eval": {
+              "median_ms": 57.15412500012462,
+              "samples_ms": [
+                57.53275000006397,
+                56.93550000000869,
+                57.15412500012462
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        },
+        {
+          "case": "literal_scalar_aot",
+          "fixture_sha256": "d41aa5e1abaca51924e7348c9e548c0489454c428ff2112679173f93e31449ad",
+          "metadata": {
+            "description": "Repeated literal scalar eval returns that are eligible for direct AOT emission.",
+            "eval_fragments": [
+              {
+                "label": "return-constant",
+                "source": "return 3;",
+                "invocations": 5000,
+                "source_kind": "literal",
+                "parse_cache_should_hit": false,
+                "size_bytes": 9
+              }
+            ],
+            "eval_invocations": 5000,
+            "max_fragment_size_bytes": 9,
+            "literal_or_dynamic": "literal",
+            "parse_cache": "no hit expected"
+          },
+          "variants": {
+            "elephc-native": {
+              "median_ms": 2.7048340000419557,
+              "samples_ms": [
+                2.7000840000255266,
+                2.7048340000419557,
+                2.953625000145621
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "elephc-eval": {
+              "median_ms": 3.3875420001550083,
+              "samples_ms": [
+                3.4821250001186854,
+                3.3875420001550083,
+                3.2311249999565916
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "php-native": {
+              "median_ms": 58.364792000020316,
+              "samples_ms": [
+                54.951542000026166,
+                58.364792000020316,
+                59.1909580000447
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "php-eval": {
+              "median_ms": 60.39579200000844,
+              "samples_ms": [
+                60.54370900005779,
+                60.39579200000844,
+                60.29120799985321
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        },
+        {
+          "case": "literal_scope_read_write_aot",
+          "fixture_sha256": "060d091d46f18d255d85226ce8eccb114022fc38e34d1a2074f08ccb98f011cb",
+          "metadata": {
+            "description": "Repeated literal eval scope reads and writes eligible for AOT scope lowering.",
+            "eval_fragments": [
+              {
+                "label": "read-write",
+                "source": "$sum = $sum + 3;",
+                "invocations": 5000,
+                "source_kind": "literal",
+                "parse_cache_should_hit": false,
+                "size_bytes": 16
+              }
+            ],
+            "eval_invocations": 5000,
+            "max_fragment_size_bytes": 16,
+            "literal_or_dynamic": "literal",
+            "parse_cache": "no hit expected"
+          },
+          "variants": {
+            "elephc-native": {
+              "median_ms": 3.001208999876326,
+              "samples_ms": [
+                2.9332920000797458,
+                3.001208999876326,
+                3.1626669999695878
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "elephc-eval": {
+              "median_ms": 6.42004199994517,
+              "samples_ms": [
+                7.850665999967532,
+                6.42004199994517,
+                5.341916999896057
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "php-native": {
+              "median_ms": 65.33083299996179,
+              "samples_ms": [
+                65.33083299996179,
+                67.98825000009856,
+                65.30649999990601
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "php-eval": {
+              "median_ms": 70.21916600001532,
+              "samples_ms": [
+                70.21916600001532,
+                70.40954099988994,
+                63.65458300001592
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        },
+        {
+          "case": "repeated_small_eval",
+          "fixture_sha256": "fc8e814841e34063815d5d604201ee236dc06b10e0b17de3229a6a36279acae4",
+          "metadata": {
+            "description": "Repeated identical small dynamic eval fragments that should hit the parse cache after the first invocation.",
+            "eval_fragments": [
+              {
+                "label": "increment",
+                "source": "$sum += 3;",
+                "invocations": 5000,
+                "source_kind": "dynamic",
+                "parse_cache_should_hit": true,
+                "size_bytes": 10
+              }
+            ],
+            "eval_invocations": 5000,
+            "max_fragment_size_bytes": 10,
+            "literal_or_dynamic": "dynamic",
+            "parse_cache": "hit expected"
+          },
+          "variants": {
+            "elephc-native": {
+              "median_ms": 3.5359580001568247,
+              "samples_ms": [
+                3.286749999915628,
+                3.5359580001568247,
+                3.563957999858758
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "elephc-eval": {
+              "median_ms": 16.381832999968537,
+              "samples_ms": [
+                16.683415999978024,
+                15.339999999923748,
+                16.381832999968537
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "php-native": {
+              "median_ms": 54.598166999994646,
+              "samples_ms": [
+                54.19925000001058,
+                54.598166999994646,
+                55.892959000175324
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "php-eval": {
+              "median_ms": 56.72645800018472,
+              "samples_ms": [
+                56.72645800018472,
+                56.82745800004341,
+                56.32008299994595
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        },
+        {
+          "case": "string_output",
+          "fixture_sha256": "8031a03558dee2bd16c4274daae546cf722d2d67e003a58fae519faeb3a14d73",
+          "metadata": {
+            "description": "String concatenation in a repeated eval fragment with a final output check.",
+            "eval_fragments": [
+              {
+                "label": "concat",
+                "source": "$out = $out . \"ab\";",
+                "invocations": 1200,
+                "source_kind": "dynamic",
+                "parse_cache_should_hit": true,
+                "size_bytes": 19
+              }
+            ],
+            "eval_invocations": 1200,
+            "max_fragment_size_bytes": 19,
+            "literal_or_dynamic": "dynamic",
+            "parse_cache": "hit expected"
+          },
+          "variants": {
+            "elephc-native": {
+              "median_ms": 3.7478330000340065,
+              "samples_ms": [
+                3.716082999972059,
+                3.7478330000340065,
+                4.007750000027954
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "elephc-eval": {
+              "median_ms": 11.611042000140515,
+              "samples_ms": [
+                11.76979100000608,
+                11.611042000140515,
+                11.437500000056389
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "php-native": {
+              "median_ms": 54.345374999911655,
+              "samples_ms": [
+                54.89337499989233,
+                54.345374999911655,
+                53.56712499997229
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "php-eval": {
+              "median_ms": 54.93654199995035,
+              "samples_ms": [
+                55.24183299985452,
+                54.93654199995035,
+                53.90854200004469
               ],
               "skipped": false,
               "detail": "3 runs"
