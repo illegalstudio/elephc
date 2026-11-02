@@ -201,17 +201,20 @@ fn emit_setter(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, value: LoweredValue,
     class: &str, method: &str, span: Span,
 ) {
-    let ty = PhpType::Object(class.to_string());
-    let receiver = if matches!(ctx.builder.value_php_type(object.value).codegen_repr(), PhpType::Object(_)) {
-        let receiver = ctx.emit_value(Op::Borrow, vec![object.value], None, ty,
-            Op::Borrow.default_effects(), Some(span));
-        ctx.builder.set_value_ownership(receiver.value, Ownership::Borrowed);
-        receiver
-    } else {
-        ctx.emit_owned_value(Op::MixedUnbox, vec![object.value], None, ty.clone(),
-            Op::mixed_unbox_effects(&ty), Some(span))
-    };
-    let (receiver, owner) = crate::ir_lower::expr::root_owned_call_operand(ctx, receiver, span);
+    // Borrowing the assignment RHS does not lend the separately acquired receiver payload.
+    let (receiver, owner) = ctx.with_independent_write_receiver(|ctx| {
+        let ty = PhpType::Object(class.to_string());
+        let receiver = if matches!(ctx.builder.value_php_type(object.value).codegen_repr(), PhpType::Object(_)) {
+            let receiver = ctx.emit_value(Op::Borrow, vec![object.value], None, ty,
+                Op::Borrow.default_effects(), Some(span));
+            ctx.builder.set_value_ownership(receiver.value, Ownership::Borrowed);
+            receiver
+        } else {
+            ctx.emit_owned_value(Op::MixedUnbox, vec![object.value], None, ty.clone(),
+                Op::mixed_unbox_effects(&ty), Some(span))
+        };
+        crate::ir_lower::expr::root_owned_call_operand(ctx, receiver, span)
+    });
     let signature = ctx.classes[class].methods.get(&php_symbol_key(method)).cloned();
     let expression = Expr::new(ExprKind::Null, span);
     let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value.value], span);
@@ -219,10 +222,12 @@ fn emit_setter(
     let borrowed = ctx.emit_value(Op::Borrow, vec![value.value], None, value_type,
         Op::Borrow.default_effects(), Some(span));
     ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
-    let argument = if let Some(signature) = signature.as_ref() {
-        crate::ir_lower::expr::coerce_scalar_arg_to_param_storage(ctx, signature, 0, borrowed, &expression)
-    } else { borrowed };
-    let (argument, argument_owner) = crate::ir_lower::expr::root_owned_call_operand(ctx, argument, span);
+    let (argument, argument_owner) = ctx.with_independent_write_receiver(|ctx| {
+        let argument = if let Some(signature) = signature.as_ref() {
+            crate::ir_lower::expr::coerce_scalar_arg_to_param_storage(ctx, signature, 0, borrowed, &expression)
+        } else { borrowed };
+        crate::ir_lower::expr::root_owned_call_operand(ctx, argument, span)
+    });
     let mut operands = vec![receiver.value, argument.value];
     let extra = crate::ir_lower::expr::object_operators::append_hidden_arguments(
         ctx, signature.as_ref(), &mut operands, 1, &expression,

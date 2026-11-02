@@ -116,18 +116,40 @@ class DynamicHookCounter {
     }
 }
 function dynamicHookUpdate(mixed $object, string $name): mixed { return --$object->{$name}; }
+function namedHookUpdate(mixed $object): mixed { return ++$object->value; }
 $capability = new DynamicHookXmlCapability('<r/>');
 echo dynamicHookUpdate(new DynamicHookCounter(), 'value');
 unset($capability);
 "#;
     let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
         std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
-    let function = module.functions.iter().find(|function| function.name == "dynamicHookUpdate").unwrap();
-    for method in ["__propget_value", "__propset_value"] {
-        assert!(function.instructions.iter().any(|instruction| instruction.op == Op::MethodCall
-            && matches!(instruction.immediate, Some(Immediate::Data(id))
-                if module.data.strings[id.as_raw() as usize] == method)),
-            "{target}: runtime property names must invoke {method}\n{}", crate::ir::print_function(function));
+    for name in ["dynamicHookUpdate", "namedHookUpdate"] {
+        let function = module.functions.iter().find(|function| function.name == name).unwrap();
+        for method in ["__propget_value", "__propset_value"] {
+            assert!(function.instructions.iter().any(|instruction| instruction.op == Op::MethodCall
+                && matches!(instruction.immediate, Some(Immediate::Data(id))
+                    if module.data.strings[id.as_raw() as usize] == method)),
+                "{target}: runtime property names must invoke {method}\n{}", crate::ir::print_function(function));
+        }
+        let (position, setter) = function.instructions.iter().enumerate().find(|(_, instruction)|
+            instruction.op == Op::MethodCall && matches!(instruction.immediate,
+                Some(Immediate::Data(id)) if module.data.strings[id.as_raw() as usize] == "__propset_value"))
+            .unwrap();
+        let receiver = setter.operands[0];
+        let owner = function.instructions[..position].iter().find_map(|instruction|
+            match instruction.immediate {
+                Some(Immediate::LocalSlot(slot)) if instruction.op == Op::StoreLocal
+                    && instruction.operands == [receiver] => Some(slot),
+                _ => None,
+            }).expect("the extracted hook receiver must have its own cleanup slot");
+        assert!(function.instructions[..position].iter().any(|instruction|
+            instruction.op == Op::PushCallOperandOwner
+                && instruction.immediate == Some(Immediate::LocalSlot(owner))), "{target}: {name}: receiver unwind owner");
+        for op in [Op::PopCallOperandOwner, Op::ReleaseLocalSlot] {
+            assert!(function.instructions[position + 1..].iter().any(|instruction|
+                instruction.op == op && instruction.immediate == Some(Immediate::LocalSlot(owner))),
+                "{target}: {name}: receiver {op:?}");
+        }
     }
     crate::ir::validate_module(&module).unwrap();
     crate::codegen::generate_user_asm_from_ir(&module, false, false)
