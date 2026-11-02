@@ -83,7 +83,7 @@ pub(super) fn lower_nested_array_assign(
         } else { parent };
         let (parent, owner) = root_static_update_receiver(ctx, parent, span);
         let Some(ElementUpdate::IncDec { increment }) = update else { unreachable!() };
-        let handled = super::native_dimension_incdec::lower(ctx, parent, index, increment, span,
+        let handled = super::native_dimension_incdec::lower(ctx, parent, index, increment, value_incdec_locals(value), span,
             |ctx, parent| lower_boxed_nested_update_from_parent(ctx, parent, &read, &write,
                 ElementUpdate::IncDec { increment }, value, span));
         if !handled {
@@ -199,7 +199,7 @@ fn lower_selected_runtime_property_native_incdec(
     let ElementUpdate::IncDec { increment } = update else {
         unreachable!("runtime property native routing is limited to incdec")
     };
-    if !super::native_dimension_incdec::lower(ctx, parent, index, increment, span, |ctx, parent| {
+    if !super::native_dimension_incdec::lower(ctx, parent, index, increment, value_incdec_locals(source_value), span, |ctx, parent| {
         lower_boxed_nested_update_from_parent(
             ctx,
             parent,
@@ -356,7 +356,7 @@ fn lower_boxed_static_nested_update(
     let parent = lower_static_update_parent(ctx, read_array, write_array, span);
     let (pinned, owner) = root_static_update_receiver(ctx, parent, span);
     if let ElementUpdate::IncDec { increment } = &update {
-        if super::native_dimension_incdec::lower(ctx, pinned, read_key, *increment, span,
+        if super::native_dimension_incdec::lower(ctx, pinned, read_key, *increment, value_incdec_locals(source_value), span,
             |ctx, parent| lower_boxed_nested_update_from_parent(ctx, parent, read, write, update, source_value, span))
         {
             if let Some(owner) = owner { crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span); }

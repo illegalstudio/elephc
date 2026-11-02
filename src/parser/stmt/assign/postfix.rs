@@ -615,6 +615,30 @@ fn computed_receiver_property_target(target: &Expr) -> bool {
     }
 }
 
+/// Shares scoped receiver and name capture planning with indexed incdec expressions.
+pub(crate) fn lower_scoped_instance_dimension_incdec(
+    target: &Expr, increment: bool, span: Span,
+) -> Option<Stmt> {
+    if !matches!(target.kind, ExprKind::ArrayAccess { .. })
+        || !is_instance_property_assignment_target(target) { return None; }
+    let mut hop = target;
+    let mut computed_name = false;
+    loop {
+        hop = match &hop.kind {
+            ExprKind::DynamicPropertyAccess { object, property } => {
+                computed_name |= !matches!(property.kind, ExprKind::StringLiteral(_));
+                object
+            }
+            ExprKind::PropertyAccess { object, .. } => object,
+            ExprKind::ArrayAccess { array, .. } => array,
+            _ => break,
+        };
+    }
+    if !computed_name && !computed_receiver_property_target(target) { return None; }
+    lower_computed_property_element_update(target.clone(), AssignmentOperator::IncDec(increment),
+        Expr::new(ExprKind::IntLiteral(1), span), span).ok()
+}
+
 /// Distinguishes live storage roots from computed values captured once before assignment operands.
 fn storage_receiver_root(target: &Expr) -> bool {
     match &target.kind {

@@ -13,19 +13,21 @@ use super::*;
 /// Selects the native node in write context and discards the PHP scalar update.
 pub(in crate::ir_lower::stmt) fn native(
     ctx: &mut LoweringContext<'_, '_>, child: LoweredValue, index: LoweredValue,
-    increment: bool, span: Span,
+    increment: bool, results: Option<ValueIncDecLocals<'_>>, span: Span,
 ) {
     let expression = Expr::new(ExprKind::Null, span);
     let selected = crate::ir_lower::expr::lower_native_dimension_incdec_select_from_values(
-        ctx, child, index, true, &expression,
+        ctx, child, index, results.is_none(), &expression,
     );
-    step(ctx, selected, increment, false, span, |_, _| {});
+    step(ctx, selected, increment, results.is_some(), span, |ctx, stepped, previous| {
+        publish_value_incdec(ctx, results, previous, stepped, span);
+    });
 }
 
 /// Reads and writes one ordinary property element without replaying its receiver or key.
 pub(super) fn ordinary(
     ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, property: &str,
-    index: LoweredValue, key: &Expr, increment: bool, span: Span,
+    index: LoweredValue, key: &Expr, increment: bool, results: Option<ValueIncDecLocals<'_>>, span: Span,
 ) {
     runtime_receivers::guard_readwrite(ctx, receiver, property, span);
     let ty = ctx.builder.value_php_type(receiver.value);
@@ -40,10 +42,10 @@ pub(super) fn ordinary(
     let expression = Expr::new(ExprKind::StringLiteral(property.into()), span);
     let array = crate::ir_lower::expr::lower_property_get_from_value(ctx, object, property, Op::PropGet, &expression);
     let array = root_property_write_value(ctx, array, span, &mut roots);
-    if !super::super::native_dimension_incdec::lower_from_values(ctx, array, index, increment, span,
-        |ctx, array| ordinary_from_array(ctx, object, property, array, index, key, increment, span))
+    if !super::super::native_dimension_incdec::lower_from_values(ctx, array, index, increment, results, span,
+        |ctx, array| ordinary_from_array(ctx, object, property, array, index, key, increment, results, span))
     {
-        ordinary_from_array(ctx, object, property, array, index, key, increment, span);
+        ordinary_from_array(ctx, object, property, array, index, key, increment, results, span);
     }
     retire_property_write_roots(ctx, roots, span);
 }
@@ -51,7 +53,8 @@ pub(super) fn ordinary(
 /// Completes an ordinary property-array update through its already retained container.
 fn ordinary_from_array(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str,
-    array: LoweredValue, index: LoweredValue, key: &Expr, increment: bool, span: Span,
+    array: LoweredValue, index: LoweredValue, key: &Expr, increment: bool,
+    results: Option<ValueIncDecLocals<'_>>, span: Span,
 ) {
     let expression = Expr::new(ExprKind::ArrayAccess {
         array: Box::new(Expr::new(ExprKind::Null, span)), index: Box::new(key.clone()),
@@ -59,15 +62,16 @@ fn ordinary_from_array(
     let selected = crate::ir_lower::expr::lower_array_access_from_values(
         ctx, array, index, key, &expression, true, false,
     );
-    step(ctx, selected, increment, false, span, |ctx, stored| {
+    step(ctx, selected, increment, results.is_some(), span, |ctx, stored, previous| {
         lower_property_array_assign_value(ctx, object, property, index, stored, span, true);
+        publish_value_incdec(ctx, results, previous, stored, span);
     });
 }
 
 /// Preserves stable operator result types and roots heap-bearing working slots through the store.
 pub(crate) fn step(
     ctx: &mut LoweringContext<'_, '_>, selected: LoweredValue, increment: bool, post: bool, span: Span,
-    finish: impl FnOnce(&mut LoweringContext<'_, '_>, LoweredValue),
+    finish: impl FnOnce(&mut LoweringContext<'_, '_>, LoweredValue, LoweredValue),
 ) {
     let selected_type = ctx.builder.value_php_type(selected.value);
     let op = if increment { BinOp::Add } else { BinOp::Sub };
@@ -103,7 +107,8 @@ pub(crate) fn step(
         ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
         borrowed
     } else { returned };
-    finish(ctx, borrowed);
+    let stepped = borrow_step_result(ctx, result, span);
+    finish(ctx, stepped, borrowed);
     crate::ir_lower::ownership::release_if_owned(ctx, result, Some(span));
     if let Some((_, Some(owner))) = previous {
         crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span);
@@ -111,6 +116,16 @@ pub(crate) fn step(
     if rooted { crate::ir_lower::expr::unregister_owned_call_operand(ctx, slot, span); }
     ctx.emit_void(Op::ReleaseLocalSlot, vec![], Some(Immediate::LocalSlot(slot)),
         Op::ReleaseLocalSlot.default_effects(), Some(span));
+}
+
+/// Borrows the working result so retaining stores cannot consume its pending cleanup owner.
+fn borrow_step_result(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span) -> LoweredValue {
+    let ty = ctx.builder.value_php_type(value.value);
+    if !Ownership::php_type_needs_lifetime_tracking(&ty) { return value; }
+    let borrowed = ctx.emit_value(Op::Borrow, vec![value.value], None, ty,
+        Op::Borrow.default_effects(), Some(span));
+    ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+    borrowed
 }
 
 /// Reports PHP 8.3 null decrement through the warning callback while the operand is rooted.

@@ -28,24 +28,25 @@ pub(super) fn may_contain_xml(ctx: &LoweringContext<'_, '_>, ty: &PhpType) -> bo
 /// Applies native RW selection or invokes the unchanged ordinary update with a borrowed receiver.
 pub(super) fn lower(
     ctx: &mut LoweringContext<'_, '_>, array: LoweredValue, index: &Expr,
-    increment: bool, span: Span,
+    increment: bool, results: Option<ValueIncDecLocals<'_>>, span: Span,
     fallback: impl FnOnce(&mut LoweringContext<'_, '_>, LoweredValue),
 ) -> bool {
-    lower_with_key(ctx, array, increment, span, |ctx| lower_expr(ctx, index), fallback)
+    lower_with_key(ctx, array, increment, results, span, |ctx| lower_expr(ctx, index), fallback)
 }
 
 /// Reuses an already captured key when dispatching an opaque property value.
 pub(super) fn lower_from_values(
     ctx: &mut LoweringContext<'_, '_>, array: LoweredValue, index: LoweredValue,
-    increment: bool, span: Span,
+    increment: bool, results: Option<ValueIncDecLocals<'_>>, span: Span,
     fallback: impl FnOnce(&mut LoweringContext<'_, '_>, LoweredValue),
 ) -> bool {
-    lower_with_key(ctx, array, increment, span, |_| index, fallback)
+    lower_with_key(ctx, array, increment, results, span, |_| index, fallback)
 }
 
 /// Keeps key evaluation inside the selected branch and the independent native receiver lease.
 fn lower_with_key(
-    ctx: &mut LoweringContext<'_, '_>, array: LoweredValue, increment: bool, span: Span,
+    ctx: &mut LoweringContext<'_, '_>, array: LoweredValue, increment: bool,
+    results: Option<ValueIncDecLocals<'_>>, span: Span,
     key: impl FnOnce(&mut LoweringContext<'_, '_>) -> LoweredValue,
     fallback: impl FnOnce(&mut LoweringContext<'_, '_>, LoweredValue),
 ) -> bool {
@@ -53,7 +54,7 @@ fn lower_with_key(
     if !may_contain_xml(ctx, &ty) { return false; }
     let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[array.value], span);
     if known_xml(ctx, &ty) {
-        emit_native(ctx, array, key, increment, span);
+        emit_native(ctx, array, key, increment, results, span);
     } else {
         let class = ctx.intern_class_name("SimpleXMLElement");
         let condition = ctx.emit_value(Op::InstanceOf, vec![array.value], Some(Immediate::Data(class)),
@@ -65,7 +66,7 @@ fn lower_with_key(
         ctx.builder.terminate(Terminator::CondBr { cond: condition.value,
             then_target: native, then_args: vec![], else_target: ordinary, else_args: vec![] });
         ctx.builder.position_at_end(native);
-        emit_native(ctx, array, key, increment, span);
+        emit_native(ctx, array, key, increment, results, span);
         jump(ctx, merge);
         let native_slots = ctx.initialized_slots_snapshot();
         ctx.builder.position_at_end(ordinary);
@@ -143,7 +144,7 @@ fn store_parent(ctx: &mut LoweringContext<'_, '_>, name: &str, value: LoweredVal
 fn emit_native(
     ctx: &mut LoweringContext<'_, '_>, array: LoweredValue,
     key: impl FnOnce(&mut LoweringContext<'_, '_>) -> LoweredValue,
-    increment: bool, span: Span,
+    increment: bool, results: Option<ValueIncDecLocals<'_>>, span: Span,
 ) {
     let array = borrow(ctx, array, span);
     let ty = ctx.builder.value_php_type(array.value);
@@ -154,7 +155,7 @@ fn emit_native(
     let lease = property_write_receiver::PropertyWriteReceiver::new(ctx, owner, span);
     let array = crate::ir_lower::expr::borrow_native_xml_property_receiver(ctx, lease.value, span);
     let key = key(ctx);
-    super::property_array_writes::lower_native_incdec(ctx, array, key, increment, span);
+    super::property_array_writes::lower_native_incdec(ctx, array, key, increment, results, span);
     lease.finish(ctx, span);
 }
 

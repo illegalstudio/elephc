@@ -13,7 +13,7 @@ use std::collections::HashSet;
 
 use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
 use crate::parser::stmt::{
-    can_replay_assignment_target, lower_postfix_incdec_assignment,
+    can_replay_assignment_target, lower_postfix_incdec_assignment, lower_scoped_instance_dimension_incdec,
     update_dimension_base_is_snapshotted, update_index_needs_snapshot,
 };
 use crate::span::Span;
@@ -151,6 +151,16 @@ fn desugar_lvalue_incdec_with_scope(
     if !is_non_local_assignment_target(&target) {
         return None;
     }
+    if let Some(mut write) = lower_scoped_instance_dimension_incdec(&target, increment, span) {
+        let value = nested_incdec_result(&mut write, prefix)?;
+        let result = crate::names::generated_local_name(&format!(
+            "__elephc_incdec_result_{}_{}", span.line, span.col));
+        return Some(Expr::new(ExprKind::Assignment {
+            target: Box::new(Expr::new(ExprKind::Variable(result), span)),
+            value: Box::new(value), result_target: None, prelude: vec![write],
+            conditional_value_temp: None,
+        }, span));
+    }
     let mut lowerer = if scoped { AssignmentExpressionLowerer::new_scoped(span) } else { AssignmentExpressionLowerer::new(span) };
     // The increment reads and writes the same place, so the place itself is what the stabilizer
     // measures the target's parts against.
@@ -287,12 +297,12 @@ fn desugar_lvalue_incdec_with_scope(
 /// Selects a nested update's capture without re-reading the place or mutating its old result.
 fn nested_incdec_result(write: &mut Stmt, prefix: bool) -> Option<Expr> {
     let value = match &mut write.kind {
-        StmtKind::NestedArrayAssign { value, .. } => value,
+        StmtKind::NestedArrayAssign { value, .. } | StmtKind::PropertyArrayAssign { value, .. } => value,
         StmtKind::Synthetic(statements) => return nested_incdec_result(statements.last_mut()?, prefix),
         _ => return None,
     };
     let ExprKind::Assignment { target, value: operation, prelude, .. } = &mut value.kind else { return None; };
-    if prefix { return Some(target.as_ref().clone()); }
+    let next = target.as_ref().clone();
     let StmtKind::Assign { name, .. } = &prelude.first()?.kind else { return None; };
     let old = name.clone();
     let working = crate::names::generated_local_name(&format!(
@@ -307,7 +317,7 @@ fn nested_incdec_result(write: &mut Stmt, prefix: bool) -> Option<Expr> {
     prelude.push(Stmt::new(StmtKind::Assign {
         name: working, value: Expr::new(ExprKind::Variable(old.clone()), value.span),
     }, value.span));
-    Some(Expr::new(ExprKind::Variable(old), value.span))
+    Some(if prefix { next } else { Expr::new(ExprKind::Variable(old), value.span) })
 }
 
 /// Returns true if the expression is a non-local assignment target (array-access,

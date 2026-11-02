@@ -45,6 +45,8 @@ mod string_append;
 mod conditionals;
 mod loops;
 mod array_write_core;
+mod dimension_incdec_results;
+pub(crate) use dimension_incdec_results::{ValueIncDecLocals, value_incdec_locals, publish_value_incdec};
 mod buffer_element_updates;
 mod nested_array_writes;
 mod nested_property_updates;

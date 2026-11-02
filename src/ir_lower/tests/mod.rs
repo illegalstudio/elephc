@@ -155,6 +155,7 @@ mod hosted_exception_discard;
 mod xml_parser_arguments;
 mod simplexml_targets;
 mod simplexml_target_corpora;
+mod instance_dimension_incdec;
 mod native_property_child_probes;
 
 /// Runs frontend, type checking, optimization, and EIR lowering for a source string.

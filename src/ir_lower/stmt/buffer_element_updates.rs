@@ -24,8 +24,8 @@
 //!   fatals and the width conversion of the store are unchanged. A statement reads the element
 //!   where its value would be lowered, after the write's receiver; an expression reads and steps
 //!   it where its prelude did, before the write loads its handle or receiver. The generated
-//!   locals are not written: a statement never reads them, and an expression returns the typed
-//!   values.
+//!   locals are written only for scoped expression kernels whose wrapper reads the result.
+//!   Ordinary statements discard them and direct expressions return the typed values.
 //! - A prefix expression on an int element still yields a `mixed`, because its value is PHP's
 //!   sum, which is a float past `PHP_INT_MAX`. Only that expression value is boxed, after the
 //!   store, which does not read it.
@@ -62,6 +62,8 @@ pub(super) struct BufferIncDec<'a> {
     element: ScalarBufferElement,
     /// `true` for `++`, `false` for `--`.
     increment: bool,
+    /// Scoped expression captures receive the old value and PHP sum before storage conversion.
+    published: Option<ValueIncDecLocals<'a>>,
 }
 
 /// The typed values of one buffer element update.
@@ -83,6 +85,19 @@ impl BufferIncDec<'_> {
         let read = lower_expr(ctx, self.read);
         let old = coerce_to_element(ctx, read, self.element, Some(self.read.span));
         let stored = lower_step(ctx, old, self.element, self.increment, span);
+        if self.published.is_some() {
+            let next = match self.element {
+                ScalarBufferElement::Float => stored,
+                ScalarBufferElement::Int => {
+                    let one = lower_int_one(ctx, span);
+                    let op = if self.increment { Op::ICheckedAdd } else { Op::ICheckedSub };
+                    ctx.emit_value(op, vec![old.value, one.value], None, PhpType::Mixed,
+                        op.default_effects(), Some(span))
+                }
+            };
+            publish_value_incdec(ctx, self.published, old, next, span);
+            crate::ir_lower::ownership::release_if_owned(ctx, next, Some(span));
+        }
         BufferIncDecValues { old, stored }
     }
 }
@@ -98,7 +113,8 @@ pub(super) fn statement_update<'a>(
         return None;
     }
     let element = scalar_buffer_element(&ctx.builder.value_php_type(buffer.value))?;
-    Some(BufferIncDec { read: statement_read(value)?, element, increment })
+    Some(BufferIncDec { read: statement_read(value)?, element, increment,
+        published: value_incdec_locals(value) })
 }
 
 /// Recognizes a statement `++`/`--` of a lowered receiver's scalar buffer property.
@@ -114,22 +130,21 @@ pub(super) fn property_statement_update<'a>(
     let element = object_property_type(ctx, receiver.value, property)
         .as_ref()
         .and_then(scalar_buffer_element)?;
-    Some(BufferIncDec { read: statement_read(value)?, element, increment })
+    Some(BufferIncDec { read: statement_read(value)?, element, increment,
+        published: value_incdec_locals(value) })
 }
 
 /// Returns the element read of a parser statement `++`/`--` value.
 ///
 /// `assignment_value` builds `new = ++old` (or `--old`) with the single prelude statement
 /// `old = <element read>`, and `desugared_element_update` has matched that read to the write.
-/// The two-statement form with a working copy belongs to nested expression updates, which read
-/// their generated locals afterwards, so it is declined.
+/// A canonical two-statement working-copy kernel also publishes its expression captures.
 fn statement_read(value: &Expr) -> Option<&Expr> {
     let ExprKind::Assignment { prelude, result_target: None, .. } = &value.kind else {
         return None;
     };
-    let [Stmt { kind: StmtKind::Assign { value: read, .. }, .. }] = prelude.as_slice() else {
-        return None;
-    };
+    if prelude.len() != 1 && value_incdec_locals(value).is_none() { return None; }
+    let StmtKind::Assign { value: read, .. } = &prelude.first()?.kind else { return None; };
     Some(read)
 }
 
@@ -404,7 +419,7 @@ pub(crate) fn lower_buffer_expression_update(
                 .and_then(scalar_buffer_element)?
         }
     };
-    let values = BufferIncDec { read: update.read, element, increment: update.increment }
+    let values = BufferIncDec { read: update.read, element, increment: update.increment, published: None }
         .lower_values(ctx, span);
     match update.root {
         ExpressionRoot::Local(name) => {

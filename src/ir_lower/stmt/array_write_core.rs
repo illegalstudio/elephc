@@ -252,7 +252,7 @@ fn lower_array_assign_with_update(
     }
     let array_value = load_array_local_for_write(ctx, array, span);
     if let Some(increment) = incdec {
-        if super::native_dimension_incdec::lower(ctx, array_value, index, increment, span,
+        if super::native_dimension_incdec::lower(ctx, array_value, index, increment, value_incdec_locals(value), span,
             |ctx, array_value| lower_array_assign_from_value(ctx, array, array_value, index, value, span, key_already_diagnosed, incdec))
         { return; }
     }

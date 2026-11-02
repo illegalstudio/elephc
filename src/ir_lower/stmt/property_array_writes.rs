@@ -286,6 +286,7 @@ pub(super) fn lower_property_array_assign_with_update(
     update: PropertyElementUpdate,
 ) {
     let compound = compound_source(value, object, property, index, span);
+    let incdec_results = value_incdec_locals(value);
     let index_expression = index;
     let delayed_incdec = match update {
         PropertyElementUpdate::IncDec(increment) if (ctx.classes.contains_key("SimpleXMLElement")
@@ -344,9 +345,9 @@ pub(super) fn lower_property_array_assign_with_update(
         if let Some(increment) = delayed_incdec {
             native_xml::dispatch(ctx, receiver, child, span,
                 |ctx, child| with_late_property_key(ctx, late_index, index, span,
-                    |ctx, index| incdec::native(ctx, child, index, increment, span)),
+                    |ctx, index| incdec::native(ctx, child, index, increment, incdec_results, span)),
                 |ctx, object| with_late_property_key(ctx, late_index, index, span,
-                    |ctx, index| incdec::ordinary(ctx, object, property, index, index_expression, increment, span)));
+                    |ctx, index| incdec::ordinary(ctx, object, property, index, index_expression, increment, incdec_results, span)));
         } else {
             native_xml::write(ctx, receiver, child, property, Some(index), late_index, value,
                 compound.map(|(op, _)| (op, index_expression)), span, key_already_diagnosed);
@@ -356,7 +357,7 @@ pub(super) fn lower_property_array_assign_with_update(
     }
     with_late_property_key(ctx, late_index, index, span, |ctx, index| {
         if let Some(increment) = delayed_incdec {
-            incdec::ordinary(ctx, receiver.value, property, index, index_expression, increment, span);
+            incdec::ordinary(ctx, receiver.value, property, index, index_expression, increment, incdec_results, span);
         } else {
             write_ordinary_compound(ctx, receiver.value, property, index, value,
                 compound.map(|(op, _)| (op, index_expression)), span, key_already_diagnosed);

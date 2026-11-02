@@ -296,7 +296,7 @@ pub(super) fn lower_static_property_array_assign(
             .filter(|ty| super::native_dimension_incdec::may_contain_xml(ctx, ty))
         {
             let array = load_static_property_as(ctx, receiver, property, ty, span);
-            let handled = super::native_dimension_incdec::lower(ctx, array, index, *increment, span,
+            let handled = super::native_dimension_incdec::lower(ctx, array, index, *increment, value_incdec_locals(value), span,
                 |ctx, _| lower_static_property_array_assign_with_diagnosed_key(ctx, receiver, property, index, value, span, true));
             assert!(handled, "native XML static type remains eligible after loading");
             return;

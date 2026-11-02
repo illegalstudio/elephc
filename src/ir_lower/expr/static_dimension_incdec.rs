@@ -74,7 +74,7 @@ fn native(
     let selected = lower_native_dimension_incdec_select_from_values(ctx, receiver, key, !post, expr);
     let mut result = None;
     crate::ir_lower::stmt::with_dimension_incdec_value(ctx, selected, increment, post, expr.span,
-        |ctx, value| {
+        |ctx, _, value| {
             let value = ctx.box_value_as_mixed(value, PhpType::Mixed, Some(expr.span));
             let value = crate::ir_lower::ownership::copy_assignment_value(ctx, value, Some(expr.span));
             stage_call_result(ctx, staging.as_ref(), value, expr.span);
