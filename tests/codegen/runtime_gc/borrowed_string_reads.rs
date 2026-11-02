@@ -9,6 +9,26 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Hash hits and silent misses release string keys produced by calls and ternaries.
+#[test]
+fn test_hash_reads_release_temporary_string_keys() {
+    let source = r#"<?php
+function temporaryHashReadKey(bool $present): string { return $present ? 'known' : 'absent'; }
+$table = ['known' => 'kept'];
+for ($i = 0; $i < 4; $i++) {
+    echo $table[$argc > 0 ? 'absent' : 'known'] ?? 'fb', '|';
+    echo $table[temporaryHashReadKey(true)], '|';
+    echo $table[temporaryHashReadKey(false)] ?? 'fb', '|';
+}
+unset($table);
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "fb|kept|fb|".repeat(4));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
+}
+
 /// Single-argument string views retire detached Mixed and Stringable coercion storage.
 #[test]
 fn test_borrowed_string_views_release_single_argument_casts() {

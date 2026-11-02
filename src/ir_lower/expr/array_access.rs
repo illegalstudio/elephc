@@ -602,6 +602,16 @@ fn lower_array_access_from_values_with_receiver_pins(
         ctx.unguard_call_argument(result.value, expr.span);
     } else {
         release_coerced_source_if_owned(ctx, index_value, Some(index.span));
+        let normalized_copy = ctx.builder.value_defining_instruction(index_value.value)
+            .is_some_and(|producer| producer.op == Op::StrPersist
+                && producer.immediate == Some(Immediate::Bool(true)));
+        if matches!(op, Op::HashGet | Op::HashGetSilent)
+            && ctx.builder.value_php_type(index_value.value).codegen_repr() == PhpType::Str
+            && !normalized_copy {
+            // Hash lookups never retain or return the key. Ternaries and calls can own
+            // ordinary string keys independently of the normalized-cast copies below.
+            crate::ir_lower::ownership::release_if_owned(ctx, index_value, Some(index.span));
+        }
         // A string key is not a coerced Mixed/array source, so the call above
         // leaves a normalized `(string)` copy alive after `hash_get_silent`.
         crate::ir_lower::ownership::release_marked_normalized_cast_copies(
