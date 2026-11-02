@@ -58,8 +58,7 @@ fn retirement_types(
     reachable_bindings: &HashSet<String>,
 ) -> TypeEnv {
     let mut fixed = entry.iter().map(|(name, ty)| {
-        let mut remaining = MAX_RETIREMENT_TYPE_NODES;
-        let bound = if retirement_type_fits(ty, &mut remaining) { ty.clone() } else { PhpType::Mixed };
+        let bound = if retirement_type_is_bounded(ty) { ty.clone() } else { PhpType::Mixed };
         (name.clone(), bound)
     }).collect::<TypeEnv>();
     for (name, _) in &evidence.values { fixed.entry((*name).to_string()).or_insert(PhpType::Void); }
@@ -114,8 +113,13 @@ const MAX_RETIREMENT_TYPE_NODES: usize = 64;
 
 /// Widens an oversized bound to the sound unknown value before it can grow recursively.
 fn bounded_retirement_type(ty: PhpType) -> PhpType {
+    if retirement_type_is_bounded(&ty) { ty } else { PhpType::Mixed }
+}
+
+/// Bounds a borrowed retirement query before recursive cleanup analysis or cloning.
+pub(super) fn retirement_type_is_bounded(ty: &PhpType) -> bool {
     let mut remaining = MAX_RETIREMENT_TYPE_NODES;
-    if retirement_type_fits(&ty, &mut remaining) { ty } else { PhpType::Mixed }
+    retirement_type_fits(ty, &mut remaining)
 }
 
 /// Counts nested payloads with an early stop, bounding both traversal depth and node count.

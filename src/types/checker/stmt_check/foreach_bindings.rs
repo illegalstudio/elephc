@@ -8,11 +8,29 @@
 //! - PHP binds the value before the key, and either displaced value can throw on release.
 //! - Exceptional snapshots know the published bindings exist; zero-iteration flow does not.
 
-use crate::parser::ast::{Expr, ExprKind};
+use crate::parser::ast::{Expr, ExprKind, Stmt};
 use crate::types::{PhpType, TypeEnv};
 use super::super::Checker;
 
 impl Checker {
+    /// Keeps pre-binding callbacks only when the source can actually invoke them or cleanup.
+    pub(super) fn record_foreach_entry_exception_flow(
+        &mut self, stmt: &Stmt, source: &PhpType, env: &TypeEnv,
+    ) {
+        if self.finally_flow_frames.is_empty() { return; }
+        // Concrete arrays have no iterator callbacks or non-iterable warning. If their
+        // contents cannot throw on cleanup either, only the separately recorded operand,
+        // binding-retirement, and body effects can enter a handler.
+        if matches!(source, PhpType::Array(_) | PhpType::AssocArray { .. })
+            && super::loop_catches::retirement_type_is_bounded(source)
+            && self.exception_analysis.as_ref().is_some_and(|analysis|
+                analysis.retirement_throws(source).is_empty())
+        {
+            return;
+        }
+        self.record_statement_exception_flow(stmt, env, None, None);
+    }
+
     /// Binds one iteration in PHP order without making its names present on a skipped loop.
     pub(super) fn bind_foreach_iteration(
         &mut self, array: &Expr, value_name: &str, value_type: PhpType,

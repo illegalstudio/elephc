@@ -9,6 +9,52 @@
 
 use super::*;
 
+/// Foreach publishes value then key before retiring the displaced owner in both IR modes.
+#[test]
+fn test_nullable_fallback_flow_r52_foreach_binding_publication_runtime() {
+    let source = r#"<?php
+class R52Value { public int $n = 5; }
+class R52Retired {
+    public function __destruct() { throw new Exception('d'); }
+}
+function needR52Int(int $value): void { echo $value; }
+function needR52String(string $value): void { echo ':', $value, "\n"; }
+function sameR52Name(): void {
+    foreach ([7 => new R52Value()] as $e => $e) { needR52Int($e); echo "\n"; }
+}
+function sameR52Reference(): void {
+    $xs = [7 => 9];
+    foreach ($xs as $e => &$e) { needR52Int($e); echo "\n"; break; }
+    var_dump($xs[7]);
+}
+function retireR52Key(): void {
+    $key = new R52Retired();
+    $value = 5;
+    try { foreach ([7 => 'v'] as $key => $value) { break; } }
+    catch (Exception $c) { needR52Int($key); needR52String($value); }
+}
+function retireR52Value(): void {
+    $key = 3;
+    $value = new R52Retired();
+    try { foreach ([7 => 'v'] as $key => $value) { break; } }
+    catch (Exception $c) { needR52Int($key); needR52String($value); }
+}
+function retireR52Reference(): void {
+    $xs = [9];
+    $value = new R52Retired();
+    try { foreach ($xs as &$value) { return; } }
+    catch (Exception $c) { needR52Int($value); echo "\n"; }
+    var_dump($xs[0]);
+}
+sameR52Name();
+sameR52Reference();
+retireR52Key();
+retireR52Value();
+retireR52Reference();
+"#;
+    assert_nullable_flow_cli_heap_output(source, "7\n7\nint(7)\n7:v\n3:v\n9\nint(9)\n");
+}
+
 /// The production CLI refuses a stale subclass contract before native property access.
 #[test]
 fn test_nullable_fallback_flow_r51_foreach_retirement_cli_refusal() {

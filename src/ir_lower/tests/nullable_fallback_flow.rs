@@ -9,6 +9,18 @@
 
 use crate::ir::{Immediate, IrHeapKind, IrType, Op};
 
+/// All supported targets emit same-name and throwing-retirement foreach bindings.
+#[test]
+fn test_nullable_fallback_flow_r52_foreach_binding_publication_all_targets() {
+    let source = "<?php class D { public int $n = 5; } class Old { public function __destruct() { throw new Exception('d'); } } function needInt(int $x): void { echo $x; } function needStr(string $x): void { echo $x; } function run(): void { foreach ([7 => new D()] as $e => $e) { needInt($e); } $xs = [7 => 9]; foreach ($xs as $r => &$r) { needInt($r); break; } $key = new Old(); $value = 5; try { foreach ([7 => 'v'] as $key => $value) { break; } } catch (Exception $c) { needInt($key); needStr($value); } } run();";
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = crate::codegen::platform::Target::parse(name).unwrap();
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), target);
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Every target rejects the obsolete subclass view on a foreach retirement edge.
 #[test]
 fn test_nullable_fallback_flow_r51_foreach_retirement_all_targets() {

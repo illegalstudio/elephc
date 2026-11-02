@@ -346,7 +346,7 @@ impl Checker {
                 }
                 let value_was_bound = env.contains_key(value_var);
                 let arr_ty = self.infer_type_with_assignment_effects(array, env)?;
-                self.record_statement_exception_flow(stmt, env, None, None);
+                self.record_foreach_entry_exception_flow(stmt, &arr_ty, env);
                 if *value_by_ref {
                     widen_by_ref_foreach_source_storage(self, array, env)?;
                 }

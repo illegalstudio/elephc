@@ -417,19 +417,9 @@ pub(super) fn lower_foreach(
         iterator_cleanup: by_ref_origin.map(|_| (iterator_state, array.span)),
         receiver_pin,
     });
-    if let Some(key_var) = key_var {
-        let key = ctx.emit_value(
-            Op::IterCurrentKey,
-            vec![iterator.value],
-            None,
-            PhpType::Mixed,
-            Op::IterCurrentKey.default_effects(),
-            Some(array.span),
-        );
-        ctx.store_local(key_var, key, PhpType::Mixed, Some(array.span));
-    }
     if value_by_ref {
         let slot = ctx.declare_local(value_var, foreach_ref_value_type(&source_ty));
+        let previous = root_displaced_foreach_binding(ctx, value_var, array.span);
         ctx.release_ref_cell_owner(value_var, Some(array.span));
         ctx.emit_void(
             Op::IterCurrentValueRef,
@@ -440,10 +430,33 @@ pub(super) fn lower_foreach(
         );
         ctx.mark_ref_bound_local(value_var);
         ctx.mark_local_initialized(value_var);
+        if let Some(owner) = previous {
+            crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, array.span);
+        }
     } else {
         let value_ty = foreach_value_type(&source_ty);
         let value = lower_foreach_current_value(ctx, iterator, &source_ty, &value_ty, array.span);
+        let previous = root_displaced_foreach_binding(ctx, value_var, array.span);
         ctx.store_local(value_var, value, value_ty, Some(array.span));
+        if let Some(owner) = previous {
+            crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, array.span);
+        }
+    }
+    // PHP publishes the value before the key, including when both use the same name.
+    if let Some(key_var) = key_var {
+        let key = ctx.emit_value(
+            Op::IterCurrentKey,
+            vec![iterator.value],
+            None,
+            PhpType::Mixed,
+            Op::IterCurrentKey.default_effects(),
+            Some(array.span),
+        );
+        let previous = root_displaced_foreach_binding(ctx, key_var, array.span);
+        ctx.store_local(key_var, key, PhpType::Mixed, Some(array.span));
+        if let Some(owner) = previous {
+            crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, array.span);
+        }
     }
     lower_block(ctx, body);
     ctx.loop_stack.pop();
@@ -482,6 +495,16 @@ pub(super) fn lower_foreach(
     if let Some(pin) = receiver_pin {
         crate::ir_lower::ownership::release_if_owned(ctx, pin.value, Some(pin.span));
     }
+}
+
+/// Defers the displaced value's final release until the new iteration binding is visible.
+fn root_displaced_foreach_binding(
+    ctx: &mut LoweringContext<'_, '_>, name: &str, span: Span,
+) -> Option<LocalSlotId> {
+    // Fresh iteration slots are already declared and zero-initialized. Global-backed
+    // bindings load their actual shared owner, including a value seeded by another scope.
+    let previous = ctx.load_local(name, Some(span));
+    crate::ir_lower::expr::root_value_for_later_use(ctx, previous, span).1
 }
 
 /// Reifies a property, static property, or nested element source as a local reference.

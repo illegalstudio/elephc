@@ -9,6 +9,19 @@
 
 use super::*;
 
+/// A concrete scalar array cannot throw before publishing its iteration bindings.
+#[test]
+fn test_nullable_fallback_flow_r52_foreach_entry_precision() {
+    for source in ["[7 => 'v']", "$xs"] {
+        let source = format!("<?php class D {{ public function __destruct() {{ throw new Exception('d'); }} }} function need(string $x): void {{}} function run(): void {{ $xs = [7 => 'v']; $key = new D(); $value = 5; try {{ foreach ({source} as $key => $value) {{ break; }} }} catch (Exception $c) {{ need($value); }} }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+    // Operand failures still precede publication, even for an array-valued expression.
+    expect_error("<?php class Entry {} function source(): array { throw new Exception('source'); } function need(string $x): void {} function run(): void { $value = new Entry(); try { foreach (source() as $value) { break; } } catch (Exception $c) { need($value); } }", "expects string");
+    // Opaque iterable callbacks also retain the entry alternative.
+    expect_error("<?php class Entry {} class Items implements Iterator { public function rewind(): void { throw new Exception('rewind'); } public function valid(): bool { return true; } public function current(): string { return 'v'; } public function key(): int { return 7; } public function next(): void {} } function need(string $x): void {} function run(Items $xs): void { $value = new Entry(); try { foreach ($xs as $value) { break; } } catch (Exception $c) { need($value); } }", "expects string");
+}
+
 /// Foreach binding retirement cannot expose an obsolete object type in an outer handler.
 #[test]
 fn test_nullable_fallback_flow_r51_foreach_retirement_admission() {
@@ -31,10 +44,12 @@ fn test_nullable_fallback_flow_r51_foreach_retirement_admission() {
 #[test]
 fn test_nullable_fallback_flow_r51_foreach_retirement_precision() {
     for (declarations, initial, source) in [
-        ("class Cold { public function __destruct() { throw new Exception('d'); } } function need(int $x): void {}", "$e = 1;", "['x']"),
-        ("class D { public function __destruct() { throw new Exception('d'); } } function need(D $x): void {}", "$e = new D();", "[]"),
+        ("class Cold { public function __destruct() { throw new Exception('d'); } }", "$e = 1;", "['x']"),
+        ("class D { public function __destruct() { throw new Exception('d'); } }", "$e = new D();", "[]"),
     ] {
-        let source = format!("<?php {declarations} function run(): void {{ {initial} try {{ foreach ({source} as $e) {{ break; }} }} catch (Exception $c) {{ need($e); }} }}");
+        // An unreachable handler cannot clear the continuing proof. This checks reachability
+        // directly rather than depending on the fallback type used to check unreachable code.
+        let source = format!("<?php {declarations} function need(int $x): void {{}} function run(?int $v): void {{ $v ??= 1; {initial} try {{ foreach ({source} as $e) {{ break; }} }} catch (Exception $c) {{ $v = null; }} need($v); }}");
         check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
     }
 }
