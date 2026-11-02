@@ -311,6 +311,8 @@ rejected, matching PHP.
 ## switch / case / default
 
 Standard PHP switch with fall-through semantics. Use `break` to prevent fall-through.
+Case labels use loose equality (`==`): `true` matches `case 2`, while an array
+does not match an integer label, including when passed through `iterable`.
 
 ```php
 <?php

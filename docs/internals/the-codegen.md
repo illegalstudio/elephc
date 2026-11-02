@@ -14,6 +14,22 @@ Codegen is a single EIR pipeline. The checked and optimized AST is always
 lowered into EIR, IR passes run over that module, and `src/codegen/` emits the
 user assembly for the selected target.
 
+Switch dispatch uses integer comparisons only for PHP integer subjects and labels.
+Other PHP values use loose equality, preserving boolean conversion, array comparison
+rules and object-to-number warnings. Float comparisons with null test numeric zero
+without the NAN warning emitted by an explicit boolean conversion.
+Owned operands and temporary comparison boxes publish exception cleanup records
+until normal retirement, including when a warning handler throws into a local catch.
+Recursive array/property comparisons use the same ABI guard builder for their owned
+cells. A scalar fallback publishes each source owner once. Simple variable switch
+subjects reload their storage between labels so callbacks can update later matches.
+Dynamic variable subjects have no unused initial load. Each reload retires its own
+converted value, with provisional local guards protecting owned unboxed views if
+a comparison callback throws; finalization removes cleanup for borrowed views.
+The same local-view guards protect direct equality operands and evaluated case labels.
+Pending operands publish those guards before later expressions that can unwind, then
+detach them before the consuming comparison takes over their cleanup.
+
 ## Pipeline Position
 
 Internal value classes can declare operator adapters in their shared
