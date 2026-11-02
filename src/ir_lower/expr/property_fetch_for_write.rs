@@ -52,19 +52,23 @@ pub(crate) fn lower_static_property_write_chain_with_operands(
         let borrowed = ctx.emit_value(Op::Borrow, vec![parent.value.value], None, ty,
             Op::Borrow.default_effects(), Some(span));
         ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
-        let child = lower_native_dimension_write_select(ctx, borrowed, index, expr);
+        let child = ctx.with_independent_write_receiver(|ctx|
+            lower_native_dimension_write_select(ctx, borrowed, index, expr));
         return capture_static_write_child(ctx, parent, child, span);
     }
     if let ExprKind::DynamicPropertyAccess { object, property } = &expr.kind {
-        let early_name = if matches!(object.kind, ExprKind::Variable(_)) {
-            super::super::scoped_writes::property_name(ctx, property, span)
-        } else { None };
+        let early_name = ctx.with_independent_write_receiver(|ctx| {
+            if matches!(object.kind, ExprKind::Variable(_)) {
+                super::super::scoped_writes::property_name(ctx, property, span)
+            } else { None }
+        });
         let mut parent = lower_static_property_write_chain_with_operands(ctx, object, operands, span);
         let name = if let Some(name) = early_name { name } else {
-            super::super::scoped_writes::property_name(ctx, property, span).unwrap_or_else(|| {
-                let name = lower_expr(ctx, property);
-                property_access::coerce_runtime_property_name(ctx, name, span)
-            })
+            ctx.with_independent_write_receiver(|ctx|
+                super::super::scoped_writes::property_name(ctx, property, span).unwrap_or_else(|| {
+                    let name = lower_expr(ctx, property);
+                    property_access::coerce_runtime_property_name(ctx, name, span)
+                }))
         };
         parent.narrow_for_dynamic_array(ctx, name, operands, span);
         let result_type = property_access::dynamic_property_get_result_type(
@@ -84,15 +88,16 @@ pub(crate) fn lower_static_property_write_chain_with_operands(
         let argument = ctx.emit_value(Op::Borrow, vec![name.value], None, PhpType::Str,
             Op::Borrow.default_effects(), Some(span));
         ctx.builder.set_value_ownership(argument.value, Ownership::Borrowed);
-        let child = property_access::lower_dynamic_property_fetch_or_select(
-            ctx, borrowed, argument, result_type, PropertyFetchMode::Read, false, true, expr,
-        );
+        let child = ctx.with_independent_write_receiver(|ctx|
+            property_access::lower_dynamic_property_fetch_or_select(
+                ctx, borrowed, argument, result_type, PropertyFetchMode::Read, false, true, expr,
+            ));
         unpin_in_flight_owners(ctx, pins, span);
         crate::ir_lower::ownership::release_if_owned(ctx, name, Some(span));
         return capture_static_write_child(ctx, parent, child, span);
     }
     let ExprKind::PropertyAccess { object, property } = &expr.kind else {
-        let value = lower_expr(ctx, expr);
+        let value = ctx.with_independent_write_receiver(|ctx| lower_expr(ctx, expr));
         return PropertyWriteReceiver::new(ctx, value, span).into_runtime_interface_view(ctx, span);
     };
     let mut parent = lower_static_property_write_chain_with_operands(ctx, object, operands, span);
@@ -103,7 +108,8 @@ pub(crate) fn lower_static_property_write_chain_with_operands(
     let borrowed = ctx.emit_value(Op::Borrow, vec![parent.value.value], None, ty,
         Op::Borrow.default_effects(), Some(span));
     ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
-    let child = property_access::write_select::select_named(ctx, borrowed, property, expr);
+    let child = ctx.with_independent_write_receiver(|ctx|
+        property_access::write_select::select_named(ctx, borrowed, property, expr));
     capture_static_write_child(ctx, parent, child, span)
 }
 

@@ -14,11 +14,12 @@ use crate::ir::{Immediate, LocalKind, Op};
 fn verify_native_property_read_leases(target: &str) {
     let source = r#"<?php
 class NativeReadCounter { public mixed $value = 1; }
+class NativeReadUnrelatedHook { public mixed $other = null { get { return $this->other; } } }
 function nativeReadCompound(NativeReadCounter $box, string $name): void {
     $box->{$name} += 1;
     $copy = ($box->{$name} += 1);
 }
-function nativeReadCoalesceChild(stdClass $root, string $name): mixed {
+function nativeReadCoalesceChild(mixed $root, string $name): mixed {
     return $root->{$name}->value ??= 2;
 }
 function nativeReadNullable(?SimpleXMLElement $node): mixed {
@@ -32,6 +33,7 @@ function nativeReadDynamicContainerMiss(int $index, string $name): mixed {
     $rows = [new SimpleXMLElement('<r/>')];
     return $rows[$index]->{$name} ?? 'fallback';
 }
+new NativeReadUnrelatedHook();
 $xml = new SimpleXMLElement('<r/>');
 "#;
     let module = super::lower_source_at_for_target(
@@ -65,13 +67,21 @@ $xml = new SimpleXMLElement('<r/>');
         .filter_map(|inst| inst.result).collect::<Vec<_>>();
     assert!(!children.is_empty(), "{target}: coalesce must read its deferred receiver child");
     for child in children {
-        assert!(!coalesce.instructions.iter().any(|inst| inst.op == Op::Acquire && inst.operands == [child]),
+        assert!(!coalesce.instructions.iter().any(|inst| inst.op == Op::Acquire && inst.operands == [child]
+            && inst.immediate == Some(Immediate::Bool(true))),
             "{target}: a borrowed RHS must not duplicate an independently owned receiver child");
-        assert!(coalesce.instructions.iter().any(|inst| inst.op == Op::StoreLocal && inst.operands == [child]
-            && matches!(inst.immediate, Some(Immediate::LocalSlot(slot))
-                if coalesce.instructions.iter().any(|pin| pin.op == Op::PushCallOperandOwner
-                    && pin.immediate == Some(Immediate::LocalSlot(slot))))),
-            "{target}: the original child owner must remain visible to exception cleanup");
+        let retained = coalesce.instructions.iter().any(|inst| inst.op == Op::Acquire
+            && inst.operands == [child]);
+        if retained {
+            assert!(coalesce.instructions.iter().any(|inst| inst.op == Op::Release && inst.operands == [child]),
+                "{target}: a retaining getter merge must release its original child owner");
+        } else {
+            assert!(coalesce.instructions.iter().any(|inst| inst.op == Op::StoreLocal && inst.operands == [child]
+                && matches!(inst.immediate, Some(Immediate::LocalSlot(slot))
+                    if coalesce.instructions.iter().any(|pin| pin.op == Op::PushCallOperandOwner
+                        && pin.immediate == Some(Immediate::LocalSlot(slot))))),
+                "{target}: the original child owner must remain visible to exception cleanup");
+        }
     }
     let nullable = module.functions.iter().find(|function| function.name == "nativeReadNullable").unwrap();
     assert!(nullable.instructions.iter().any(|inst| inst.op == Op::NullsafeMethodCall
