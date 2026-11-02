@@ -36,6 +36,7 @@ pub(super) fn reflection_property_metadata(
                 type_metadata.as_ref(),
             );
             Some(ReflectionOwnerMetadata {
+                rendered_to_string: None,
                 reflected_name: Some(property_name.clone()),
                 attr_names: info
                     .property_attribute_names
@@ -69,7 +70,7 @@ pub(super) fn reflection_property_metadata(
                 is_enum_case: false,
                 parameter_members: Vec::new(),
                 type_metadata,
-                property_default_value: reflection_property_default_value(info, &property_name),
+                property_default_value: reflection_property_default_value(ctx, info, &property_name),
                 required_parameter_count: 0,
                 is_deprecated: false,
                 is_generator: false,
@@ -174,7 +175,7 @@ pub(super) fn reflection_function_parameter_metadata(
         None,
         Some(declaring_function),
         &[],
-        None,
+        Some(&function.source_defaults),
     )?;
     let Some(parameter) = reflection_parameter_member_for_selector(&parameters, selector) else {
         return Ok(empty_reflection_metadata());

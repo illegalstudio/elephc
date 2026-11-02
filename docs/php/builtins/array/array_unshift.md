@@ -2,7 +2,7 @@
 title: "array_unshift()"
 description: "Prepends one or more elements to the beginning of an array."
 sidebar:
-  order: 44
+  order: 46
 ---
 
 ## array_unshift()

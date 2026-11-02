@@ -27,6 +27,7 @@ pub(crate) mod iconv_bridge;
 pub(crate) mod interface_wrappers;
 pub(crate) mod mbstring_query;
 pub(crate) mod phar_stream;
+pub(crate) mod random;
 /// Platform module.
 pub mod platform;
 mod prescan;
@@ -57,6 +58,7 @@ pub(crate) use declaration_order::{
     declared_class_names, declared_interface_names, declared_trait_names,
 };
 pub use declaration_order::prepare_declared_name_order;
+pub(crate) use driver_support::generate_phpext_runtime;
 pub(crate) use driver_support::{emit_write_current_string_stderr, emit_write_literal_stderr};
 #[allow(unused_imports)]
 pub use driver_support::{
@@ -73,7 +75,7 @@ pub(crate) use sentinels::NULL_SENTINEL;
 pub(crate) use value_boxing::{
     emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
     emit_box_runtime_payload_as_mixed, emit_release_pushed_refcounted_temp_after_array_push,
-    mixed_unbox_payload_reg, runtime_value_tag,
+    container_value_tag, mixed_unbox_payload_reg, runtime_value_tag,
 };
 pub(crate) use wrappers::{
     emit_callback_wrapper, emit_extern_callback_trampoline, emit_fiber_wrapper,

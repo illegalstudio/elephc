@@ -81,12 +81,21 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Stored declarations parsed with the earlier annotation rewrite must be refused.
 /// BUMPED TO 16 because class-reference type-list lookahead now preserves PHP comparisons.
 /// Previously stored parse failures for those valid expressions must be reparsed.
+/// BUMPED TO 17 to combine generic declarations with native deferred-default Error metadata.
+/// Neither branch's earlier serialized layout describes this merged enum shape.
 /// BUMPED TO 18 to combine generic declarations with effective readonly setter metadata
 /// and retained abstract setter contracts. Format 17 already identifies the separate
 /// native deferred-default expression layout, so it cannot identify this branch as well.
 /// BUMPED TO 19 to combine retained readonly setter contracts with main's conservative
 /// caller-scope access mask. Neither earlier branch layout may read this combined format.
-pub(crate) const FORMAT_VERSION: u32 = 19;
+/// BUMPED TO 20 to combine deferred-default errors with main's caller-scope access mask.
+/// BUMPED TO 21 to combine those deferred-default errors with retained readonly setter
+/// contracts, generic declarations, and caller-scope access masks from both branches.
+/// BUMPED TO 22 because retained generic token streams now include ReservedNameHead.
+/// Older token variant indexes must not be decoded as this layout.
+/// BUMPED TO 23 because `EvalExpr` gained the assignment-expression variant; older
+/// variant indexes must not be decoded as this layout.
+pub(crate) const FORMAT_VERSION: u32 = 23;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///

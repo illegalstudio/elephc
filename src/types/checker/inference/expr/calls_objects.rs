@@ -7,12 +7,14 @@
 //! Key details:
 //! - Retains constructor, visibility, eval-barrier, callable, and late-static-binding checks.
 
-use super::null_coalesce::{null_coalesce_result_type, operand_is_never_null};
+use super::null_coalesce::{
+    null_coalesce_buffer_merge_type, null_coalesce_result_type, operand_is_never_null,
+};
 use super::{body_must_not_use_this, Checker};
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::pcntl_constants::pcntl_int_constants;
-use crate::types::{packed_type_size, PhpType, TypeEnv};
+use crate::types::{PhpType, TypeEnv};
 
 impl Checker {
     /// Infers types for calls, closures, objects, property access, assignments, and generators.
@@ -57,23 +59,33 @@ impl Checker {
             }
             ExprKind::BufferNew { element_type, len } => {
                 let len_ty = self.infer_type(len, env)?;
-                if len_ty != PhpType::Int {
+                // A length takes what a buffer index takes. Checked int arithmetic such as
+                // `$n + 1` infers `mixed` (PHP promotes an overflowing result to float), so a
+                // `mixed` or `int|float` length is converted at runtime, where a value that is
+                // not a whole number in range fails the allocation's length validation.
+                if !matches!(len_ty, PhpType::Int | PhpType::Mixed)
+                    && !len_ty.is_int_float_union()
+                {
                     return Err(CompileError::new(
                         expr.span,
                         "buffer_new<T>() length must be integer",
                     ));
                 }
-                let elem_ty = self.resolve_type_expr(element_type, expr.span)?;
-                if packed_type_size(&elem_ty, &self.packed_classes).is_none() {
-                    return Err(CompileError::new(
-                        expr.span,
-                        "buffer_new<T>() requires a POD scalar, pointer, or packed class element type",
-                    ));
-                }
+                let elem_ty = self.resolve_buffer_element_type(
+                    element_type,
+                    expr.span,
+                    "buffer_new<T>() requires a POD scalar, pointer, or packed class element type",
+                )?;
                 Ok(PhpType::Buffer(Box::new(elem_ty)))
             }
             ExprKind::BitNot(inner) => {
                 let ty = self.infer_type(inner, env)?;
+                if let Some(class) = crate::types::object_operators::operator_class(&ty) {
+                    return Ok(PhpType::Object(class.name.to_string()));
+                }
+                if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+                    return Ok(PhpType::Mixed);
+                }
                 if !matches!(ty, PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Void) {
                     return Err(CompileError::new(
                         expr.span,
@@ -93,6 +105,17 @@ impl Checker {
                 let vt = self.infer_null_probe_operand(value, operand_env)?;
                 let value_is_never_null = operand_is_never_null(self, value, &vt, operand_env);
                 let dt = self.infer_type(default, env)?;
+                if let Some(buffer) = null_coalesce_buffer_merge_type(
+                    self,
+                    value,
+                    &vt,
+                    value_is_never_null,
+                    default,
+                    &dt,
+                    expr.span,
+                )? {
+                    return Ok(buffer);
+                }
                 Ok(null_coalesce_result_type(self, value_is_never_null, vt, dt))
             }
             ExprKind::Pipe { value, callable } => {
@@ -117,6 +140,12 @@ impl Checker {
             }
             ExprKind::ConstRef(name) => {
                 let constant_name = name.as_str().trim_start_matches('\\');
+                if constant_name == "MT_RAND_PHP" {
+                    self.warnings.push(crate::errors::CompileWarning::deprecation(
+                        expr.span,
+                        "Constant MT_RAND_PHP is deprecated since 8.3, as it uses a biased non-standard variant of Mt19937",
+                    ));
+                }
                 if pcntl_int_constants(self.target)
                     .iter()
                     .any(|(constant, _)| *constant == constant_name)
@@ -435,11 +464,42 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        self.infer_runtime_iterated_call_arg_type(expr, env)
+    }
+
+    /// Infers one argument for a call surface that owns runtime array or Traversable iteration.
+    ///
+    /// Besides descriptor invokers, `array_push` uses this for its associative receiver
+    /// coordinator, which stages every unpacked value before mutating the receiver.
+    pub(crate) fn infer_runtime_iterated_call_arg_type(
+        &mut self,
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        self.infer_runtime_iterated_call_arg_types(expr, env)
+            .map(|(_, element)| element)
+    }
+
+    /// Infers both the source and element types for a runtime-iterated call argument.
+    ///
+    /// The source type lets builtin checks distinguish a concrete typed array from a
+    /// Traversable or boxed array whose element layout remains unknown to native storage.
+    pub(crate) fn infer_runtime_iterated_call_arg_types(
+        &mut self,
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<(PhpType, PhpType), CompileError> {
         match &expr.kind {
             ExprKind::Spread(inner) => {
-                self.infer_spread_element_type(inner, expr.span, env, true)
+                let source = self.infer_type(inner, env)?;
+                let element = self.spread_source_element_type(
+                    source.clone(),
+                    expr.span,
+                    true,
+                )?;
+                Ok((source, element))
             }
-            _ => self.infer_type(expr, env),
+            _ => self.infer_type(expr, env).map(|ty| (ty.clone(), ty)),
         }
     }
 
@@ -452,6 +512,20 @@ impl Checker {
         allow_traversable: bool,
     ) -> Result<PhpType, CompileError> {
         let ty = self.infer_type(inner, env)?;
+        self.spread_source_element_type(ty, span, allow_traversable)
+    }
+
+    /// Returns the element type a spread source of the already inferred type `ty` supplies, or
+    /// the "requires an array" diagnostic at `span`, the span of the `...` node itself.
+    ///
+    /// Split from [`Checker::infer_spread_element_type`] so the indexed-literal typing, which
+    /// types its spread sources once in its hash-spread scan, does not type them a second time.
+    pub(super) fn spread_source_element_type(
+        &self,
+        ty: PhpType,
+        span: crate::span::Span,
+        allow_traversable: bool,
+    ) -> Result<PhpType, CompileError> {
         match ty {
             PhpType::Array(elem_ty) => Ok(*elem_ty),
             PhpType::AssocArray { value, .. } => Ok(*value),

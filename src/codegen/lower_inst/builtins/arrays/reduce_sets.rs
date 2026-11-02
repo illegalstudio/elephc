@@ -44,7 +44,7 @@ pub(crate) fn lower_array_walk(ctx: &mut FunctionContext<'_>, inst: &Instruction
                     Ok(())
                 },
             )?;
-            store_void_builtin_result(ctx, inst)?;
+            store_true_builtin_result(ctx, inst)?;
             return Ok(());
         }
         PhpType::Str => {
@@ -67,7 +67,7 @@ pub(crate) fn lower_array_walk(ctx: &mut FunctionContext<'_>, inst: &Instruction
                     Ok(())
                 },
             )?;
-            store_void_builtin_result(ctx, inst)?;
+            store_true_builtin_result(ctx, inst)?;
             return Ok(());
         }
         _ => {}
@@ -85,7 +85,7 @@ pub(crate) fn lower_array_walk(ctx: &mut FunctionContext<'_>, inst: &Instruction
     if env_bytes != 0 {
         abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
     }
-    store_void_builtin_result(ctx, inst)
+    store_true_builtin_result(ctx, inst)
 }
 
 /// Merges boxed PHP arrays through layout dispatch, retaining the concrete indexed fast path.

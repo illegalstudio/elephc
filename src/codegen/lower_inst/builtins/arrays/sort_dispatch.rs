@@ -110,8 +110,11 @@ pub(super) fn lower_hash_reindexing_sort(
     };
     let value_ty = value.codegen_repr();
     let helper = match value_ty {
-        PhpType::Str => str_helper,
-        PhpType::Int => int_helper,
+        PhpType::Str => Some(str_helper),
+        PhpType::Int => Some(int_helper),
+        // A Mixed-valued hash has no typed comparator; `emit_mixed_slot_sort` orders the extracted
+        // list with `__rt_php_compare_slots` after a runtime scalar guard, exactly as a boxed sort.
+        PhpType::Mixed => None,
         ref other => {
             return Err(CodegenIrError::unsupported(format!(
                 "{} for hash values of PHP type {:?}",
@@ -120,6 +123,7 @@ pub(super) fn lower_hash_reindexing_sort(
         }
     };
 
+    super::boxed_mutation::require_non_null_hash_receiver(ctx, array, name)?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
     receiver.require_writable(name)?;
     // Same opening as the key-preserving hash sorts: drop the slot's ownership and split a shared
@@ -142,8 +146,18 @@ pub(super) fn lower_hash_reindexing_sort(
     // Sort the fresh list in place. The sorters answer nothing useful and clobber the argument
     // registers, so the list pointer is parked rather than read back afterwards.
     abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_reg_move(ctx.emitter, arg0, result_reg);
-    abi::emit_call_label(ctx.emitter, helper);
+    match helper {
+        Some(helper) => {
+            abi::emit_reg_move(ctx.emitter, arg0, result_reg);
+            abi::emit_call_label(ctx.emitter, helper);
+        }
+        None => {
+            // `emit_mixed_slot_sort` reads its array from the first argument register, so move it
+            // there first (a no-op on AArch64, where that is also the result register).
+            abi::emit_reg_move(ctx.emitter, arg0, result_reg);
+            emit_mixed_slot_sort(ctx, name)?;
+        }
+    }
 
     // Rebuild a hash keyed 0..n-1 out of the sorted list. `__rt_array_slice_to_hash` reads
     // (array, offset, length, length_present), and a zero flag means "to the end", so the length
@@ -162,7 +176,7 @@ pub(super) fn lower_hash_reindexing_sort(
     // Publish the rebuilt table as the receiver's value, then release the two intermediates in
     // the order they were stacked: the sorted list, then the table its values came from.
     ctx.store_result_value(array)?;
-    receiver.store_back_value(ctx, array)?;
+    receiver.store_back_after_consuming_split(ctx, array)?;
     // Both release helpers read their pointer from the RESULT register, not the first argument
     // register — `x0` on ARM64, `rax` on x86_64. Passing it in `arg0` happened to work on ARM64,
     // where the two are the same register, and released a garbage pointer on x86_64.
@@ -174,7 +188,7 @@ pub(super) fn lower_hash_reindexing_sort(
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
+        1,
     );
     store_if_result(ctx, inst)
 }
@@ -209,17 +223,29 @@ pub(super) fn lower_indexed_array_sort(
             ctx.load_value_to_reg(array, "rdi")?;
         }
     }
+    if elem_ty == PhpType::Float {
+        // A float slot holds the value, not a pointer to it, so neither the integer helper
+        // (which would compare the bit patterns) nor the string one can order it. The float
+        // sorter follows PHP's comparison schedule and uses the shared scalar ordering.
+        emit_float_slot_sort(ctx, name)?;
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            1,
+        );
+        return store_if_result(ctx, inst);
+    }
     if elem_ty == PhpType::Mixed {
         // A boxed cell has no ordering of its own, so this is the slot permuter
         // driven by PHP's ordering table, the same one `<` and `<=>` use. The
-        // array is already in the first argument register; `__rt_usort` wants it
-        // second, behind the comparator address, and takes no capture
-        // environment.
+        // array is already in the first argument register; the stable sorter
+        // keeps float values arriving through declared array receivers coherent
+        // with the homogeneous float path above.
         emit_mixed_slot_sort(ctx, name)?;
         abi::emit_load_int_immediate(
             ctx.emitter,
             abi::int_result_reg(ctx.emitter),
-            0x7fff_ffff_ffff_fffe,
+            1,
         );
         return store_if_result(ctx, inst);
     }
@@ -232,7 +258,7 @@ pub(super) fn lower_indexed_array_sort(
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
+        1,
     );
     store_if_result(ctx, inst)
 }
@@ -255,11 +281,12 @@ pub(super) fn lower_indexed_array_shuffle(ctx: &mut FunctionContext<'_>, inst: &
             ctx.load_value_to_reg(array, "rdi")?;
         }
     }
+    crate::codegen::random::publish_elephc_random_function_pointers(ctx.emitter);
     abi::emit_call_label(ctx.emitter, "__rt_shuffle");
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
+        1,
     );
     store_if_result(ctx, inst)
 }
@@ -325,7 +352,7 @@ pub(super) fn lower_user_sort_static_callback(
             abi::emit_load_int_immediate(
                 ctx.emitter,
                 abi::int_result_reg(ctx.emitter),
-                0x7fff_ffff_ffff_fffe,
+                1,
             );
             store_if_result(ctx, inst)?;
             return Ok(());
@@ -356,7 +383,7 @@ pub(super) fn lower_user_sort_static_callback(
             abi::emit_load_int_immediate(
                 ctx.emitter,
                 abi::int_result_reg(ctx.emitter),
-                0x7fff_ffff_ffff_fffe,
+                1,
             );
             store_if_result(ctx, inst)?;
             return Ok(());
@@ -412,7 +439,7 @@ pub(super) fn lower_user_sort_with_static_callback_binding(
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
+        1,
     );
     store_if_result(ctx, inst)
 }
@@ -569,54 +596,57 @@ pub(super) fn lower_array_key_sort(
     }
 }
 
-/// Sorts an indexed array of boxed `Mixed` cells through `__rt_usort`.
-///
-/// The comparator is a runtime callback rather than a user function, so no
-/// capture environment is passed and `__rt_usort` keeps its two-argument path.
-/// A runtime guard first rejects container, object, resource, and callable tags,
-/// whose PHP ordering is not implemented by the shared comparator.
+/// Sorts raw float slots with PHP's stable comparison schedule, including NAN placement.
+fn emit_float_slot_sort(ctx: &mut FunctionContext<'_>, name: &str) -> Result<()> {
+    let descending = match name {
+        "sort" => 0,
+        "rsort" => 1,
+        other => return Err(CodegenIrError::unsupported(format!(
+            "{other} over indexed-array elements of PHP type Float"
+        ))),
+    };
+    let direction_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_int_immediate(ctx.emitter, direction_reg, descending);
+    abi::emit_call_label(ctx.emitter, "__rt_sort_float");
+    Ok(())
+}
+
+/// Sorts boxed scalar slots with the same stable PHP schedule as raw float slots.
+/// The guard rejects unsupported container, object, resource and callable comparisons first.
 pub(super) fn emit_mixed_slot_sort(ctx: &mut FunctionContext<'_>, name: &str) -> Result<()> {
-    let comparator = match name {
-        "sort" => "__rt_php_compare_slots",
-        "rsort" => "__rt_php_compare_slots_desc",
-        other => {
-            return Err(CodegenIrError::unsupported(format!(
-                "{other} over indexed-array elements of PHP type Mixed"
-            )))
-        }
+    let descending = match name {
+        "sort" => 0,
+        "rsort" => 1,
+        other => return Err(CodegenIrError::unsupported(format!(
+            "{other} over indexed-array elements of PHP type Mixed"
+        ))),
     };
     abi::emit_call_label(ctx.emitter, "__rt_mixed_sort_require_scalars");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x1, x0");                              // the array moves behind the comparator address
-            abi::emit_symbol_address(ctx.emitter, "x0", comparator);
-            ctx.emitter.instruction("mov x2, #0");                              // no capture environment
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov rsi, rax");                            // the validated array moves behind the comparator address
-            abi::emit_symbol_address(ctx.emitter, "rdi", comparator);
-            ctx.emitter.instruction("xor edx, edx");                            // no capture environment
-        }
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_usort");
+    let array_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_reg_move(ctx.emitter, array_reg, result_reg);
+    let direction_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_int_immediate(ctx.emitter, direction_reg, descending);
+    abi::emit_call_label(ctx.emitter, "__rt_sort_mixed");
     Ok(())
 }
 
 /// Returns the indexed-array element type accepted by the selected sort helper.
 ///
-/// `Mixed` is accepted wherever strings are, because those are the two sorts that
-/// have an ordering for scalar values whose type is only known at run time: the
-/// slot is permuted by `__rt_usort`, after a runtime guard rejects non-scalars,
-/// and the ordering comes from `__rt_php_compare`, which is what `<` and `<=>`
-/// already use. The sorts that pass `allow_strings = false`
-/// (`asort`, `natsort`, etc.) keep refusing it because they have no comparator to hand a
-/// boxed cell to, and a loud refusal is the right answer until they do.
+/// `Mixed` and `Float` are accepted wherever strings are, because those are the sorts that
+/// reach the shared `__rt_php_compare` ordering: `Mixed` uses `__rt_sort_mixed` after a runtime
+/// scalar guard, while raw floats use `__rt_sort_float`. Both use PHP's comparison schedule
+/// for NAN placement and the comparator used by `<` and `<=>`. A float needs that route because its slot holds the value
+/// itself rather than a pointer, so neither the integer nor the string helper can order it.
+/// The sorts that pass `allow_strings = false` (`asort`, `natsort`, etc.) keep refusing both
+/// because they have no comparator to hand a slot to, and a loud refusal is the right answer
+/// until they do.
 pub(super) fn indexed_sort_element_type(ty: PhpType, name: &str, allow_strings: bool) -> Result<PhpType> {
     match ty.codegen_repr() {
         PhpType::Array(elem) => {
             let elem = elem.codegen_repr();
             if matches!(elem, PhpType::Int | PhpType::Void | PhpType::Never)
-                || (allow_strings && matches!(elem, PhpType::Str | PhpType::Mixed))
+                || (allow_strings && matches!(elem, PhpType::Str | PhpType::Mixed | PhpType::Float))
             {
                 return Ok(elem);
             }

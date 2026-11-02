@@ -9,6 +9,21 @@
 
 use crate::ir::{Effects, Op, RuntimeFnId};
 
+/// Every direct output opcode can cross into a throwing hosted PHP callback.
+#[test]
+fn hosted_output_opcodes_are_throwing_effect_boundaries() {
+    let required = Effects::OUTPUT | Effects::MAY_THROW;
+    for op in [
+        Op::EchoValue,
+        Op::PrintValue,
+        Op::WriteStrStdout,
+        Op::WriteStdout,
+        Op::Warn,
+    ] {
+        assert!(op.default_effects().contains(required), "{op:?}");
+    }
+}
+
 /// Replacement results use independent scratch storage rather than borrowing their inputs.
 #[test]
 fn string_replacement_results_do_not_keep_argument_owners_alive() {
@@ -262,5 +277,39 @@ fn array_flip_effects_preserve_warning_handlers() {
     let effects = RuntimeFnId::ArrayFlip.effects();
     for required in [Effects::MAY_THROW, Effects::WRITES_GLOBAL, Effects::REFCOUNT_OP, Effects::OUTPUT] {
         assert!(effects.contains(required));
+    }
+}
+
+/// Heap metric reads observe allocations and reset writes cannot disappear as unused calls.
+#[test]
+fn memory_metrics_effects_observe_heap_and_peak_resets() {
+    for target in [RuntimeFnId::MemoryGetUsage, RuntimeFnId::MemoryGetPeakUsage,
+        RuntimeFnId::MemoryGetAllocations, RuntimeFnId::MemoryGetFrees] {
+        assert!(target.effects().contains(Effects::READS_GLOBAL | Effects::READS_HEAP));
+        assert!(!target.effects().contains(Effects::ALLOC_HEAP));
+        assert_eq!(target.result_ownership(), crate::builtins::semantics::BuiltinResultOwnership::NonHeap);
+    }
+    assert!(RuntimeFnId::MemoryResetPeakUsage.effects().contains(Effects::WRITES_GLOBAL));
+}
+
+/// Proven scalar flags retain read-only sampling, while dynamic errors and NAN warnings remain visible.
+#[test]
+fn memory_metrics_effects_follow_flag_types() {
+    use crate::builtins::semantics::{BuiltinSemanticInput, resolve_builtin_effects};
+    use crate::types::PhpType;
+    for name in ["memory_get_usage", "memory_get_peak_usage"] {
+        let definition = crate::builtins::registry::lookup(name).unwrap();
+        for ty in [PhpType::Bool, PhpType::Int, PhpType::Str, PhpType::Void] {
+            let input = BuiltinSemanticInput { name, args: &[], arg_types: &[ty], span: crate::span::Span::dummy() };
+            let effects = resolve_builtin_effects(definition, &input);
+            assert_eq!(effects, Effects::READS_GLOBAL | Effects::READS_HEAP);
+            assert!(!effects.contains(Effects::MAY_WARN));
+        }
+        let input = BuiltinSemanticInput { name, args: &[], arg_types: &[PhpType::Float], span: crate::span::Span::dummy() };
+        assert!(resolve_builtin_effects(definition, &input).contains(Effects::MAY_WARN));
+        let input = BuiltinSemanticInput { name, args: &[], arg_types: &[PhpType::Mixed], span: crate::span::Span::dummy() };
+        assert!(resolve_builtin_effects(definition, &input).contains(Effects::MAY_THROW));
+        let input = BuiltinSemanticInput { name, args: &[], arg_types: &[PhpType::Array(Box::new(PhpType::Int))], span: crate::span::Span::dummy() };
+        assert!(resolve_builtin_effects(definition, &input).contains(Effects::MAY_THROW));
     }
 }

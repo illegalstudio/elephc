@@ -185,3 +185,22 @@ emptyTakeArray(['key' => 7]);
     assert_eq!(out.stdout, "NULL:NULL:0|NULL:NULL:0|", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A concrete Mixed-valued hash shifts its head, renumbers integer keys, keeps a copied alias
+/// intact, and releases every owner.
+#[test]
+fn test_core_concrete_mixed_hash_shift_renumbers_and_balances() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+for ($i = 0; $i < 4; $i++) {
+    $items = [1 => str_repeat('a', 12), 2 => 'b', 5 => 3];
+    $copy = $items;
+    $first = array_shift($items);
+    echo strlen($first), '|', implode(',', $items), '|', count($copy), '|';
+    unset($first, $items, $copy);
+}
+echo 'done';
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "12|b,3|3|".repeat(4) + "done", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

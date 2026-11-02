@@ -66,7 +66,7 @@ pub(in crate::codegen::lower_inst) fn literal_function_exists(
     bare_name: &str,
     strict_php: bool,
 ) -> bool {
-    ctx.function_by_name(bare_name).is_some()
+    ctx.function_by_name(bare_name).is_some_and(|function| function.source_name.is_none())
         || ctx.has_extern_function(bare_name)
         || is_php_visible_builtin_function_for_target(
             bare_name,
@@ -184,7 +184,8 @@ fn emit_function_exists_candidate_table(
 /// | `name_resolver::is_date_procedural_alias()`     | `name_resolver::date_procedural_alias_names()`   |
 ///
 /// Names are de-duplicated case-insensitively with `php_symbol_key`, the same key the
-/// compile-time lookups use. Variant groups are collected first so that a name which is both a
+/// compile-time lookups use. Private implementation variants are excluded in both paths.
+/// Variant groups are collected first so that a name which is both a
 /// group and a plain declaration keeps its runtime activity check, mirroring the literal path's
 /// ordering (it tests `function_variant_group_name` before anything else).
 fn dynamic_function_exists_candidates(
@@ -211,6 +212,8 @@ fn dynamic_function_exists_candidates(
         push(&group.name, Some(symbol));
     }
     for function in ctx.module.functions.iter().chain(ctx.module.closures.iter()) {
+        // Private implementation variants have physical entries, not PHP declarations.
+        if function.source_name.is_some() { continue; }
         push(&function.name, None);
     }
     for extern_decl in &ctx.module.extern_decls {

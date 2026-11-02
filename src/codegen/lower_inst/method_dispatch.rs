@@ -9,15 +9,45 @@
 
 use super::*;
 
+/// Reports whether the receiver's static class or interface declares the method, or a class
+/// handles undeclared calls through `__call`.
+///
+/// A narrowed receiver keeps its declared type in EIR, so a method only its narrowed class has
+/// is absent here and must dispatch on the runtime class instead.
+fn static_receiver_declares_method(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    method_name: &str,
+) -> bool {
+    let normalized = class_name.trim_start_matches('\\');
+    let method_key = php_symbol_key(method_name);
+    if let Some(interface_info) = ctx.module.interface_infos.get(normalized) {
+        return interface_info.methods.contains_key(&method_key);
+    }
+    match ctx.module.class_infos.get(normalized) {
+        Some(class_info) => {
+            class_info.methods.contains_key(&method_key)
+                || class_info.methods.contains_key(&php_symbol_key("__call"))
+        }
+        None => true,
+    }
+}
+
 /// Lowers a direct instance-method call on a statically known object receiver.
 ///
 /// Overridable methods check literal `false` and `null` parameters on the runtime
-/// implementation. A final or otherwise non-virtual method keeps the resolved signature.
+/// implementation. Generic final declarations also select the runtime instantiation's
+/// diagnostic name, even though object-only variance preserves literal parameter types.
 pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let object = expect_operand(inst, 0)?;
     let method_name = method_name_data(ctx, inst)?.to_string();
     if let Some((class_name, true)) = objects::nullable_object_receiver_class(ctx, object)? {
         if !class_name.is_empty() {
+            if !static_receiver_declares_method(ctx, &class_name, &method_name) {
+                // A narrowed nullable receiver (`if ($this->shape instanceof Square)`): dispatch
+                // on the runtime class, which still reports a call on null.
+                return lower_mixed_method_call(ctx, inst, object, &method_name);
+            }
             return lower_nullable_receiver_method_call(ctx, inst, object, &class_name, &method_name);
         }
     }
@@ -65,6 +95,12 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     if is_throwable_standard_method_call(ctx, &class_name, &method_name) {
         return lower_throwable_standard_method(ctx, inst, object, &method_name);
     }
+    if !static_receiver_declares_method(ctx, &class_name, &method_name) {
+        // The checker accepted a method the receiver's static type does not declare, so the
+        // receiver was narrowed (`if ($shape instanceof Square)`). Lowering keeps the slot's
+        // declared type, so dispatch on the runtime class, as for an untyped receiver.
+        return lower_mixed_method_call(ctx, inst, object, &method_name);
+    }
     if ctx
         .module
         .interface_infos
@@ -73,7 +109,7 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
         return lower_interface_method_call(ctx, inst, &class_name, &method_name);
     }
     let target = resolve_method_call_target(ctx, &class_name, &method_name, inst.operands.len())?;
-    if target.dynamic_slot.is_some() {
+    if super::method_resolution::method_requires_runtime_literal_guards(ctx, &class_name, &target) {
         // An override may widen `false` or `null`. The vtable selects that body, so the
         // guard has to read the runtime class rather than the static base signature.
         let receiver_reg = abi::nested_call_reg(ctx.emitter);

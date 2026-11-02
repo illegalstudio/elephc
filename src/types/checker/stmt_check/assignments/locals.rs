@@ -12,7 +12,8 @@ use crate::errors::CompileError;
 use crate::errors::CompileWarning;
 use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{
-    is_compound_assignment_self_read, CallableTarget, Expr, ExprKind, StaticReceiver, TypeExpr,
+    is_compound_assignment_self_read, BinOp, CallableTarget, Expr, ExprKind, StaticReceiver,
+    TypeExpr,
 };
 use crate::span::Span;
 use crate::types::{normalized_array_key_type, PhpType, TypeEnv};
@@ -140,6 +141,7 @@ pub(super) fn check_assign(
             checker.warnings.push(CompileWarning {
                 span,
                 message: format!("Undefined variable: ${} (treated as null)", name),
+                kind: crate::errors::WarningKind::Warning,
             });
         }
     }
@@ -215,8 +217,17 @@ pub(super) fn check_assign(
         return Err(error);
     }
     update_reflection_class_assignment_metadata(checker, name, reflection_class_target);
-    let merged = merge_local_assignment_type(checker, name, &ty, span, env, stmt_form);
+    let merged = merge_local_assignment_type(checker, name, &ty, value, span, env, stmt_form);
     if merged.is_ok() {
+        if checker.local_conditional_depth == 0 {
+            let boxed_source = matches!(&value.kind, ExprKind::Variable(source)
+                if checker.boxed_parameter_locals.contains(source));
+            if boxed_source {
+                checker.boxed_parameter_locals.insert(name.to_string());
+            } else {
+                checker.boxed_parameter_locals.remove(name);
+            }
+        }
         // Whatever the environment holds for `name` from here on was put there by this store,
         // so a guard that narrowed the name no longer speaks for it. `merge_local_assignment_type`
         // has already consulted the guard view, which is why this runs after it and not before.
@@ -268,7 +279,12 @@ pub(super) fn check_ref_assign(
     // be killed or re-bound independently. Recorded before the per-shape checks so an aliasing
     // that fails a later validation is still treated as an alias.
     checker.ref_aliased_locals.insert(target.to_string());
+    checker
+        .non_builtin_ref_aliased_locals
+        .insert(target.to_string());
+    checker.ref_assign_aliased_locals.insert(target.to_string());
     checker.record_reference_alias_root(source);
+    checker.record_ref_assign_alias_root(source);
     let result = match &source.kind {
         ExprKind::Variable(source_name) => {
             check_ref_assign_variable(checker, target, source_name, span, env)
@@ -288,11 +304,14 @@ pub(super) fn check_ref_assign(
             clear_callable_metadata(checker, target);
             Ok(())
         }
-        ExprKind::FunctionCall { .. }
-        | ExprKind::MethodCall { .. }
-        | ExprKind::StaticMethodCall { .. }
-        | ExprKind::ClosureCall { .. }
-        | ExprKind::ExprCall { .. } => {
+        ExprKind::FunctionCall { args, .. }
+        | ExprKind::MethodCall { args, .. }
+        | ExprKind::StaticMethodCall { args, .. }
+        | ExprKind::ClosureCall { args, .. }
+        | ExprKind::ExprCall { args, .. } => {
+            for arg in args {
+                promote_ref_call_property_argument(checker, arg, env)?;
+            }
             let target_ty = checker.infer_type(source, env)?;
             env.insert(target.to_string(), target_ty);
             checker.active_ref_params.insert(target.to_string());
@@ -361,6 +380,44 @@ pub(super) fn check_ref_assign(
 }
 
 /// Type-checks `$target =& $source` where the source is a plain variable.
+/// Promotes a property passed to a by-reference call so `=&` can later alias its storage.
+///
+/// `function &grab(&$x) { return $x; } $r = &grab($obj->prop);` must leave `$r` aliasing the
+/// property itself, not the hidden temporary used to call `grab`. The property needs reference
+/// storage before codegen; the direct-property RefAssign branch records the same promotion.
+fn promote_ref_call_property_argument(
+    checker: &mut Checker,
+    arg: &Expr,
+    env: &TypeEnv,
+) -> Result<(), CompileError> {
+    let mut place = arg;
+    while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &place.kind {
+        place = value;
+    }
+    let ExprKind::PropertyAccess { object, property } = &place.kind else {
+        return Ok(());
+    };
+    let object_ty = checker.infer_type(object, env)?;
+    if let Some(class) = crate::types::checker::single_object_class_name(&object_ty) {
+        checker
+            .reference_property_promotions
+            .insert((class, property.clone()));
+    } else {
+        let owners: Vec<String> = checker
+            .classes
+            .iter()
+            .filter(|(_, info)| info.properties.iter().any(|(name, _)| name == property))
+            .map(|(name, _)| name.clone())
+            .collect();
+        for owner in owners {
+            checker
+                .reference_property_promotions
+                .insert((owner, property.clone()));
+        }
+    }
+    Ok(())
+}
+
 fn check_ref_assign_variable(
     checker: &mut Checker,
     target: &str,
@@ -865,10 +922,15 @@ fn resolve_class_name<'a>(checker: &'a Checker, class_name: &str) -> Option<&'a 
 /// value is simply dropped — and it is only safe where the store definitely runs and no
 /// reference can still reach the old cell, which is exactly
 /// [`Checker::local_binding_is_killable`].
+///
+/// A COMPATIBLE merge between two different numeric types may re-bind as well, silently and
+/// for storage alone: see [`splits_numeric_binding`]. `value` is the assigned expression,
+/// which that decision inspects.
 fn merge_local_assignment_type(
     checker: &mut Checker,
     name: &str,
     ty: &PhpType,
+    value: &Expr,
     span: Span,
     env: &mut TypeEnv,
     stmt_form: bool,
@@ -886,6 +948,7 @@ fn merge_local_assignment_type(
     // that unrelated assignment — a `$x = …` in the main file would otherwise silently disarm
     // the retype of a `$w = …` at the same position in a library. Exactly ONE name leaves the
     // span's set of re-bound locals; the key itself goes only once the set is empty.
+    checker.numeric_region_retypes.remove(&(span, name.to_owned()));
     if checker
         .local_retype_sites
         .get(&span)
@@ -919,6 +982,25 @@ fn merge_local_assignment_type(
     // Everything above still runs (the retype-site re-decision, and the callable/reflection
     // metadata updates `check_assign` performed before calling in), so only the type merge is
     // short-circuited.
+    // All stores of a region-split name must remain numeric. A later nonnumeric store
+    // retracts earlier region decisions as well, before any lowering can consume them.
+    let numeric_region_value = super::super::super::numeric_regions::numeric_assignment(
+        checker, value, ty, env);
+    if !numeric_region_value {
+        let mut pending = vec![name.to_owned()];
+        let mut rejected = std::collections::HashSet::new();
+        while let Some(name) = pending.pop() {
+            if !rejected.insert(name.clone()) { continue; }
+            pending.extend(checker.numeric_region_dependents.get(&name).into_iter().flatten().cloned());
+            for (site, names) in &mut checker.numeric_region_sites {
+                if names.remove(&name) && checker.numeric_region_retypes.remove(&(*site, name.clone())) {
+                    if let Some(names) = checker.local_retype_sites.get_mut(site) { names.remove(&name); }
+                }
+            }
+        }
+        checker.local_retype_sites.retain(|_, names| !names.is_empty());
+        checker.numeric_region_sites.retain(|_, names| !names.is_empty());
+    }
     if checker.mixed_storage_locals.contains(name)
         || checker.boxed_ref_aliased_locals.contains(name)
     {
@@ -1054,6 +1136,32 @@ fn merge_local_assignment_type(
             ));
         }
         if let Some(merged_ty) = merged_ty {
+            // A storage-only re-bind (see `splits_numeric_binding`), at the eligibility the
+            // retype above uses. Nothing typing-visible changes: the environment still takes the
+            // merged type and no warning is filed, so the decision is only which frame slot the
+            // store writes. `--strict-locals` does not veto it for the same reason. A parameter
+            // keeps its one slot: backtrace frames read its current argument value by name from
+            // the first slot of that name (`debug_backtrace()[0]["args"]`).
+            let independent_split = splits_numeric_binding(existing, ty, value)
+                && checker.local_binding_is_killable(name);
+            let region_split = checker.numeric_region_sites.get(&span).is_some_and(|names| names.contains(name))
+                && (matches!(existing, PhpType::Int | PhpType::Float | PhpType::Mixed) || existing.is_int_float_union())
+                && numeric_region_value;
+            if stmt_form
+                && span.identifies_a_node()
+                && (independent_split || region_split)
+                && !checker.local_parameter_names.contains(name)
+                && !checker.top_level_binding_is_program_global(name)
+            {
+                checker
+                    .local_retype_sites
+                    .entry(span)
+                    .or_default()
+                    .insert(name.to_string());
+                if !independent_split {
+                    checker.numeric_region_retypes.insert((span, name.to_owned()));
+                }
+            }
             if &merged_ty != existing {
                 env.insert(name.to_string(), merged_ty);
             }
@@ -1069,6 +1177,45 @@ fn merge_local_assignment_type(
         env.insert(name.to_string(), ty.clone());
     }
     Ok(())
+}
+
+/// Returns whether a type-compatible reassignment should still start a FRESH binding, so two
+/// numeric bindings of one name get two frame slots instead of sharing one.
+///
+/// A slot is typed by everything ever stored into it. `for ($i = $n - 1; …; $i--)` stores a
+/// checked `int - int`, which is `mixed` until proven, so it used to widen the one slot an
+/// earlier `for ($i = 0; $i < $n; $i++)` also used, and the earlier loop, whose own updates are
+/// provably integer, ran boxed too. With a binding per assignment each loop keeps the storage
+/// its own stores need. PHP cannot observe the difference: the assignment drops the old value
+/// either way.
+///
+/// Only numeric bindings qualify (`int`, `float`, the `int|float` an increment leaves behind,
+/// and `mixed`), and only when the assigned type differs from the binding's (two `mixed`
+/// bindings would share a representation anyway). The re-bind releases the old occupant
+/// BEFORE the store retains the new value, so the value must not be able to borrow the old
+/// cell: it is either a raw `int`/`float` or a fresh arithmetic result. `$i = $c ? $i : 0`
+/// keeps the shared slot.
+fn splits_numeric_binding(existing: &PhpType, incoming: &PhpType, value: &Expr) -> bool {
+    let raw_scalar = |ty: &PhpType| matches!(ty, PhpType::Int | PhpType::Float);
+    let numeric = |ty: &PhpType| raw_scalar(ty) || ty.is_int_float_union() || *ty == PhpType::Mixed;
+    existing != incoming
+        && numeric(existing)
+        && numeric(incoming)
+        && (raw_scalar(incoming) || is_fresh_arithmetic_result(value))
+}
+
+/// Returns whether an expression evaluates to a freshly computed arithmetic result.
+///
+/// The arithmetic operators always produce a new value (an integer, a float, a boxed numeric
+/// result or an operator-overloaded object), never a view of one of their operands.
+fn is_fresh_arithmetic_result(value: &Expr) -> bool {
+    matches!(
+        &value.kind,
+        ExprKind::BinaryOp {
+            op: BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow,
+            ..
+        }
+    )
 }
 
 /// Type-checks a typed local variable declaration with a type hint (`Type $name = value`).

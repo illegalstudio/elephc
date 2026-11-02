@@ -666,6 +666,39 @@ echo "done";
     );
 }
 
+/// Regression test: unpacking a string must leave exactly one owned copy.
+/// `__rt_zval_unpack` persisted the `zend_string` bytes and then handed that copy
+/// to `__rt_mixed_from_value`, which persists a string payload again for the
+/// cell it returns — so the first copy was owned by nothing and leaked one block
+/// per unpacked string, including every string element of an unpacked array.
+/// Hosted PHP extensions unpack every result, so the leak scaled with calls.
+#[test]
+fn test_zval_unpack_string_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$total = 0;
+for ($i = 0; $i < 50; $i++) {
+    $z = zval_pack("value" . $i);
+    $s = zval_unpack($z);
+    $total += strlen($s);
+    zval_free($z);
+    $za = zval_pack(["a" . $i, "b", "c"]);
+    $a = zval_unpack($za);
+    $total += count($a);
+    zval_free($za);
+}
+echo $total;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "490");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
 /// Regression test: `zval_free` on a packed array must release every owned
 /// PHP-shaped block (the zval, the `zend_array`, the data block, each bucket's
 /// `zend_string` key and string/array-value children) with no leak. The array is

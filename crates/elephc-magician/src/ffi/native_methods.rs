@@ -24,6 +24,8 @@ use crate::eval_ir::{
 
 mod attribute_decoder;
 mod callable_metadata;
+mod callable_default_errors;
+mod callable_default_expressions;
 mod constructor_registration;
 mod method_registration;
 mod property_registration;
@@ -34,7 +36,10 @@ use callable_metadata::*;
 use constructor_registration::*;
 use method_registration::*;
 use property_registration::*;
+pub use property_registration::__elephc_eval_register_native_class_default_error;
 pub use public_abi::*;
+pub use callable_default_errors::*;
+pub use callable_default_expressions::*;
 
 pub(in crate::ffi) use callable_metadata::{
     native_callable_array_default, native_callable_object_default, native_callable_scalar_default,
@@ -51,6 +56,7 @@ const NATIVE_MEMBER_ATTRIBUTE_METHOD: u8 = 0;
 const NATIVE_MEMBER_ATTRIBUTE_PROPERTY: u8 = 1;
 const NATIVE_MEMBER_ATTRIBUTE_CLASS_CONSTANT: u8 = 2;
 const NATIVE_MEMBER_ATTRIBUTE_CLASS: u8 = 3;
+const NATIVE_MEMBER_ATTRIBUTE_FUNCTION: u8 = 4;
 const NATIVE_ATTRIBUTE_ARGS_UNSUPPORTED: u8 = 0;
 const NATIVE_ATTRIBUTE_ARGS_SUPPORTED: u8 = 1;
 const NATIVE_ATTRIBUTE_ARG_NULL: u8 = 0;

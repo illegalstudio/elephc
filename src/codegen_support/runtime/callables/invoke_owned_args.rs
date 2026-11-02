@@ -7,7 +7,7 @@
 //! Key details:
 //! - The argument box is consumed on normal and exceptional exits.
 //! - Separate entries distinguish borrowed descriptors from caller-transferred descriptor owners.
-//! - A third hidden ABI argument carries the invocation-site lexical class id through the
+//! - A third hidden ABI argument carries the invocation-site scope/strictness profile through the
 //!   exception boundary. The value is frame-owned, so nesting, throws and fibers cannot clobber it.
 //! - A local native handler keeps cleanup below the caller's exception boundary.
 //! - Slots are cleared before release so a cleanup throw cannot release an owner twice.
@@ -53,7 +53,7 @@ pub(crate) fn emit_callable_invoke_owned_args(emitter: &mut Emitter) {
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
     save_handler_state(emitter);
     abi::emit_frame_slot_address(emitter, descriptor_arg, HANDLER_OFFSET - TRY_HANDLER_JMP_BUF_OFFSET);
-    emitter.bl_c("setjmp");                                                     // catch descriptor or cleanup throws without discarding the owned slots
+    emitter.save_exception_handler();                                           // catch descriptor or cleanup throws without discarding the owned slots
     abi::emit_branch_if_int_result_nonzero(emitter, caught);
     abi::load_at_offset(emitter, descriptor_arg, DESCRIPTOR);
     abi::load_at_offset(emitter, array_arg, ARGUMENTS);

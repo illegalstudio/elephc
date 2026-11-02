@@ -17,7 +17,9 @@ pub(super) fn lower_match(
     default: Option<&Expr>,
     expr: &Expr,
 ) -> LoweredValue {
+    let subject_span = subject.span;
     let subject = lower_expr(ctx, subject);
+    let (subject, subject_owner) = root_owned_call_operand(ctx, subject, subject_span);
     let result_type = match_merge_result_type(ctx, arms, default, expr);
     let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let merge = ctx.builder.create_named_block("match.merge", Vec::new());
@@ -61,6 +63,9 @@ pub(super) fn lower_match(
         ctx.builder.terminate(Terminator::Fatal { message });
     }
     ctx.builder.position_at_end(merge);
+    if let Some(owner) = subject_owner {
+        retire_owned_call_operand(ctx, owner, expr.span);
+    }
     take_owned_temp(ctx, &temp_name, expr.span)
 }
 

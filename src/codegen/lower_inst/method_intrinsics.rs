@@ -121,7 +121,7 @@ pub(super) fn lower_nullable_receiver_method_call(
     let done_label = ctx.next_label("method_receiver_done");
     let receiver_reg = abi::nested_call_reg(ctx.emitter);
     objects::emit_nullable_receiver_object_payload(ctx, object, &null_label, receiver_reg)?;
-    if target.dynamic_slot.is_some() {
+    if super::method_resolution::method_requires_runtime_literal_guards(ctx, class_name, &target) {
         emit_hierarchy_literal_parameter_guards(
             ctx, inst, class_name, method_name, receiver_reg,
         )?;
@@ -468,8 +468,9 @@ fn emit_interface_literal_parameter_guards(
 /// Checks literal parameters on the runtime class when a base method can be overridden.
 ///
 /// `false` and `null` on the static signature are not the implementation's contract:
-/// a subclass may widen them. Only classes in `ancestor`'s tree are considered, and a
-/// class whose implementation no longer declares the literal is not rejected.
+/// a subclass may widen them. Normally only classes in `ancestor`'s tree are considered.
+/// Final generic declarations also consider variance siblings without inheritance edges,
+/// selecting the actual declaring instantiation's diagnostic name by runtime class id.
 pub(super) fn emit_hierarchy_literal_parameter_guards(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -478,14 +479,19 @@ pub(super) fn emit_hierarchy_literal_parameter_guards(
     receiver_reg: &str,
 ) -> Result<()> {
     let key = php_symbol_key(method_name);
-    if !ctx.module.class_infos.get(ancestor.trim_start_matches('\\'))
+    let normalized = ancestor.trim_start_matches('\\');
+    if !ctx.module.class_infos.get(normalized)
         .and_then(|class| class.methods.get(&key))
         .is_some_and(|signature| super::super::literal_method_index::has_literal_parameters(&signature.params))
     {
         return Ok(());
     }
+    let fixed_generic_signature = normalized.contains('<')
+        && ctx.module.class_infos.get(normalized).is_some_and(|class| {
+            class.is_final || class.final_methods.contains(&key)
+        });
     emit_dispatched_literal_parameter_guards(
-        ctx, inst, method_name, receiver_reg, Some(ancestor),
+        ctx, inst, method_name, receiver_reg, if fixed_generic_signature { None } else { Some(ancestor) },
     )
 }
 

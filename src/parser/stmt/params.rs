@@ -89,13 +89,20 @@ pub(super) fn parse_function_decl(
 /// lex as `>>` then `>`, and four as `>>` then `>>`, which this handles by construction: every
 /// `>>` is consumed by the inner of the two lists it closes.
 #[derive(Default)]
-struct AngleCloses {
+pub(super) struct AngleCloses {
     /// Number of type argument lists already closed by an earlier `>>` token.
     pending: u32,
 }
 
+impl AngleCloses {
+    /// Returns the number of unmatched closing angle brackets.
+    pub(super) fn pending_count(&self) -> u32 {
+        self.pending
+    }
+}
+
 /// Consumes the `>` that closes a type argument list, splitting a `>>` token when needed.
-fn expect_type_list_close(
+pub(super) fn expect_type_list_close(
     tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
@@ -336,6 +343,7 @@ pub(crate) fn parse_type_expr(
     pos: &mut usize,
     span: Span,
 ) -> Result<TypeExpr, CompileError> {
+    let starts_with_null = matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Null));
     let mut closes = AngleCloses::default();
     let ty = parse_type_expr_nested(tokens, pos, span, &mut closes)?;
     // A credit left over means a `>>` closed one more list than was open — the type ended with
@@ -343,6 +351,9 @@ pub(crate) fn parse_type_expr(
     // token later fails to parse as.
     if closes.pending > 0 {
         return Err(CompileError::new(span, "Unbalanced '>' in type arguments"));
+    }
+    if starts_with_null && matches!(ty, TypeExpr::Void) {
+        return Ok(TypeExpr::Named(crate::names::Name::unqualified("null")));
     }
     Ok(ty)
 }
@@ -419,7 +430,7 @@ fn type_starts_at(tokens: &[SpannedToken], index: usize) -> bool {
                 | Token::Static
                 | Token::Parent
         )
-    )
+    ) || crate::parser::relative_name_starts_at(tokens, index)
 }
 
 /// Collapses a parsed union member list into its canonical `TypeExpr`.
@@ -454,6 +465,25 @@ fn normalize_union_members(members: Vec<TypeExpr>) -> TypeExpr {
     }
 }
 
+/// Parses a pointer target and its closing bracket, preserving nested pointer targets.
+fn parse_pointer_type_target(
+    tokens: &[SpannedToken], pos: &mut usize, span: Span, closes: &mut AngleCloses,
+) -> Result<Name, CompileError> {
+    let target = parse_name(tokens, pos, span, "Expected pointer target type inside ptr<...>")?;
+    let target = if target.is_unqualified() && matches!(target.as_str(), "ptr" | "pointer")
+        && matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Less))
+    {
+        *pos += 1;
+        let inner = parse_pointer_type_target(tokens, pos, span, closes)?;
+        let prefix = if inner.kind == crate::names::NameKind::FullyQualified { "\\" } else { "" };
+        Name::unqualified(format!("ptr<{}{}>", prefix, inner.as_str()))
+    } else {
+        target
+    };
+    expect_type_list_close(tokens, pos, span, closes, "Expected '>' after ptr target type")?;
+    Ok(target)
+}
+
 /// Parses a single (non-union) type expression: builtin keyword, `ptr<T>`, `buffer<T>`,
 /// or a qualified/unqualified name. Does not handle `?T` (nullable) — that is handled by
 /// the caller `parse_type_expr`. Advances `*pos` past the consumed token(s).
@@ -464,6 +494,13 @@ fn parse_atomic_type_expr(
     closes: &mut AngleCloses,
 ) -> Result<TypeExpr, CompileError> {
     match tokens.get(*pos).map(|(t, _)| t) {
+        // A builtin type word followed by `\` is the first segment of a class name, as in
+        // `Int\Money $m` or `Array\Cursor $c` (#826): it is a class type, not `int`/`array`.
+        Some(Token::Identifier(_))
+            if matches!(tokens.get(*pos + 1).map(|(t, _)| t), Some(Token::Backslash)) =>
+        {
+            parse_named_type_expr(tokens, pos, span, closes)
+        }
         Some(Token::Identifier(name)) if ident_matches(name, &["int", "integer"]) => {
             *pos += 1;
             Ok(TypeExpr::Int)
@@ -557,18 +594,7 @@ fn parse_atomic_type_expr(
             }
             if *pos < tokens.len() && tokens[*pos].0 == Token::Less {
                 *pos += 1;
-                let target = parse_name(
-                    tokens,
-                    pos,
-                    span,
-                    "Expected pointer target type inside ptr<...>",
-                )?;
-                expect_token(
-                    tokens,
-                    pos,
-                    &Token::Greater,
-                    "Expected '>' after ptr target type",
-                )?;
+                let target = parse_pointer_type_target(tokens, pos, span, closes)?;
                 Ok(TypeExpr::Ptr(Some(target)))
             } else {
                 Ok(TypeExpr::Ptr(None))
@@ -628,23 +654,33 @@ fn parse_atomic_type_expr(
             Ok(TypeExpr::Named(Name::unqualified("parent")))
         }
         Some(_) if name_starts_at(tokens, *pos) => {
-            let name = parse_name(tokens, pos, span, "Expected type name")?;
-            // `Box<>` lexes as the single `<>` token (PHP's `!=` alias), the same trap
-            // `array<>`, `ptr<>` and `buffer<>` each spring.
-            if *pos < tokens.len() && tokens[*pos].0 == Token::LessGreater {
-                return Err(CompileError::new(
-                    span,
-                    &format!("Expected a type argument inside {}<...>", name.as_str()),
-                ));
-            }
-            let args = parse_type_arguments(tokens, pos, span, closes)?;
-            if args.is_empty() {
-                return Ok(TypeExpr::Named(name));
-            }
-            Ok(TypeExpr::GenericClass { name, args })
+            parse_named_type_expr(tokens, pos, span, closes)
         }
         _ => Err(CompileError::new(span, "Expected type expression")),
     }
+}
+
+/// Parses a class type name and its optional generic arguments in any qualified form.
+fn parse_named_type_expr(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+    closes: &mut AngleCloses,
+) -> Result<TypeExpr, CompileError> {
+    let name = parse_name(tokens, pos, span, "Expected type name")?;
+    // `Box<>` lexes as the single `<>` token (PHP's `!=` alias), the same trap
+    // `array<>`, `ptr<>` and `buffer<>` each spring.
+    if *pos < tokens.len() && tokens[*pos].0 == Token::LessGreater {
+        return Err(CompileError::new(
+            span,
+            &format!("Expected a type argument inside {}<...>", name.as_str()),
+        ));
+    }
+    let args = parse_type_arguments(tokens, pos, span, closes)?;
+    if args.is_empty() {
+        return Ok(TypeExpr::Named(name));
+    }
+    Ok(TypeExpr::GenericClass { name, args })
 }
 
 /// Returns `true` if `name` matches any of the `keywords` case-insensitively.

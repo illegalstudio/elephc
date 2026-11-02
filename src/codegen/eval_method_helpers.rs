@@ -306,7 +306,7 @@ fn collect_class_method_slots(
             allowed_scopes: visibility_scope_names(module, impl_class, visibility),
             params: sig.params.iter().map(|(_, ty)| super::eval_argument_helpers::bridge_storage_type(ty)).collect(),
             ref_params: eval_normalized_ref_params(sig.params.len(), &sig.ref_params),
-            return_ty: sig.return_type.codegen_repr(),
+            return_ty: crate::types::mixed_box_php_type(&sig.return_type),
             return_is_owned: runtime_helper.is_none()
                 && native_method_returns_owned_value(module, impl_class, method, false),
             return_uses_marker: runtime_helper.is_none()
@@ -361,7 +361,7 @@ fn collect_hidden_private_ancestor_method_slots(
                 allowed_scopes: visibility_scope_names(module, impl_class, visibility),
                 params: sig.params.iter().map(|(_, ty)| super::eval_argument_helpers::bridge_storage_type(ty)).collect(),
                 ref_params: eval_normalized_ref_params(sig.params.len(), &sig.ref_params),
-                return_ty: sig.return_type.codegen_repr(),
+                return_ty: crate::types::mixed_box_php_type(&sig.return_type),
                 return_is_owned: native_method_returns_owned_value(module, impl_class, method, false),
                 return_uses_marker: compiled_method_return_uses_marker(sig),
                 is_hidden_shadow: true,
@@ -427,7 +427,7 @@ fn collect_class_static_method_slots(
             allowed_scopes: visibility_scope_names(module, impl_class, visibility),
             params: sig.params.iter().map(|(_, ty)| super::eval_argument_helpers::bridge_storage_type(ty)).collect(),
             ref_params: eval_normalized_ref_params(sig.params.len(), &sig.ref_params),
-            return_ty: sig.return_type.codegen_repr(),
+            return_ty: crate::types::mixed_box_php_type(&sig.return_type),
             return_is_owned: native_method_returns_owned_value(module, impl_class, method, true),
             return_uses_marker: compiled_method_return_uses_marker(sig),
             entry_symbol: entry_symbol.clone(),
@@ -494,8 +494,10 @@ fn method_signature_supported(sig: &crate::types::FunctionSig) -> bool {
 }
 
 /// Returns true for an eval-supplied method argument type supported by this bridge.
+///
+/// A `?ptr<T>` argument is cast like an int: PHP null becomes address 0.
 fn method_param_supported(ty: &PhpType) -> bool {
-    matches!(
+    crate::types::is_nullable_pointer_type(ty) || matches!(
         ty.codegen_repr(),
         PhpType::Int
             | PhpType::Bool
@@ -512,8 +514,10 @@ fn method_param_supported(ty: &PhpType) -> bool {
 }
 
 /// Returns true for return storage shapes the bridge can box for eval.
+///
+/// A `?ptr<T>` return is boxed by its declared union, address 0 as PHP null.
 fn method_return_supported(ty: &PhpType) -> bool {
-    matches!(
+    crate::types::is_nullable_pointer_type(ty) || matches!(
         ty.codegen_repr(),
         PhpType::Void
             | PhpType::Int
@@ -803,7 +807,7 @@ fn emit_aarch64_method_exception_boundary_push(
         "add x0, x29, #{}",
         handler_offset + TRY_HANDLER_JMP_BUF_OFFSET
     ));
-    emitter.bl_c("setjmp");                                                      // snapshot the bridge stack before entering native methods
+    emitter.save_exception_handler();                                           // snapshot the bridge stack before entering native methods
     emitter.instruction(&format!("cbnz x0, {}", escape_label));                 // non-zero setjmp result means a method Throwable escaped
 }
 
@@ -845,7 +849,7 @@ fn emit_x86_64_method_exception_boundary_push(
         "lea rdi, [rbp - {}]",
         handler_base - TRY_HANDLER_JMP_BUF_OFFSET
     ));
-    emitter.bl_c("setjmp");                                                      // snapshot the bridge stack before entering native methods
+    emitter.save_exception_handler();                                           // snapshot the bridge stack before entering native methods
     emitter.instruction("test eax, eax");                                       // did control arrive through longjmp?
     emitter.instruction(&format!("jne {}", escape_label));                      // non-zero setjmp result means a method Throwable escaped
 }
@@ -2154,7 +2158,7 @@ fn emit_aarch64_cast_eval_arg(
         super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);
     }
     match param_ty.codegen_repr() {
-        PhpType::Int => {
+        PhpType::Int | PhpType::Pointer(_) => {
             emitter.instruction("ldr x0, [x29, #-16]");                         // reload the boxed eval argument for integer coercion
             emitter.instruction("bl __rt_mixed_cast_int");                      // coerce the eval argument to a PHP int
         }
@@ -2333,7 +2337,7 @@ fn emit_x86_64_cast_eval_arg(
         super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);
     }
     match param_ty.codegen_repr() {
-        PhpType::Int => {
+        PhpType::Int | PhpType::Pointer(_) => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval argument for integer coercion
             emitter.instruction("call __rt_mixed_cast_int");                    // coerce the eval argument to a PHP int
         }

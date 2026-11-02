@@ -7,6 +7,9 @@
 //!
 //! Key details:
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
+//! - The ARM64 body checks the raw `open` and `write` syscalls with `branch_on_syscall_success`:
+//!   macOS reports failure through the carry flag with a POSITIVE errno in x0, so an unchecked
+//!   failed open (ENOENT = 2) used to write the data to stderr and report success.
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
@@ -89,6 +92,17 @@ pub fn emit_file_put_contents(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload null-terminated path
     emitter.instruction("mov x2, #0x1A4");                                      // file mode 0644 (octal)
     emitter.syscall(5);
+    // -- a failed open is a failed write, never a write to the errno-numbered descriptor --
+    // macOS reports a failed syscall with the carry flag and a POSITIVE errno in x0, so a
+    // missing directory (ENOENT = 2) used to look like fd 2 and send the data to stderr.
+    if emitter.platform.needs_cmp_before_error_branch() {
+        emitter.instruction("cmp x0, #0");                                      // Linux: a negative result is -errno
+    }
+    let open_ok = emitter.platform.branch_on_syscall_success("__rt_fpc_opened");
+    emitter.instruction(&open_ok);                                              // continue only when open succeeded
+    emitter.instruction("mov x0, #-1");                                         // file_put_contents()'s failure result
+    emitter.instruction("b __rt_fpc_return");                                   // nothing was opened, so nothing to close
+    emitter.label("__rt_fpc_opened");
     emitter.instruction("str x0, [sp, #8]");                                    // save fd on stack
 
     // -- take an exclusive lock when LOCK_EX is set, as PHP does --
@@ -115,6 +129,14 @@ pub fn emit_file_put_contents(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #16]");                                   // reload data pointer
     emitter.instruction("ldr x2, [sp, #24]");                                   // reload data length
     emitter.syscall(4);
+    // -- a failed write is reported as -1, not as an errno-sized byte count --
+    if emitter.platform.needs_cmp_before_error_branch() {
+        emitter.instruction("cmp x0, #0");                                      // Linux: a negative result is -errno
+    }
+    let write_ok = emitter.platform.branch_on_syscall_success("__rt_fpc_wrote");
+    emitter.instruction(&write_ok);                                             // keep the byte count of a successful write
+    emitter.instruction("mov x0, #-1");                                         // file_put_contents()'s failure result
+    emitter.label("__rt_fpc_wrote");
     emitter.instruction("str x0, [sp, #32]");                                   // save bytes written
 
     // -- close the file --
@@ -241,6 +263,40 @@ fn emit_file_put_contents_linux_x86_64(emitter: &mut Emitter) {
 mod tests {
     use super::*;
     use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    /// Both aarch64 targets check the raw `open` before using its result as a descriptor, and the
+    /// `write` before returning its result as a byte count. macOS signals a failed syscall with
+    /// the carry flag and a POSITIVE errno, so without the check `file_put_contents()` into a
+    /// missing directory wrote its data to fd 2 (stderr) and reported success.
+    #[test]
+    fn test_aarch64_checks_the_open_and_write_syscalls() {
+        for (platform, open_check, write_check) in [
+            (Platform::MacOS, "b.cc __rt_fpc_opened", "b.cc __rt_fpc_wrote"),
+            (Platform::Linux, "b.ge __rt_fpc_opened", "b.ge __rt_fpc_wrote"),
+        ] {
+            let mut emitter = Emitter::new(Target::new(platform, Arch::AArch64));
+            emit_file_put_contents(&mut emitter);
+            let asm = emitter.output();
+            let after_open = asm
+                .split("mov x2, #0x1A4")
+                .nth(1)
+                .expect("the open sets the 0644 mode");
+            assert!(
+                after_open.contains(open_check),
+                "{platform:?}: a failed open must not fall through to the write"
+            );
+            let open_check_at = after_open.find(open_check).unwrap();
+            let save_fd_at = after_open.find("str x0, [sp, #8]").unwrap();
+            assert!(
+                open_check_at < save_fd_at,
+                "{platform:?}: the open result is checked before it is used as a descriptor"
+            );
+            assert!(
+                asm.contains(write_check),
+                "{platform:?}: a failed write is reported as -1, not as a byte count"
+            );
+        }
+    }
 
     /// `__rt_flock` and `__rt_ftruncate` do NOT take the platform's first argument registers on
     /// x86_64: both read their fd from `rax`, `__rt_flock` reads its lock op from `rdx`, and

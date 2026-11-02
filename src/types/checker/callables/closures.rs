@@ -67,6 +67,11 @@ impl Checker {
         let mut declared_params = Vec::new();
 
         for (idx, (name, type_ann, default, is_ref)) in params.iter().enumerate() {
+            let source_default = default;
+            let owner = self.current_class.as_deref();
+            let parent = owner.and_then(|owner| self.classes.get(owner))
+                .and_then(|class| class.parent.as_deref());
+            let default = super::super::schema::normalize_lexical_callable_default(default, owner, parent)?;
             let (env_ty, sig_ty) = match type_ann {
                 Some(type_ann) => {
                     let declared_ty = self.resolve_declared_param_type_hint(
@@ -74,25 +79,34 @@ impl Checker {
                         span,
                         &format!("Closure parameter ${}", name),
                     )?;
-                    self.validate_resolved_declared_default_type(
-                        &declared_ty,
-                        default.as_ref(),
-                        span,
-                        &format!("Closure parameter ${}", name),
-                    )?;
+                    // A synthesized lexical-scope Error has no value to compare with
+                    // the declared type. Actual value defaults keep normal validation.
+                    let deferred_scope_error = default.as_ref().is_some_and(|value| matches!(value.kind, ExprKind::Throw(_)))
+                        && !source_default.as_ref().is_some_and(|value| matches!(value.kind, ExprKind::Throw(_)));
+                    if !deferred_scope_error {
+                        self.validate_resolved_declared_default_type(
+                            &declared_ty,
+                            default.as_ref(),
+                            span,
+                            &format!("Closure parameter ${}", name),
+                        )?;
+                    }
                     (declared_ty.clone(), declared_ty)
                 }
                 None if *is_ref => (PhpType::Mixed, PhpType::Mixed),
                 None => match contextual_param_types.get(idx) {
                     Some(hint) => (hint.clone(), hint.clone()),
-                    None => (PhpType::Int, PhpType::Mixed),
+                    // No context types it: PHP semantics are `mixed`. The body must be
+                    // checked against the same Mixed the signature publishes, never an
+                    // `int` placeholder that makes valid string uses fail.
+                    None => (PhpType::Mixed, PhpType::Mixed),
                 },
             };
 
             closure_env.insert(name.clone(), env_ty);
             param_types.push((name.clone(), sig_ty));
             param_type_exprs.push(type_ann.clone());
-            defaults.push(default.clone());
+            defaults.push(default);
             ref_params.push(*is_ref);
             declared_params.push(type_ann.is_some());
         }
@@ -202,7 +216,8 @@ impl Checker {
             if let Some(type_ann) = return_type {
                 let declared_ret =
                     self.resolve_declared_return_type_hint(type_ann, span, "Closure")?;
-                self.require_compatible_return_type(
+                self.require_compatible_return_hint(
+                    type_ann,
                     &declared_ret,
                     &generator_ty,
                     true,
@@ -228,13 +243,14 @@ impl Checker {
                     "Closure declared never must not return",
                 ));
             }
-            self.require_declared_return_coverage(&declared_ret, body, span, "Closure")?;
+            self.require_return_hint_coverage(type_ann, &declared_ret, body, span, "Closure")?;
             if all_return_infos.is_empty() {
                 return Ok((declared_ret, true));
             }
 
             for return_info in &all_return_infos {
-                self.require_compatible_return_type(
+                self.require_compatible_return_hint(
+                    type_ann,
                     &declared_ret,
                     &return_info.ty,
                     return_info.has_value,
@@ -266,7 +282,7 @@ impl Checker {
     /// Applies the caller-visible container rule to a closure whose body is `return <user call>;`.
     ///
     /// EIR lowering stamps exactly that body shape with the callee's
-    /// `crate::types::dynamic_params::caller_visible_return_type` (see
+    /// `crate::types::dynamic_params::caller_visible_checker_return_type` (see
     /// `crate::ir_lower::function::direct_closure_return_expr_type`), built from the two
     /// predicates applied here: a callee with an untyped by-value parameter receives it as a
     /// boxed Mixed cell, so an array it builds from it holds Mixed elements. The checker

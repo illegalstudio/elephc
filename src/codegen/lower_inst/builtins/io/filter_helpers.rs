@@ -147,9 +147,10 @@ pub(super) fn materialize_stream_filter_params(
     let params_ty = ctx.value_php_type(params)?.codegen_repr();
     ctx.load_value_to_result(params)?;
     if matches!(params_ty, PhpType::Mixed | PhpType::Union(_)) {
-        if !ctx.value_can_own_mixed_box_source(params)? {
-            abi::emit_incref_if_refcounted(ctx.emitter, &params_ty);
-        }
+        // The native filter owns a separate lease, including when the source is an
+        // owning temporary. EIR retires the original argument after the fresh result,
+        // or through its exception guard when onCreate throws.
+        abi::emit_incref_if_refcounted(ctx.emitter, &params_ty);
     } else {
         emit_box_current_value_as_mixed(ctx.emitter, &params_ty);
     }

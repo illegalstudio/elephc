@@ -161,6 +161,100 @@ fn dynamic_constructor_frames_preserve_the_nested_receiver_register() {
     }
 }
 
+/// Concrete, interface and nullsafe method calls and callable invocations reserve the
+/// hand-used receiver register on every target, whatever the receiver's static type.
+///
+/// The old predicate saved it only for a Mixed or union receiver, so `$this->close()` in a
+/// destructor wrote x19/r12 under a prologue that saved nothing. A destructor run by the
+/// exception unwinder then returned into frame cleanup with the register the cleanup
+/// callback and `__rt_exception_cleanup_frames` keep their own state in overwritten.
+#[test]
+fn dispatching_frames_preserve_the_nested_receiver_register() {
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        for op in [
+            Op::MethodCall,
+            Op::NullsafeMethodCall,
+            Op::ClosureCall,
+            Op::ExprCall,
+            Op::CallableDescriptorInvoke,
+        ] {
+            let mut function = Function::new("dispatching_frame".into(), IrType::Void, PhpType::Void);
+            {
+                let mut builder = Builder::new(&mut function);
+                let entry = builder.create_named_block("entry", Vec::new());
+                builder.set_entry(entry);
+                builder.position_at_end(entry);
+                // A concrete receiver: the shape the Mixed-only predicate did not recognize.
+                let receiver = builder
+                    .emit(
+                        Op::ConstNull,
+                        Vec::new(),
+                        None,
+                        IrType::Heap(crate::ir::IrHeapKind::Object),
+                        PhpType::Object("Thing".into()),
+                        crate::ir::Ownership::Borrowed,
+                    )
+                    .expect("the receiver constant produces a value");
+                // Frame analysis needs only the opcode, not method metadata or emission.
+                builder.emit(op, vec![receiver], None, IrType::Void, PhpType::Void, crate::ir::Ownership::NonHeap);
+                builder.terminate(Terminator::Return { value: None });
+            }
+            for regalloc in [false, true] {
+                let layout = layout_for_function(&function, target, regalloc, false, false);
+                let register = nested_call_reg_name(target.arch);
+                assert_eq!(layout.callee_saved_offsets.iter().filter(|(saved, _)| *saved == register).count(),
+                    1, "{name}: {op:?}, register allocation {regalloc}");
+            }
+        }
+    }
+}
+
+/// A frame made only of register-neutral scalar work keeps the nested-call register unsaved,
+/// and the same body saves it as soon as the frame owns a refcounted local.
+///
+/// The save is the default for every other opcode, so this pins the one exemption: pure
+/// constant/arithmetic leaves do not pay a store and a load for a register they never touch.
+/// A heap local brings prologue retains and epilogue releases into runtime helpers, some of
+/// which use r12 as scratch on x86_64, so it removes the exemption even with a neutral body.
+#[test]
+fn scalar_leaf_frames_skip_the_nested_receiver_register_save() {
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let mut function = Function::new("scalar_leaf_frame".into(), IrType::I64, PhpType::Int);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let left = builder.emit_const_i64(40);
+            let right = builder.emit_const_i64(2);
+            let sum = builder
+                .emit(Op::IAdd, vec![left, right], None, IrType::I64, PhpType::Int, crate::ir::Ownership::NonHeap)
+                .expect("the addition produces a value");
+            builder.terminate(Terminator::Return { value: Some(sum) });
+        }
+        let register = nested_call_reg_name(target.arch);
+        for regalloc in [false, true] {
+            let layout = layout_for_function(&function, target, regalloc, false, false);
+            assert!(layout.callee_saved_offsets.iter().all(|(saved, _)| *saved != register),
+                "{name}: register allocation {regalloc}");
+        }
+
+        function.add_local(
+            Some("owner".into()),
+            IrType::Heap(crate::ir::IrHeapKind::Object),
+            PhpType::Object("Thing".into()),
+            LocalKind::PhpLocal,
+        );
+        for regalloc in [false, true] {
+            let layout = layout_for_function(&function, target, regalloc, false, false);
+            assert_eq!(layout.callee_saved_offsets.iter().filter(|(saved, _)| *saved == register).count(),
+                1, "{name}: heap local, register allocation {regalloc}");
+        }
+    }
+}
+
 /// Verifies AArch64 saves a later Mixed argument before retaining an earlier string.
 #[test]
 fn aarch64_prologue_saves_all_parameters_before_runtime_calls() {

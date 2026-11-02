@@ -119,6 +119,7 @@ pub(crate) fn lower_is_iterable(ctx: &mut FunctionContext<'_>, inst: &Instructio
         | PhpType::Buffer(_)
         | PhpType::Packed(_)
         | PhpType::Resource(_)
+        | PhpType::Narrow(_)
         | PhpType::TaggedScalar => false,
         PhpType::Mixed | PhpType::Union(_) => {
             emit_mixed_is_iterable(ctx, value)?;

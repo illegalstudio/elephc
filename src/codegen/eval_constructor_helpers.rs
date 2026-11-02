@@ -292,8 +292,10 @@ fn constructor_signature_supported(sig: &FunctionSig) -> bool {
 }
 
 /// Returns true for one constructor argument type supported by the bridge.
+///
+/// A `?ptr<T>` argument is cast like an int: PHP null becomes address 0.
 fn constructor_param_supported(ty: &PhpType) -> bool {
-    matches!(
+    crate::types::is_nullable_pointer_type(ty) || matches!(
         ty.codegen_repr(),
         PhpType::Int
             | PhpType::Bool
@@ -479,7 +481,7 @@ fn emit_aarch64_constructor_exception_boundary_push(emitter: &mut Emitter, escap
         "add x0, x29, #{}",
         handler_offset + TRY_HANDLER_JMP_BUF_OFFSET
     ));
-    emitter.bl_c("setjmp");                                                     // snapshot the bridge stack before entering native constructors
+    emitter.save_exception_handler();                                           // snapshot the bridge stack before entering native constructors
     emitter.instruction(&format!("cbnz x0, {}", escape_label));                 // non-zero setjmp result means a constructor Throwable escaped
 }
 
@@ -519,7 +521,7 @@ fn emit_x86_64_constructor_exception_boundary_push(emitter: &mut Emitter, escape
         "lea rdi, [rbp - {}]",
         handler_base - TRY_HANDLER_JMP_BUF_OFFSET
     ));
-    emitter.bl_c("setjmp");                                                      // snapshot the bridge stack before entering native constructors
+    emitter.save_exception_handler();                                           // snapshot the bridge stack before entering native constructors
     emitter.instruction("test eax, eax");                                       // did control arrive through longjmp?
     emitter.instruction(&format!("jne {}", escape_label));                      // non-zero setjmp result means a constructor Throwable escaped
 }
@@ -1425,7 +1427,7 @@ fn emit_aarch64_cast_eval_arg(
         super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);
     }
     match param_ty.codegen_repr() {
-        PhpType::Int => {
+        PhpType::Int | PhpType::Pointer(_) => {
             emitter.instruction("ldr x0, [x29, #-16]");                         // reload the boxed eval argument for integer coercion
             emitter.instruction("bl __rt_mixed_cast_int");                      // coerce the eval argument to a PHP int
         }
@@ -1590,7 +1592,7 @@ fn emit_x86_64_cast_eval_arg(
         super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);
     }
     match param_ty.codegen_repr() {
-        PhpType::Int => {
+        PhpType::Int | PhpType::Pointer(_) => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval argument for integer coercion
             emitter.instruction("call __rt_mixed_cast_int");                    // coerce the eval argument to a PHP int
         }

@@ -9,6 +9,8 @@
 //! - Mixed helpers use boxed tag/payload cells; tag constants and ownership rules are shared with type checking and codegen.
 //! - Null or sentinel payloads presented with a container-shaped tag (4–6) are
 //!   normalized to the canonical Mixed null tag before ownership or allocation.
+//! - Tag 13 (`POINTER_ARRAY_VALUE_TYPE`, a raw `?ptr<T>` word from a pointer array or hash)
+//!   boxes as PHP null for address 0 and as an integer otherwise, so no cell carries tag 13.
 //! - Tag 9 (resource) takes no ownership, but it is this function that guarantees
 //!   every boxed resource carries a PHP resource id: the tag-9 arm calls
 //!   `__rt_resource_id_of`, which binds the next id when the native payload has
@@ -54,7 +56,7 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::sentinels::emit_branch_if_null_container;
+use crate::codegen_support::sentinels::{emit_branch_if_null_container, POINTER_ARRAY_VALUE_TYPE};
 
 /// Retains or persists a runtime value and boxes it into a Mixed cell.
 ///
@@ -72,6 +74,13 @@ pub fn emit_mixed_from_value(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_from_value ---");
     emitter.label_global("__rt_mixed_from_value");
+    // -- a ?ptr<T> container word: address 0 is PHP null, any other address an integer --
+    emitter.instruction(&format!("cmp x0, #{}", POINTER_ARRAY_VALUE_TYPE));     // is this a raw ?ptr<T> word from a pointer container?
+    emitter.instruction("b.ne __rt_mixed_from_value_tagged");                   // every other tag boxes as it is
+    emitter.instruction("mov x9, #8");                                          // runtime tag 8 = PHP null for the null pointer word
+    emitter.instruction("cmp x1, #0");                                          // is this the null pointer word?
+    emitter.instruction("csel x0, x9, xzr, eq");                                // box 0 as PHP null and any address as an integer
+    emitter.label("__rt_mixed_from_value_tagged");
 
     emitter.instruction("sub sp, sp, #48");                                     // allocate stack frame for the incoming payload and boxed result
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
@@ -173,6 +182,14 @@ fn emit_mixed_from_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_from_value ---");
     emitter.label_global("__rt_mixed_from_value");
+    // -- a ?ptr<T> container word: address 0 is PHP null, any other address an integer --
+    emitter.instruction(&format!("cmp rax, {}", POINTER_ARRAY_VALUE_TYPE));     // is this a raw ?ptr<T> word from a pointer container?
+    emitter.instruction("jne __rt_mixed_from_value_x86_tagged");                // every other tag boxes as it is
+    emitter.instruction("xor eax, eax");                                        // runtime tag 0 = integer for a live pointer address
+    emitter.instruction("mov r10, 8");                                          // runtime tag 8 = PHP null for the null pointer word
+    emitter.instruction("test rdi, rdi");                                       // is this the null pointer word?
+    emitter.instruction("cmovz rax, r10");                                      // box 0 as PHP null
+    emitter.label("__rt_mixed_from_value_x86_tagged");
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before boxing the mixed payload
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the temporary payload spill

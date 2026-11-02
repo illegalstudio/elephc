@@ -112,9 +112,10 @@ unsafe fn copy_child_siginfo(info: &libc::siginfo_t) -> ElephcPcntlSigInfo {
 /// A failure returns `-1` and records errno for `pcntl_get_last_error()`.
 #[no_mangle]
 pub extern "C" fn elephc_pcntl_fork() -> i64 {
+    let mut signals = elephc_process_context::SpawnPermit::new();
     let mut previous_mask = unsafe { std::mem::zeroed::<libc::sigset_t>() };
     let mut full_mask = unsafe { std::mem::zeroed::<libc::sigset_t>() };
-    let mask_was_blocked = signal_queue_initialized()
+    let mask_was_blocked = (signal_queue_initialized() || signals.is_active())
         && unsafe {
             libc::sigfillset(&mut full_mask) == 0
                 && libc::sigprocmask(libc::SIG_SETMASK, &full_mask, &mut previous_mask) == 0
@@ -123,6 +124,7 @@ pub extern "C" fn elephc_pcntl_fork() -> i64 {
     let fork_error = current_errno();
     if pid == 0 {
         reset_signal_pipe_after_fork();
+        signals.in_child();
     }
     if mask_was_blocked {
         unsafe {
@@ -171,9 +173,10 @@ pub extern "C" fn elephc_pcntl_daemon(
     no_chdir: libc::c_int,
     no_close: libc::c_int,
 ) -> libc::c_int {
+    let mut signals = elephc_process_context::SpawnPermit::new();
     let mut previous_mask = unsafe { std::mem::zeroed::<libc::sigset_t>() };
     let mut full_mask = unsafe { std::mem::zeroed::<libc::sigset_t>() };
-    let mask_was_blocked = signal_queue_initialized()
+    let mask_was_blocked = (signal_queue_initialized() || signals.is_active())
         && unsafe {
             libc::sigfillset(&mut full_mask) == 0
                 && libc::sigprocmask(libc::SIG_SETMASK, &full_mask, &mut previous_mask) == 0
@@ -182,6 +185,7 @@ pub extern "C" fn elephc_pcntl_daemon(
     let daemon_error = current_errno();
     if result == 0 {
         reset_signal_pipe_after_fork();
+        signals.in_child();
     }
     if mask_was_blocked {
         unsafe {

@@ -2,7 +2,7 @@
 title: "date_create_immutable()"
 description: "Creates a DateTimeImmutable from a date/time string."
 sidebar:
-  order: 193
+  order: 196
 ---
 
 ## date_create_immutable()

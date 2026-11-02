@@ -117,11 +117,11 @@ pub(super) fn emit_store_fiber_start_args_aarch64(
         ctx.emitter.instruction(&format!("cmp x9, #{}", idx + 1));              // is this start() slot allowed for user arguments?
         ctx.emitter.instruction(&format!("b.lt {}", skip_label));               // stop once wrapper-reserved slots would be overwritten
         ctx.emitter
-            .instruction(&format!("str {}, [x0, #{}]", source_reg, offset)); // store the boxed Mixed start() argument
+            .instruction(&format!("str {}, [x0, #{}]", source_reg, offset));    // store the boxed Mixed start() argument
     }
     ctx.emitter.label(&skip_label);
     ctx.emitter
-        .instruction(&format!("mov x9, #{}", supplied_arg_count)); // materialize the visible start() argument count
+        .instruction(&format!("mov x9, #{}", supplied_arg_count));              // materialize the visible start() argument count
     ctx.emitter.instruction(&format!("str x9, [x0, #{}]", runtime::FIBER_START_ARG_COUNT_OFFSET)); // publish start() arity for Fiber wrappers
     Ok(())
 }
@@ -232,6 +232,10 @@ pub(super) fn emit_optional_mixed_arg(ctx: &mut FunctionContext<'_>, value: Opti
         ctx.load_value_to_result(value)?;
         let source_ty = ctx.raw_value_php_type(value)?;
         materialize_direct_call_arg_for_param(ctx, &source_ty, &PhpType::Mixed)?;
+        if matches!(source_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+            // The coroutine consumes its transfer cell; the caller still owns its staged input.
+            abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+        }
         return Ok(());
     }
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
@@ -320,7 +324,7 @@ pub(super) fn emit_mixed_fiber_receiver_to_arg(
             emit_method_call_on_null_fatal(ctx, method_name);
             ctx.emitter.label(&fiber_label);
             ctx.emitter
-                .instruction(&format!("mov {}, x1", receiver_arg)); // pass the unboxed Fiber object to the runtime predicate
+                .instruction(&format!("mov {}, x1", receiver_arg));             // pass the unboxed Fiber object to the runtime predicate
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("cmp rax, 6");                              // continue only when the Mixed receiver holds an object
@@ -449,7 +453,8 @@ pub(super) fn lower_nullsafe_method_call(ctx: &mut FunctionContext<'_>, inst: &I
     // whatever the last helper left there as `$this`. Every other receiver-register dispatch
     // (`lower_mixed_method_call`, callable dispatch, the array-access and intrinsic paths)
     // already uses this register for the same reason, and `crate::codegen::frame` reserves
-    // its save slot for exactly the `NullsafeMethodCall` receivers this lowering handles.
+    // its save slot in every frame containing a `NullsafeMethodCall`, which is never
+    // register-neutral.
     let object_reg = abi::nested_call_reg(ctx.emitter);
     objects::emit_nullable_receiver_object_payload(ctx, object, &null_label, object_reg)?;
     let receiver_ty = PhpType::Object(class_name);
@@ -476,7 +481,7 @@ pub(super) fn lower_nullsafe_method_call(ctx: &mut FunctionContext<'_>, inst: &I
     if inst.result_php_type.codegen_repr() == PhpType::Mixed
         && target.return_ty.codegen_repr() != PhpType::Mixed
     {
-        emit_box_current_value_as_mixed(ctx.emitter, &target.return_ty.codegen_repr());
+        emit_box_current_value_as_mixed(ctx.emitter, &crate::types::mixed_box_php_type(&target.return_ty));
     }
     // THE WRITEBACKS RUN ON THE CALL ARM, BEFORE THE JUMP, because that is the only arm that
     // pushed the by-reference cell block: releasing it after `done_label` would also run on

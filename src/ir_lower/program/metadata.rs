@@ -57,6 +57,7 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
     module.declared_trait_constant_visibilities =
         collect_declared_trait_constant_visibilities(program);
     module.declared_trait_final_constants = collect_declared_trait_final_constants(program);
+    module.imported_trait_method_names = collect_imported_trait_method_names(program, &check_result.classes);
     module.class_infos = check_result.classes.clone();
     normalize_class_method_signatures_for_eir(module, &check_result.callable_param_sigs);
     module.interface_infos = check_result.interfaces.clone();
@@ -87,14 +88,17 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
             params: sig
                 .params
                 .iter()
-                .map(|(name, php_type)| ExternParamDecl {
+                .zip(sig.abi_params.iter())
+                .map(|((name, php_type), abi)| ExternParamDecl {
                     name: name.clone(),
                     ir_type: value_or_void_ir_type(php_type),
                     php_type: php_type.clone(),
+                    abi: *abi,
                 })
                 .collect(),
             return_type: value_or_void_ir_type(&sig.return_type),
             return_php_type: sig.return_type.clone(),
+            return_abi: sig.abi_return,
             link_libs: sig.library.iter().cloned().collect(),
         })
         .collect();

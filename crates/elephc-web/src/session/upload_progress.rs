@@ -28,6 +28,9 @@
 //!   degrades gracefully on a truncated or adversarial body.
 //! - The RMW preserves unrelated entries under all three registered session
 //!   serializers and accepts Cookie, GET, or multipart POST session IDs.
+//! - Tracker state owns its names and counters; body positions are offsets, never
+//!   pointers into a body buffer or a decoded session. Each RMW builds fresh bytes,
+//!   so reloading a session cannot invalidate a cached progress bucket pointer.
 
 use std::ffi::CStr;
 use std::io::Read;
@@ -37,6 +40,7 @@ use std::time::Instant;
 use super::file_io::{
     configured_session_file_path, lock_exclusive, open_session_file, parse_save_path,
 };
+use crate::multipart::extract_quoted;
 
 /// Longest multipart boundary this tracker will follow, in bytes.
 ///
@@ -220,8 +224,20 @@ impl Tracker {
     /// with `upload_progress.cleanup` on, that stale `done => false` record would outlive
     /// the request. PHP requires the trigger field to be COMPLETE before it tracks anything,
     /// so waiting also matches the interpreter.
+    ///
+    /// The assembled `$_SESSION` key must also be representable by the active serializer.
+    /// The trigger-field value is client-controlled, and the `php` handler frames entries
+    /// as `key|serialized-value`: a `|` in that value would write attacker-authored
+    /// serialized data as a second session entry, which `session_start()` later feeds to
+    /// `unserialize()`. Rejecting the write keeps the upload working while leaving the
+    /// session file structurally intact (PHP 8.5's `session_encode()` rejects `|` in keys
+    /// for the same reason).
     fn ready_to_write(&self) -> bool {
-        self.sid.is_some() && self.key.is_some() && !self.key_provisional
+        if !(self.sid.is_some() && self.key.is_some() && !self.key_provisional) {
+            return false;
+        }
+        self.full_key()
+            .is_some_and(|key| session_key_fits_handler(&key, self.handler))
     }
 
     /// Finalizes progress once the body is fully drained: marks every file and
@@ -446,9 +462,9 @@ fn resume_index(part_start: usize, scanned: usize, delim_len: usize) -> usize {
             ser_int(&mut out, i as i64);
             out.extend_from_slice(b"a:7:{");
             ser_str(&mut out, b"field_name");
-            ser_str(&mut out, &f.field_name);
+            ser_str(&mut out, &session_wire_safe(&f.field_name));
             ser_str(&mut out, b"name");
-            ser_str(&mut out, &f.name);
+            ser_str(&mut out, &session_wire_safe(&f.name));
             ser_str(&mut out, b"tmp_name");
             ser_str(&mut out, b"");
             ser_str(&mut out, b"error");
@@ -753,6 +769,43 @@ fn valid_sid(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b',' || b == b'-')
 }
 
+/// Returns true when the assembled progress key can be written by `handler`
+/// without changing the session file's entry structure.
+///
+/// The `php` handler frames entries as `key|serialized-value`, so `|` inside a
+/// key would let a client-authored trigger-field value append a serialized
+/// object as a second entry — which `session_start()` later hands to
+/// `unserialize()`. A NUL cannot appear in a PHP session key, and `php_binary`
+/// stores the key length in one byte (keys above 127 bytes are silently
+/// dropped, so tracking is pointless). `php_serialize` length-prefixes the key
+/// itself, but the same file may be read by a `php` handler in a differently
+/// configured deployment, so the separator rule applies to every handler.
+fn session_key_fits_handler(full_key: &[u8], handler: Handler) -> bool {
+    !full_key.contains(&b'|')
+        && !full_key.contains(&b'\0')
+        && (handler != Handler::PhpBinary || full_key.len() <= 127)
+}
+
+/// Escapes the bytes that matter to the session wire formats inside a
+/// client-supplied progress field.
+///
+/// `field_name` and `name` come straight from the multipart headers. They are
+/// embedded in serially framed session data, and a session file written by one
+/// handler can be read by another (`php_serialize` → `php` is the php2shell
+/// chain). Percent-encoding `|` and NUL keeps those bytes from ever acting as a
+/// `php` entry separator while preserving the rest of the reported name.
+fn session_wire_safe(value: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(value.len());
+    for &byte in value {
+        match byte {
+            b'|' => out.extend_from_slice(b"%7C"),
+            b'\0' => out.extend_from_slice(b"%00"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 /// Parses `session.upload_progress.freq` into a byte threshold. `"N%"` is a
 /// percentage of `content_length`; a bare `"N"` is an absolute byte count. The
 /// result is at least 1 so a valid config always eventually writes.
@@ -811,20 +864,11 @@ fn parse_part(seg: &[u8]) -> Option<(Vec<u8>, Option<Vec<u8>>, &[u8])> {
             .to_ascii_lowercase()
             .starts_with("content-disposition:")
         {
-            name = extract_quoted(line, "name=").map(|s| s.into_bytes());
-            filename = extract_quoted(line, "filename=").map(|s| s.into_bytes());
+            name = extract_quoted(line, "name").map(|s| s.into_bytes());
+            filename = extract_quoted(line, "filename").map(|s| s.into_bytes());
         }
     }
     Some((name?, filename, content))
-}
-
-/// Extracts a quoted attribute value (`key="value"`) from a header line.
-fn extract_quoted(line: &str, key: &str) -> Option<String> {
-    let start = line.find(key)? + key.len();
-    let rest = &line[start..];
-    let rest = rest.strip_prefix('"')?;
-    let end = rest.find('"')?;
-    Some(rest[..end].to_string())
 }
 
 // ── PHP serialize scalar emitters ──
@@ -1333,6 +1377,8 @@ fn strip_suffix<'a>(data: &'a [u8], suffix: &[u8]) -> &'a [u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod reload_tests;
 
     /// The `php`-handler serializer must match PHP `serialize()` byte-for-byte
     /// for the progress array shape (verified against `php -r`).
@@ -1844,6 +1890,97 @@ mod tests {
         assert_eq!(
             extract_boundary(&format!("multipart/form-data; boundary={long}")),
             None
+        );
+    }
+
+    /// php2shell chain C: the trigger-field value is client-controlled and is assembled
+    /// into the `$_SESSION` key. A `|` there would write a second, attacker-authored
+    /// serialized entry into a `php`-handler session file, so no write is authorized.
+    #[test]
+    fn a_trigger_key_with_the_php_entry_separator_is_never_written() {
+        let mut tracker = incremental_tracker();
+        tracker.sid = Some("sid123".to_string());
+        tracker.advance(
+            b"--BOUND\r\nContent-Disposition: form-data; name=\"PHP_SESSION_UPLOAD_PROGRESS\"\r\n\r\nk|O:4:\"Evil\":1:{s:3:\"cmd\";s:1:\"x\";}\r\n--BOUND\r\n",
+        );
+        assert!(tracker.key.is_some(), "the part is still parsed");
+        assert!(
+            !tracker.ready_to_write(),
+            "a key containing the php entry separator must never reach the session file"
+        );
+
+        // The same rule protects the cross-handler (`php_serialize` -> `php`) read,
+        // where the separator would sit inside a length-prefixed key string.
+        let key = b"upload_progress_k|O:4:\"Evil\":1:{}";
+        assert!(!session_key_fits_handler(key, Handler::Php));
+        assert!(!session_key_fits_handler(key, Handler::PhpSerialize));
+        assert!(!session_key_fits_handler(key, Handler::PhpBinary));
+        assert!(session_key_fits_handler(b"upload_progress_mykey", Handler::Php));
+        assert!(session_key_fits_handler(b"upload_progress_mykey", Handler::PhpSerialize));
+        assert!(session_key_fits_handler(b"upload_progress_mykey", Handler::PhpBinary));
+        assert!(
+            !session_key_fits_handler(&[b'k'; 128], Handler::PhpBinary),
+            "php_binary keys are length-prefixed by one byte"
+        );
+    }
+
+    /// Client-supplied `field_name`/`name` values must not be able to act as a `php`
+    /// entry separator when a `php_serialize` file is later read by a `php` handler.
+    /// The bytes are percent-encoded instead of dropped, so the rest of the name survives.
+    #[test]
+    fn client_names_cannot_smuggle_a_php_entry_separator() {
+        let files = vec![FileProgress {
+            field_name: b"f|O:4:\"Evil\":1:{}".to_vec(),
+            name: b"x\0|O:4:\"Evil\":1:{}".to_vec(),
+            bytes_processed: 0,
+            done: true,
+        }];
+        let tracker = incremental_tracker();
+        let out = tracker.serialize_progress(&files, 0, true);
+        assert!(
+            !out.contains(&b'|'),
+            "serialized progress data must contain no php entry separator: {}",
+            String::from_utf8_lossy(&out)
+        );
+        assert!(
+            !out.contains(&0),
+            "serialized progress data must contain no NUL"
+        );
+        assert!(
+            String::from_utf8_lossy(&out).contains("%7C") && String::from_utf8_lossy(&out).contains("%00"),
+            "separator and NUL must be percent-encoded: {}",
+            String::from_utf8_lossy(&out)
+        );
+    }
+
+    /// PHP's multipart rules accept escaped quotes and unquoted values. Now that
+    /// the header parser extracts the full client filename, the progress writer
+    /// must still neutralize its `|` (this is the php2shell filename chain).
+    #[test]
+    fn an_escaped_quote_filename_is_still_sanitized() {
+        let segment = b"Content-Disposition: form-data; name=\"f\"; filename=\"x|O:4:\\\"Evil\\\":1:{s:3:\\\"cmd\\\";s:1:\\\"x\\\";}\"\r\n\r\nBODY";
+        let (name, filename, content) = parse_part(segment).expect("part parses");
+        let filename = filename.expect("filename is present");
+        assert_eq!(
+            filename, b"x|O:4:\"Evil\":1:{s:3:\"cmd\";s:1:\"x\";}".to_vec(),
+            "the escaped quotes must be unescaped exactly as PHP does"
+        );
+        let files = vec![FileProgress {
+            field_name: name,
+            name: filename,
+            bytes_processed: content.len(),
+            done: true,
+        }];
+        let out = incremental_tracker().serialize_progress(&files, content.len(), true);
+        assert!(
+            !out.contains(&b'|'),
+            "the filename separator must be encoded: {}",
+            String::from_utf8_lossy(&out)
+        );
+        assert!(
+            String::from_utf8_lossy(&out).contains("%7C"),
+            "the filename separator must be visible as %7C: {}",
+            String::from_utf8_lossy(&out)
         );
     }
 }

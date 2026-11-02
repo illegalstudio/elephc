@@ -11,8 +11,9 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use super::ScalarWidth;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 #[allow(dead_code)] // Callable used in match arms, constructed when closures are added
 /// PHP runtime type.
 pub enum PhpType {
@@ -32,6 +33,12 @@ pub enum PhpType {
         value: Box<PhpType>,
     },
     Buffer(Box<PhpType>),
+    /// Storage format of a `buffer<T>` element declared with a C width name (`buffer<i32>`,
+    /// `buffer<u8>`, `buffer<f32>`). It only ever appears as the element type inside `Buffer`:
+    /// an element read yields `storage_value_type()` (`int` or `float`), and a write takes
+    /// that same type, so no value is ever typed `Narrow`. Packed class fields keep the same
+    /// widths in their field metadata instead (`PackedFieldInfo::width`).
+    Narrow(ScalarWidth),
     Callable,
     Object(String),
     Packed(String),
@@ -44,6 +51,32 @@ pub enum PhpType {
     /// type; codegen funnels construct it from `int|null` unions only under
     /// `NullRepr::Tagged`. Under the legacy sentinel opt-out it never exists.
     TaggedScalar,
+}
+
+impl std::fmt::Debug for PhpType {
+    /// Formats the normal debug shape without exposing internal pointer width tags.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Int => f.write_str("Int"), Self::Float => f.write_str("Float"),
+            Self::Str => f.write_str("Str"), Self::Bool => f.write_str("Bool"),
+            Self::False => f.write_str("False"), Self::Void => f.write_str("Void"),
+            Self::Never => f.write_str("Never"), Self::Iterable => f.write_str("Iterable"),
+            Self::Mixed => f.write_str("Mixed"), Self::Callable => f.write_str("Callable"),
+            Self::TaggedScalar => f.write_str("TaggedScalar"),
+            Self::Array(inner) => f.debug_tuple("Array").field(inner).finish(),
+            Self::AssocArray { key, value } => f.debug_struct("AssocArray").field("key", key).field("value", value).finish(),
+            Self::Buffer(inner) => f.debug_tuple("Buffer").field(inner).finish(),
+            Self::Narrow(width) => f.debug_tuple("Narrow").field(width).finish(),
+            Self::Object(name) => f.debug_tuple("Object").field(name).finish(),
+            Self::Packed(name) => f.debug_tuple("Packed").field(name).finish(),
+            Self::Pointer(target) => {
+                let visible = target.as_ref().map(|name| crate::names::display_pointer_target(name));
+                f.debug_tuple("Pointer").field(&visible).finish()
+            }
+            Self::Resource(kind) => f.debug_tuple("Resource").field(kind).finish(),
+            Self::Union(members) => f.debug_tuple("Union").field(members).finish(),
+        }
+    }
 }
 
 impl PhpType {
@@ -62,6 +95,22 @@ impl PhpType {
             && members.iter().any(|member| matches!(member, Self::Array(value) if **value == Self::Mixed))
             && members.iter().any(|member| matches!(member, Self::AssocArray { key, value }
                 if **key == Self::Mixed && **value == Self::Mixed)))
+    }
+
+    /// Returns whether an array slot can safely hold a managed live reference for `array_push`.
+    pub(crate) fn supports_live_array_push_place(&self) -> bool {
+        self.is_php_array() || self.codegen_repr() == Self::Mixed
+    }
+
+    /// Returns the type a packed field or buffer element of this storage type reads as.
+    ///
+    /// A width (`PhpType::Narrow`) reads as its value type, `int` or `float`; every other
+    /// element type is its own value type.
+    pub fn storage_value_type(&self) -> PhpType {
+        match self {
+            PhpType::Narrow(width) => width.value_type(),
+            other => other.clone(),
+        }
     }
 
     /// Returns a `PhpType::Resource(Some("stream"))` representing a stream resource.
@@ -106,6 +155,7 @@ impl PhpType {
             | PhpType::Array(_)
             | PhpType::AssocArray { .. }
             | PhpType::Buffer(_)
+            | PhpType::Narrow(_)
             | PhpType::Callable
             | PhpType::Packed(_)
             | PhpType::Pointer(_)
@@ -127,6 +177,7 @@ impl PhpType {
             PhpType::Array(_) => 8,          // pointer to heap
             PhpType::AssocArray { .. } => 8, // pointer to heap
             PhpType::Buffer(_) => 8,         // pointer to buffer header
+            PhpType::Narrow(_) => 8,         // never a value; its element reads as a word
             PhpType::Callable => 8,          // callable descriptor address
             PhpType::Object(_) => 8,         // pointer to heap
             PhpType::Packed(_) => 8,         // metadata-only nominal type, usually accessed by pointer
@@ -151,6 +202,7 @@ impl PhpType {
             PhpType::Array(_) => 1,
             PhpType::AssocArray { .. } => 1,
             PhpType::Buffer(_) => 1,
+            PhpType::Narrow(_) => 1,
             PhpType::Callable => 1,
             PhpType::Object(_) => 1,
             PhpType::Packed(_) => 1,
@@ -164,6 +216,16 @@ impl PhpType {
     /// Returns true if this type uses a floating-point register (d0-d7).
     pub fn is_float_reg(&self) -> bool {
         matches!(self, PhpType::Float)
+    }
+
+    /// Reports whether an integer must widen to satisfy this declared numeric contract.
+    pub(crate) fn coerces_integer_to_float(&self) -> bool {
+        match self {
+            Self::Float => true,
+            Self::Union(members) => members.contains(&Self::Float)
+                && !members.iter().any(|member| matches!(member, Self::Int | Self::Mixed)),
+            _ => false,
+        }
     }
 
     /// Returns true for heap values whose lifetime is tracked with runtime refcounts.
@@ -189,6 +251,10 @@ impl PhpType {
                     && nullable_int_union_members(members) =>
             {
                 PhpType::TaggedScalar
+            }
+            // `?ptr<T>` is one raw pointer word where 0 is null, like a C pointer.
+            PhpType::Union(members) if nullable_pointer_union_member(members).is_some() => {
+                nullable_pointer_union_member(members).expect("checked above")
             }
             PhpType::Union(_) => PhpType::Mixed,
             PhpType::False => PhpType::Bool,
@@ -284,7 +350,8 @@ impl PhpType {
     ///
     /// `Never` is the placeholder element type of an empty array literal, so it
     /// contributes no runtime value and defers to the populated branch. The
-    /// `false` subtype and `bool` share the boolean contract; every other
+    /// `false` subtype and `bool` share the boolean contract, and pointers and
+    /// `null` share the pointer word (see `merge_pointer_elements`); every other
     /// disagreement requires boxed `Mixed` element storage.
     pub fn widen_array_branch_element(a: PhpType, b: PhpType) -> PhpType {
         if a == b {
@@ -302,6 +369,9 @@ impl PhpType {
         ) {
             return PhpType::Bool;
         }
+        if let Some(pointer) = merge_pointer_elements(&a, &b) {
+            return pointer;
+        }
         PhpType::Mixed
     }
 
@@ -314,6 +384,129 @@ impl PhpType {
             key: Box::new(PhpType::widen(t1.hash_key_type(), t2.hash_key_type())),
             value: Box::new(PhpType::widen(t1.hash_value_type(), t2.hash_value_type())),
         }
+    }
+}
+
+/// Merges the pointer types one local holds at different points into the type of its word.
+///
+/// Unlike an array element (`merge_pointer_elements`), a local keeps a typed target over an
+/// untyped `ptr`, as the checker's assignment merge does, so `$p = ptr_null();` followed by
+/// `$p = $buffer[0];` still reaches the record's fields. Two different targets share an untyped
+/// `ptr`. Both sides are expected to be `PhpType::Pointer`.
+pub(crate) fn merge_local_pointer_targets(a: &PhpType, b: &PhpType) -> PhpType {
+    match (a, b) {
+        _ if a == b => a.clone(),
+        (PhpType::Pointer(None), PhpType::Pointer(Some(_))) => b.clone(),
+        (PhpType::Pointer(Some(_)), PhpType::Pointer(None)) => a.clone(),
+        _ => PhpType::Pointer(None),
+    }
+}
+
+/// Merges two array element types that are pointers, `?ptr<T>` or `null` into one pointer element.
+///
+/// Every pointer is one raw word, so pointers with different target tags share an untyped `ptr`
+/// slot, and a `null` element is the null pointer word, which keeps the element `?ptr<T>`.
+/// Returns `None` when either side is something else (or both are `null`), leaving the caller's
+/// ordinary widening to `mixed`.
+pub(crate) fn merge_pointer_elements(a: &PhpType, b: &PhpType) -> Option<PhpType> {
+    /// Splits a pointer-like element into its pointer (none for `null`) and nullability.
+    fn split(ty: &PhpType) -> Option<(Option<PhpType>, bool)> {
+        match ty {
+            PhpType::Pointer(_) => Some((Some(ty.clone()), false)),
+            PhpType::Void => Some((None, true)),
+            PhpType::Union(members) => nullable_pointer_union_member(members).map(|p| (Some(p), true)),
+            _ => None,
+        }
+    }
+    let (left, left_null) = split(a)?;
+    let (right, right_null) = split(b)?;
+    let pointer = match (left, right) {
+        (Some(left), Some(right)) if left == right => left,
+        (Some(_), Some(_)) => PhpType::Pointer(None),
+        (Some(pointer), None) | (None, Some(pointer)) => pointer,
+        (None, None) => return None,
+    };
+    Some(if left_null || right_null {
+        PhpType::Union(vec![pointer, PhpType::Void])
+    } else {
+        pointer
+    })
+}
+
+/// Returns the type of an element read that can miss: a pointer element becomes `?ptr<T>`.
+///
+/// A missing pointer element is the null pointer word, which is PHP null, so the read keeps
+/// `null` in its type (a plain pointer would make `=== null` fold to false). Other element
+/// types are returned unchanged.
+pub(crate) fn pointer_element_read_type(element: PhpType) -> PhpType {
+    if matches!(element, PhpType::Pointer(_)) {
+        PhpType::Union(vec![element, PhpType::Void])
+    } else {
+        element
+    }
+}
+
+/// Returns the pointer of a `?ptr<T>` union: exactly one pointer member plus `null`.
+///
+/// Such a union is stored as that pointer word with 0 meaning null (decision recorded for task
+/// 6da89f60), so a null pointer and PHP `null` are the same value.
+pub(crate) fn nullable_pointer_union_member(members: &[PhpType]) -> Option<PhpType> {
+    let mut pointer = None;
+    let mut has_null = false;
+    for member in members {
+        match member {
+            PhpType::Pointer(_) if pointer.is_none() => pointer = Some(member.clone()),
+            PhpType::Void | PhpType::Never => has_null = true,
+            _ => return None,
+        }
+    }
+    pointer.filter(|_| has_null)
+}
+
+/// Returns whether a type is a `?ptr<T>` union, stored as a pointer word where 0 is null.
+pub(crate) fn is_nullable_pointer_type(php_type: &PhpType) -> bool {
+    matches!(php_type, PhpType::Union(members) if nullable_pointer_union_member(members).is_some())
+}
+
+/// Returns whether `ty` is an indexed array whose elements are stored as raw pointer words
+/// (`array<ptr<T>>` or `array<ptr<T>|null>`), as opposed to boxed Mixed cells.
+pub(crate) fn is_pointer_element_indexed_array(ty: &PhpType) -> bool {
+    matches!(
+        ty.codegen_repr(),
+        PhpType::Array(elem) if matches!(elem.codegen_repr(), PhpType::Pointer(_))
+    )
+}
+
+/// Returns the type a value of a declared type is boxed into `mixed` as: its codegen type, except
+/// that a `?ptr<T>` keeps its union, so address 0 boxes as PHP null instead of the integer 0.
+pub(crate) fn mixed_box_php_type(php_type: &PhpType) -> PhpType {
+    if is_nullable_pointer_type(php_type) {
+        php_type.clone()
+    } else {
+        php_type.codegen_repr()
+    }
+}
+
+/// Spells a pointer parameter type for a diagnostic: `?ptr<T>` for the nullable union, which
+/// otherwise prints as `ptr<T>|null`.
+pub(crate) fn pointer_param_display(php_type: &PhpType) -> String {
+    if is_nullable_pointer_type(php_type) {
+        format!("?{}", php_type.codegen_repr())
+    } else {
+        php_type.to_string()
+    }
+}
+
+/// Returns the PHP type an EIR value carries for a declared type.
+///
+/// That is the codegen representation, except for a `?ptr<T>`: its representation is the bare
+/// pointer word, and a value typed without the null member would make `=== null`, `is_null()`,
+/// `isset()`, `??` and `echo` treat a null result as a set pointer.
+pub(crate) fn eir_value_php_type(php_type: &PhpType) -> PhpType {
+    if is_nullable_pointer_type(php_type) {
+        php_type.clone()
+    } else {
+        php_type.codegen_repr()
     }
 }
 
@@ -351,13 +544,14 @@ impl fmt::Display for PhpType {
             PhpType::Array(inner) => write!(f, "array<{}>", inner),
             PhpType::AssocArray { key, value } => write!(f, "array<{}, {}>", key, value),
             PhpType::Buffer(inner) => write!(f, "buffer<{}>", inner),
+            PhpType::Narrow(width) => write!(f, "{}", width.name()),
             PhpType::Callable => write!(f, "callable"),
             // An EMPTY class name is the `object` type hint: any object, no particular class.
             // Rendering it as the empty string produced "expects , got int".
             PhpType::Object(name) if name.is_empty() => write!(f, "object"),
             PhpType::Object(name) => write!(f, "{}", name),
             PhpType::Packed(name) => write!(f, "packed {}", name),
-            PhpType::Pointer(Some(name)) => write!(f, "ptr<{}>", name),
+            PhpType::Pointer(Some(name)) => write!(f, "ptr<{}>", crate::names::display_pointer_target(name)),
             PhpType::Pointer(None) => write!(f, "ptr"),
             PhpType::Resource(Some(kind)) => write!(f, "resource<{}>", kind),
             PhpType::Resource(None) => write!(f, "resource"),

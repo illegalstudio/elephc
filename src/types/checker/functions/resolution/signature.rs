@@ -138,8 +138,7 @@ impl Checker {
             .collect();
         let prev_by_ref_return = self.current_by_ref_return;
         self.current_by_ref_return = decl.by_ref_return;
-        self.loop_storage_types
-            .retain(|(scope, _), _| scope != &function_key);
+        self.clear_loop_storage_scope(&function_key);
         let previous_loop_storage_scope =
             std::mem::replace(&mut self.current_loop_storage_scope, function_key.clone());
         self.resolving_functions.insert(function_key.clone());
@@ -158,6 +157,9 @@ impl Checker {
             pre_bound_own_storage,
             &decl.body,
             |checker| {
+                checker.boxed_parameter_locals.extend(decl.params.iter().enumerate()
+                    .filter(|(index, _)| decl.param_types.get(*index).is_none_or(Option::is_none))
+                    .map(|(_, name)| name.clone()));
                 for stmt in &decl.body {
                     if let Err(error) = checker.check_stmt(stmt, &mut local_env) {
                         errors.extend(error.flatten());
@@ -217,7 +219,8 @@ impl Checker {
                     &format!("Function '{}'", name),
                 )?;
                 if !self.generator_return_type_accepts(&declared_ret) {
-                    self.require_compatible_return_type(
+                    self.require_compatible_return_hint(
+                        type_ann,
                         &declared_ret,
                         &generator_ty,
                         true,
@@ -239,7 +242,8 @@ impl Checker {
                     &format!("Function '{}' declared never must not return", name),
                 ));
             }
-            self.require_declared_return_coverage(
+            self.require_return_hint_coverage(
+                type_ann,
                 &declared_ret,
                 &decl.body,
                 decl.span,
@@ -247,7 +251,8 @@ impl Checker {
             )?;
             if !all_return_infos.is_empty() {
                 for return_info in &all_return_infos {
-                    self.require_compatible_return_type(
+                    self.require_compatible_return_hint(
+                        type_ann,
                         &declared_ret,
                         &return_info.ty,
                         return_info.has_value,

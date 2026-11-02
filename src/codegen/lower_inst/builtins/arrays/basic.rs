@@ -32,82 +32,6 @@ pub(crate) fn lower_array_product(ctx: &mut FunctionContext<'_>, inst: &Instruct
     super::boxed_aggregate::lower_aggregate(ctx, inst, true)
 }
 
-/// Lowers `array_push()` by appending every value and publishing the mutated array.
-///
-/// The operand list is `[array, value…]` with any number of trailing values, matching PHP's
-/// `array_push(array &$array, mixed ...$values)`. `array_push($a)` with no values is legal PHP
-/// too and just reads the current length back.
-///
-/// Values are appended one at a time in source order. Each append can reach `__rt_array_grow`
-/// and relocate the array, so the per-value helper republishes the receiver between steps rather
-/// than once at the end.
-pub(crate) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    if inst.operands.is_empty() {
-        return Err(CodegenIrError::invalid_module(
-            "array_push expected at least 1 arg, got 0".to_string(),
-        ));
-    }
-    let array = expect_operand(inst, 0)?;
-    let boxed_receiver = matches!(
-        ctx.value_php_type(array)?.codegen_repr(),
-        PhpType::Mixed | PhpType::Union(_)
-    );
-    if boxed_receiver && inst.operands.len() > 1 {
-        super::boxed_mutation::prepare_boxed_array_receiver(ctx, array, "array_push")?;
-    }
-    for index in 1..inst.operands.len() {
-        let value = expect_operand(inst, index)?;
-        if boxed_receiver {
-            super::super::super::arrays::lower_mixed_array_append_value(ctx, array, value)?;
-        } else {
-            super::super::super::arrays::lower_array_push_value(ctx, inst, array, value)?;
-        }
-    }
-    load_array_push_length_to_result(ctx, array)?;
-    store_if_result(ctx, inst)
-}
-
-/// Materializes the receiver's post-append element count into the int result register.
-///
-/// PHP's `array_push()` returns the new number of elements. Reading it back from the array
-/// rather than from the last append's return register covers the value-less form, which never
-/// calls a helper at all, and survives the write-backs each append performs.
-///
-/// A boxed `Mixed` receiver holds the container behind a cell, so the count comes from the
-/// generic length helper; a typed indexed array keeps its logical length in the first payload
-/// word and is read directly.
-fn load_array_push_length_to_result(
-    ctx: &mut FunctionContext<'_>,
-    array: ValueId,
-) -> Result<()> {
-    if matches!(
-        ctx.value_php_type(array)?.codegen_repr(),
-        PhpType::Mixed | PhpType::Union(_)
-    ) {
-        // -- a boxed receiver keeps its container behind a cell, so ask the generic counter --
-        // `__rt_mixed_count` is on the single-argument INT-RESULT ABI (`x0` / `rax` in and
-        // out), not the C argument ABI. Handing it `rdi` left `rax` holding whatever the last
-        // append had put there, so `array_push()` on a boxed receiver returned 0 instead of
-        // the new element count (issue #1191).
-        ctx.load_value_to_result(array)?;
-        abi::emit_call_label(ctx.emitter, "__rt_mixed_count");
-        return Ok(());
-    }
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            // -- a typed indexed array keeps its logical length in the first payload word --
-            ctx.load_value_to_reg(array, "x0")?;
-            ctx.emitter.instruction("ldr x0, [x0]");                            // read the post-append element count as the int result
-        }
-        Arch::X86_64 => {
-            // -- a typed indexed array keeps its logical length in the first payload word --
-            ctx.load_value_to_reg(array, "rax")?;
-            ctx.emitter.instruction("mov rax, QWORD PTR [rax]");                // read the post-append element count as the int result
-        }
-    }
-    Ok(())
-}
-
 /// Lowers `array_chunk()` by splitting an indexed array into nested indexed arrays.
 ///
 /// PHP's `bool $preserve_keys = false` renumbers each chunk from zero; a literal `true` keeps the
@@ -372,6 +296,44 @@ pub(crate) fn lower_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruct
     let array = expect_operand(inst, 0)?;
     if ctx.value_php_type(array)?.codegen_repr() == PhpType::Mixed {
         return super::boxed_reverse::lower_boxed_array_reverse(ctx, inst, array);
+    }
+    // A concrete associative source: `__rt_array_reverse_boxed` already walks hash storage in
+    // reverse insertion order and returns an owned Mixed-value hash, which is exactly the declared
+    // `AssocArray { *, Mixed }` result. Box the borrowed source, call the helper, and release the
+    // box; a hash source needs no key-shape split (both flags keep a hash).
+    let source_ty = ctx.value_php_type(array)?.codegen_repr();
+    if let PhpType::AssocArray { value, .. } = &source_ty {
+        if value.codegen_repr() != PhpType::Mixed {
+            return Err(CodegenIrError::unsupported(format!(
+                "array_reverse for hash values of PHP type {:?}",
+                value.codegen_repr()
+            )));
+        }
+        super::boxed_mutation::require_non_null_hash_receiver(ctx, array, "array_reverse")?;
+        let preserve_keys = match inst.operands.get(1).copied() {
+            None => false,
+            Some(flag) => const_bool_operand(ctx, flag)?.ok_or_else(|| {
+                CodegenIrError::unsupported(
+                    "array_reverse preserve_keys argument that is not a compile-time literal"
+                        .to_string(),
+                )
+            })?,
+        };
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        let arg0 = abi::int_arg_reg_name(ctx.emitter.target, 0);
+        let arg1 = abi::int_arg_reg_name(ctx.emitter.target, 1);
+        ctx.load_value_to_reg(array, result_reg)?;
+        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &source_ty);
+        abi::emit_push_reg(ctx.emitter, result_reg);
+        abi::emit_load_int_immediate(ctx.emitter, arg1, i64::from(preserve_keys));
+        abi::emit_load_temporary_stack_slot(ctx.emitter, arg0, 0);
+        abi::emit_call_label(ctx.emitter, "__rt_array_reverse_boxed");
+        abi::emit_push_reg(ctx.emitter, result_reg);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+        abi::emit_pop_reg(ctx.emitter, result_reg);
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+        return store_if_result(ctx, inst);
     }
     let preserve_keys = match inst.operands.get(1).copied() {
         None => false,

@@ -2,7 +2,7 @@
 title: "mysqli_use_result() - internals"
 description: "Compiler internals for mysqli_use_result(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 181
+  order: 184
 ---
 
 ## `mysqli_use_result()` - internals

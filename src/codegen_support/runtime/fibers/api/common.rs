@@ -37,12 +37,12 @@ pub(super) fn emit_box_null_mixed(emitter: &mut Emitter) {
 /// Emits the `--instrument` unpark hook: puts this coroutine's activations back
 /// on the profiler's stack before control leaves without returning.
 ///
-/// `__rt_fiber_suspend` has three such exits, and every one of them reaches PHP
+/// Every exceptional exit from `__rt_fiber_suspend` reaches PHP
 /// handlers: `Fiber::suspend()` outside a fiber and a live `unserialize()` both
 /// raise `FiberError` before the stack switch, and a pending
 /// `Fiber::throw()`/`Generator::throw()` raises after it. The hook at the
 /// suspension site brackets the CALL, so its second half is skipped on all
-/// three, and the activation stayed parked while its own `catch` ran — the
+/// of these exits, and the activation stayed parked while its own `catch` ran, so the
 /// handler's work charged to whatever frame was below it, and the function's own
 /// exit later finding no frame and closing nothing. Generators reach the same
 /// helper through `__rt_gen_suspend`, so this covers `yield` too.

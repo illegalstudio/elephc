@@ -9,7 +9,8 @@
 //! Key details:
 //! - When a write filter is attached the payload is copied into the dedicated
 //!   `_stream_filter_buf` scratch, transformed in place, and written from there
-//!   so the caller's string is never mutated.
+//!   so the caller's string is never mutated. User-filter output owns a separate
+//!   buffer that is retired after the write while preserving its result.
 //! - A payload larger than the 64 KiB scratch is written unfiltered; v1 stream
 //!   filters target the common small-write case.
 
@@ -50,13 +51,14 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.instruction("b __rt_user_wrapper_fwrite");                          // wrapper fd: tail-call stream_write (uncond → cross-atom safe)
     emitter.label("__rt_fwrite_real_fd");
 
-    // Frame (48 bytes): [0]=fd [8]=pointer [16]=length [32]=x29 [40]=x30.
+    // Frame (48 bytes): [0]=fd [8]=pointer [16]=length/result [24]=output owner [32..48]=FP/LR.
     emitter.instruction("sub sp, sp, #48");                                     // frame for the saved write state
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // establish the helper frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the file descriptor
     emitter.instruction("str x1, [sp, #8]");                                    // save the payload pointer
     emitter.instruction("str x2, [sp, #16]");                                   // save the payload length
+    emitter.instruction("str xzr, [sp, #24]");                                  // no independent filtered output is owned yet
 
     // -- look up the write filter for this descriptor --
     abi::emit_symbol_address(emitter, "x9", "_stream_write_filters");
@@ -136,6 +138,11 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #16]");                                   // payload len → third arg
     emitter.instruction("mov x3, #1");                                          // direction = 1 (write)
     emitter.instruction("bl __rt_apply_user_stream_filter");                    // x1/x2 ← user filter's transformed payload
+    emitter.instruction("ldr x9, [sp, #8]");                                    // compare the filtered result with the borrowed input
+    emitter.instruction("cmp x1, x9");                                          // an unchanged pointer still belongs to the caller
+    emitter.instruction("b.eq __rt_fwrite_filter_borrowed");                    // leave the borrowed input outside filtered-output cleanup
+    emitter.instruction("str x1, [sp, #24]");                                   // retain the independent filtered output until the write completes
+    emitter.label("__rt_fwrite_filter_borrowed");
     emitter.instruction("str x1, [sp, #8]");                                    // overwrite the payload-ptr slot with the filter result
     emitter.instruction("str x2, [sp, #16]");                                   // overwrite the payload-len slot with the filter result
     emitter.instruction("b __rt_fwrite_direct");                                // fall through to the standard direct-write path
@@ -157,6 +164,12 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.label("__rt_fwrite_syscall");
     emitter.syscall(4);
     emitter.label("__rt_fwrite_return");
+    emitter.instruction("str x0, [sp, #16]");                                   // preserve the byte count or failure across output retirement
+    emitter.instruction("ldr x0, [sp, #24]");                                   // load the independent user-filter output owner
+    emitter.instruction("cbz x0, __rt_fwrite_output_retired");                  // direct writes and borrowed filter results need no retirement
+    emitter.instruction("bl __rt_heap_free_safe");                              // release owned output while ignoring static filter scratch
+    emitter.label("__rt_fwrite_output_retired");
+    emitter.instruction("ldr x0, [sp, #16]");                                   // restore the original write result
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the frame
     emitter.instruction("ret");                                                 // return the byte count from write
@@ -182,13 +195,14 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rdi, r9");                                         // is this a synthetic user-wrapper fd?
     emitter.instruction("jge __rt_user_wrapper_fwrite");                        // dispatch into the wrapper's stream_write instead of issuing a write syscall
 
-    // Frame (rbp-relative): [-8]=fd [-16]=pointer [-24]=length.
+    // Frame (rbp-relative): [-8]=fd [-16]=pointer [-24]=length/result [-32]=output owner.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
     emitter.instruction("sub rsp, 32");                                         // frame for the saved write state
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the file descriptor
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the payload pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the payload length
+    emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // no independent filtered output is owned yet
 
     // -- look up the write filter for this descriptor --
     abi::emit_symbol_address(emitter, "r9", "_stream_write_filters");           // write-filter table base
@@ -265,6 +279,10 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // payload len → third arg
     emitter.instruction("mov ecx, 1");                                          // direction = 1 (write)
     emitter.instruction("call __rt_apply_user_stream_filter");                  // rax/rdx ← user filter's transformed payload
+    emitter.instruction("cmp rax, QWORD PTR [rbp - 16]");                       // an unchanged filtered pointer still belongs to the caller
+    emitter.instruction("je __rt_fwrite_filter_borrowed_x86");                  // leave the borrowed input outside filtered-output cleanup
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // retain the independent filtered output until the write completes
+    emitter.label("__rt_fwrite_filter_borrowed_x86");
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // overwrite the payload-ptr slot with the filter result
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // overwrite the payload-len slot with the filter result
     emitter.instruction("jmp __rt_fwrite_direct_x86");                          // fall through to the standard direct-write path
@@ -285,6 +303,13 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_fwrite_syscall_x86");
     emitter.instruction("call write");                                          // write the payload through libc write()
     emitter.label("__rt_fwrite_return_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the byte count or failure across output retirement
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // load the independent user-filter output owner
+    emitter.instruction("test rax, rax");                                       // direct writes and borrowed filter results have no output owner
+    emitter.instruction("jz __rt_fwrite_output_retired_x86");                   // skip retirement when no independent output was produced
+    emitter.instruction("call __rt_heap_free_safe");                            // release owned output while ignoring static filter scratch
+    emitter.label("__rt_fwrite_output_retired_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // restore the original write result
     emitter.instruction("add rsp, 32");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the byte count from write

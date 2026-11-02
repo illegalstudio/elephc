@@ -1,9 +1,9 @@
 //! Purpose:
-//! Validates control-flow restrictions that make every cdylib export recoverable
-//! at the native host boundary.
+//! Validates control-flow and capability restrictions for recoverable library exports
+//! at native C and PHP host boundaries.
 //!
 //! Called from:
-//! - `crate::pipeline::compile()` after AST-to-EIR lowering for cdylib output.
+//! - `crate::pipeline::compile()` after AST-to-EIR lowering for library output.
 //!
 //! Key details:
 //! - Statically reachable functions, methods, constructors, implicit object hooks,
@@ -19,7 +19,7 @@ use crate::codegen::callable_reachability::CallableReachabilityAnalysis;
 use crate::errors::CompileError;
 use crate::ir::function_variants::{collect_dispatch_groups, resolve_variant_callee_name};
 use crate::ir::{
-    Function, Immediate, Module, Op, RuntimeCallTarget, RuntimeFnId, Terminator, ValueDef, ValueId,
+    CoreBuiltinOp, Function, Immediate, Module, Op, RuntimeCallTarget, RuntimeFnId, Terminator, ValueDef, ValueId,
 };
 use crate::names::php_symbol_key;
 use crate::types::PhpType;
@@ -55,6 +55,23 @@ pub fn validate_cdylib_call_graph(
     module: &Module,
     exports: &HashMap<String, ExportedFunction>,
 ) -> Result<(), CompileError> {
+    validate_call_graph(module, exports, false)
+}
+
+/// Applies core-only producer capability restrictions to every transitively reachable body.
+pub fn validate_phpext_call_graph(
+    module: &Module,
+    exports: &HashMap<String, ExportedFunction>,
+) -> Result<(), CompileError> {
+    validate_call_graph(module, exports, true)
+}
+
+/// Shares reachability proof while adding request-isolation constraints for PHP hosts.
+fn validate_call_graph(
+    module: &Module,
+    exports: &HashMap<String, ExportedFunction>,
+    phpext: bool,
+) -> Result<(), CompileError> {
     let functions = module
         .functions
         .iter()
@@ -82,9 +99,85 @@ pub fn validate_cdylib_call_graph(
             let Some(function) = functions.get(&function_key) else {
                 continue;
             };
+            // Generator constructors allocate coroutine stacks before entering their EIR bodies.
+            if phpext && function.flags.is_generator {
+                return Err(CompileError::new(export.span,
+                    &format!("PHP export '{}' reaches native generators through {}; native generators have no hosted stack or lifecycle policy", export.name, path.join(" -> "))));
+            }
             reject_fatal_terminators(module, function, export, &path)?;
             let callable_reachability = CallableReachabilityAnalysis::new(module, function);
             for instruction in &function.instructions {
+                if phpext {
+                    let php_values = match instruction.op {
+                        Op::MixedBox | Op::MixedClone | Op::ArrayToMixed | Op::HashToMixed =>
+                            &instruction.operands[..instruction.operands.len().min(1)],
+                        Op::Cast if !contains_native_handle(&instruction.result_php_type) =>
+                            &instruction.operands[..instruction.operands.len().min(1)],
+                        Op::ArraySet | Op::ArraySetMixedKey | Op::ArrayPush | Op::HashSet | Op::HashAppend | Op::PropSet =>
+                            instruction.operands.get(1..).unwrap_or(&[]),
+                        Op::RuntimeCall => instruction.operands.as_slice(),
+                        _ => &[],
+                    };
+                    if php_values.iter().any(|value| function.value(*value)
+                        .is_some_and(|value| contains_native_handle(&value.php_type))) {
+                        return Err(CompileError::new(instruction.span.unwrap_or(export.span),
+                            &format!("PHP export '{}' reaches {} through {}; native handles cannot be boxed into PHP values", export.name, instruction.op.name(), path.join(" -> "))));
+                    }
+                    let unsupported = match instruction.op {
+                        Op::GeneratorNew | Op::GeneratorYield | Op::GeneratorYieldFrom | Op::GeneratorReturn =>
+                            Some("native generators have no hosted stack or lifecycle policy"),
+                        Op::ExternGlobalLoad | Op::ExternGlobalStore =>
+                            Some("extern globals have no audited request-local PHP extension lifecycle"),
+                        Op::ErrorSuppressBegin | Op::ErrorSuppressEnd =>
+                            Some("native error suppression has no audited PHP host reporting policy"),
+                        _ => None,
+                    };
+                    if let Some(reason) = unsupported {
+                        return Err(CompileError::new(instruction.span.unwrap_or(export.span),
+                            &format!("PHP export '{}' reaches {} through {}; {reason}", export.name, instruction.op.name(), path.join(" -> "))));
+                    }
+                    // Handler registration and fragment-based diagnostics cannot bypass the host policy.
+                    if instruction.op == Op::CoreBuiltin && !matches!(instruction.immediate.as_ref(),
+                        Some(Immediate::I64(selector)) if *selector == CoreBuiltinOp::DiagnosticCallerLine.as_i64()) {
+                        return Err(CompileError::new(instruction.span.unwrap_or(export.span),
+                            &format!("PHP export '{}' reaches a core builtin through {} with no audited request-local PHP extension lifecycle", export.name, path.join(" -> "))));
+                    }
+                    if matches!(instruction.op, Op::PromoteLocalRefCell | Op::AliasLocalRefCell
+                        | Op::LoadArrayElemRefCell | Op::LoadArrayElemRefCellExisting
+                        | Op::BindRefCellPtr | Op::AdoptRefCellPtr | Op::AcquireRefCell) {
+                        return Err(CompileError::new(instruction.span.unwrap_or(export.span),
+                            &format!("PHP export '{}' reaches reference construction through {}; native reference graphs are not supported by --emit phpext", export.name, path.join(" -> "))));
+                    }
+                    if instruction.op == Op::ObjectNew {
+                        if let Some(class) = immediate_class_name(module, instruction.immediate.as_ref()) {
+                            let exported = crate::phpext::class_helpers::is_exported_class(module, class);
+                            if !exported && !matches!(class, "Exception" | "RuntimeException" | "Error" | "TypeError"
+                                | "ValueError" | "ArithmeticError" | "DivisionByZeroError" | "ArgumentCountError"
+                                | "JsonException") {
+                                return Err(CompileError::new(instruction.span.unwrap_or(export.span),
+                                    &format!("PHP export '{}' constructs unsupported class '{class}'; --emit phpext currently supports builtin Throwables", export.name)));
+                            }
+                        }
+                    }
+                    if let Some(target) = runtime_function_id(instruction.immediate.as_ref()) {
+                        if !crate::phpext::signature::runtime_supported(target) {
+                            return reject_runtime_call(export, instruction, &path, target,
+                                "has no audited request-local PHP extension lifecycle");
+                        }
+                    }
+                    if let Some(callee) = phpext_variant_target(
+                        module,
+                        instruction,
+                        &dispatch_groups,
+                    ) {
+                        return reject_phpext_function_variant(
+                            export,
+                            instruction.span.unwrap_or(export.span),
+                            &path,
+                            &callee,
+                        );
+                    }
+                }
                 if instruction.op == Op::LanguageConstructCall {
                     let Some(name) = immediate_function_name(module, instruction.immediate.as_ref())
                     else {
@@ -118,7 +211,11 @@ pub fn validate_cdylib_call_graph(
                     continue;
                 }
 
-                if opaque_dynamic_dispatch(instruction.op) {
+                if phpext && enqueue_exported_class_method(module, function, instruction,
+                    &functions, &mut queue, &path) { continue; }
+                let private_allocation = phpext && instruction.op == Op::DynamicObjectNewWithoutConstructorMixed
+                    && crate::phpext::class_helpers::is_allocation_helper(function);
+                if opaque_dynamic_dispatch(instruction.op) && !private_allocation {
                     return Err(CompileError::new(
                         instruction.span.unwrap_or(export.span),
                         &format!(
@@ -162,6 +259,7 @@ pub fn validate_cdylib_call_graph(
                         &callable_reachability,
                         &mut queue,
                         &path,
+                        phpext,
                     )?,
                     _ => {}
                 }
@@ -169,6 +267,88 @@ pub fn validate_cdylib_call_graph(
         }
     }
     Ok(())
+}
+
+/// Resolves method calls whose receiver is one final class with an exported host layout.
+fn enqueue_exported_class_method<'a>(module: &Module, function: &Function,
+    instruction: &crate::ir::Instruction, functions: &HashMap<String, &'a Function>,
+    queue: &mut VecDeque<(String, Vec<String>)>, path: &[String]) -> bool {
+    if instruction.op == Op::StaticMethodCall {
+        let Some(Immediate::Data(data)) = instruction.immediate else { return false; };
+        let Some(name) = module.data.strings.get(data.as_raw() as usize) else { return false; };
+        let Some((receiver, method)) = name.rsplit_once("::") else { return false; };
+        let owner = if receiver.eq_ignore_ascii_case("self") || receiver.eq_ignore_ascii_case("static") {
+            let Some(owner) = function.lexical_class.as_deref() else { return false; };
+            owner
+        } else { receiver.trim_start_matches('\\') };
+        if !crate::phpext::class_helpers::is_exported_class(module, owner) { return false; }
+        let Some((class_name, class)) = module.class_infos.iter().find(|(name, _)| name.eq_ignore_ascii_case(owner)) else { return false; };
+        let method_key = php_symbol_key(method);
+        if !class.static_methods.contains_key(&method_key) && !class.methods.contains_key(&method_key) { return false; }
+        return enqueue_user_body(functions, queue, path, &format!("{class_name}::{method}"));
+    }
+    if !matches!(instruction.op, Op::MethodCall | Op::NullsafeMethodCall) { return false; }
+    let Some(receiver) = instruction.operands.first().and_then(|value| function.value(*value)) else { return false; };
+    let PhpType::Object(class_name) = receiver.php_type.codegen_repr() else { return false; };
+    let Some(class) = module.class_infos.get(&class_name) else { return false; };
+    if !class.is_final || !crate::phpext::class_helpers::is_exported_class(module, &class_name) { return false; }
+    let Some(Immediate::Data(data)) = instruction.immediate else { return false; };
+    let Some(method) = module.data.strings.get(data.as_raw() as usize) else { return false; };
+    let Some((name, _)) = class.methods.iter().find(|(name, _)| name.eq_ignore_ascii_case(method)) else { return false; };
+    enqueue_user_body(functions, queue, path, &format!("{class_name}::{name}"));
+    true
+}
+
+/// Identifies a call whose target depends on include-time variant activation.
+fn phpext_variant_target(
+    module: &Module,
+    instruction: &crate::ir::Instruction,
+    dispatch_groups: &HashMap<String, Vec<String>>,
+) -> Option<String> {
+    if !matches!(instruction.op, Op::Call | Op::FunctionVariantCall) {
+        return None;
+    }
+    match instruction.immediate.as_ref()? {
+        Immediate::Data(_) | Immediate::ProfiledData { .. } => {
+            let callee = immediate_function_name(module, instruction.immediate.as_ref())?;
+            dispatch_groups
+                .contains_key(&php_symbol_key(callee))
+                .then(|| callee.to_string())
+        }
+        Immediate::FunctionVariantRef { group, variant } => {
+            resolve_variant_callee_name(module, *group, *variant)
+        }
+        _ => None,
+    }
+}
+
+/// Rejects variant dispatch that cannot be initialized without running top-level source code.
+fn reject_phpext_function_variant<T>(
+    export: &ExportedFunction,
+    span: crate::span::Span,
+    path: &[String],
+    callee: &str,
+) -> Result<T, CompileError> {
+    Err(CompileError::new(
+        span,
+        &format!(
+            "PHP export '{}' reaches include-selected function variant '{}' through {}; --emit phpext does not execute top-level include activation",
+            export.name,
+            callee,
+            path.join(" -> "),
+        ),
+    ))
+}
+
+/// Finds address-bearing native storage whose ordinary Mixed tag would hide its identity.
+fn contains_native_handle(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_) => true,
+        PhpType::Array(value) => contains_native_handle(value),
+        PhpType::AssocArray { key, value } => contains_native_handle(key) || contains_native_handle(value),
+        PhpType::Union(members) => members.iter().any(contains_native_handle),
+        _ => false,
+    }
 }
 
 /// Rejects every fatal EIR terminator in a body reachable from an export.
@@ -257,6 +437,7 @@ fn validate_runtime_call<'a>(
     callable_reachability: &CallableReachabilityAnalysis,
     queue: &mut VecDeque<(String, Vec<String>)>,
     path: &[String],
+    phpext: bool,
 ) -> Result<(), CompileError> {
     if let Some(Immediate::RuntimeCall(RuntimeCallTarget::Pcntl(target))) =
         instruction.immediate.as_ref()
@@ -281,6 +462,19 @@ fn validate_runtime_call<'a>(
         let Some(candidates) = callable_reachability.candidates(callback) else {
             return reject_runtime_call(export, instruction, path, target, "uses an opaque runtime callback");
         };
+        if phpext {
+            if let Some(candidate) = candidates
+                .iter()
+                .find(|candidate| dispatch_groups.contains_key(&php_symbol_key(candidate)))
+            {
+                return reject_phpext_function_variant(
+                    export,
+                    instruction.span.unwrap_or(export.span),
+                    path,
+                    candidate,
+                );
+            }
+        }
         if candidates.is_empty()
             || candidates.iter().any(|candidate| {
                 !enqueue_named_target(functions, dispatch_groups, queue, path, candidate)

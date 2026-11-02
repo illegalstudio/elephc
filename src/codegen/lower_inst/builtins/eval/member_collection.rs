@@ -10,7 +10,7 @@
 use super::*;
 
 /// Registers generated AOT class parent metadata for eval `parent::` resolution.
-pub(super) fn register_eval_native_class_parents(ctx: &mut FunctionContext<'_>, context_offset: usize) {
+pub(super) fn register_eval_native_class_parents(ctx: &mut FunctionContext<'_>, context_source: EvalContextSource) {
     let mut parents = ctx
         .module
         .class_infos
@@ -26,7 +26,7 @@ pub(super) fn register_eval_native_class_parents(ctx: &mut FunctionContext<'_>, 
         .collect::<Vec<_>>();
     parents.sort_by_key(|(class_id, _, _)| *class_id);
     for (_, class_name, parent_name) in parents {
-        register_eval_native_class_parent(ctx, context_offset, &class_name, &parent_name);
+        register_eval_native_class_parent(ctx, context_source, &class_name, &parent_name);
     }
 }
 

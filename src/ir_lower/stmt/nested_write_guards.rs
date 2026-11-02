@@ -7,6 +7,7 @@
 //! Key details:
 //! - Guards run after the RHS and borrow operands published by the caller.
 //! - Arrays, objects, null and supported string offsets keep their existing lowering.
+//! - Rejected appends release an owned string RHS that no container can retain.
 
 use super::*;
 
@@ -18,16 +19,43 @@ pub(super) fn guard_nested_write_parent(
     index: Option<&Expr>,
     span: Span,
 ) -> bool {
+    guard_nested_write_parent_with_string_cleanup(ctx, parent, index, None, &[], span)
+}
+
+/// Guards an append parent and releases an owned string RHS on every rejected branch.
+pub(super) fn guard_array_push_parent(
+    ctx: &mut LoweringContext<'_, '_>,
+    parent: LoweredValue,
+    value: LoweredValue,
+    pins: &[crate::ir_lower::expr::PinnedInFlightOwner],
+    span: Span,
+) -> bool {
+    let string = (ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Str)
+        .then_some(value);
+    guard_nested_write_parent_with_string_cleanup(ctx, parent, None, string, pins, span)
+}
+
+/// Rejects invalid parents and optionally balances an owned string that the write cannot consume.
+fn guard_nested_write_parent_with_string_cleanup(
+    ctx: &mut LoweringContext<'_, '_>,
+    parent: LoweredValue,
+    index: Option<&Expr>,
+    error_string: Option<LoweredValue>,
+    error_string_pins: &[crate::ir_lower::expr::PinnedInFlightOwner],
+    span: Span,
+) -> bool {
     let invalid_string_offset = index.is_none() || index.is_some_and(|index| {
         matches!(&index.kind, ExprKind::StringLiteral(key)
             if crate::numeric_string::scan_numeric_prefix(key).is_none())
     });
     let parent_ty = ctx.builder.value_php_type(parent.value).codegen_repr();
     if parent_ty == PhpType::Str && invalid_string_offset {
+        release_error_string(ctx, error_string, error_string_pins, span);
         throw_string_write_error(ctx, index.is_none(), span);
         return false;
     }
     if matches!(parent_ty, PhpType::Int | PhpType::Float | PhpType::Resource(_)) {
+        release_error_string(ctx, error_string, error_string_pins, span);
         lower_throw_access_error(ctx, "Cannot use a scalar value as an array", span);
         return false;
     }
@@ -41,6 +69,7 @@ pub(super) fn guard_nested_write_parent(
         let scalar_check = ctx.builder.create_named_block("nested.write.scalar.check", Vec::new());
         branch_on_guard(ctx, is_string, string_error, scalar_check);
         ctx.builder.position_at_end(string_error);
+        release_error_string(ctx, error_string, error_string_pins, span);
         throw_string_write_error(ctx, index.is_none(), span);
         ctx.builder.position_at_end(scalar_check);
         ctx.restore_initialized_slots(initialized);
@@ -63,10 +92,24 @@ pub(super) fn guard_nested_write_parent(
     let initialized = ctx.initialized_slots_snapshot();
     branch_on_guard(ctx, invalid, scalar_error, writable);
     ctx.builder.position_at_end(scalar_error);
+    release_error_string(ctx, error_string, error_string_pins, span);
     lower_throw_access_error(ctx, "Cannot use a scalar value as an array", span);
     ctx.builder.position_at_end(writable);
     ctx.restore_initialized_slots(initialized);
     true
+}
+
+/// Releases a string temporary that no rejected append branch can transfer into a container.
+fn release_error_string(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: Option<LoweredValue>,
+    pins: &[crate::ir_lower::expr::PinnedInFlightOwner],
+    span: Span,
+) {
+    if let Some(value) = value {
+        crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins.to_vec(), span);
+        super::array_write_core::release_persisted_string_operand(ctx, value, span);
+    }
 }
 
 /// Tests a boxed parent's runtime type without unboxing or consuming its storage.

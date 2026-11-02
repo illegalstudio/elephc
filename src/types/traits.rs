@@ -204,6 +204,9 @@ pub fn flatten_classes(
                         continue;
                     }
                 };
+                let imported_constants = crate::magic_constants::bind_trait_constant_values(
+                    imported_constants, name,
+                );
                 let merged_constants = match merge::merge_constants(
                     &imported_constants,
                     constants,
@@ -286,6 +289,9 @@ pub fn flatten_classes(
                         continue;
                     }
                 };
+                let imported_constants = crate::magic_constants::bind_trait_constant_values(
+                    imported_constants, name,
+                );
                 let merged_constants = match merge::merge_constants(
                     &imported_constants,
                     constants,

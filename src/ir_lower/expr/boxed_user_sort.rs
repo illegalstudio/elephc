@@ -100,7 +100,7 @@ pub(super) fn lower_boxed_usort(
         ctx.bind_static_callable_temp(&descriptor_slot, binding);
     }
     sort_and_publish(ctx, &place, &work_slot, &descriptor_slot, &callback_source, &guard, expr);
-    Some(lower_null(ctx, expr))
+    Some(lower_bool_literal(ctx, true, expr))
 }
 
 /// Selects places whose stable reference identity can be represented by existing EIR primitives.
@@ -201,7 +201,7 @@ fn sort_and_publish(
     let callback = ctx.load_local(descriptor, Some(expr.span));
     // The existing raw sorter COW-separates this rooted working slot. No
     // callback can observe its payload through the original receiver.
-    emit_builtin_call_value(ctx, "usort", vec![array.value, callback.value], PhpType::Void, expr.span, None);
+    emit_builtin_call_value(ctx, "usort", vec![array.value, callback.value], PhpType::Bool, expr.span, None);
     handler_op(ctx, Op::TryPopHandler, guard.handler, expr.span);
     branch(ctx, finalize);
 

@@ -41,7 +41,29 @@ pub(super) fn lower_method_call(
         None
     };
     let object_expr = object;
-    let object = lower_expr(ctx, object_expr);
+    let object = lower_member_receiver(ctx, object_expr, expr);
+    if op == Op::MethodCall && args.is_empty()
+        && ctx.classes.values().any(|class| class.deferred_property_default_error.is_some())
+        && matches!(php_symbol_key(method).as_str(),
+            "getdefaultproperties" | "getstaticproperties" | "newinstancewithoutconstructor")
+    {
+        if is_reflection_class_construction_receiver(ctx, object.value) {
+            let owns_receiver = ctx.value_is_owning_temporary(object)
+                && !ctx.value_is_owned_unboxed_local_load(object.value);
+            if owns_receiver {
+                ctx.begin_argument_guard_scope();
+                ctx.guard_call_argument(object, 0, expr.span);
+                ctx.end_argument_guard_scope();
+            }
+            // Inspect metadata without consuming an inline reflector needed by the real call.
+            let borrowed = ctx.emit_value(Op::Borrow, vec![object.value], None,
+                ctx.builder.value_php_type(object.value).clone(), Op::Borrow.default_effects(),
+                Some(expr.span));
+            let name = lower_property_get_from_value(ctx, borrowed, "__name", Op::PropGet, expr);
+            crate::ir_lower::property_default_errors::for_dynamic_class(ctx, name, expr.span);
+            if owns_receiver { ctx.unguard_call_argument(object.value, expr.span); }
+        }
+    }
     if let Some(message) = throw_access_message {
         release_owning_receiver_temporary(ctx, object, expr.span);
         return crate::ir_lower::stmt::lower_throw_access_error_expr(ctx, &message, expr.span);
@@ -125,6 +147,9 @@ pub(super) fn lower_method_call(
             return result;
         }
     }
+    if let Some(call) = enum_interface_calls::lower_enum_interface_call(ctx, object, method, args, op, expr) {
+        return call;
+    }
     let magic_args;
     let (dispatch_method, args) = if let Some(args) =
         magic_call_dispatch_args(ctx, object.value, method, args, object_expr.span)
@@ -135,7 +160,6 @@ pub(super) fn lower_method_call(
         (method, args)
     };
     let result_type = method_call_result_type(ctx, object.value, dispatch_method, op, expr);
-    let mut operands = vec![object.value];
     let sig = method_call_argument_signature(ctx, object_expr, object.value, dispatch_method);
     promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
     // A by-reference-returning method transfers a lease that must outlive this caller's
@@ -150,15 +174,41 @@ pub(super) fn lower_method_call(
     let result_staging = prepublish_user_call_result(
         ctx, sig.as_ref(), &return_alias, &result_type, expr.span,
     );
-    // Internal value-class methods can reject a scalar after their temporary receiver exists.
-    let receiver_pins = if crate::types::object_operators::operator_class(
-        &ctx.builder.value_php_type(object.value),
-    ).is_some() {
-        pin_in_flight_owners(ctx, &[object.value], object_expr.span)
-    } else { Vec::new() };
+    let receiver_class = match ctx.builder.value_php_type(object.value).codegen_repr() {
+        PhpType::Object(class_name) => Some(class_name.trim_start_matches('\\').to_string()),
+        _ => None,
+    };
+    // A concrete local load may later unbox physical Mixed storage after eval widens
+    // its slot. Acquiring a root is safe for both borrowed and independently owned loads.
+    let (object, receiver_owner) = root_method_receiver(ctx, object, expr.span);
+    let mut operands = vec![object.value];
     begin_call_argument_evaluation(ctx);
-    let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
+    let call_description = receiver_class
+        .map(|class_name| format!("{class_name}::{dispatch_method}"))
+        .unwrap_or_else(|| dispatch_method.to_string());
+    let previous_description = ctx.call_description.replace(call_description);
+    let ref_place_rewrite = sig.as_ref().and_then(|signature| {
+        super::ref_place_args::rewrite_typed_property_ref_args(ctx, signature, args)
+    });
+    let call_args = ref_place_rewrite
+        .as_ref()
+        .map_or(args, |rewrite| rewrite.args.as_slice());
+    let arg_values = lower_args_with_signature(ctx, sig.as_ref(), call_args);
+    ctx.call_description = previous_description;
     let mut arg_values = arg_values;
+    if method_is_fiber_start(ctx, object.value, dispatch_method) {
+        for argument in &mut arg_values {
+            let omitted = ctx.builder.value_defining_instruction(*argument).is_some_and(|inst| {
+                inst.op == Op::ConstNull && inst.span.is_some_and(|span| span.line == 0 && span.col == 0)
+            });
+            if omitted { continue; }
+            // The native start buffer borrows Mixed cells. Publish boxing in EIR
+            // so ordinary argument cleanup owns it on return, suspension and throw.
+            let value = lowered_value_from_id(ctx, *argument);
+            let boxed = coerce_value_for_temp(ctx, value, &PhpType::Mixed, expr.span);
+            *argument = root_evaluated_call_argument(ctx, boxed, expr.span).value;
+        }
+    }
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
     let roots = root_user_call_operands(
         ctx,
@@ -193,222 +243,16 @@ pub(super) fn lower_method_call(
         expr.span,
     );
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
-    unpin_in_flight_owners(ctx, receiver_pins, object_expr.span);
-    release_owning_receiver_temporary(ctx, object, expr.span);
+    if let Some(rewrite) = ref_place_rewrite {
+        super::ref_place_args::finish_ref_place_rewrite(ctx, rewrite, expr.span);
+    }
+    if let Some(owner) = receiver_owner {
+        retire_owned_call_operand(ctx, owner, expr.span);
+    } else {
+        release_owning_receiver_temporary(ctx, object, expr.span);
+    }
     let call = take_prepublished_call_result(ctx, result_staging, call, expr.span);
     finish_reference_return_value(ctx, call, reference_staging, expr.span)
-}
-
-/// Lowers the `Closure` rebinding methods on a closure (`Callable`) receiver:
-/// `$closure->bindTo($newThis [, $scope])` and `$closure->call($newThis, ...$args)`.
-/// Returns `None` for any other method so normal dispatch (and its diagnostics)
-/// still apply. A statically known explicit `$scope` receives its own closure
-/// function specialization, preserving PHP member visibility without changing
-/// the original closure's lexical scope.
-pub(super) fn lower_closure_bind_method(
-    ctx: &mut LoweringContext<'_, '_>,
-    closure_expr: &Expr,
-    closure: &LoweredValue,
-    method: &str,
-    args: &[Expr],
-    expr: &Expr,
-) -> Option<LoweredValue> {
-    let method = php_symbol_key(method);
-    let result_type = match method.as_str() {
-        "bindto" => PhpType::Callable,
-        "call" => PhpType::Mixed,
-        _ => return None,
-    };
-    if method == "bindto" {
-        if let (Some(new_this), Some(scope)) = (args.first(), args.get(1)) {
-            if let Some(plan) = plan_scoped_closure_bind(ctx, closure_expr, scope) {
-                return Some(lower_planned_scoped_closure_bind(
-                    ctx, plan, *closure, new_this, scope, expr,
-                ));
-            }
-        }
-    }
-    // An escaped closure, such as a global replaced by a destructor or an error handler, is
-    // stored in a boxed Mixed cell once its compile-time callable identity is invalidated. The
-    // runtime binder consumes the raw callable descriptor, not the address of that Mixed box.
-    // Extract an owning descriptor view at the same boundary used for declared callable
-    // parameters before publishing the bind operands for unwind cleanup.
-    let closure = if matches!(
-        ctx.builder.value_php_type(closure.value).codegen_repr(),
-        PhpType::Mixed | PhpType::Union(_)
-    ) {
-        unbox_callable_param_storage(ctx, *closure, Some(closure_expr.span))
-    } else {
-        *closure
-    };
-    // Binding retains its own receiver and environment. Original temporary inputs still
-    // need their own retirement, including a throw while evaluating the new receiver or
-    // invocation arguments. The result must outlive both original-input cleanup records.
-    let result_staging = prepublish_call_result(ctx, &result_type, expr.span);
-    let (closure, closure_owner) = root_owned_call_operand(ctx, closure, expr.span);
-    let new_this = match args.first() {
-        Some(arg) => lower_expr(ctx, arg),
-        None => lower_null(ctx, expr),
-    };
-    let (new_this, receiver_owner) = root_owned_call_operand(ctx, new_this, expr.span);
-    let bound = emit_closure_bind(ctx, closure.value, new_this.value, expr);
-    let result = if method == "call" {
-        let call_args = &args[args.len().min(1)..];
-        let bound = root_descriptor_callback(ctx, bound, PhpType::Mixed, expr.span);
-        let arg_container =
-            lower_untyped_descriptor_invoker_arg_container(ctx, call_args, expr.span);
-        emit_callable_descriptor_invoke(ctx, bound, arg_container, expr.span)
-    } else {
-        bound
-    };
-    stage_call_result(ctx, result_staging.as_ref(), result, expr.span);
-    if let Some(slot) = receiver_owner {
-        retire_owned_call_operand(ctx, slot, expr.span);
-    }
-    if let Some(slot) = closure_owner {
-        retire_owned_call_operand(ctx, slot, expr.span);
-    }
-    Some(take_prepublished_call_result(ctx, result_staging, result, expr.span))
-}
-
-/// A statically resolved closure function cloned for one explicit PHP visibility scope.
-pub(super) struct ScopedClosureBindPlan {
-    name: String,
-    signature: FunctionSig,
-    return_alias: ReturnArgAlias,
-}
-
-/// Plans a scope-specialized binding without emitting EIR or evaluating source expressions.
-///
-/// The generic runtime binder copies a descriptor, so it cannot alter the already compiled
-/// function's lexical member-access scope. When both the closure and scope class are statically
-/// known, clone that EIR function and assign the requested lexical class to the clone. The source
-/// function remains unchanged for unbound calls and bindings using another scope.
-pub(super) fn plan_scoped_closure_bind(
-    ctx: &mut LoweringContext<'_, '_>,
-    closure_expr: &Expr,
-    scope_expr: &Expr,
-) -> Option<ScopedClosureBindPlan> {
-    let binding = static_callable_binding_for_expr(ctx, closure_expr)
-        .or_else(|| ctx.take_pending_static_callable_result())?;
-    let StaticCallableBinding::Closure {
-        name,
-        signature,
-        captures,
-        return_alias,
-        ..
-    } = binding
-    else {
-        return None;
-    };
-    let requested_scope = static_callable_class_name(ctx, scope_expr)?;
-    let scope = lookup_folded_name(
-        ctx.classes.keys(),
-        requested_scope.trim_start_matches('\\'),
-    )?;
-    let mut function = ctx.closure_function(&name)?.clone();
-    let capture_params = function
-        .params
-        .get(function.params.len().checked_sub(captures.len())?..)?;
-    let [this_param] = capture_params else {
-        return None;
-    };
-    if this_param.name != "this"
-        || this_param.php_type.codegen_repr() != PhpType::Mixed
-        || this_param.by_ref
-    {
-        return None;
-    }
-    let scoped_name = ctx.next_closure_name();
-    function.name = scoped_name.clone();
-    function.lexical_class = Some(scope);
-    ctx.extend_closures([function]);
-    Some(ScopedClosureBindPlan {
-        name: scoped_name,
-        signature,
-        return_alias,
-    })
-}
-
-/// Materializes a descriptor whose compiled function uses the planned PHP visibility scope.
-pub(super) fn lower_planned_scoped_closure_bind(
-    ctx: &mut LoweringContext<'_, '_>,
-    plan: ScopedClosureBindPlan,
-    closure: LoweredValue,
-    new_this_expr: &Expr,
-    scope_expr: &Expr,
-    expr: &Expr,
-) -> LoweredValue {
-    let result_staging = prepublish_call_result(ctx, &PhpType::Callable, expr.span);
-    let (_, closure_owner) = root_owned_call_operand(ctx, closure, expr.span);
-    let new_this = lower_expr(ctx, new_this_expr);
-    let (new_this, receiver_owner) = root_owned_call_operand(ctx, new_this, new_this_expr.span);
-    let scope = lower_expr(ctx, scope_expr);
-    let (_, scope_owner) = root_owned_call_operand(ctx, scope, scope_expr.span);
-
-    let receiver_capture =
-        crate::ir_lower::ownership::acquire_if_refcounted(ctx, new_this, Some(expr.span));
-    let boxed_this = if ctx
-        .builder
-        .value_php_type(receiver_capture.value)
-        .codegen_repr()
-        == PhpType::Mixed
-    {
-        receiver_capture
-    } else {
-        ctx.box_value_as_mixed(receiver_capture, PhpType::Mixed, Some(expr.span))
-    };
-    let captures = vec![ClosureCapture {
-        value: boxed_this.value,
-        by_ref_local: None,
-    }];
-    let data = ctx.intern_string(&plan.name);
-    let bound = ctx.emit_value(
-        Op::ClosureNew,
-        vec![boxed_this.value],
-        Some(Immediate::Data(data)),
-        PhpType::Callable,
-        Op::ClosureNew.default_effects(),
-        Some(expr.span),
-    );
-    stage_call_result(ctx, result_staging.as_ref(), bound, expr.span);
-    if let Some(slot) = scope_owner {
-        retire_owned_call_operand(ctx, slot, scope_expr.span);
-    }
-    if let Some(slot) = receiver_owner {
-        retire_owned_call_operand(ctx, slot, new_this_expr.span);
-    }
-    if let Some(slot) = closure_owner {
-        retire_owned_call_operand(ctx, slot, expr.span);
-    }
-    let bound = take_prepublished_call_result(ctx, result_staging, bound, expr.span);
-    ctx.set_pending_static_callable_result(StaticCallableBinding::Closure {
-        name: plan.name,
-        signature: plan.signature,
-        captures,
-        return_alias: plan.return_alias,
-        loop_guarded: false,
-        numeric_loop_guarded: false,
-    });
-    bound
-}
-
-/// Emits the `closure_bind` runtime call that rebinds a closure's captured
-/// `$this`, yielding a new closure (`Callable`) descriptor.
-pub(super) fn emit_closure_bind(
-    ctx: &mut LoweringContext<'_, '_>,
-    closure: crate::ir::ValueId,
-    new_this: crate::ir::ValueId,
-    expr: &Expr,
-) -> LoweredValue {
-    ctx.emit_value(
-        Op::ClosureBind,
-        vec![closure, new_this],
-        None,
-        PhpType::Callable,
-        Op::ClosureBind.default_effects(),
-        Some(expr.span),
-    )
 }
 
 /// Builds synthetic `__call` arguments when a class lacks the requested method.
@@ -444,7 +288,32 @@ pub(super) fn method_call_argument_signature(
     if method_is_fiber_start(ctx, object, method) {
         return crate::ir_lower::fibers::start_sig_for_expr(ctx, object_expr);
     }
-    method_signature(ctx, object, method)
+    method_signature(ctx, object, method).or_else(|| narrowed_receiver_argument_signature(ctx, object, method))
+}
+
+/// Returns the signature that normalizes the arguments of a method the receiver's static class
+/// does not declare: the checker accepted the call because it narrowed the receiver
+/// (`if ($response instanceof Page) { $response->with($blocks) }`), and codegen dispatches it
+/// on the runtime class as for a `mixed` receiver. Its arguments take the signature every
+/// declaring class shares, as a `mixed` receiver's do, so an owned argument (`new Conn()`, a
+/// retained property read) is released after the call; without one it was handed over raw and
+/// never released. `None` for a class that routes the call through `__call`, or when the
+/// declaring classes disagree.
+fn narrowed_receiver_argument_signature(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    method: &str,
+) -> Option<FunctionSig> {
+    let object_ty = ctx.builder.value_php_type(object);
+    let (class_name, _) = singular_object_class(&object_ty)?;
+    let normalized = class_name.trim_start_matches('\\');
+    if normalized.is_empty()
+        || ctx.has_eval_barrier()
+        || class_method_signature(ctx, normalized, &php_symbol_key("__call")).is_some()
+    {
+        return None;
+    }
+    common_dynamic_method_signature(ctx, &php_symbol_key(method))
 }
 
 /// Returns true when a method call targets PHP's built-in `Fiber::start()`.

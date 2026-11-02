@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Direct calls stay source-sensitive so a local buffer variable can be nulled.
+//! - Freeing the nulled local again is a no-op, while a stale alias dies with the
+//!   use-after-free fatal, matching compiled `buffer_free()`.
 
 use super::super::super::*;
 
@@ -46,12 +48,12 @@ pub(in crate::interpreter) fn eval_buffer_free_values_result(
     eval_buffer_free_result(*buffer, values)
 }
 
-/// Frees an AOT-shaped buffer header and returns PHP null.
+/// Frees an eval buffer through the registry and returns PHP null.
 fn eval_buffer_free_result(
     buffer: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_buffer_free_address(buffer, values)?;
+    super::buffer_registry::eval_buffer_release(buffer, values)?;
     values.null()
 }
 
@@ -63,7 +65,7 @@ fn eval_buffer_free_direct_variable(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let value = eval_expr(&EvalExpr::LoadVar(variable.to_string()), context, scope, values)?;
-    eval_buffer_free_address(value, values)?;
+    super::buffer_registry::eval_buffer_release(value, values)?;
     let null = values.null()?;
     for replaced in scope.set_respecting_references(
         variable.to_string(),
@@ -73,16 +75,4 @@ fn eval_buffer_free_direct_variable(
         values.release(replaced)?;
     }
     values.null()
-}
-
-/// Frees the raw allocation addressed by an AOT-shaped buffer header pointer.
-fn eval_buffer_free_address(
-    buffer: RuntimeCellHandle,
-    values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
-    let address = super::ptr::eval_non_null_pointer(buffer, values)?;
-    unsafe {
-        libc::free(address.cast::<libc::c_void>());
-    }
-    Ok(())
 }

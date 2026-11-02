@@ -23,7 +23,7 @@ use super::FunctionContext;
 pub(crate) struct MachineLayoutState {
     /// Block emitted immediately after the current one, if any.
     pub(crate) next_block: Option<BlockId>,
-    /// Integer compare whose flags the current block's `cond_br` consumes directly.
+    /// Scalar compare whose flags the current block's `cond_br` consumes directly.
     pub(crate) fused_compare: Option<InstId>,
     /// Out-of-line cold text collected for this function, when deferral is active.
     cold_text: Option<String>,
@@ -37,7 +37,7 @@ impl FunctionContext<'_> {
             .and_then(|block| self.block_label_for_id(block).ok())
     }
 
-    /// Returns true when `inst` is an integer compare lowered by the following `cond_br`.
+    /// Returns true when `inst` is a scalar compare lowered by the following `cond_br`.
     pub(in crate::codegen) fn is_fused_compare(&self, inst: InstId) -> bool {
         self.machine_layout.fused_compare == Some(inst)
     }

@@ -163,7 +163,7 @@ fn collect_program_function_bodies<'a>(
                     FunctionEffectBody {
                         body,
                         declared_never: is_never_return_type(return_type),
-                        parameter_guard_may_throw: params.iter().any(|(_, ty, _, _)| matches!(ty, Some(TypeExpr::False))),
+                        parameter_guard_may_throw: params.iter().any(|(_, ty, _, _)| type_guard_may_throw(ty.as_ref())),
                     },
                 );
             }
@@ -198,7 +198,7 @@ fn collect_program_static_method_bodies<'a>(
                                 context: context.clone(),
                                 body: &method.body,
                                 declared_never: is_never_return_type(&method.return_type),
-                                parameter_guard_may_throw: method.params.iter().any(|(_, ty, _, _)| matches!(ty, Some(TypeExpr::False))),
+                                parameter_guard_may_throw: method.params.iter().any(|(_, ty, _, _)| type_guard_may_throw(ty.as_ref())),
                             },
                         );
                     }
@@ -235,7 +235,7 @@ fn collect_program_instance_method_bodies<'a>(
                                 context: context.clone(),
                                 body: &method.body,
                                 declared_never: is_never_return_type(&method.return_type),
-                                parameter_guard_may_throw: method.params.iter().any(|(_, ty, _, _)| matches!(ty, Some(TypeExpr::False))),
+                                parameter_guard_may_throw: method.params.iter().any(|(_, ty, _, _)| type_guard_may_throw(ty.as_ref())),
                             },
                         );
                     }
@@ -358,6 +358,35 @@ fn never_declared_effect(declared_never: bool, effect: Effect) -> Effect {
         effect.with_side_effects()
     } else {
         effect
+    }
+}
+
+/// Returns whether binding this declared parameter can raise before the body runs.
+///
+/// A literal `false` type and a class type both run a call-boundary guard: `false` checks the
+/// literal, and a class checks that a `Class|false` / `Class|null` union argument carries the
+/// object alternative. Keep the call observable even when the body itself is pure.
+fn type_guard_may_throw(ty: Option<&TypeExpr>) -> bool {
+    let Some(ty) = ty else { return false };
+    match ty {
+        TypeExpr::False | TypeExpr::Named(_) if !type_expr_is_builtin(ty) => true,
+        TypeExpr::GenericClass { .. } | TypeExpr::Intersection(_) => true,
+        TypeExpr::Nullable(inner) => type_guard_may_throw(Some(inner)),
+        TypeExpr::Union(members) => members.iter().any(|member| type_guard_may_throw(Some(member))),
+        _ => false,
+    }
+}
+
+/// Returns whether a named type expression is a PHP builtin rather than a class.
+fn type_expr_is_builtin(ty: &TypeExpr) -> bool {
+    match ty {
+        TypeExpr::Named(name) => matches!(
+            name.as_str().trim_start_matches('\\').to_ascii_lowercase().as_str(),
+            "mixed" | "array" | "object" | "callable" | "iterable" | "string" | "int"
+                | "float" | "bool" | "null" | "false" | "true" | "static" | "self"
+                | "parent" | "void" | "never"
+        ),
+        _ => false,
     }
 }
 

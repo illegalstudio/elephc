@@ -124,9 +124,8 @@ pub(in crate::interpreter) fn catch_types_match_thrown(
 ) -> Result<bool, EvalStatus> {
     for class_name in class_names {
         let class_name = class_name.trim_start_matches('\\');
-        if class_name.eq_ignore_ascii_case("Throwable") {
-            return Ok(true);
-        }
+        // Throwable uses the same interface matcher as other catch types. Native
+        // control-flow objects, including coroutine cancellation, are not Throwables.
         if let Some(matched) = dynamic_object_is_a(thrown, class_name, false, context, values)? {
             if matched {
                 return Ok(true);

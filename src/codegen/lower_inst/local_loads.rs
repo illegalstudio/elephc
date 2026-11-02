@@ -40,7 +40,9 @@ pub(super) fn lower_load_local(ctx: &mut FunctionContext<'_>, inst: &Instruction
     let result = inst
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("load_local missing result value"))?;
-    let source_ty = ctx.load_local_to_result(slot)?;
+    ctx.load_local_to_result(slot)?;
+    // The slot's box type, so a `?ptr<T>` slot boxed for a `mixed` result reads null for 0.
+    let source_ty = ctx.local_mixed_box_type(slot)?;
     let result_ty = ctx.value_php_type(result)?;
     coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty)?;
     ctx.store_result_value(result)
@@ -59,7 +61,7 @@ pub(super) fn lower_load_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruct
     }
     if !ctx.local_ref_cell_representation_is_dynamic(slot) {
         let source_ty = ctx.load_raw_local_to_result(slot)?;
-        coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty)?;
+        coerce_borrowed_ref_cell_local(ctx, &source_ty, &result_ty)?;
         return ctx.store_result_value(result);
     }
     let state_offset = ctx.ref_cell_state_offset(slot).ok_or_else(|| {
@@ -86,12 +88,32 @@ pub(super) fn lower_load_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruct
         }
     }
     let source_ty = ctx.load_raw_local_to_result(slot)?;
-    coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty)?;
+    coerce_borrowed_ref_cell_local(ctx, &source_ty, &result_ty)?;
     ctx.emit_branch(&done);
     ctx.emitter.label(&ref_cell);
     load_ref_cell_local_to_result_as(ctx, slot, &result_ty)?;
     ctx.emitter.label(&done);
     ctx.store_result_value(result)
+}
+
+/// Keeps a ref-cell read borrowed on the raw side of a conditional promotion.
+/// The cell path already borrows its payload; a flow-proven heap view from an unpromoted
+/// Mixed box must borrow the payload directly instead of adding a lease or string copy.
+pub(super) fn coerce_borrowed_ref_cell_local(
+    ctx: &mut FunctionContext<'_>,
+    source_ty: &PhpType,
+    result_ty: &PhpType,
+) -> Result<()> {
+    if source_ty.codegen_repr() == PhpType::Mixed
+        && matches!(result_ty.codegen_repr(), PhpType::Str | PhpType::Array(_)
+            | PhpType::AssocArray { .. } | PhpType::Object(_) | PhpType::Callable
+            | PhpType::Iterable)
+    {
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
+        return Ok(());
+    }
+    coerce_loaded_local_to_result_type(ctx, source_ty, result_ty)
 }
 
 /// Loads the value pointed to by a local ref-cell slot using the supplied alias type.
@@ -151,13 +173,16 @@ pub(in crate::codegen) fn coerce_loaded_local_to_result_type(
     source_ty: &PhpType,
     result_ty: &PhpType,
 ) -> Result<()> {
+    let box_ty = crate::types::mixed_box_php_type(source_ty);
     let source_ty = source_ty.codegen_repr();
     let result_ty = result_ty.codegen_repr();
     if crate::ir::local_load_types_share_storage(&source_ty, &result_ty) {
         return Ok(());
     }
     match (&source_ty, &result_ty) {
-        (PhpType::Mixed, PhpType::Int) => {
+        // A boxed pointer is an integer-like payload and a boxed null casts to 0, which is the
+        // null of a `?ptr<T>` read (a `mixed` static local later holding a pointer).
+        (PhpType::Mixed, PhpType::Int | PhpType::Pointer(_)) => {
             move_int_result_to_first_arg(ctx);
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
             Ok(())
@@ -196,12 +221,23 @@ pub(in crate::codegen) fn coerce_loaded_local_to_result_type(
             );
             Ok(())
         }
+        // A pointer-word local that lowering knows holds `null` here (address 0 in the slot)
+        // reads as the ordinary null value every `null` consumer expects.
+        (PhpType::Pointer(_), PhpType::Void) => {
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                crate::codegen::sentinels::NULL_SENTINEL,
+            );
+            Ok(())
+        }
         (_, PhpType::TaggedScalar) => {
             coerce_loaded_value_to_tagged_scalar(ctx, &source_ty)?;
             Ok(())
         }
+        // A `?ptr<T>` source keeps its union, so address 0 is PHP null.
         (_, PhpType::Mixed) => {
-            emit_box_current_value_as_mixed(ctx.emitter, &source_ty);
+            emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
             Ok(())
         }
         _ => Err(CodegenIrError::unsupported(format!(

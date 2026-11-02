@@ -158,11 +158,13 @@ pub(super) fn first_class_callable_descriptor(
 /// The invoker copies a borrowed string result and takes an owned one as is, so getting this
 /// wrong in the borrowed direction leaks one string per call. Owned results come from the
 /// mbstring engine and from the transforms that persist before returning (`strtoupper`,
-/// `strtolower`); everything else answers in the concat scratch buffer.
+/// `strtolower`), and from full semantic wrappers that persist their PHP return value.
 pub(super) fn builtin_returns_owned_string(name: &str) -> bool {
     crate::builtins::registry::lookup(name).is_some_and(|definition| {
         let semantics = &definition.spec.semantics;
-        matches!(
+        matches!(semantics.argument_lowering,
+            crate::builtins::semantics::BuiltinArgumentLowering::WeakStringUnion { .. }
+        ) || matches!(
             semantics.runtime_functions,
             crate::builtins::semantics::BuiltinRuntimeFunctions::One(target)
                 if target.uses_mbstring_runtime()

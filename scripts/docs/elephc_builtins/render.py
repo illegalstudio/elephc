@@ -317,11 +317,20 @@ def _availability_section(b: dict) -> str:
             }.get(route, "the Elephc compiler")
             lines.append(f"- **Compiled (AOT)**: supported through {route_text}.")
         if aot.get("signature_override_reason"):
-            lines.append(
-                "- **AOT signature compatibility**: "
-                f"`{aot['signature_override_reason']}` - compiled code accepts the "
-                "signature shown above; eval may expose the broader canonical signature."
-            )
+            reason = aot["signature_override_reason"]
+            if reason == "runtime-arity-validation":
+                lines.append(
+                    "- **AOT signature compatibility**: "
+                    f"`{reason}` - compiled code accepts any argument count and raises "
+                    "PHP's `ArgumentCountError` at run time, so the signature shown is the "
+                    "PHP-visible one."
+                )
+            else:
+                lines.append(
+                    "- **AOT signature compatibility**: "
+                    f"`{reason}` - compiled code accepts the signature shown above; eval "
+                    "may expose the broader canonical signature."
+                )
             eval_support = b.get("eval") or {}
             if eval_support.get("supported"):
                 lines.append(

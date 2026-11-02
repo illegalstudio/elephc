@@ -25,11 +25,11 @@ builtin! {
 /// Validates the argument type for a `sort` call.
 ///
 /// Accepts concrete and declared PHP arrays. Arity (exactly 1) is
-/// pre-validated by the registry. Returns `Ok(PhpType::Void)` on success.
+/// pre-validated by the registry. Returns `Ok(PhpType::Bool)` on success.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) && !ty.is_php_array() {
         return Err(CompileError::new(cx.span, &format!("{}() argument must be array", cx.name)));
     }
-    Ok(PhpType::Void)
+    Ok(PhpType::Bool)
 }

@@ -10,6 +10,14 @@
 //! - The `assoc_chunk` submodule checks heap balance when `array_chunk()` copies an associative receiver.
 //! - The `mixed_receiver_property_writes` submodule checks the ownership of a property write whose receiver is statically `mixed`.
 
+#[path = "runtime_gc/borrowed_numeric.rs"]
+mod borrowed_numeric;
+#[path = "runtime_gc/borrowed_string_reads.rs"]
+mod borrowed_string_reads;
+#[path = "runtime_gc/ref_local_append.rs"]
+mod ref_local_append;
+#[path = "runtime_gc/string_offset_lifetime.rs"]
+mod string_offset_lifetime;
 #[path = "runtime_gc/json_decode_owners.rs"]
 mod json_decode_owners;
 #[path = "runtime_gc/string_append.rs"]
@@ -18,6 +26,11 @@ mod string_append;
 mod bcmath_number;
 #[path = "runtime_gc/basics.rs"]
 mod basics;
+#[path = "runtime_gc/branch_conditions.rs"]
+mod branch_conditions;
+#[path = "runtime_gc/receiver_parameter_owners.rs"]
+mod receiver_parameter_owners;
+mod guarded_interface_mutations;
 #[path = "runtime_gc/large_unary_string_results.rs"]
 mod large_unary_string_results;
 #[path = "runtime_gc/static_local_initializers.rs"]
@@ -26,12 +39,21 @@ mod static_local_initializers;
 mod ini_lookup_arguments;
 #[path = "runtime_gc/mixed_string_cast_return.rs"]
 mod mixed_string_cast_return;
+#[path = "runtime_gc/stream_registry.rs"]
+mod stream_registry;
+#[path = "runtime_gc/pointer_read_owners.rs"]
+mod pointer_read_owners;
+mod filter_brigade_owners;
+#[path = "runtime_gc/pending_return_owners.rs"]
+mod pending_return_owners;
 #[path = "runtime_gc/object_cast.rs"]
 mod object_cast;
 #[path = "runtime_gc/array_cast.rs"]
 mod array_cast;
 #[path = "runtime_gc/nullable_string_return.rs"]
 mod nullable_string_return;
+#[path = "runtime_gc/nullable_array_read_owners.rs"]
+mod nullable_array_read_owners;
 #[path = "runtime_gc/iconv.rs"]
 mod iconv;
 #[path = "runtime_gc/mbstring.rs"]
@@ -47,6 +69,7 @@ mod deep_cleanup;
 #[path = "runtime_gc/scalar_mixed_cleanup.rs"]
 mod scalar_mixed_cleanup;
 mod scalar_set_fast_path;
+mod heap_tail_scan;
 #[path = "runtime_gc/eval_constructor.rs"]
 mod eval_constructor;
 #[path = "runtime_gc/eval_native_calls.rs"]
@@ -100,6 +123,8 @@ mod omitted_by_ref_default_args;
 mod callable_property_owners;
 #[path = "runtime_gc/foreach_object_source.rs"]
 mod foreach_object_source;
+mod foreach_nested_owners;
+mod fiber_transfer_owners;
 #[path = "runtime_gc/foreach_iterator_aggregate_owner.rs"]
 mod foreach_iterator_aggregate_owner;
 #[path = "runtime_gc/nested_property_defaults.rs"]
@@ -110,6 +135,7 @@ mod spread_promotion;
 mod stack_args;
 #[path = "runtime_gc/cow_and_cycles.rs"]
 mod cow_and_cycles;
+mod missing_key_unset;
 #[path = "runtime_gc/core_builtins.rs"]
 mod core_builtins;
 #[path = "runtime_gc/dynamic_property_cycles.rs"]
@@ -120,6 +146,8 @@ mod destructor_catch_cleanup;
 mod callback_argument_cleanup;
 mod argument_evaluation_owners;
 mod codegen_guard_operand_owners;
+mod offset_unset_key_guards;
+mod array_edge_type_errors;
 mod call_coercion_owners;
 mod eval_sparse_arrays;
 mod boxed_array_merge;
@@ -141,6 +169,7 @@ mod boxed_array_column;
 mod boxed_array_take;
 mod boxed_array_unshift;
 mod boxed_array_sort;
+mod boxed_array_reverse;
 mod boxed_array_splice;
 mod boxed_array_slice;
 mod boxed_array_key_sort;
@@ -164,12 +193,15 @@ mod native_property_unset;
 mod eval_closure_receivers;
 mod eval_argument_lifetimes;
 mod eval_array_references;
+mod eval_method_adapter_owners;
 mod eval_operand_owners;
 mod eval_scope_writeback;
 mod unserialize_hydration_data;
 mod serialize_magic_results;
 #[path = "runtime_gc/growth.rs"]
 mod growth;
+#[path = "runtime_gc/allocator_bins.rs"]
+mod allocator_bins;
 #[path = "runtime_gc/heap.rs"]
 mod heap;
 mod split_remainders;
@@ -177,15 +209,54 @@ mod split_remainders;
 mod implode_boxed_operand;
 #[path = "runtime_gc/heap_codegen.rs"]
 mod heap_codegen;
+#[path = "runtime_gc/memory_metrics.rs"]
+mod memory_metrics;
 #[path = "runtime_gc/resource_scope_cleanup.rs"]
 mod resource_scope_cleanup;
 #[path = "runtime_gc/resource_inventory.rs"]
 mod resource_inventory;
 #[path = "runtime_gc/class_param_return.rs"]
 mod class_param_return;
+#[path = "runtime_gc/string_param_return.rs"]
+mod string_param_return;
 #[path = "runtime_gc/reflection_attribute_filter.rs"]
 mod reflection_attribute_filter;
 #[path = "runtime_gc/tagged_scalar_boxing.rs"]
 mod tagged_scalar_boxing;
+#[path = "runtime_gc/string_offset_writes.rs"]
+mod string_offset_writes;
 #[path = "runtime_gc/gc_incoming_cache.rs"]
 mod gc_incoming_cache;
+#[path = "runtime_gc/unshift_reference_cow.rs"]
+mod unshift_reference_cow;
+
+mod entity_slot_owners;
+
+#[path = "runtime_gc/heap_small_bins.rs"]
+mod heap_small_bins;
+
+#[path = "runtime_gc/gc_candidate_cost.rs"]
+mod gc_candidate_cost;
+
+mod callable_cycles;
+
+mod native_object_cycles;
+
+mod incomplete_object_cycles;
+
+mod coroutine_cancellation;
+#[path = "runtime_gc/coroutine_boundaries.rs"]
+mod coroutine_boundaries;
+#[path = "runtime_gc/coroutine_eval.rs"]
+mod coroutine_eval;
+
+#[path = "runtime_gc/coroutine_debuginfo.rs"]
+mod coroutine_debuginfo;
+
+mod coroutine_slot_set;
+#[path = "runtime_gc/counter_regions.rs"]
+mod counter_regions;
+#[path = "runtime_gc/static_object_exports.rs"]
+mod static_object_exports;
+#[path = "runtime_gc/gmp_exception_operands.rs"]
+mod gmp_exception_operands;

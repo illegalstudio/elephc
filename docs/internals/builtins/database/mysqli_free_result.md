@@ -2,7 +2,7 @@
 title: "mysqli_free_result() - internals"
 description: "Compiler internals for mysqli_free_result(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 128
+  order: 131
 ---
 
 ## `mysqli_free_result()` - internals

@@ -449,16 +449,34 @@ impl Checker {
                         );
                     }
                 }
+                let param_name = decl
+                    .params
+                    .get(arg_idx)
+                    .map(String::as_str)
+                    .unwrap_or("arg");
+                let declared_ty = decl
+                    .param_types
+                    .get(arg_idx)
+                    .and_then(|annotation| annotation.as_ref())
+                    .map(|annotation| {
+                        self.resolve_declared_param_type_hint(
+                            annotation,
+                            decl.span,
+                            &format!("Function '{}' parameter ${}", name, param_name),
+                        )
+                    })
+                    .transpose()?;
                 if supplied_reference {
                     // The callee holds a reference to this local from here on, and it can
                     // escape, so the local is never kill/retype eligible in this body.
                     self.record_reference_alias_root(arg);
-                    if !self.is_by_ref_argument_lvalue(arg, caller_env)? {
-                        let param_name = decl
-                            .params
-                            .get(arg_idx)
-                            .map(String::as_str)
-                            .unwrap_or("arg");
+                    let property_place = match declared_ty.as_ref() {
+                        Some(expected_ty) => {
+                            self.by_ref_property_place(arg, expected_ty, caller_env)?
+                        }
+                        None => false,
+                    };
+                    if !property_place && !self.is_by_ref_argument_lvalue(arg, caller_env)? {
                         return Err(CompileError::new(
                             arg.span,
                             &format!(
@@ -468,17 +486,7 @@ impl Checker {
                         ));
                     }
                 }
-                if let Some(type_ann) = decl.param_types.get(arg_idx).and_then(|t| t.as_ref()) {
-                    let param_name = decl
-                        .params
-                        .get(arg_idx)
-                        .map(String::as_str)
-                        .unwrap_or("arg");
-                    let declared_ty = self.resolve_declared_param_type_hint(
-                        type_ann,
-                        decl.span,
-                        &format!("Function '{}' parameter ${}", name, param_name),
-                    )?;
+                if let Some(declared_ty) = declared_ty {
                     // A tracked two-slot callable array crosses a declared `callable` boundary
                     // as the descriptor EIR lowering materializes for this exact argument. The
                     // already-resolved call validator applies the same exception; the first call
@@ -604,13 +612,19 @@ impl Checker {
 
         for i in arg_idx..decl.params.len() {
             if let Some(default_expr) = &decl.defaults[i] {
+                let deferred_scope_error =
+                    crate::types::deferred_defaults::deferred_error_message(default_expr).is_some();
                 if let Some(type_ann) = decl.param_types.get(i).and_then(|t| t.as_ref()) {
                     let declared_ty = self.resolve_declared_param_type_hint(
                         type_ann,
                         decl.span,
                         &format!("Function '{}' parameter ${}", name, decl.params[i]),
                     )?;
-                    let default_ty = self.infer_type(default_expr, caller_env)?;
+                    let default_ty = if deferred_scope_error {
+                        declared_ty.clone()
+                    } else {
+                        self.infer_type(default_expr, caller_env)?
+                    };
                     self.require_compatible_arg_type(
                         &declared_ty,
                         &default_ty,
@@ -619,7 +633,11 @@ impl Checker {
                     )?;
                     param_types.push((decl.params[i].clone(), declared_ty));
                 } else {
-                    let ty = self.infer_type(default_expr, caller_env)?;
+                    let ty = if deferred_scope_error {
+                        PhpType::Mixed
+                    } else {
+                        self.infer_type(default_expr, caller_env)?
+                    };
                     param_types.push((decl.params[i].clone(), ty));
                 }
             }

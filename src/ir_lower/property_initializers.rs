@@ -15,7 +15,8 @@ use super::context::{LoweredValue, LoweringContext};
 
 /// Returns whether allocation must initialize defaults or typed-property markers.
 pub(super) fn needs_initializer(class: &ClassInfo) -> bool {
-    class.defaults.iter().any(Option::is_some)
+    class.deferred_property_default_error.is_some()
+        || class.defaults.iter().any(Option::is_some)
         || class.properties.iter().enumerate().any(|(index, (name, _))| {
             class.property_slot_is_declared(index, name)
                 || (class.property_slot_is_reference(index, name)
@@ -25,6 +26,10 @@ pub(super) fn needs_initializer(class: &ClassInfo) -> bool {
 
 /// Emits default expressions and raw slot writes into a freshly zeroed object.
 pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, class: &ClassInfo) {
+    if let Some(message) = &class.deferred_property_default_error {
+        super::stmt::lower_throw_access_error_expr(ctx, message, class.declaration_span);
+        return;
+    }
     let object = ctx.load_local("this", None);
     for (index, (name, ty)) in class.properties.iter().enumerate() {
         let slot = Immediate::PropertyRef {
@@ -71,6 +76,6 @@ fn lower_default_value(
             Op::HashNew.default_effects(), Some(default.span),
         );
     }
-    let value = super::expr::lower_expr(ctx, default);
+    let value = super::expr::lower_expr_for_destination(ctx, default, ty);
     super::stmt::contextualize_property_array_value(ctx, value, default, ty, default.span)
 }

@@ -155,6 +155,22 @@ fn as_attribute(mut declaration: Stmt, targets: i64) -> Stmt {
     declaration
 }
 
+/// Adds Core's `WeakReference` declaration to a program that does not declare it yet: a prelude
+/// injected after the Core one (the hosted-extension wrappers) may need it on its own.
+pub fn ensure_weak_reference(
+    mut program: Program,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> Program {
+    let declared = |stmt: &Stmt| matches!(&stmt.kind, StmtKind::ClassDecl { name, .. } if name == "WeakReference");
+    if program.iter().any(declared) {
+        return program;
+    }
+    let declaration: Program = core_declarations().into_iter().filter(declared).collect();
+    inventory.record_program("core", &declaration);
+    program.splice(0..0, declaration);
+    program
+}
+
 /// Injects the reachable Core class declarations, widening for introspection and eval.
 pub fn inject_if_used(
     program: Program,

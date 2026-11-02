@@ -1,14 +1,19 @@
 name: PDO Live Databases
 
 # The live suites are ignored by the ordinary codegen matrix because they need
-# database services and native client libraries. Keep them in the required PR
-# loop, and split the embedded drivers from the optional system-client profiles
-# so neither serial group holds the other on the workflow's critical path.
+# database services and native client libraries. The core PostgreSQL and MySQL suites
+# run on every pull request; the optional-driver suites run on pull requests that change
+# PDO or mysqli code or carry the `ci:pdo-live` label. Both run in the merge queue and
+# on the nightly schedule (see the `plan` job and CONTRIBUTING.md § "CI tiers and the
+# merge queue"). The embedded drivers and the optional system-client profiles stay
+# split so neither serial group holds the other on the workflow's critical path.
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+  merge_group:
+    types: [checks_requested]
   schedule:
     - cron: '0 3 * * *'
   workflow_dispatch:
@@ -30,8 +35,42 @@ env:
   ELEPHC_PDO_LIVE_REQUIRED: '1'
 
 jobs:
+  # Chooses whether the live suites run (scripts/ci/plan_tiers.sh): `run` gates the core
+  # suites and `extended` the optional-driver suites. The push to main that the merge queue
+  # produces skips both, because the queue already ran them on that commit.
+  plan:
+    name: Plan PDO live tiers
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      run: ${{ steps.plan.outputs.run }}
+      extended: ${{ steps.plan.outputs.extended }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts/ci
+          sparse-checkout-cone-mode: true
+
+      - name: Choose the tiers
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          SHA: ${{ github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          WORKFLOW_FILE: pdo-live.yml
+          EXTENDED_LABEL: ci:pdo-live
+          EXTENDED_PATHS: ^((src|crates|tests|scripts)/.*(pdo|mysqli)|\.github/workflows/pdo-live\.yml$|scripts/ci/plan_tiers\.sh$|Cargo\.lock$)
+        run: bash scripts/ci/plan_tiers.sh
+
   pdo-core:
     name: PDO core live suite (${{ matrix.suite }})
+    needs: plan
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     strategy:
@@ -84,17 +123,18 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Cache Rust build state
-        uses: actions/cache@v6
+        # Dependencies only (registry, git checkouts, and the dependency
+        # artifacts under target/); the action prunes the workspace crates'
+        # own artifacts before saving. Caching the whole target/ dir put three
+        # 4 GB entries per platform plus every other job's into the repository's
+        # 10 GB allowance, so main's entries were evicted before the next run
+        # and every archive job compiled from scratch.
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
         with:
-          path: |
-            ~/.cargo/git
-            ~/.cargo/registry
-            target
-          key: rust-pdo-live-core-${{ matrix.suite }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            rust-pdo-live-core-${{ matrix.suite }}-
-            rust-pdo-live-core-
-            rust-pdo-live-
+          prefix-key: rust-deps-pdo-live-core-${{ matrix.suite }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-bin: false
+          cache-on-failure: true
 
       - name: Install native test dependencies
         run: |
@@ -244,16 +284,28 @@ jobs:
   pdo-core-gate:
     name: PDO core live suites (PostgreSQL 16 + MySQL 8.4)
     if: always()
-    needs: pdo-core
+    needs: [plan, pdo-core]
     runs-on: ubuntu-24.04
     steps:
       - name: Confirm every core PDO suite passed
+        # Only the push to main whose commit the merge queue already tested skips the core
+        # suites; then they must be skipped, and otherwise every one of them must pass.
         env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          RUN_TIER: ${{ needs.plan.outputs.run }}
           MATRIX_RESULT: ${{ needs.pdo-core.result }}
-        run: test "$MATRIX_RESULT" = success
+        run: |
+          test "$PLAN_RESULT" = success
+          if [ "$RUN_TIER" = true ]; then
+            test "$MATRIX_RESULT" = success
+          else
+            test "$MATRIX_RESULT" = skipped
+          fi
 
   pdo-drivers:
     name: PDO optional-driver suite (${{ matrix.suite }})
+    needs: plan
+    if: needs.plan.outputs.extended == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     strategy:
@@ -365,17 +417,18 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Cache Rust build state
-        uses: actions/cache@v6
+        # Dependencies only (registry, git checkouts, and the dependency
+        # artifacts under target/); the action prunes the workspace crates'
+        # own artifacts before saving. Caching the whole target/ dir put three
+        # 4 GB entries per platform plus every other job's into the repository's
+        # 10 GB allowance, so main's entries were evicted before the next run
+        # and every archive job compiled from scratch.
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
         with:
-          path: |
-            ~/.cargo/git
-            ~/.cargo/registry
-            target
-          key: rust-pdo-live-drivers-${{ matrix.suite }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            rust-pdo-live-drivers-${{ matrix.suite }}-
-            rust-pdo-live-drivers-
-            rust-pdo-live-
+          prefix-key: rust-deps-pdo-live-drivers-${{ matrix.suite }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-bin: false
+          cache-on-failure: true
 
       - name: Install native test dependencies
         run: |
@@ -575,10 +628,20 @@ jobs:
   pdo-drivers-gate:
     name: PDO optional-driver live suites
     if: always()
-    needs: pdo-drivers
+    needs: [plan, pdo-drivers]
     runs-on: ubuntu-24.04
     steps:
       - name: Confirm every optional PDO suite passed
+        # A pull request that does not touch the database code skips these suites; then they
+        # must be skipped, and otherwise every one of them must pass.
         env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          EXTENDED_TIER: ${{ needs.plan.outputs.extended }}
           MATRIX_RESULT: ${{ needs.pdo-drivers.result }}
-        run: test "$MATRIX_RESULT" = success
+        run: |
+          test "$PLAN_RESULT" = success
+          if [ "$EXTENDED_TIER" = true ]; then
+            test "$MATRIX_RESULT" = success
+          else
+            test "$MATRIX_RESULT" = skipped
+          fi

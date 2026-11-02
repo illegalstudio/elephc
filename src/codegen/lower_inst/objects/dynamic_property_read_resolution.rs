@@ -311,9 +311,16 @@ pub(super) fn ensure_dynamic_property_slot_results_supported(
 }
 
 /// Verifies that a runtime miss can be materialized in the EIR result register shape.
+///
+/// A `?ptr<T>` result has a null of its own (address 0); a plain `ptr` result does not.
+/// Buffer probes keep their element layout and use the raw missing-handle sentinel.
 pub(super) fn ensure_dynamic_property_miss_supported(inst: &Instruction) -> Result<()> {
+    if crate::types::is_nullable_pointer_type(&inst.result_php_type) {
+        return Ok(());
+    }
     match inst.result_php_type.codegen_repr() {
-        PhpType::Mixed | PhpType::TaggedScalar | PhpType::Bool | PhpType::Int => Ok(()),
+        PhpType::Mixed | PhpType::TaggedScalar | PhpType::Bool | PhpType::Int
+        | PhpType::Buffer(_) => Ok(()),
         ty => Err(CodegenIrError::unsupported(format!(
             "{} runtime miss for result PHP type {:?}",
             inst.op.name(),
@@ -328,6 +335,8 @@ pub(super) fn materialize_loaded_property_result(
     inst: &Instruction,
     source_ty: &PhpType,
 ) -> Result<()> {
+    // A `?ptr<T>` slot keeps its union, so address 0 is PHP null.
+    let box_ty = crate::types::mixed_box_php_type(source_ty);
     let source_ty = source_ty.codegen_repr();
     match inst.result_php_type.codegen_repr() {
         PhpType::Mixed if source_ty == PhpType::Mixed => {
@@ -335,7 +344,7 @@ pub(super) fn materialize_loaded_property_result(
             Ok(())
         }
         PhpType::Mixed => {
-            emit_box_current_value_as_mixed(ctx.emitter, &source_ty);
+            emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
             Ok(())
         }
         PhpType::TaggedScalar if source_ty != PhpType::TaggedScalar => {
@@ -348,6 +357,12 @@ pub(super) fn materialize_loaded_property_result(
 
 /// Emits a PHP null value for a dynamic property lookup that matched no declared slot.
 pub(super) fn emit_dynamic_property_miss_result(ctx: &mut FunctionContext<'_>, inst: &Instruction) {
+    if crate::types::is_nullable_pointer_type(&inst.result_php_type)
+        || matches!(inst.result_php_type, PhpType::Buffer(_))
+    {
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        return;
+    }
     match inst.result_php_type.codegen_repr() {
         PhpType::Mixed => emit_boxed_null(ctx),
         PhpType::TaggedScalar => {

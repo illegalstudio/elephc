@@ -90,11 +90,17 @@ mod tests {
     /// now retain member PHPDoc types that earlier parsers silently omitted.
     /// BUMPED TO 16 with the same fingerprint: complete-list lookahead preserves class
     /// comparisons, invalidating stored parse failures without changing the serialized shape.
+    /// BUMPED TO 17: generic declarations and native deferred-default Error expressions
+    /// now coexist, requiring a fingerprint of the complete merged source inventory.
     /// BUMPED TO 18: retained readonly setter contracts coexist with generic declarations.
     /// Format 17 belongs to the distinct native deferred-default expression layout.
     /// BUMPED TO 19: retained readonly setter contracts and main's caller-scope access
     /// mask need a fresh cache identity for their combined serialized layout.
-    const RECORDED_FINGERPRINT: u64 = 13881816518370807753;
+    /// BUMPED TO 20: deferred-default expressions coexist with caller-scope access masks.
+    /// BUMPED TO 21: both branches' deferred-default expressions and retained readonly
+    /// setter contracts now share generic declarations and caller-scope access masks.
+    /// BUMPED TO 22: retained token streams distinguish reserved qualified-name segments.
+    const RECORDED_FINGERPRINT: u64 = 11016239859085291084;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
     ///

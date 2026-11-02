@@ -91,6 +91,117 @@ echo count($alias);
     assert!(message.contains("Unsupported reference assignment"), "{message}");
 }
 
+/// An enum branch cannot mark a copied class interface fallback as an adopted reference.
+#[test]
+fn enum_reference_branch_cannot_adopt_class_fallback_on_every_target() {
+    for added_reference in [false, true] {
+        let marker = if added_reference { "&" } else { "" };
+        let source = format!(r#"<?php
+interface I {{ public function f(): int; }}
+enum E implements I {{ case A; public function &f(): int {{ $value = 7; return $value; }} }}
+class C implements I {{ public function {marker}f(): int {{ $value = 8; return $value; }} }}
+function bind(I $target): void {{ $alias = &$target->f(); echo $alias; }}
+bind(new C());
+"#);
+        for name in TARGETS {
+            let error = match super::try_lower_source_at_for_target(
+                &source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+            ) {
+                Err(LoweringError::Unsupported(error)) => error,
+                other => panic!("{name}: expected copied class fallback refusal, got {other:?}"),
+            };
+            assert!(error.message.contains("Unsupported reference assignment"), "{name}: {}", error.message);
+        }
+    }
+}
+
+/// Final enum branches either adopt the actual reference or explicitly promote their copy.
+#[test]
+fn selected_enum_reference_or_copy_lowers_on_every_target() {
+    let source = r#"<?php
+class S { public int $value = 1; }
+class PriorBinding {}
+interface I { public function f(S $store): int; }
+enum A implements I { case V; public function &f(S $store): int { return $store->value; } }
+enum B implements I { case V; public function f(S $store): int { return $store->value + 1; } }
+function bind(I $target, S $store): void { $alias = new PriorBinding(); $alias = &$target->f($store); ++$alias; }
+$store = new S(); bind(A::V, $store); bind(B::V, $store);
+"#;
+    for name in TARGETS {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let caller = module.functions.iter().find(|function| function.name == "bind").unwrap();
+        assert_eq!(caller.instructions.iter().filter(|inst| inst.op == Op::AdoptRefCellPtr).count(), 1,
+            "{name}: the reference-returning branch transfers its real cell");
+        assert!(caller.instructions.iter().any(|inst| inst.op == Op::PromoteLocalRefCell),
+            "{name}: the value-returning branch explicitly creates a private cell");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
+/// Loop-carried old cells stay leased until the new alias is visible on every target.
+#[test]
+fn loop_reference_rebinding_retires_old_lease_after_publication_on_every_target() {
+    let source = r#"<?php
+class P { public function __construct(public int $value) {} }
+function &nextReference(int $index): P { $value = new P($index); return $value; }
+function bindLoop(): void {
+    for ($index = 0; $index < 3; ++$index) {
+        $alias = &nextReference($index);
+        echo $alias->value;
+    }
+}
+bindLoop();
+"#;
+    for name in TARGETS {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let caller = module.functions.iter().find(|function| function.name == "bindLoop").unwrap();
+        let alias = caller.instructions.iter().position(|inst| inst.op == Op::AliasLocalRefCell).unwrap();
+        let (retain, previous, lease) = caller.instructions.iter().enumerate().take(alias)
+            .find_map(|(index, inst)| match inst.immediate {
+                Some(crate::ir::Immediate::LocalSlotPair { first, second })
+                    if inst.op == Op::RetainLocalRefCell => Some((index, first, second)),
+                _ => None,
+            }).expect("the prior runtime binding is retained even at its first syntactic assignment");
+        let operation = |op, slot| caller.instructions.iter().position(|inst|
+            inst.op == op && inst.immediate == Some(crate::ir::Immediate::LocalSlot(slot))
+        ).unwrap();
+        let publish = operation(Op::PushCallOperandOwner, lease);
+        let replace = operation(Op::ReleaseLocalRefCell, previous);
+        let detach = operation(Op::PopCallOperandOwner, lease);
+        let retire = operation(Op::ReleaseLocalRefCell, lease);
+        assert!(retain < publish && publish < replace && replace < alias,
+            "{name}: the old binding is protected while its target owner retires");
+        assert!(alias < detach && detach < retire,
+            "{name}: publication precedes the old cell's last potentially throwing release");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
+/// A reference cannot silently change representation at an interface dispatch boundary.
+#[test]
+fn selected_enum_reference_payload_mismatch_is_refused_on_every_target() {
+    let source = r#"<?php
+interface I { public function f(): mixed; }
+enum A implements I { case V; public function &f(): string { $value = 'a'; return $value; } }
+enum B implements I { case V; public function f(): mixed { return 'b'; } }
+function bind(I $target): void { $alias = &$target->f(); echo $alias; }
+bind(A::V); bind(B::V);
+"#;
+    for name in TARGETS {
+        let error = match super::try_lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        ) {
+            Err(LoweringError::Unsupported(error)) => error,
+            other => panic!("{name}: expected incompatible reference payload refusal, got {other:?}"),
+        };
+        assert!(error.message.contains("reference payload"), "{name}: {}", error.message);
+    }
+}
+
 /// Resolved functions, methods, static methods and bound closures all stage a transferred cell.
 ///
 /// Each accepted binding adopts the staged owner, so the count of `AdoptRefCellPtr` operations

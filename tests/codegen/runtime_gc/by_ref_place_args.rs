@@ -50,6 +50,46 @@ echo implode(",", $b->items);
     assert_clean(out, "0,1,2,3");
 }
 
+/// Inferred native property layouts use copy/write-back instead of a boxed live reference cell.
+#[test]
+fn test_array_push_inferred_properties_use_heap_clean_writeback() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class IntPushBox { public $items = [1]; }
+$ints = new IntPushBox();
+$intCount = array_push($ints->items, 2);
+class StringPushBox { public $items = ["a"]; }
+$strings = new StringPushBox();
+$stringCount = array_push($strings->items, "b");
+class StaticPushBox { public static $items = [1]; }
+$staticCount = array_push(StaticPushBox::$items, 2);
+class AssocPushBox { public $items = ["a" => 1]; }
+$assoc = new AssocPushBox();
+$assocCount = array_push($assoc->items, 2);
+class StaticAssocPushBox { public static $items = ["a" => 1]; }
+$staticAssocCount = array_push(StaticAssocPushBox::$items, 2);
+class LateAssocPushBox { public $items; }
+$lateAssoc = new LateAssocPushBox();
+$lateAssoc->items = ["a" => 1];
+$lateAssocCount = array_push($lateAssoc->items, 2);
+class NestedAssocPushBox { public $items = ["a" => [1]]; }
+$nestedAssoc = new NestedAssocPushBox();
+$nestedCount = array_push($nestedAssoc->items["a"], 2);
+echo $intCount, "|", json_encode($ints->items), "\n";
+echo $stringCount, "|", json_encode($strings->items), "\n";
+echo $staticCount, "|", json_encode(StaticPushBox::$items), "\n";
+echo $assocCount, "|", json_encode($assoc->items), "\n";
+echo $staticAssocCount, "|", json_encode(StaticAssocPushBox::$items), "\n";
+echo $lateAssocCount, "|", json_encode($lateAssoc->items), "\n";
+echo $nestedCount, "|", json_encode($nestedAssoc->items), "\n";
+"#,
+    );
+    assert_clean(
+        out,
+        "2|[1,2]\n2|[\"a\",\"b\"]\n2|[1,2]\n2|{\"a\":1,\"0\":2}\n2|{\"a\":1,\"0\":2}\n2|{\"a\":1,\"0\":2}\n2|{\"a\":[1,2]}\n",
+    );
+}
+
 /// The aliased property case: the pre-sort array is still owned by `$copy`, so the
 /// write-back's release of the property's previous occupant must not free it.
 #[test]

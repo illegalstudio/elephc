@@ -82,6 +82,7 @@ pub(in crate::interpreter) fn eval_native_global_constant(
         EvalNativeGlobalConstant::Int(value) => values.int(*value),
         EvalNativeGlobalConstant::Float(value) => values.float(*value),
         EvalNativeGlobalConstant::String(value) => values.string(value),
+        EvalNativeGlobalConstant::Bytes(value) => values.string_bytes_value(value),
         EvalNativeGlobalConstant::Resource(value) => values.resource(*value),
     }
 }
@@ -123,6 +124,7 @@ fn eval_native_user_constant_element<V: RuntimeValueOps>(
         NativeCallableDefault::Int(value) => values.int(*value),
         NativeCallableDefault::Float(value) => values.float(*value),
         NativeCallableDefault::String(value) => values.string(value),
+        NativeCallableDefault::Bytes(value) => values.string_bytes_value(value),
         NativeCallableDefault::EmptyArray => values.array_new(0),
         NativeCallableDefault::Array(elements) => {
             materialize_native_callable_array_default_elements(
@@ -131,7 +133,8 @@ fn eval_native_user_constant_element<V: RuntimeValueOps>(
                 eval_native_user_constant_element::<V>,
             )
         }
-        NativeCallableDefault::Object { .. } => Err(EvalStatus::RuntimeFatal),
+        NativeCallableDefault::Object { .. } | NativeCallableDefault::DeferredError(_)
+        | NativeCallableDefault::Expression { .. } => Err(EvalStatus::RuntimeFatal),
     }
 }
 

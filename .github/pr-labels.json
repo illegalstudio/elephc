@@ -225,6 +225,14 @@
     "priority:high": {
       "color": "B60205",
       "description": "Maintainer-assigned high-priority work."
+    },
+    "ci:macos": {
+      "color": "5319E7",
+      "description": "Run the macOS test matrix and iOS links on this PR, not only in the merge queue."
+    },
+    "ci:pdo-live": {
+      "color": "5319E7",
+      "description": "Run the optional-driver live database suites on this PR without a PDO or mysqli change."
     }
   },
   "areas": [

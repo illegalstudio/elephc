@@ -1,73 +1,62 @@
 //! Purpose:
-//! Creates eval contexts and seeds top-level declared-symbol metadata.
+//! Registers native symbols and configures eval constants, profiles and providers.
 //!
 //! Called from:
 //! - The eval lowering facade and sibling eval support modules.
 //!
 //! Key details:
-//! - Context creation also preserves regex-provider and PHP-profile registration.
+//! - Context initialization requests these registrations only when metadata is needed.
 //! - Core and user global constants are seeded through separate bridge registries so
 //!   PHP's `Core` / `user` categories stay exact inside eval.
 
 use super::*;
 
-/// Ensures a persistent eval context exists and stores its handle in the scratch frame.
-pub(super) fn ensure_eval_context(ctx: &mut FunctionContext<'_>) -> Result<()> {
-    let slot = eval_context_slot(ctx)?;
-    let offset = ctx.local_offset(slot)?;
-    let ready = ctx.next_label("eval_context_ready");
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::load_at_offset(ctx.emitter, result_reg, offset);
-    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &ready);
-    register_eval_regex_provider(ctx);
-    // -- attach this module's immutable catalog to a fresh activation context --
-    let catalog = ctx.data.add_private_identity("L__elephc_eval_native_catalog");
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 0),
-        &catalog,
+/// Registers the whole native catalog into the eval context passed as the first argument.
+///
+/// This is the body of the module-level catalog helper. The handle is parked in
+/// a module-level symbol because this frame is the fixed 32-byte one the
+/// shared-helper prologue builds: a frame-local slot would land in the caller's
+/// stack.
+pub(in crate::codegen::lower_inst::builtins) fn register_eval_inventory(
+    ctx: &mut FunctionContext<'_>,
+) -> Result<()> {
+    let source = EvalContextSource::Symbol(
+        crate::codegen::eval_inventory_helper::EVAL_INVENTORY_CONTEXT_SYMBOL,
     );
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_context_new_with_native_catalog");
-    abi::emit_call_label(ctx.emitter, &symbol);
-    abi::store_at_offset(ctx.emitter, result_reg, offset);
+    // The handle arrives in the FIRST ARGUMENT register, which is not the result
+    // register on every target: x86_64 passes it in `rdi` and returns in `rax`.
+    // Reading the result register there would store whatever the caller happened
+    // to leave in `rax` — `1` on the deferred-catalog path — and the readiness
+    // probe would then dereference address 1.
+    let handle_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    abi::emit_store_reg_to_symbol(
+        ctx.emitter,
+        handle_reg,
+        crate::codegen::eval_inventory_helper::EVAL_INVENTORY_CONTEXT_SYMBOL,
+        0,
+    );
     let registered = ctx.next_label("eval_native_catalog_registered");
-    load_eval_context_local_to_arg(ctx, offset, 0);
+    load_eval_context_source_to_arg(ctx, source, 0);
     let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_context_native_catalog_ready");
     abi::emit_call_label(ctx.emitter, &symbol);
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, &registered);
-    // -- register and publish metadata only on this thread's catalog miss --
-    register_eval_declared_symbols(ctx, offset);
-    register_eval_native_global_constants(ctx, offset)?;
-    register_eval_native_user_constants(ctx, offset);
-    register_eval_native_functions(ctx, offset)?;
-    register_eval_native_method_signatures(ctx, offset);
-    load_eval_context_local_to_arg(ctx, offset, 0);
+    // -- publish only after the complete generated registration transaction --
+    register_eval_declared_symbols(ctx, source);
+    register_eval_native_global_constants(ctx, source)?;
+    register_eval_native_user_constants(ctx, source);
+    register_eval_native_functions(ctx, source)?;
+    register_eval_native_method_signatures(ctx, source);
+    load_eval_context_source_to_arg(ctx, source, 0);
     let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_context_publish_native_catalog");
     abi::emit_call_label(ctx.emitter, &symbol);
     ctx.emitter.label(&registered);
-    // The runtime's `__rt_closure_bind` is shared by eval-free programs, so it reaches the
-    // generated adapter wrapper through a slot each new context fills. Install it on both
-    // cache hits and misses, since a host can enter a different loaded module between calls.
-    let scratch = abi::symbol_scratch_reg(ctx.emitter);
-    abi::emit_symbol_address(
-        ctx.emitter,
-        scratch,
-        crate::codegen::eval_callable_helpers::EVAL_CALLBACK_WRAPPER_LABEL,
-    );
-    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_elephc_eval_wrap_callback_fn", 0);
-    ctx.emitter.label(&ready);
-    abi::load_at_offset(ctx.emitter, result_reg, offset);
-    abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_CONTEXT_HANDLE_OFFSET);
     Ok(())
 }
 
 /// Registers the AOT Core constant inventory with a newly allocated eval context.
 pub(super) fn register_eval_native_global_constants(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
 ) -> Result<()> {
     let user_names = ctx
         .module
@@ -84,7 +73,7 @@ pub(super) fn register_eval_native_global_constants(
         .collect::<Vec<_>>();
     entries.sort_by(|left, right| left.0.cmp(&right.0));
     for (name, value, ty) in entries {
-        register_eval_native_global_constant(ctx, context_offset, &name, &value, &ty)?;
+        register_eval_native_global_constant(ctx, context_source, &name, &value, &ty)?;
     }
     Ok(())
 }
@@ -92,19 +81,19 @@ pub(super) fn register_eval_native_global_constants(
 /// Emits one scalar AOT constant registration call with its exact PHP runtime type.
 fn register_eval_native_global_constant(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     name: &str,
     value: &ExprKind,
     ty: &PhpType,
 ) -> Result<()> {
     if name == "PHP_BINARY" {
-        register_eval_executable_constant(ctx, context_offset, name, "__elephc_eval_register_native_global_constant");
+        register_eval_executable_constant(ctx, context_source, name, "__elephc_eval_register_native_global_constant");
         return Ok(());
     }
     let (kind, word, string_value) = eval_native_global_constant_abi_value(value, ty)?;
     register_eval_native_scalar_constant(
         ctx,
-        context_offset,
+        context_source,
         name,
         kind,
         word,
@@ -116,12 +105,12 @@ fn register_eval_native_global_constant(
 
 /// Registers the running executable path under either a Core name or a user alias.
 fn register_eval_executable_constant(
-    ctx: &mut FunctionContext<'_>, context_offset: usize, name: &str, symbol: &str,
+    ctx: &mut FunctionContext<'_>, context_source: EvalContextSource, name: &str, symbol: &str,
 ) {
     abi::emit_call_label(ctx.emitter, "__rt_php_binary");
     let (ptr, len) = abi::string_result_regs(ctx.emitter);
     abi::emit_push_reg_pair(ctx.emitter, ptr, len);
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     emit_eval_constant_name_args(ctx, name);
     let target = ctx.emitter.target;
     abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 3), NATIVE_GLOBAL_CONSTANT_STRING);
@@ -141,7 +130,7 @@ fn register_eval_executable_constant(
 /// failing the compile; see `eval_native_user_constant_value`.
 pub(super) fn register_eval_native_user_constants(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
 ) {
     let user_names = ctx
         .module
@@ -159,20 +148,29 @@ pub(super) fn register_eval_native_user_constants(
     entries.sort_by(|left, right| left.0.cmp(&right.0));
     for (name, value, ty) in entries {
         if crate::types::predefined_constants::is_executable_path_alias(&value, &ctx.module.global_constants) {
-            register_eval_executable_constant(ctx, context_offset, &name, "__elephc_eval_register_native_user_constant");
+            register_eval_executable_constant(ctx, context_source, &name, "__elephc_eval_register_native_user_constant");
             continue;
         }
-        let Some(encoded) = eval_native_user_constant_value(&value, &ty) else {
+        let normalized = if matches!(value, ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)
+            | ExprKind::ArrayLiteralMixed(_)) {
+            let context = crate::codegen::const_default_values::ConstDefaultContext {
+                module: ctx.module, current_class: None,
+            };
+            crate::codegen::const_default_values::resolve_const_default(
+                &Expr::new(value.clone(), crate::span::Span::synthetic()), &context,
+            ).and_then(crate::codegen::const_default_values::resolved_literal_default)
+        } else { None };
+        let Some(encoded) = eval_native_user_constant_value(normalized.as_ref().unwrap_or(&value), &ty) else {
             continue;
         };
-        register_eval_native_user_constant(ctx, context_offset, &name, &encoded);
+        register_eval_native_user_constant(ctx, context_source, &name, &encoded);
     }
 }
 
 /// Emits one user-constant registration call for a scalar or array constant value.
 fn register_eval_native_user_constant(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     name: &str,
     value: &EvalNativeUserConstantValue,
 ) {
@@ -183,7 +181,7 @@ fn register_eval_native_user_constant(
             string_value,
         } => register_eval_native_scalar_constant(
             ctx,
-            context_offset,
+            context_source,
             name,
             *kind,
             *word,
@@ -191,7 +189,7 @@ fn register_eval_native_user_constant(
             "__elephc_eval_register_native_user_constant",
         ),
         EvalNativeUserConstantValue::Array(elements) => {
-            register_eval_native_user_constant_array(ctx, context_offset, name, elements)
+            register_eval_native_user_constant_array(ctx, context_source, name, elements)
         }
     }
 }
@@ -199,12 +197,12 @@ fn register_eval_native_user_constant(
 /// Emits one array-valued user-constant registration call with its encoded element spec.
 fn register_eval_native_user_constant_array(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     name: &str,
     elements: &[EvalNativeCallableArrayDefaultElement],
 ) {
     let spec = encode_eval_native_array_default_elements(elements);
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     emit_eval_constant_name_args(ctx, name);
     let (spec_label, spec_len) = ctx.data.add_string(&spec);
     abi::emit_symbol_address(
@@ -229,14 +227,14 @@ fn register_eval_native_user_constant_array(
 /// The Core and user registries share this kind/payload ABI shape; only the callee differs.
 fn register_eval_native_scalar_constant(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     name: &str,
     kind: i64,
     word: i64,
     string_value: Option<&str>,
     symbol_name: &str,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     emit_eval_constant_name_args(ctx, name);
     abi::emit_load_int_immediate(
         ctx.emitter,
@@ -244,7 +242,8 @@ fn register_eval_native_scalar_constant(
         kind,
     );
     if let Some(string_value) = string_value {
-        let (value_label, value_len) = ctx.data.add_string(string_value.as_bytes());
+        let bytes = elephc_builtin_contract::string_literal::literal_bytes(string_value);
+        let (value_label, value_len) = ctx.data.add_string(&bytes);
         abi::emit_symbol_address(
             ctx.emitter,
             abi::int_arg_reg_name(ctx.emitter.target, 4),
@@ -602,50 +601,57 @@ pub(super) fn eval_context_slot(ctx: &FunctionContext<'_>) -> Result<LocalSlotId
 /// Registers eligible AOT global functions with a newly allocated eval context.
 pub(super) fn register_eval_native_functions(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
 ) -> Result<()> {
     let registrations = eval_native_function_registrations(ctx);
     for registration in registrations {
-        register_eval_native_function(ctx, context_offset, &registration)?;
+        register_eval_native_function(ctx, context_source, &registration)?;
     }
     Ok(())
 }
 
 /// Registers eligible AOT method and constructor signatures with a newly allocated eval context.
-pub(super) fn register_eval_native_method_signatures(ctx: &mut FunctionContext<'_>, context_offset: usize) {
+pub(super) fn register_eval_native_method_signatures(
+    ctx: &mut FunctionContext<'_>,
+    context_source: EvalContextSource,
+) {
     for registration in eval_native_method_registrations(ctx) {
-        register_eval_native_method(ctx, context_offset, &registration);
+        register_eval_native_method(ctx, context_source, &registration);
     }
     for registration in eval_native_constructor_registrations(ctx) {
-        register_eval_native_constructor(ctx, context_offset, &registration);
+        register_eval_native_constructor(ctx, context_source, &registration);
     }
     for registration in eval_native_property_type_registrations(ctx) {
-        register_eval_native_property_type(ctx, context_offset, &registration);
+        register_eval_native_property_type(ctx, context_source, &registration);
     }
     for registration in eval_native_abstract_property_registrations(ctx) {
-        register_eval_native_abstract_property(ctx, context_offset, &registration);
+        register_eval_native_abstract_property(ctx, context_source, &registration);
     }
     for registration in eval_native_interface_property_registrations(ctx) {
-        register_eval_native_interface_property(ctx, context_offset, &registration);
+        register_eval_native_interface_property(ctx, context_source, &registration);
     }
     for registration in eval_native_property_default_registrations(ctx) {
-        register_eval_native_property_default(ctx, context_offset, &registration);
+        register_eval_native_property_default(ctx, context_source, &registration);
     }
+    super::property_attribute_registration::register_eval_native_class_default_errors(ctx, context_source);
     for registration in eval_native_member_attribute_registrations(ctx) {
-        register_eval_native_member_attribute(ctx, context_offset, &registration);
+        register_eval_native_member_attribute(ctx, context_source, &registration);
     }
-    register_eval_native_class_parents(ctx, context_offset);
+    register_eval_native_class_parents(ctx, context_source);
 }
 
 /// Registers generated declared-name metadata with a newly allocated eval context.
-pub(super) fn register_eval_declared_symbols(ctx: &mut FunctionContext<'_>, context_offset: usize) {
+pub(super) fn register_eval_declared_symbols(
+    ctx: &mut FunctionContext<'_>,
+    context_source: EvalContextSource,
+) {
     let class_names = ctx.module.declared_class_names.clone();
     let interface_names = ctx.module.declared_interface_names.clone();
     let trait_names = ctx.module.declared_trait_names.clone();
     for name in class_names {
         register_eval_declared_symbol_name(
             ctx,
-            context_offset,
+            context_source,
             "__elephc_eval_register_declared_class_name",
             &name,
         );
@@ -653,7 +659,7 @@ pub(super) fn register_eval_declared_symbols(ctx: &mut FunctionContext<'_>, cont
     for name in interface_names {
         register_eval_declared_symbol_name(
             ctx,
-            context_offset,
+            context_source,
             "__elephc_eval_register_declared_interface_name",
             &name,
         );
@@ -661,7 +667,7 @@ pub(super) fn register_eval_declared_symbols(ctx: &mut FunctionContext<'_>, cont
     for name in trait_names {
         register_eval_declared_symbol_name(
             ctx,
-            context_offset,
+            context_source,
             "__elephc_eval_register_declared_trait_name",
             &name,
         );
@@ -671,11 +677,11 @@ pub(super) fn register_eval_declared_symbols(ctx: &mut FunctionContext<'_>, cont
 /// Emits one declared-name metadata registration call into the eval context.
 pub(super) fn register_eval_declared_symbol_name(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     symbol_name: &str,
     name: &str,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     let (name_label, name_len) = ctx.data.add_string(name.as_bytes());
     abi::emit_symbol_address(
         ctx.emitter,

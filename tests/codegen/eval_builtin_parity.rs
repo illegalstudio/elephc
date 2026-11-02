@@ -12,7 +12,7 @@ use std::fmt::Write;
 
 use crate::support::{
     compile_and_run, compile_and_run_capture_with_regex, compile_and_run_with_regex,
-    elephc_cli_command_with_mbstring_native, fs, make_cli_test_dir, run_binary,
+    elephc_cli_command_with_eval_catalog_native, fs, make_cli_test_dir, run_binary,
 };
 
 /// Compiles and runs an eval fixture with both native regex providers explicitly enabled.
@@ -21,7 +21,7 @@ fn compile_and_run_with_mbstring_and_regex(source: &str) -> String {
     let php = dir.join("main.php");
     fs::write(&php, source).expect("write eval builtin catalog fixture");
 
-    let compiled = elephc_cli_command_with_mbstring_native(&dir)
+    let compiled = elephc_cli_command_with_eval_catalog_native(&dir)
         .args(["--with-mbstring", "--with-regex"])
         .arg(&php)
         .output()
@@ -107,6 +107,11 @@ echo function_exists("StRlEn") ? "M" : "m";');
 /// Verifies eval `function_exists()` sees every compiler builtin available on the host target.
 #[test]
 fn test_eval_function_exists_covers_static_builtin_catalog() {
+    if crate::support::skip_without_gmp_native(
+        "test_eval_function_exists_covers_static_builtin_catalog",
+    ) {
+        return;
+    }
     let mut fragment = String::new();
     let target = elephc::codegen_support::platform::Target::detect_host();
     for name in elephc::builtin_metadata::php_visible_builtin_names_for_target(target) {

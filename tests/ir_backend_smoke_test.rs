@@ -296,7 +296,7 @@ echo str_repeat(times: mark_i("T", 2), string: mark_s("S", "ab"));
         (
             "named_extern_reordered",
             r#"<?php
-extern function strcmp(string $left, string $right): int;
+extern function strcmp(string $left, string $right): i32;
 echo strcmp(right: "ab", left: "aa") < 0 ? "lt" : "bad";
 "#,
             "lt",
@@ -1757,8 +1757,8 @@ echo $map["f"] * 2;
 #[test]
 fn ir_backend_handles_scalar_extern_calls() {
     let source = r#"<?php
-extern function abs(int $n): int;
-extern function getpid(): int;
+extern function abs(i32 $n): i32;
+extern function getpid(): i32;
 echo abs(-42);
 echo ":";
 echo getpid() > 0 ? "pid" : "bad";
@@ -1773,8 +1773,8 @@ echo getpid() > 0 ? "pid" : "bad";
 #[test]
 fn ir_backend_handles_string_extern_calls() {
     let source = r#"<?php
-extern function atoi(string $s): int;
-extern function strcmp(string $left, string $right): int;
+extern function atoi(string $s): i32;
+extern function strcmp(string $left, string $right): i32;
 extern function getenv(string $name): string;
 echo atoi("99");
 echo ":";

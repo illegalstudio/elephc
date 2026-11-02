@@ -671,3 +671,134 @@ echo $saved[1];
     );
     assert_eq!(out, "8");
 }
+
+/// `array_reverse` over a Mixed-valued hash reverses insertion order and, without `preserve_keys`,
+/// renumbers the surviving integer keys from zero, matching PHP for both key policies.
+#[test]
+fn test_array_reverse_mixed_valued_hash() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["x" => 1, "y" => "s"];
+var_dump(array_reverse($a));
+$b = [1 => 1, 2 => "s"];
+var_dump(array_reverse($b));
+var_dump(array_reverse($a, true));
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(2) {\n  [\"y\"]=>\n  string(1) \"s\"\n  [\"x\"]=>\n  int(1)\n}\n\
+array(2) {\n  [0]=>\n  string(1) \"s\"\n  [1]=>\n  int(1)\n}\n\
+array(2) {\n  [\"y\"]=>\n  string(1) \"s\"\n  [\"x\"]=>\n  int(1)\n}\n"
+    );
+}
+
+/// `array_shift` over a Mixed-valued hash returns the head value and renumbers the surviving
+/// integer keys from zero, while a copied alias keeps its own order and keys.
+#[test]
+fn test_array_shift_mixed_valued_hash() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["x" => 1, "y" => "s"];
+$copy = $a;
+echo array_shift($a), "|", implode(",", $a), "|", implode(",", $copy), "\n";
+$b = [1 => 1, 2 => "s", 5 => 3];
+echo array_shift($b), "|", implode(",", $b), "\n";
+$c = [];
+var_dump(array_shift($c));
+"#,
+    );
+    assert_eq!(out, "1|s|1,s\n1|s,3\nNULL\n");
+}
+
+/// `array_unshift` over a Mixed-valued hash prepends values and renumbers the surviving integer
+/// keys from zero, while a copied alias keeps its own order and keys. With no values it only
+/// reports the current count.
+#[test]
+fn test_array_unshift_mixed_valued_hash() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["x" => 1, "y" => "s"];
+$copy = $a;
+echo array_unshift($a, 9, "z"), "|", implode(",", $a), "|", implode(",", $copy), "\n";
+$b = [1 => 1, 2 => "s"];
+echo array_unshift($b, 9), "|", implode(",", $b), "\n";
+$c = ["only" => 1];
+echo array_unshift($c), "|", implode(",", $c), "\n";
+"#,
+    );
+    assert_eq!(out, "4|9,z,1,s|1,s\n3|9,1,s\n1|1\n");
+}
+
+/// `rsort` over a Mixed-valued hash reorders the values descending and renumbers the keys from
+/// zero, while a copied alias keeps its own order and keys.
+#[test]
+fn test_rsort_mixed_valued_hash() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["x" => 1, "y" => "s"];
+$copy = $a;
+rsort($a);
+var_dump($a);
+var_dump($copy);
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(2) {\n  [0]=>\n  string(1) \"s\"\n  [1]=>\n  int(1)\n}\n\
+array(2) {\n  [\"x\"]=>\n  int(1)\n  [\"y\"]=>\n  string(1) \"s\"\n}\n"
+    );
+}
+
+/// A mutating argument expression must not leave `array_unshift` using the stale receiver snapshot
+/// the EIR took before argument evaluation: the nested call republishes the receiver's table.
+#[test]
+fn test_array_unshift_mixed_valued_hash_reloads_receiver_after_argument_mutation() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["k1" => "x", "k2" => "y", "z" => 3];
+array_unshift($a, array_shift($a));
+echo count($a), "|", implode(",", $a), "\n";
+$b = ["k1" => "x", "k2" => "y", "z" => 3];
+array_unshift($b, array_pop($b), count($b));
+echo count($b), "|", implode(",", $b), "\n";
+"#,
+    );
+    assert_eq!(out, "3|x,y,3\n4|3,2,x,y\n");
+}
+
+/// A miss-read receiver keeps the array shape but holds PHP's null; the four builtins must raise
+/// PHP's TypeError instead of dereferencing the in-band null-container sentinel.
+#[test]
+fn test_mixed_valued_hash_builtins_reject_null_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+$conf = ["a" => ["x" => 1, "y" => "s"]];
+$opts = $conf["missing"];
+try { array_unshift($opts, 1); } catch (TypeError $e) { echo "u\n"; }
+try { array_unshift($opts); } catch (TypeError $e) { echo "u0\n"; }
+try { array_shift($opts); } catch (TypeError $e) { echo "s\n"; }
+try { $r = array_reverse($opts); } catch (TypeError $e) { echo "r\n"; }
+try { rsort($opts); } catch (TypeError $e) { echo "k\n"; }
+"#,
+    );
+    assert_eq!(out, "u\nu0\ns\nr\nk\n");
+}
+
+/// The concrete hash `array_pop` and link sorts must also reject a null receiver with PHP's
+/// TypeError rather than silently succeeding.
+#[test]
+fn test_mixed_valued_hash_pop_and_link_sorts_reject_null_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+$conf = ["a" => ["x" => 1, "y" => "s"]];
+$opts = $conf["missing"];
+try { $r = array_pop($opts); } catch (TypeError $e) { echo "p\n"; }
+try { ksort($opts); } catch (TypeError $e) { echo "ks\n"; }
+try { asort($opts); } catch (TypeError $e) { echo "as\n"; }
+try { krsort($opts); } catch (TypeError $e) { echo "krs\n"; }
+try { arsort($opts); } catch (TypeError $e) { echo "ars\n"; }
+"#,
+    );
+    assert_eq!(out, "p\nks\nas\nkrs\nars\n");
+}

@@ -460,6 +460,9 @@ fn initialize_dynamic_iterable_iterator(
 
     ctx.emitter.label(&indexed_case);
     if by_ref {
+        if let Some(slot) = source_load_local_slot(ctx, source)? {
+            ctx.prepare_mutated_source_local_owner(slot, source)?;
+        }
         convert_dynamic_indexed_source_for_ref(ctx, offset)?;
         store_iter_source_to_origin_if_local(ctx, offset, source)?;
     }
@@ -471,6 +474,9 @@ fn initialize_dynamic_iterable_iterator(
 
     ctx.emitter.label(&hash_case);
     if by_ref {
+        if let Some(slot) = source_load_local_slot(ctx, source)? {
+            ctx.prepare_mutated_source_local_owner(slot, source)?;
+        }
         convert_dynamic_hash_source_for_ref(ctx, offset)?;
         store_iter_source_to_origin_if_local(ctx, offset, source)?;
     }
@@ -1019,12 +1025,13 @@ fn ensure_unique_static_iter_source(
             // Retire and clear the old box before the consuming conversion, then publish the
             // converted owner below. Raw concrete slots need no release here.
             if let Some(slot) = source_local {
-                ctx.release_mutated_source_local_owner(slot, source)?;
+                ctx.prepare_mutated_source_local_owner(slot, source)?;
             }
+            ctx.load_value_to_result(source)?;
             convert_loaded_indexed_source_to_hash(ctx);
             ctx.store_result_value(source)?;
             if let Some(slot) = source_local {
-                ctx.store_container_writeback_to_local(slot, source)?;
+                ctx.store_mutated_container_writeback_to_local(slot, source)?;
             }
             return Ok(());
         }
@@ -1037,15 +1044,13 @@ fn ensure_unique_static_iter_source(
     // local's payload owner into that operation so storeback neither leaks the previous box nor
     // leaves the iterator's origin pointing at a retired generation.
     if let Some(slot) = source_local {
-        ctx.release_mutated_source_local_owner(slot, source)?;
+        ctx.prepare_mutated_source_local_owner(slot, source)?;
     }
-    if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction("mov rdi, rax");                                // pass the foreach source pointer to the COW helper
-    }
+    ctx.load_value_to_reg(source, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
     abi::emit_call_label(ctx.emitter, helper);
     ctx.store_result_value(source)?;
     if let Some(slot) = source_local {
-        ctx.store_container_writeback_to_local(slot, source)?;
+        ctx.store_mutated_container_writeback_to_local(slot, source)?;
     }
     Ok(())
 }
@@ -1124,7 +1129,7 @@ fn store_iter_source_to_origin_if_local(
         }
     }
     ctx.store_result_value(source)?;
-    ctx.store_container_writeback_to_local(slot, source)
+    ctx.store_mutated_container_writeback_to_local(slot, source)
 }
 
 /// Resolves a source SSA value back to its direct or reference-bound local origin.
@@ -1797,7 +1802,8 @@ fn box_iterator_method_result_if_needed(
     };
     let result_ty = ctx.value_php_type(result)?;
     if result_ty == PhpType::Mixed && return_ty.codegen_repr() != PhpType::Mixed {
-        emit_box_current_value_as_mixed(ctx.emitter, &return_ty.codegen_repr());
+        // A `?ptr<T>` result keeps its union, so address 0 is PHP null.
+        emit_box_current_value_as_mixed(ctx.emitter, &crate::types::mixed_box_php_type(return_ty));
     }
     Ok(())
 }
@@ -2583,7 +2589,12 @@ fn load_current_array_value_aarch64(
         PhpType::Void | PhpType::Never => {
             abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
         }
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Mixed => {
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Callable
+        | PhpType::Mixed
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_) => {
             ctx.emitter.instruction(                                            // skip the indexed-array header to reach element payloads
                 &format!("add {}, {}, #24", array_reg, array_reg)
             );
@@ -2646,7 +2657,12 @@ fn load_current_array_value_x86_64(
         PhpType::Void | PhpType::Never => {
             abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
         }
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Mixed => {
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Callable
+        | PhpType::Mixed
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_) => {
             ctx.emitter.instruction(                                            // skip the indexed-array header to reach element payloads
                 &format!("lea {}, [{} + 24]", array_reg, array_reg)
             );

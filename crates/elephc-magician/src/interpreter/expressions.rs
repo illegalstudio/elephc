@@ -60,11 +60,12 @@ fn eval_expr_with_result_ownership(
     own_result: bool,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match expr {
+        EvalExpr::DeferredDefaultError(message) => throwables::eval_throw_error(message, context, values),
         EvalExpr::Array(elements) => {
             if elements
                 .iter()
                 .any(|element| {
-                    matches!(
+                    native_default_array_spread(element).is_some() || matches!(
                         element,
                         EvalArrayElement::KeyValue { .. }
                             | EvalArrayElement::KeyReference { .. }
@@ -203,6 +204,21 @@ fn eval_expr_with_result_ownership(
                 values.warning(&format!("Warning: Undefined variable ${name}\n"))?;
                 values.null()
             }
+        }
+        EvalExpr::Assign { name, value } => {
+            let value = eval_owned_expr(value, context, scope, values)?;
+            for replaced in set_owned_scope_cell(
+                context,
+                scope,
+                name.clone(),
+                value,
+                values,
+            )? {
+                eval_release_value(context, values, replaced)?;
+            }
+            // The scope owns the stored cell; the expression result borrows that owner so
+            // `eval_owned_expr` retains once when the surrounding call needs its own lease.
+            Ok(value.borrowed())
         }
         EvalExpr::Magic(magic) => eval_magic_const(magic, context, values),
         EvalExpr::Match {

@@ -24,6 +24,7 @@ use super::{
     lower_property_probe_from_value, property_can_be_uninitialized,
     property_probe_needs_runtime_name_form_for_type, store_value_into_temp, take_owned_temp,
     value_is_definitely_null, value_is_nullable,
+    refine_member_receiver,
 };
 
 /// Lowers `expr` when it is a postfix chain containing `?->`.
@@ -275,6 +276,7 @@ fn lower_nullsafe_postfix_segment(
             property,
             nullsafe,
         } => {
+            let current = refine_member_receiver(ctx, current, expr);
             if nullsafe && !guard_nullsafe_chain_receiver(ctx, current, null_block, expr) {
                 return None;
             }
@@ -311,6 +313,7 @@ fn lower_nullsafe_postfix_segment(
             property,
             nullsafe,
         } => {
+            let current = refine_member_receiver(ctx, current, expr);
             if nullsafe && !guard_nullsafe_chain_receiver(ctx, current, null_block, expr) {
                 return None;
             }

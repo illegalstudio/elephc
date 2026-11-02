@@ -2,7 +2,7 @@
 title: "sys_get_temp_dir()"
 description: "Returns the directory path used for temporary files."
 sidebar:
-  order: 303
+  order: 306
 ---
 
 ## sys_get_temp_dir()

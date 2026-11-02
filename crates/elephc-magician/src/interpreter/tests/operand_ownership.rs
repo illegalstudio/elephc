@@ -11,6 +11,50 @@
 use super::super::*;
 use super::support::*;
 
+/// A by-value foreach receiver is retired after every normal or abrupt body exit.
+#[test]
+fn foreach_receiver_lease_covers_every_exit() {
+    for body in ["", "break;", "return $value;", "missingForeachBody();", "throw 42;"] {
+        let mut values = FakeOps::default();
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let source = format!("foreach ([7] as $value) {{ {body} }}");
+        let program = parse_fragment(source.as_bytes()).unwrap();
+        let result = execute_program_outcome_with_context(
+            &mut context, &program, &mut scope, &mut values,
+        );
+        if body.contains("missingForeachBody") {
+            assert!(matches!(result, Ok(EvalOutcome::Throwable(_))), "{source}");
+        } else {
+            assert_eq!(result.is_err(), body == "throw 42;", "{source}");
+        }
+        let arrays = values.values.iter().filter_map(|(id, value)| {
+            matches!(value, FakeValue::Array(_)).then_some(*id)
+        }).collect::<Vec<_>>();
+        assert_eq!(arrays.len(), 1, "{source}");
+        assert_eq!(values.cell_owners[&arrays[0]], 0, "{source}");
+    }
+}
+
+/// The foreach lease consumes its copy without consuming a borrowed caller array.
+#[test]
+fn foreach_receiver_lease_preserves_scope_storage() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let array = values.array_new(0).unwrap();
+    scope.set("items", array, ScopeCellOwnership::Owned);
+    let program = parse_fragment(b"foreach ($items as $value) {}").unwrap();
+    execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+    assert_eq!(scope.visible_cell("items"), Some(array));
+    assert_eq!(values.cell_owners[&(array.as_ptr() as usize)], 1);
+    for (id, value) in &values.values {
+        if matches!(value, FakeValue::Array(_)) && *id != array.as_ptr() as usize {
+            assert_eq!(values.cell_owners[id], 0, "retire the private iteration copy");
+        }
+    }
+}
+
 /// An eval return owns its cell independently of the activation scope kept for native reload.
 #[test]
 fn program_return_retains_borrowed_scope_storage() {
