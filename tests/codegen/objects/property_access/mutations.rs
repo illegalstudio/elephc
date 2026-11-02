@@ -1331,3 +1331,33 @@ foreach ([new ErasedPrefixString(), new ErasedPrefixDeclaredMagic(), new ErasedP
     assert_eq!(out.stdout, expected);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Erased compound stores keep assignment errors independently of XML capability reachability.
+#[test]
+fn test_erased_compound_property_null_errors_bundle() {
+    let body = r#"
+function compoundNamedFailure(mixed $object): mixed {
+    try { return $object->value .= 'x'; }
+    catch (Error $error) { echo $error->getMessage(), '|'; unset($error); return null; }
+}
+function compoundDynamicFailure(mixed $object, string $name): void {
+    try { $object->{$name} .= 'x'; }
+    catch (Error $error) { echo $error->getMessage(), '|'; unset($error); }
+    try { $object->{$name} += 2; }
+    catch (Error $error) { echo $error->getMessage(), '|'; unset($error); }
+}
+compoundNamedFailure(null); compoundDynamicFailure(null, 'value');
+"#;
+    for xml in [false, true] {
+        if xml && crate::support::skip_without_xml_native("test_erased_compound_property_null_errors_bundle") { continue; }
+        let capability = if xml {
+            "class CompoundFailureXmlCapability extends SimpleXMLElement {} $capability = new CompoundFailureXmlCapability('<r/>'); unset($capability);"
+        } else { "" };
+        let source = format!("<?php {capability} {body}");
+        let out = compile_and_run_with_heap_debug(&source);
+        assert!(out.success, "xml={xml}: stdout={} stderr={}", out.stdout, out.stderr);
+        assert_eq!(out.stdout, "Attempt to assign property \"value\" on null|".repeat(3), "xml={xml}");
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "xml={xml}: {}", out.stderr);
+        assert!(!out.stderr.contains("Warning:"), "xml={xml}: {}", out.stderr);
+    }
+}

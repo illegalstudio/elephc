@@ -95,11 +95,13 @@ pub(super) fn lower_assignment(
         if !old.contains("__elephc_incdec_old_") { return None; }
         (position, result.is_some_and(|value| matches!(&value.kind, ExprKind::Variable(name) if name == old)))
     };
-    if !admitted && post { return None; }
+    let compound = left.as_ref() == target;
+    if !admitted && (post || compound) { return None; }
     if scoped { super::super::scoped_writes::consume_update_operands(ctx); }
     for stmt in &prelude[..prefix] { crate::ir_lower::stmt::lower_stmt(ctx, stmt); }
     let reread = !post;
-    Some(lower(ctx, object, property, op, right, post, scoped, reread, "increment/decrement", expr))
+    let verb = if compound { "assign" } else { "increment/decrement" };
+    Some(lower(ctx, object, property, op, right, post, scoped, reread, verb, expr))
 }
 
 /// Recognizes ordinary erased prefix receivers independently of optional XML reachability.
