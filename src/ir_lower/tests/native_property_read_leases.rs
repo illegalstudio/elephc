@@ -18,6 +18,9 @@ function nativeReadCompound(NativeReadCounter $box, string $name): void {
     $box->{$name} += 1;
     $copy = ($box->{$name} += 1);
 }
+function nativeReadCoalesceChild(stdClass $root, string $name): mixed {
+    return $root->{$name}->value ??= 2;
+}
 function nativeReadNullable(?SimpleXMLElement $node): mixed {
     return $node->missing ?? 'fallback';
 }
@@ -56,6 +59,20 @@ $xml = new SimpleXMLElement('<r/>');
             "{target}: the snapshot owner still retires after the update");
     }
     assert!(captures > 0, "{target}: the fixture must exercise a published Mixed read capture");
+    let coalesce = module.functions.iter().find(|function| function.name == "nativeReadCoalesceChild").unwrap();
+    let children = coalesce.instructions.iter().filter(|inst| inst.op == Op::DynamicPropGet
+        && inst.immediate == Some(Immediate::PropertyFetchMode(crate::ir::PropertyFetchMode::Read)))
+        .filter_map(|inst| inst.result).collect::<Vec<_>>();
+    assert!(!children.is_empty(), "{target}: coalesce must read its deferred receiver child");
+    for child in children {
+        assert!(!coalesce.instructions.iter().any(|inst| inst.op == Op::Acquire && inst.operands == [child]),
+            "{target}: a borrowed RHS must not duplicate an independently owned receiver child");
+        assert!(coalesce.instructions.iter().any(|inst| inst.op == Op::StoreLocal && inst.operands == [child]
+            && matches!(inst.immediate, Some(Immediate::LocalSlot(slot))
+                if coalesce.instructions.iter().any(|pin| pin.op == Op::PushCallOperandOwner
+                    && pin.immediate == Some(Immediate::LocalSlot(slot))))),
+            "{target}: the original child owner must remain visible to exception cleanup");
+    }
     let nullable = module.functions.iter().find(|function| function.name == "nativeReadNullable").unwrap();
     assert!(nullable.instructions.iter().any(|inst| inst.op == Op::NullsafeMethodCall
         && matches!(inst.immediate, Some(Immediate::Data(name))
