@@ -148,19 +148,22 @@ class Child extends Base {
     assert!(call(&module, "Child::relaySelf", "self::value").effects.contains(Effects::OUTPUT));
 }
 
-/// A proven late-static body still includes warnings from its bool argument coercion.
+/// Late-static bool coercions preserve warnings and exceptions from their handlers.
 #[test]
 fn call_effect_batch_late_static_argument_warnings() {
-    let module = super::lower_source(r#"<?php
+    let source = r#"<?php
 class Base {
     public static function consume(bool $value): int { return 1; }
     public static function relay(mixed $value): int { return static::consume($value); }
 }
 class Child extends Base {}
-"#);
-    let effects = call(&module, "Base::relay", "static::consume").effects;
-    assert!(effects.contains(Effects::MAY_WARN));
-    assert!(!effects.contains(Effects::MAY_DEOPT));
+"#;
+    for target in TARGETS {
+        let module = lower_for(source, target);
+        let effects = call(&module, "Base::relay", "static::consume").effects;
+        assert!(effects.contains(Effects::MAY_WARN | Effects::MAY_THROW), "{target}");
+        assert!(!effects.contains(Effects::MAY_DEOPT), "{target}");
+    }
 }
 
 /// Abstract classes contribute callable static bodies even when concrete children override them.
@@ -227,7 +230,7 @@ class Child extends Base {
         for (caller, callee) in [("Child::relayParent", "parent::consume"),
             ("Child::relaySelf", "self::consume")]
         {
-            assert!(call(&module, caller, callee).effects.contains(Effects::MAY_WARN),
+            assert!(call(&module, caller, callee).effects.contains(Effects::MAY_WARN | Effects::MAY_THROW),
                 "{target}: {caller}");
         }
     }
@@ -296,7 +299,7 @@ echo Concrete::keep();
 echo Root::relay($argc);
 "#;
     for (literal, required) in [("false", Effects::MAY_THROW),
-        ("null", Effects::MAY_THROW), ("bool", Effects::MAY_WARN)]
+        ("null", Effects::MAY_THROW), ("bool", Effects::MAY_WARN | Effects::MAY_THROW)]
     {
         let source = template.replace("LITERAL", literal);
         for target in TARGETS {

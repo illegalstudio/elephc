@@ -73,6 +73,34 @@ echo "done";
     assert_eq!(without_ir_opt(|| compile_and_run(source)), "warn;warn;done");
 }
 
+/// Throwing warning handlers preserve catch-only readers during lexical bool coercions.
+#[test]
+fn test_call_effect_batch_review_throwing_coercion_warnings() {
+    let template = r#"<?php
+set_error_handler(function(int $level, string $message): bool { throw new Exception("handler"); });
+class WarningThrowBase {
+    public function accept(bool $value): int { return 1; }
+}
+class WarningThrowChild extends WarningThrowBase {
+    public function relay(mixed $value, bool $force): int {
+        $seen = 0;
+        try {
+            if ($force) { throw new Exception("keep catch"); }
+            $seen = 1;
+            RECEIVER::accept($value);
+            return 0;
+        } catch (Exception $e) { return $seen; }
+    }
+}
+echo (new WarningThrowChild())->relay(NAN, $argc === 999);
+"#;
+    for receiver in ["self", "parent"] {
+        let source = template.replace("RECEIVER", receiver);
+        assert_eq!(compile_and_run(&source), "1", "{receiver}");
+        assert_eq!(without_ir_opt(|| compile_and_run(&source)), "1", "{receiver}");
+    }
+}
+
 /// Discarded calls retain null guards after an independent throw keeps the AST catch live.
 #[test]
 fn test_call_effect_batch_review_null_parameter_guards() {

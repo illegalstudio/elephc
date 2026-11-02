@@ -300,7 +300,7 @@ fn literal_parameter_guard_effects<'a>(parameters: impl IntoIterator<Item = &'a 
     }
 }
 
-/// Models warning-capable conversions performed only while the backend materializes call args.
+/// Models argument conversions whose warning handler can also throw during materialization.
 fn call_argument_coercion_effects<'a>(
     function: &Function,
     instruction: &crate::ir::Instruction,
@@ -321,7 +321,7 @@ fn call_argument_coercion_effects<'a>(
                 })
         });
     if warns {
-        Effects::MAY_WARN
+        Effects::MAY_WARN | Effects::MAY_THROW
     } else {
         Effects::PURE
     }

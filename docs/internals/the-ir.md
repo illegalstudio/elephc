@@ -641,6 +641,8 @@ declarations even when the callee body is pure. Argument-coercion effects use th
 call's operand layout: lexical `self::` and `parent::` calls to instance methods
 omit the implicit receiver from parameter matching, while ordinary instance
 calls include that receiver on both sides.
+Warning-capable argument coercions also retain `may_throw`, because a PHP warning
+handler can throw an exception before the callee runs.
 
 Caller-visible summaries omit `ConcatReset`, `PushCallOperandOwner` and
 `PopCallOperandOwner`: they restore scratch offsets or publish temporary owner
