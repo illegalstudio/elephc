@@ -17,7 +17,7 @@
 use crate::codegen::{abi, emit_box_current_value_as_mixed};
 use crate::codegen::platform::Arch;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
-use crate::ir::{Instruction, ValueDef, ValueId};
+use crate::ir::{Immediate, Instruction, Op, ValueDef, ValueId};
 use crate::names::static_property_symbol;
 use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};

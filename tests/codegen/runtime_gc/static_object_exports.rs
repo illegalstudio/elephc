@@ -7,27 +7,30 @@
 //! Key details:
 //! - The persistent Mixed slot owns a box and a reference independent of its source.
 
-use crate::support::compile_and_run_with_heap_debug;
+use crate::support::{compile_and_run_with_heap_debug, skip_without_xml_native};
 
 /// Caught static-property and hook type failures release each rejected temporary value.
 #[test]
 fn test_rejected_static_and_hook_stores_release_temporary_boxes() {
+    if skip_without_xml_native("test_rejected_static_and_hook_stores_release_temporary_boxes") { return; }
     let output = compile_and_run_with_heap_debug(r#"<?php
 class RejectedStaticAndHookStores {
     public static iterable $items = [];
     public object $node { set { echo 'unexpected'; } }
 }
-function rejectedPropertyValue(): mixed { return null; }
+$root = new SimpleXMLElement('<r/>');
 $box = new RejectedStaticAndHookStores();
 $caught = 0;
 for ($index = 0; $index < 8; $index++) {
-    try { RejectedStaticAndHookStores::$items = rejectedPropertyValue(); }
+    try { RejectedStaticAndHookStores::$items = $root->missing->child; }
     catch (TypeError $error) { $caught++; }
-    try { $box->node = rejectedPropertyValue(); }
+    try { $box->node = $root->missing->child; }
     catch (TypeError $error) { $caught++; }
 }
-echo $caught, ':', count(RejectedStaticAndHookStores::$items);
-unset($box, $error);
+$remaining = 0;
+foreach (RejectedStaticAndHookStores::$items as $item) { $remaining++; }
+echo $caught, ':', $remaining;
+unset($box, $root, $error);
 "#);
     assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
     assert_eq!(output.stdout, "16:0");
