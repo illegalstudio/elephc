@@ -1051,9 +1051,10 @@ fn call_array_reference_markers_balance_extraction_on_return_and_error() {
                 });
             assert_eq!(result.is_err(), fail_dispatch);
             if let Ok(result) = result { values.release(result).unwrap(); }
-            assert_eq!(values.cell_owners[&(marker.as_ptr() as usize)], 1, "only the array owns the marker");
+            assert_eq!(values.cell_owners[&(marker.as_ptr() as usize)], 0, "the extracted activation owner was retired");
+            assert_eq!(values.reference_owner_count(marker), 1, "the array still owns its graph edge");
             values.release(array).unwrap();
-            assert_eq!(values.cell_owners[&(marker.as_ptr() as usize)], 0);
+            assert_eq!(values.reference_owner_count(marker), 0);
             values.release(original).unwrap();
         }
     }
