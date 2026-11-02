@@ -340,6 +340,7 @@ pub fn emit_vd_obj_count(emitter: &mut Emitter) {
 
     emitter.label("__rt_vd_obj_count_done");
     // -- PHP's `(n)` also counts every dynamic property the body appends --
+    emitter.instruction("ldr x9, [x1]");                                        // reload the class id after marker probes reused its scratch register
     emit_load_dump_dyn_hash(emitter, "x1", "x9", "x12", "x13", "__rt_vd_obj_count_ret");
     emitter.instruction("ldr x12, [x12]");                                      // load the dynamic-property hash entry count
     emitter.instruction("add x5, x5, x12");                                     // count every dynamic property too
@@ -405,6 +406,7 @@ fn emit_vd_obj_count_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_vd_obj_count_done_x86");
     // -- PHP's `(n)` also counts every dynamic property the body appends --
+    emitter.instruction("mov r9, QWORD PTR [rdi]");                             // reload the class id after marker probes reused its scratch register
     emit_load_dump_dyn_hash(emitter, "rdi", "r9", "r10", "r11", "__rt_vd_obj_count_ret_x86");
     emitter.instruction("add rax, QWORD PTR [r10]");                            // count every dynamic property too
     emitter.label("__rt_vd_obj_count_ret_x86");
