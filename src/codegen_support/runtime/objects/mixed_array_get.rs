@@ -175,6 +175,8 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #48");                                     // release the local frame
     emitter.instruction("ret");                                                 // return the owned Mixed empty string in x0
     emitter.label("__rt_mixed_array_get_string_key_error");
+    emitter.instruction("ldr x9, [sp, #40]");                                   // recover the read or write-fetch mode before diagnosing the key
+    emitter.instruction("cbz x9, __rt_mixed_array_get_null");                   // existence and coalescing probes treat nonnumeric string keys as absent
     emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address before throwing
     emitter.instruction("add sp, sp, #48");                                     // release the local frame before the non-returning throw
     crate::codegen_support::runtime::arrays::value_error::emit_throw_static_message_aarch64(
@@ -542,6 +544,8 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return the owned Mixed empty string in rax
     emitter.label("__rt_mixed_array_get_string_key_error");
+    emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // distinguish a quiet probe from ordinary reads and write fetches
+    emitter.instruction("je __rt_mixed_array_get_null");                        // quiet string-key probes return an absent value
     emitter.instruction("mov rsp, rbp");                                        // release the local frame before throwing
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing
     crate::codegen_support::runtime::arrays::value_error::emit_throw_static_message_x86_64(
@@ -811,6 +815,23 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
 mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
+
+    /// Invalid string keys return null only for quiet probes, preserving read and write errors.
+    #[test]
+    fn mixed_string_key_error_distinguishes_quiet_probes_on_all_targets() {
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(target).unwrap());
+            emit_mixed_array_get(&mut emitter);
+            let assembly = emitter.output();
+            let invalid = assembly.split_once("__rt_mixed_array_get_string_key_error:\n").unwrap().1;
+            let invalid = invalid.split_once("__rt_mixed_array_get_indexed:\n").unwrap().0;
+            let (mode, absent) = if target == "linux-x86_64" {
+                ("cmp QWORD PTR [rbp - 32], 0", "je __rt_mixed_array_get_null")
+            } else { ("ldr x9, [sp, #40]", "cbz x9, __rt_mixed_array_get_null") };
+            assert!(invalid.find(mode).unwrap() < invalid.find(absent).unwrap(), "{target}: {invalid}");
+            assert!(invalid.contains("_string_offset_type_error_msg"), "{target}: {invalid}");
+        }
+    }
 
     /// An ARM operand-owner record cannot hide the saved mode used to select an attached getter.
     #[test]

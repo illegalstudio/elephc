@@ -36,6 +36,29 @@ unset($xml);
     assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
 }
 
+/// Silent string probes preserve ordinary invalid-offset errors once XML dispatch is available.
+#[test]
+fn test_simplexml_erased_string_probes_preserve_read_errors() {
+    if skip_without_xml_native("test_simplexml_erased_string_probes_preserve_read_errors") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$xml = new SimpleXMLElement('<r/>');
+function erasedStringProbe(mixed $text): void {
+    var_dump(isset($text['missing']), empty($text['missing']), $text['missing'] ?? 'fallback');
+    var_dump(isset($text['-1']), isset($text['1.0']), isset($text['1x']));
+    try { echo $text['missing']; } catch (TypeError $error) { echo $error->getMessage(), '|'; }
+    try { $text['missing'] = 'x'; } catch (TypeError $error) { echo $error->getMessage(), '|'; }
+}
+erasedStringProbe('ab');
+unset($xml);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, concat!("bool(false)\nbool(true)\nstring(8) \"fallback\"\n",
+        "bool(true)\nbool(false)\nbool(false)\n",
+        "Cannot access offset of type string on string|Cannot access offset of type string on string|"));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
+}
+
 /// Nullable native probes skip method dispatch and keep both direct and eval fallback values.
 #[test]
 fn test_simplexml_nullable_native_property_coalesce_bundle() {
