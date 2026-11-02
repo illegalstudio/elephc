@@ -135,6 +135,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_md5(emitter);
     strings::emit_sha1(emitter);
     strings::emit_crc32(emitter);
+    strings::ctype::emit_ctype(emitter);
     if features.mbstring || features.eval_bridge {
         strings::emit_mbstring(emitter, features.eval_bridge, features.mbregex);
     }

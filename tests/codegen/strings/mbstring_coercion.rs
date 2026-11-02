@@ -46,7 +46,7 @@ echo mb_internal_encoding(), "\n";
     let output = compile_and_run_capture(&source);
     assert!(output.success, "{}", output.stderr);
     assert_eq!(output.stdout, "int(3)\nint(1)\nint(3)\nstring(2) \"bc\"\nmb_strlen(): Argument #1 ($string) must be of type string, array given\neval-text\nint(2)\nnative-text\nint(6)\nmb_strlen(): Argument #1 ($string) must be of type string, EvalMbPlain given\neval-throw\nstring callback stopped\n8bit\n");
-    assert_eq!(output.stderr, "Deprecated: Implicit conversion from float-string \"1.5\" to int loses precision\nDeprecated: Implicit conversion from float-string \"2.9\" to int loses precision\n");
+    assert_eq!(output.stderr, "\nDeprecated: Implicit conversion from float-string \"1.5\" to int loses precision\n\nDeprecated: Implicit conversion from float-string \"2.9\" to int loses precision\n");
 }
 
 /// Stops later Stringable calls on parameter errors and delays encoding validation until outer coercions finish.
@@ -69,7 +69,7 @@ echo mb_strlen("still usable"), "\n";
     let output = compile_and_run_capture(&source);
     assert!(output.success, "{}", output.stderr);
     assert_eq!(output.stdout, "type-first\nfirst\ntype-second\nfirst\nlast\nencoding-last\n12\n");
-    assert_eq!(output.stderr, "Deprecated: Implicit conversion from float 0.5 to int loses precision\n");
+    assert_eq!(output.stderr, "\nDeprecated: Implicit conversion from float 0.5 to int loses precision\n");
 }
 
 /// Verifies repeated successful and throwing Stringable calls balance metadata, argument, and result ownership.
@@ -141,7 +141,7 @@ try { mb_substr("a", 0, "bad"); } catch (TypeError $e) { echo $e->getMessage(), 
     let output = compile_and_run_capture(source);
     assert!(output.success, "{}", output.stderr);
     assert_eq!(output.stdout, "int(3)\nint(1)\nint(3)\nstring(2) \"bc\"\nstringable\nint(2)\nmb_strlen(): Argument #1 ($string) must be of type string, array given\nmb_strlen(): Argument #1 ($string) must be of type string, AotMbPlain given\ncallback failed\nmb_strlen(): Argument #2 ($encoding) must be a valid encoding, \"123\" given\nbool(true)\nmb_substr(): Argument #3 ($length) must be of type ?int, string given\n");
-    assert_eq!(output.stderr, "Deprecated: Implicit conversion from float-string \"1.5\" to int loses precision\nDeprecated: Implicit conversion from float-string \"2.9\" to int loses precision\n");
+    assert_eq!(output.stderr, "\nDeprecated: Implicit conversion from float-string \"1.5\" to int loses precision\n\nDeprecated: Implicit conversion from float-string \"2.9\" to int loses precision\n");
 }
 
 /// Applies strict parameter typing to dynamic original values without executing rejected Stringable methods.

@@ -87,7 +87,7 @@ echo mb_encode_numericentity("A", [0, 100, 100000000000000000000.0, 4294967295])
         let output = compile_and_run_capture(&program(body, eval, true));
         assert!(output.success, "{}", output.stderr);
         assert_eq!(output.stdout, "&#66;\n&#77;\n&#66;\n&#66;\n&#1661993025;\n");
-        assert_eq!(output.stderr, "Warning: A non-numeric value encountered\nDeprecated: Implicit conversion from float 1.5 to int loses precision\nWarning: A non-numeric value encountered\nDeprecated: Implicit conversion from float-string \"1.5bad\" to int loses precision\nWarning: The float 1.0E+20 is not representable as an int, cast occurred\n");
+        assert_eq!(output.stderr, "\nWarning: A non-numeric value encountered\n\nDeprecated: Implicit conversion from float 1.5 to int loses precision\n\nWarning: A non-numeric value encountered\n\nDeprecated: Implicit conversion from float-string \"1.5bad\" to int loses precision\n\nWarning: The float 1.0E+20 is not representable as an int, cast occurred\n");
     }
 }
 

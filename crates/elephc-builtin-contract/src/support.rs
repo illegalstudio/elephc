@@ -378,7 +378,8 @@ mod tests {
         // raw-memory builtins and `buffer_ptr`, bound in eval through their own registry homes.
         // The tokenizer location helper also uses the shared runtime registry.
         // Five native heap metric bindings share the boxed runtime dispatcher.
-        assert_eq!(eval_registry, 755 + curl_surface);
+        // The seven additional ctype contracts join the eval registry.
+        assert_eq!(eval_registry, 762 + curl_surface);
         // 83 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use, plus the ELEVEN
         // `__elephc_opcache_rt_*` runtime script-cache helpers this branch adds.
@@ -397,7 +398,8 @@ mod tests {
         //
         // None of the eleven is callable from eval'd code. Nor are the four internal aliases
         // the extension-hosting prelude calls (`__elephc_ptr_get`, `__elephc_zval_*`).
-        assert_eq!(eval_internal, 134);
+        // The two internal libc setlocale helpers join the internal eval inventory.
+        assert_eq!(eval_internal, 136);
         // 30 registry builtins awaiting eval homes, plus the 325 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
         assert_eq!(eval_pending, 359);
@@ -410,7 +412,8 @@ mod tests {
         // Five native heap metric operations use the ordinary AOT registry, and so do the four
         // internal aliases the extension-hosting prelude calls.
         // The PHP 8.5 array value-edge pair adds two AOT-only registry entries.
-        assert_eq!(aot_registry, 824);
+        // The seven ctype contracts and two internal setlocale helpers join the AOT registry.
+        assert_eq!(aot_registry, 833);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
         assert_eq!(aot_external, 424 + curl_surface);
@@ -464,12 +467,13 @@ mod tests {
         // Heap usage queries keep a TypeError adapter for non-scalar flags.
         assert_eq!(hybrid_adapter, 4);
         // Includes the four float pointer builtins and `buffer_ptr`, which eval runs through
-        // interpreter adapters, plus the fifty-one GMP homes forwarding to the compiled prelude.
-        assert_eq!(interpreter_adapter, 660 + curl_surface);
+        // interpreter adapters, plus the fifty-one GMP homes forwarding to the compiled prelude
+        // and the seven ctype contracts.
+        assert_eq!(interpreter_adapter, 667 + curl_surface);
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own. So do the four
-        // internal aliases the extension-hosting prelude calls.
-        assert_eq!(unsupported, 493);
+        // internal aliases the extension-hosting prelude calls and the two setlocale helpers.
+        assert_eq!(unsupported, 495);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

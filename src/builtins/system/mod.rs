@@ -45,6 +45,8 @@ pub mod __elephc_opcache_rt_in_file_cache;
 pub mod __elephc_opcache_rt_reset;
 pub mod __elephc_opcache_rt_stat;
 pub mod __elephc_opcache_rt_swap;
+pub mod __elephc_setlocale_query;
+pub mod __elephc_setlocale_set;
 pub mod __elephc_pdo_called_class_status;
 pub mod __elephc_pdo_statement_class_status;
 pub mod __elephc_strtotime_raw;

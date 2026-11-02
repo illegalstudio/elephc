@@ -443,6 +443,37 @@ pub(crate) fn emit_runtime_data_fixed(
     for (symbol, value) in [("_rt_warning_prefix", "Warning: "), ("_rt_notice_prefix", "Notice: "), ("_rt_deprecated_prefix", "Deprecated: ")] {
         out.push_str(&format!(".globl {symbol}\n{symbol}:\n    .ascii \"{value}\"\n"));
     }
+    // -- ctype deprecation text and its kind-indexed function-name table --
+    for (symbol, value) in [
+        ("_ctype_deprecated_suffix", crate::codegen_support::runtime::strings::ctype::DEPRECATION_SUFFIX),
+        ("_ctype_deprecated_line_sep", crate::codegen_support::runtime::strings::ctype::LINE_SEPARATOR),
+        ("_ctype_deprecated_newline", crate::codegen_support::runtime::strings::ctype::NEWLINE),
+        ("_ctype_type_int", crate::codegen_support::runtime::strings::ctype::TYPE_INT),
+        ("_ctype_type_float", crate::codegen_support::runtime::strings::ctype::TYPE_FLOAT),
+        ("_ctype_type_bool", crate::codegen_support::runtime::strings::ctype::TYPE_BOOL),
+        ("_ctype_type_null", crate::codegen_support::runtime::strings::ctype::TYPE_NULL),
+        ("_ctype_type_array", crate::codegen_support::runtime::strings::ctype::TYPE_ARRAY),
+        ("_ctype_type_resource", crate::codegen_support::runtime::strings::ctype::TYPE_RESOURCE),
+        ("_ctype_type_closure", crate::codegen_support::runtime::strings::ctype::TYPE_CLOSURE),
+        ("_ctype_type_unknown", crate::codegen_support::runtime::strings::ctype::TYPE_UNKNOWN),
+    ] {
+        out.push_str(&format!(".globl {symbol}\n{symbol}:\n    .ascii {value:?}\n"));
+    }
+    for (kind, prefix) in crate::codegen_support::runtime::strings::ctype::PREFIXES.iter().enumerate() {
+        let label = format!("_ctype_prefix_{kind}");
+        out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {prefix:?}\n"));
+    }
+    for (symbol, value) in [
+        ("_diag_newline", "\n"),
+        ("_diag_location_in", " in "),
+        ("_diag_location_on_line", " on line "),
+    ] {
+        out.push_str(&format!(".globl {symbol}\n{symbol}:\n    .ascii {value:?}\n"));
+    }
+    out.push_str(".p2align 3\n.globl _ctype_deprecated_prefix_table\n_ctype_deprecated_prefix_table:\n");
+    for (kind, prefix) in crate::codegen_support::runtime::strings::ctype::PREFIXES.iter().enumerate() {
+        out.push_str(&format!("    .quad _ctype_prefix_{kind}\n    .quad {}\n", prefix.len()));
+    }
     out.push_str(&comm_directive("_exc_value", 8, target));
     out.push_str(&comm_directive("_fiber_current", 8, target));
     out.push_str(&comm_directive("_magic_set_guard_head", 8, target));

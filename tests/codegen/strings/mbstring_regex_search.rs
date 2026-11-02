@@ -34,7 +34,7 @@ fn test_mbstring_regex_search_runtime_errors() {
         let output = compile_and_run_capture(&program(source, eval));
         assert!(output.success, "eval={eval}: {}\nstdout: {}", output.stderr, output.stdout);
         assert_eq!(output.stdout, expected, "eval={eval}");
-        assert_eq!(output.stderr, "Warning: mb_ereg_search(): mbregex compile err: premature end of char-class\n", "eval={eval}");
+        assert_eq!(output.stderr, "\nWarning: mb_ereg_search(): mbregex compile err: premature end of char-class\n", "eval={eval}");
     }
 }
 

@@ -419,12 +419,8 @@ impl EvalValuesHook {
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::Crc32 => one_arg(evaluated_args, values, eval_crc32_result),
-            Self::Ctype => one_arg(evaluated_args, values, |value, values| match name {
-                "ctype_alnum" => eval_ctype_alnum_result(value, values),
-                "ctype_alpha" => eval_ctype_alpha_result(value, values),
-                "ctype_digit" => eval_ctype_digit_result(value, values),
-                "ctype_space" => eval_ctype_space_result(value, values),
-                _ => Err(EvalStatus::RuntimeFatal),
+            Self::Ctype => one_arg(evaluated_args, values, |value, values| {
+                eval_ctype_named_result(name, value, context, values)
             }),
             Self::Deg2rad => one_arg(evaluated_args, values, eval_deg2rad_result),
             Self::Exp => one_arg(evaluated_args, values, eval_exp_result),

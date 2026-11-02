@@ -303,7 +303,7 @@ fn test_mixed_foreach_over_non_iterable_warns_and_preserves_prior_side_effects()
     assert_eq!(out.stdout, "S");
     assert_eq!(
         out.stderr,
-        "Warning: foreach() argument must be of type array|object, int given\n",
+        "\nWarning: foreach() argument must be of type array|object, int given\n",
         "{}",
         out.stderr
     );

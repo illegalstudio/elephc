@@ -105,6 +105,7 @@ mod vsprintf;
 mod md5;
 mod sha1;
 mod crc32;
+pub(crate) mod ctype;
 mod iconv;
 mod mbstring;
 mod hash;

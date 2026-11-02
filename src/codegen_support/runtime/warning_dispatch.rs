@@ -186,6 +186,18 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     abi::emit_load_temporary_stack_slot(e, scratch, LEVEL);
     ins(e, "and x0, x0, x10", "and rax, r10");
     abi::emit_branch_if_int_result_zero(e, "__rt_warning_release");
+    // The host extension already formats native warnings through Zend, so a separate
+    // newline-only write would surface as an empty warning event in the host handler.
+    if !e.phpext_output {
+        if arm {
+            abi::emit_symbol_address(e, "x1", "_diag_newline");
+            abi::emit_load_int_immediate(e, "x2", 1);
+        } else {
+            abi::emit_symbol_address(e, "rdi", "_diag_newline");
+            abi::emit_load_int_immediate(e, "rsi", 1);
+        }
+        abi::emit_call_label(e, "__rt_diag_write");                             // PHP starts each default diagnostic on its own blank line
+    }
     if arm {
         arg(e, 1, BUFFER);
         arg(e, 2, LENGTH);
@@ -215,8 +227,126 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     e.label("__rt_warning_allocation_failed");
     abi::emit_jump(e, "__rt_heap_allocation_failed");
     emit_cleanup(e);
+    emit_strip_location(e);
     super::arrays::emit_native_frame_owners(e, "__rt_gc_warning_frame_owners", &[ARGS, RESULT]);
     emit_reset(e);
+}
+
+/// Emits `__rt_diag_strip_location(ptr, len)`, which removes a trailing
+/// `" in <file> on line <N>"` from a handler-facing diagnostic message.
+///
+/// PHP passes the bare message to a user error handler and provides the file and line as
+/// separate arguments. Producers that build one complete default-output line (the ctype
+/// deprecations) therefore hand this helper the complete buffer; the default-output path
+/// keeps it untouched while the handler argument is cut at the location separator.
+fn emit_strip_location(e: &mut Emitter) {
+    if e.target.arch == Arch::AArch64 {
+        emit_strip_location_aarch64(e);
+    } else {
+        emit_strip_location_x86_64(e);
+    }
+}
+
+/// AArch64 variant of `__rt_diag_strip_location`.
+fn emit_strip_location_aarch64(e: &mut Emitter) {
+    e.blank();
+    e.comment("--- runtime: diag_strip_location ---");
+    e.label_global("__rt_diag_strip_location");
+    e.instruction("cmp x2, #9");                                                // a location suffix needs at least " on line "
+    e.instruction("b.lo __rt_diag_strip_location_done");                        // shorter messages carry no location suffix
+    e.instruction("mov x9, x2");                                                // start the backward search at the message end
+    e.instruction("sub x9, x9, #9");                                            // select the last possible " on line " offset
+    e.label("__rt_diag_strip_location_outer");
+    e.instruction("add x11, x1, x9");                                           // address the candidate line separator
+    abi::emit_symbol_address(e, "x12", "_diag_location_on_line");
+    e.instruction("mov x13, #0");                                               // compare the marker from its first byte
+    e.label("__rt_diag_strip_location_outer_cmp");
+    e.instruction("ldrb w14, [x11, x13]");                                      // load one candidate line-separator byte
+    e.instruction("ldrb w15, [x12, x13]");                                      // load the matching marker byte
+    e.instruction("cmp w14, w15");                                               // compare the two bytes
+    e.instruction("b.ne __rt_diag_strip_location_outer_miss");                  // try the previous candidate offset
+    e.instruction("add x13, x13, #1");                                          // advance the marker comparison
+    e.instruction("cmp x13, #9");                                               // has the complete " on line " matched?
+    e.instruction("b.ne __rt_diag_strip_location_outer_cmp");                   // continue comparing the marker
+    e.instruction("cmp x9, #4");                                                // does a preceding " in " fit?
+    e.instruction("b.lo __rt_diag_strip_location_done");                        // no separator fits before the line marker
+    e.instruction("sub x10, x9, #4");                                           // select the last possible " in " offset
+    e.label("__rt_diag_strip_location_inner");
+    e.instruction("add x11, x1, x10");                                          // address the candidate location separator
+    abi::emit_symbol_address(e, "x12", "_diag_location_in");
+    e.instruction("mov x13, #0");                                               // compare the marker from its first byte
+    e.label("__rt_diag_strip_location_inner_cmp");
+    e.instruction("ldrb w14, [x11, x13]");                                      // load one candidate location-separator byte
+    e.instruction("ldrb w15, [x12, x13]");                                      // load the matching marker byte
+    e.instruction("cmp w14, w15");                                               // compare the two bytes
+    e.instruction("b.ne __rt_diag_strip_location_inner_miss");                  // try the previous candidate offset
+    e.instruction("add x13, x13, #1");                                          // advance the marker comparison
+    e.instruction("cmp x13, #4");                                               // has the complete " in " matched?
+    e.instruction("b.ne __rt_diag_strip_location_inner_cmp");                   // continue comparing the marker
+    e.instruction("mov x2, x10");                                               // cut the handler message before " in "
+    e.instruction("b __rt_diag_strip_location_done");                           // return the stripped message length
+    e.label("__rt_diag_strip_location_inner_miss");
+    e.instruction("cbz x10, __rt_diag_strip_location_done");                    // no earlier separator exists
+    e.instruction("sub x10, x10, #1");                                          // try the previous " in " offset
+    e.instruction("b __rt_diag_strip_location_inner");                          // continue the backward search
+    e.label("__rt_diag_strip_location_outer_miss");
+    e.instruction("cbz x9, __rt_diag_strip_location_done");                     // no earlier line marker exists
+    e.instruction("sub x9, x9, #1");                                            // try the previous " on line " offset
+    e.instruction("b __rt_diag_strip_location_outer");                          // continue the backward search
+    e.label("__rt_diag_strip_location_done");
+    e.instruction("ret");                                                       // return with the original or stripped length
+}
+
+/// x86_64 variant of `__rt_diag_strip_location`.
+fn emit_strip_location_x86_64(e: &mut Emitter) {
+    e.blank();
+    e.comment("--- runtime: diag_strip_location ---");
+    e.label_global("__rt_diag_strip_location");
+    e.instruction("cmp rsi, 9");                                                // a location suffix needs at least " on line "
+    e.instruction("jb __rt_diag_strip_location_done");                          // shorter messages carry no location suffix
+    e.instruction("mov r8, rsi");                                               // start the backward search at the message end
+    e.instruction("sub r8, 9");                                                 // select the last possible " on line " offset
+    e.label("__rt_diag_strip_location_outer");
+    e.instruction("lea r11, [rdi + r8]");                                       // address the candidate line separator
+    e.instruction("lea r9, [rip + _diag_location_on_line]");                    // materialize the line-separator marker
+    e.instruction("xor r10d, r10d");                                            // compare the marker from its first byte
+    e.label("__rt_diag_strip_location_outer_cmp");
+    e.instruction("movzx eax, BYTE PTR [r11 + r10]");                           // load one candidate line-separator byte
+    e.instruction("movzx ecx, BYTE PTR [r9 + r10]");                            // load the matching marker byte
+    e.instruction("cmp eax, ecx");                                              // compare the two bytes
+    e.instruction("jne __rt_diag_strip_location_outer_miss");                   // try the previous candidate offset
+    e.instruction("add r10, 1");                                                // advance the marker comparison
+    e.instruction("cmp r10, 9");                                                // has the complete " on line " matched?
+    e.instruction("jne __rt_diag_strip_location_outer_cmp");                    // continue comparing the marker
+    e.instruction("cmp r8, 4");                                                 // does a preceding " in " fit?
+    e.instruction("jb __rt_diag_strip_location_done");                          // no separator fits before the line marker
+    e.instruction("lea r8, [r8 - 4]");                                          // select the last possible " in " offset
+    e.label("__rt_diag_strip_location_inner");
+    e.instruction("lea r11, [rdi + r8]");                                       // address the candidate location separator
+    e.instruction("lea r9, [rip + _diag_location_in]");                         // materialize the location-separator marker
+    e.instruction("xor r10d, r10d");                                            // compare the marker from its first byte
+    e.label("__rt_diag_strip_location_inner_cmp");
+    e.instruction("movzx eax, BYTE PTR [r11 + r10]");                           // load one candidate location-separator byte
+    e.instruction("movzx ecx, BYTE PTR [r9 + r10]");                            // load the matching marker byte
+    e.instruction("cmp eax, ecx");                                              // compare the two bytes
+    e.instruction("jne __rt_diag_strip_location_inner_miss");                   // try the previous candidate offset
+    e.instruction("add r10, 1");                                                // advance the marker comparison
+    e.instruction("cmp r10, 4");                                                // has the complete " in " matched?
+    e.instruction("jne __rt_diag_strip_location_inner_cmp");                    // continue comparing the marker
+    e.instruction("mov rsi, r8");                                               // cut the handler message before " in "
+    e.instruction("jmp __rt_diag_strip_location_done");                         // return the stripped message length
+    e.label("__rt_diag_strip_location_inner_miss");
+    e.instruction("test r8, r8");                                               // no earlier separator exists
+    e.instruction("jz __rt_diag_strip_location_done");                          // stop at the message start
+    e.instruction("sub r8, 1");                                                 // try the previous " in " offset
+    e.instruction("jmp __rt_diag_strip_location_inner");                        // continue the backward search
+    e.label("__rt_diag_strip_location_outer_miss");
+    e.instruction("test r8, r8");                                               // no earlier line marker exists
+    e.instruction("jz __rt_diag_strip_location_done");                          // stop at the message start
+    e.instruction("sub r8, 1");                                                 // try the previous " on line " offset
+    e.instruction("jmp __rt_diag_strip_location_outer");                        // continue the backward search
+    e.label("__rt_diag_strip_location_done");
+    e.instruction("ret");                                                       // return with the original or stripped length
 }
 
 /// Builds the four handler arguments with copied strings and owned boxed cells.
@@ -262,6 +392,15 @@ fn emit_arguments(e: &mut Emitter) {
                 ins(e, "b.ne __rt_warning_message_ready", "jne __rt_warning_message_ready");
                 ins(e, "sub x2, x2, #1", "sub rdx, 1");
                 e.label("__rt_warning_message_ready");
+                if arm {
+                    abi::emit_call_label(e, "__rt_diag_strip_location");
+                } else {
+                    abi::emit_reg_move(e, "rdi", "rax");
+                    abi::emit_reg_move(e, "rsi", "rdx");
+                    abi::emit_call_label(e, "__rt_diag_strip_location");
+                    abi::emit_reg_move(e, "rax", "rdi");
+                    abi::emit_reg_move(e, "rdx", "rsi");
+                }
                 emit_box_current_value_as_mixed(e, &PhpType::Str);
             }
             2 => {
@@ -371,6 +510,25 @@ mod tests {
                 "jmp __rt_heap_allocation_failed"
             }), "{target:?}");
             assert!(!asm.contains("__rt_heap_exhausted"), "{target:?}: allocator-local label escaped");
+        }
+    }
+
+    /// Host extension builds let Zend format the diagnostic and never publish a newline-only event.
+    #[test]
+    fn warning_dispatch_skips_newline_event_for_phpext_output() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut native = Emitter::new(target);
+            emit_warning_dispatch(&mut native);
+            assert!(native.output().contains("_diag_newline"), "{target:?}: native output keeps the leading blank line");
+
+            let mut hosted = Emitter::new(target);
+            hosted.phpext_output = true;
+            emit_warning_dispatch(&mut hosted);
+            assert!(!hosted.output().contains("_diag_newline"), "{target:?}: host output must not create an empty warning event");
         }
     }
 }

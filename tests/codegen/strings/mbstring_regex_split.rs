@@ -35,10 +35,10 @@ fn test_mbstring_regex_split_runtime_errors() {
         assert!(output.success, "eval={eval}: {}\n{}", output.stderr, output.stdout);
         assert_eq!(output.stdout, include_str!("fixtures/mbstring_split_errors.out"), "eval={eval}");
         assert_eq!(output.stderr, concat!(
-            "Warning: mb_split(): mbregex compile err: premature end of char-class\n",
-            "Warning: mb_split(): mbregex search failure in mbsplit(): no support in this configuration\n",
-            "Deprecated: Implicit conversion from float 2.5 to int loses precision\n",
-            "Deprecated: mb_split(): Passing null to parameter #3 ($limit) of type int is deprecated\n"), "eval={eval}");
+            "\nWarning: mb_split(): mbregex compile err: premature end of char-class\n",
+            "\nWarning: mb_split(): mbregex search failure in mbsplit(): no support in this configuration\n",
+            "\nDeprecated: Implicit conversion from float 2.5 to int loses precision\n",
+            "\nDeprecated: mb_split(): Passing null to parameter #3 ($limit) of type int is deprecated\n"), "eval={eval}");
     }
 }
 

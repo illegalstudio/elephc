@@ -75,7 +75,7 @@ var_dump(mb_ereg_match("a", "abc"));
         let output = compile_and_run_capture(&program(body, eval));
         assert!(output.success, "eval={eval}: {}", output.stderr);
         assert_eq!(output.stdout, expected, "eval={eval}");
-        assert_eq!(output.stderr, "Warning: mb_ereg_match(): mbregex compile err: premature end of char-class\n", "eval={eval}");
+        assert_eq!(output.stderr, "\nWarning: mb_ereg_match(): mbregex compile err: premature end of char-class\n", "eval={eval}");
     }
 }
 

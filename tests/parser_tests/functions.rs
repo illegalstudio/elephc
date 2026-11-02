@@ -984,6 +984,24 @@ fn test_parse_trailing_comma_in_call_args() {
 }
 
 #[test]
+/// Verifies bare `exit;` and `die;` parse as zero-argument calls, matching PHP's
+/// parenthesis-free language-construct form.
+fn test_parse_bare_exit_and_die() {
+    for keyword in ["exit", "die", "EXIT", "Die"] {
+        let source = format!("<?php {keyword};");
+        let stmts = parse_source(&source);
+        let StmtKind::ExprStmt(expr) = &stmts[0].kind else {
+            panic!("expected ExprStmt for {keyword}");
+        };
+        let ExprKind::FunctionCall { name, args } = &expr.kind else {
+            panic!("expected FunctionCall for {keyword}, got {:?}", expr.kind);
+        };
+        assert!(name.as_str().eq_ignore_ascii_case(keyword));
+        assert!(args.is_empty());
+    }
+}
+
+#[test]
 // Verifies that a trailing comma after the last parameter (PHP 8.0+) is accepted:
 // `<?php function foo($a, $b,) {}` parses to a `FunctionDecl` with two parameters.
 /// Verifies that a trailing comma in a parameter list parses.
