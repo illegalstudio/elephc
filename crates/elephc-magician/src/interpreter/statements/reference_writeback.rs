@@ -126,6 +126,10 @@ pub(super) fn alias_duplicate_method_ref_args(
 /// Returns true when two evaluated arguments target the same caller-side variable.
 pub(super) fn same_method_ref_target(left: &EvalReferenceTarget, right: &EvalReferenceTarget, values: &mut impl RuntimeValueOps) -> Result<bool, EvalStatus> {
     Ok(match (left, right) {
+        (EvalReferenceTarget::PersistentArrayElement { array_target, key }, other)
+        | (other, EvalReferenceTarget::PersistentArrayElement { array_target, key }) => {
+            same_persistent_array_ref_target(array_target, key, other, values)?
+        },
         (
             EvalReferenceTarget::Variable {
                 scope: left_scope,
@@ -206,6 +210,30 @@ pub(super) fn same_method_ref_target(left: &EvalReferenceTarget, right: &EvalRef
         }
         _ => false,
     })
+}
+
+/// Compares value-key aliases with persistent or temporary element targets.
+fn same_persistent_array_ref_target(
+    parent: &EvalReferenceTarget,
+    key: &EvalArrayReferenceKey,
+    other: &EvalReferenceTarget,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    match other {
+        EvalReferenceTarget::PersistentArrayElement { array_target, key: other_key } => {
+            Ok(key == other_key && same_method_ref_target(parent, array_target, values)?)
+        },
+        EvalReferenceTarget::NestedArrayElement { array_target, index } => {
+            Ok(eval_array_reference_key(*index, values)?.as_ref() == Some(key)
+                && same_method_ref_target(parent, array_target, values)?)
+        },
+        EvalReferenceTarget::ArrayElement { scope, array_name, index } => {
+            let array_target = EvalReferenceTarget::Variable { scope: *scope, name: array_name.clone() };
+            Ok(eval_array_reference_key(*index, values)?.as_ref() == Some(key)
+                && same_method_ref_target(parent, &array_target, values)?)
+        },
+        _ => Ok(false),
+    }
 }
 
 /// Compares normalized PHP array keys instead of the identity of their temporary boxes.
@@ -336,6 +364,12 @@ pub(in crate::interpreter) fn write_back_method_ref_target(
             context,
             values,
         ),
+        EvalReferenceTarget::PersistentArrayElement { array_target, key } => {
+            let index = materialize_array_reference_key(key, values)?;
+            with_eval_value_lease(index, context, values, |index, context, values| {
+                write_back_method_nested_array_element_ref_target(array_target, index, value, context, values)
+            })
+        },
         EvalReferenceTarget::ObjectProperty {
             object,
             property,
@@ -525,16 +559,28 @@ pub(super) fn write_back_method_nested_array_element_ref_target(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let current = eval_reference_target_value(array_target, context, values)?;
-    let array = if values.is_array_like(current)? {
-        let array = values.array_clone_shallow(current)?;
-        context.copy_array_metadata(current, array);
-        array
-    } else {
-        eval_new_array_for_index(index, values)?
-    };
-    let array = values.array_set(array, index, value)?;
-    write_back_method_ref_target(array_target, array, context, values)
+    let mut owners = Vec::new();
+    let result = (|| {
+        let current = eval_owned_reference_target_value(array_target, context, values, &mut owners)?;
+        owners.push(current);
+        let array = if values.is_array_like(current)? {
+            let array = values.array_clone_shallow(current)?;
+            context.copy_array_metadata(current, array);
+            array
+        } else {
+            eval_new_array_for_index(index, values)?
+        };
+        with_eval_value_lease(array, context, values, |array, context, values| {
+            let updated = values.array_set(array, index, value)?;
+            write_back_method_ref_target(array_target, updated, context, values)
+        })
+    })();
+    let mut cleanup = Ok(());
+    for owner in owners.into_iter().rev() {
+        let released = eval_release_value(context, values, owner);
+        if cleanup.is_ok() { cleanup = released; }
+    }
+    result.and(cleanup)
 }
 
 /// Stores one by-reference method result in a caller-side object property.
