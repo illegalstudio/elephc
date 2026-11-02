@@ -2875,7 +2875,9 @@ jobs:
         run: python3 -B -m unittest discover -s .github/scripts -p 'test_notarize_macos.py' -v
 
       - name: Test nextest archive validation
-        run: bash scripts/ci/test_validate_nextest_archive.sh
+        run: |
+          bash scripts/ci/test_validate_nextest_archive.sh
+          python3 -B scripts/ci/test_download_test_archive.py
 
       - name: Check workflow and composite Action refs
         run: ruby .github/scripts/check_action_pins.rb

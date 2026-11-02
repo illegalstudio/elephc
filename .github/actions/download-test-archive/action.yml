@@ -37,17 +37,18 @@ runs:
       continue-on-error: true
       shell: bash
       env:
-        ARCHIVE_DIR: ${{ inputs.path }}
-      run: bash "${{ github.action_path }}/validate.sh" "$ARCHIVE_DIR"
+        ARCHIVE_DIR: ${{ steps.first.outputs.download-path }}
+      # Runtime paths are already mapped into a job container; contexts can retain host paths.
+      run: bash "$GITHUB_ACTION_PATH/validate.sh" "$ARCHIVE_DIR"
 
     - if: steps.first.outcome == 'failure' || steps.first_archive.outcome == 'failure'
       shell: bash
       env:
         ARTIFACT_NAME: ${{ inputs.name }}
-        ARCHIVE_DIR: ${{ inputs.path }}
+        ARCHIVE_DIR: ${{ steps.first.outputs.download-path }}
       run: |
         echo "::warning title=Artifact download retried::$ARTIFACT_NAME failed download or archive validation; retrying in 15s"
-        if [[ "$ARTIFACT_NAME" == nextest-archive-* ]]; then
+        if [[ "$ARTIFACT_NAME" == nextest-archive-* && -n "$ARCHIVE_DIR" ]]; then
           rm -f -- "$ARCHIVE_DIR/nextest-archive.tar.zst"
         fi
         sleep 15
@@ -65,17 +66,17 @@ runs:
       continue-on-error: true
       shell: bash
       env:
-        ARCHIVE_DIR: ${{ inputs.path }}
-      run: bash "${{ github.action_path }}/validate.sh" "$ARCHIVE_DIR"
+        ARCHIVE_DIR: ${{ steps.second.outputs.download-path }}
+      run: bash "$GITHUB_ACTION_PATH/validate.sh" "$ARCHIVE_DIR"
 
     - if: steps.second.outcome == 'failure' || steps.second_archive.outcome == 'failure'
       shell: bash
       env:
         ARTIFACT_NAME: ${{ inputs.name }}
-        ARCHIVE_DIR: ${{ inputs.path }}
+        ARCHIVE_DIR: ${{ steps.second.outputs.download-path }}
       run: |
         echo "::warning title=Artifact download retried::$ARTIFACT_NAME failed twice; retrying in 45s"
-        if [[ "$ARTIFACT_NAME" == nextest-archive-* ]]; then
+        if [[ "$ARTIFACT_NAME" == nextest-archive-* && -n "$ARCHIVE_DIR" ]]; then
           rm -f -- "$ARCHIVE_DIR/nextest-archive.tar.zst"
         fi
         sleep 45
@@ -90,5 +91,5 @@ runs:
     - if: steps.third.outcome == 'success' && startsWith(inputs.name, 'nextest-archive-')
       shell: bash
       env:
-        ARCHIVE_DIR: ${{ inputs.path }}
-      run: bash "${{ github.action_path }}/validate.sh" "$ARCHIVE_DIR"
+        ARCHIVE_DIR: ${{ steps.third.outputs.download-path }}
+      run: bash "$GITHUB_ACTION_PATH/validate.sh" "$ARCHIVE_DIR"
