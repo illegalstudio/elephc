@@ -12,6 +12,31 @@
 
 use super::*;
 
+/// Instance and static untyped slots keep object and later array payloads independently owned.
+#[test]
+fn test_untyped_object_property_widens_for_later_array_writes() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class UntypedObjectPayload { public string $name = 'object'; }
+class UntypedObjectParent { public $value; public static $shared; }
+class UntypedObjectChild extends UntypedObjectParent {}
+$holder = new UntypedObjectChild();
+var_dump($holder->value, UntypedObjectChild::$shared);
+$holder->value = new UntypedObjectPayload();
+UntypedObjectChild::$shared = new UntypedObjectPayload();
+echo $holder->value->name, ':', UntypedObjectChild::$shared->name, '|';
+$holder->value = [4];
+UntypedObjectChild::$shared = [6];
+$holder->value[0]++;
+UntypedObjectChild::$shared[0]++;
+echo json_encode($holder->value), ':', json_encode(UntypedObjectChild::$shared), '|';
+UntypedObjectParent::$shared = null;
+unset($holder);
+"#);
+    assert!(out.success, "status={} stdout={} stderr={}", out.status, out.stdout, out.stderr);
+    assert_eq!(out.stdout, "NULL\nNULL\nobject:object|[5]:[7]|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Named class constants fold before property storage, reflection and eval default registration.
 #[test]
 fn test_named_class_constant_defaults_fold_in_all_property_consumers() {

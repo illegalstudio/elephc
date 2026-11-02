@@ -603,7 +603,8 @@ fn untyped_property_value_needs_nullable_storage(val_ty: &PhpType) -> bool {
 /// their slots already encode null. A later write outside an existing nullable union widens
 /// to `Mixed` (PHP untyped properties accept anything). Untyped non-null defaults keep the
 /// historical rebind, and array-typed slots keep `[]`-placeholder adoption and generic-array
-/// element specialization.
+/// element specialization. Other incompatible writes widen the slot to `Mixed`, preserving
+/// both earlier and later values without imposing the first inferred PHP type on the property.
 pub(super) fn refined_untyped_property_assignment_type(
     checker: &Checker,
     current: &PhpType,
@@ -651,7 +652,13 @@ pub(super) fn refined_untyped_property_assignment_type(
                 return Some(val_ty.clone());
             }
             let refined_ty = Checker::specialize_generic_array_hint(current, val_ty);
-            (refined_ty != *current).then_some(refined_ty)
+            if refined_ty != *current {
+                return Some(refined_ty);
+            }
+            if *val_ty == PhpType::Void && !untyped_property_value_needs_nullable_storage(current) {
+                return None;
+            }
+            (!checker.type_accepts(current, val_ty)).then_some(PhpType::Mixed)
         }
     }
 }
