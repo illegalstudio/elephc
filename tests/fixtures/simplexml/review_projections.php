@@ -28,4 +28,3 @@ $projectionDocument->loadHTML('<html><body><a>value</a></body></html>');
 $projectionImported = simplexml_import_dom($projectionDocument, 'ReviewProjectionXml');
 echo get_class($projectionImported), '|'; unset($projectionImported);
 echo 'nodes|'; unset($projectionDocument); echo 'done|';
-

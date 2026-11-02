@@ -31,4 +31,3 @@ echo $quietXml->missing ?? 'fb', '|c|', $quietXml->a ?? 'fb', '|e|';
 var_dump(empty($quietXml->a), empty($quietXml->{$quietName}), empty($quietXml['id']));
 echo 'u|'; unset($quietAttributes, $quietXml); echo 'end|';
 reviewNativeHookCoalesce();
-

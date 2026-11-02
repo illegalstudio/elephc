@@ -65,4 +65,3 @@ for ($iteration = 0; $iteration < 32; $iteration++) {
 }
 unset($temporaryClone, $reads, $emptyAttributes, $dynamicName, $iteration);
 unset($prefixes, $declarationsXml, $className, $error, $zero, $negativeZero, $maybeZero, $copied);
-

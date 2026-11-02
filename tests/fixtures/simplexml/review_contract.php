@@ -81,4 +81,3 @@ restore_error_handler();
 $saveAliasXml = new ReviewSaveXmlAlias('<r/>');
 echo (int)str_contains((string)$saveAliasXml->saveXML(), '<r/>'), '|';
 reviewGuardedXmlWrites(new ReviewGuardedXml('<r><value>old</value></r>'));
-

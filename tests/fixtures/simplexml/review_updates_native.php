@@ -209,4 +209,3 @@ echo $subclassOffset->asXML(), '|';
 unset($subclassOffset, $subclassOffsetError);
 restore_error_handler();
 unset($updates, $existingUpdate, $attributeUpdate, $liveUpdate, $offsetUpdate, $hookUpdate, $badOffset, $appendedOffset, $offsetError);
-

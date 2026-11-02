@@ -256,4 +256,3 @@ $emptyChildNamespaceXml = new SimpleXMLElement('<r/>');
 $emptyChildNamespaceXml->addChild('p:e', 'w', '');
 $emptyChildNamespaceXml->addChild('c', 'v', '');
 echo $emptyChildNamespaceXml->asXML(), ':', count($emptyChildNamespaceXml->xpath('//e')), ':', (string)$emptyChildNamespaceXml->e, ':', count($emptyChildNamespaceXml->xpath('//c')), '|';
-

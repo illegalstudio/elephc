@@ -21,4 +21,3 @@ $xml->addAttribute(':c', '2');
 restore_error_handler();
 echo $xml->asXML();
 unset($added, $leading, $xml);
-
