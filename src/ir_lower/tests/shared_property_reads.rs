@@ -15,6 +15,7 @@ class SharedPropertyScope {
     public function one(mixed $object, string $name): mixed { return $object->{$name}; }
     public function two(mixed $object, string $name): mixed { return $object->{$name}; }
 }
+class SharedPropertyEmpty { public string $value; }
 function sharedGlobalReadOne(mixed $object, string $name): mixed { return $object->{$name}; }
 function sharedGlobalReadTwo(mixed $object, string $name): mixed { return $object->{$name}; }
 function sharedGlobalProbeOne(mixed $object, string $name): mixed { return $object->{$name} ?? null; }
@@ -23,6 +24,7 @@ $object = new SharedPropertyScope();
 $object->one($object, "secret"); $object->two($object, "secret");
 sharedGlobalReadOne($object, "secret"); sharedGlobalReadTwo($object, "secret");
 sharedGlobalProbeOne($object, "secret"); sharedGlobalProbeTwo($object, "secret");
+try { sharedGlobalReadOne(new SharedPropertyEmpty(), "value"); } catch (Error $error) {}
 "#;
     let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
         std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
