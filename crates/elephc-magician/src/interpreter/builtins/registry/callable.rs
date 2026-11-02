@@ -282,6 +282,21 @@ pub(in crate::interpreter) fn eval_object_callable(
     if let Some(target) = context.closure_object_target(identity) {
         return Ok(eval_closure_object_target_callable(target));
     }
+    #[cfg(not(test))]
+    if let Some(owner_pointer) = crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity) {
+        if !std::ptr::eq(owner_pointer, context as *const ElephcEvalContext) {
+            if let Some(owner_context) = unsafe { owner_pointer.as_ref() }
+                .filter(|owner| owner.abi_version() == crate::abi::ABI_VERSION)
+            {
+                if let Some(target) = owner_context.closure_object_target(identity) {
+                    return Ok(EvaluatedCallable::ForeignContext {
+                        callback: Box::new(eval_closure_object_target_callable(target)),
+                        owner: crate::context::pcntl_runtime::EvalPcntlContextLease::for_live_dynamic_object(owner_pointer),
+                    });
+                }
+            }
+        }
+    }
     let Some(class) = context.dynamic_object_class(identity) else {
         let class_name = runtime_object_class_name(callback, values)?;
         let Some((_, _, is_static, is_abstract)) =
