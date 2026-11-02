@@ -38,11 +38,17 @@ escStatic($box->value); $box->value = "b3"; echo EscHolder::$ref, "|";
 EscHolder::$ref = "s3"; echo $box->value, "|";
 $x = "x0"; $control = escArray($x); $x = "x1"; echo $control[0], "|";
 EscHolder::$ref = null; unset($box, $a, $holder, $x, $control);
+function escNoEscape(&$value): void { $value = "non-escaping"; }
+$plain = new EscBox(); escNoEscape($plain->value);
+$copy = clone $plain; $copy->value = "copy"; echo $plain->value, "|";
+$shared = escArray($plain->value); $copy = clone $plain;
+$copy->value = "shared"; echo $plain->value, "|";
+unset($plain, $copy, $shared);
 ' : '';
 eval($source); unset($source);
 "#;
     let (out, assembly) = compile_and_run_with_heap_debug_and_asm(source);
-    let expected = "old|a|old|p|old|s|old+c|old+c+c|b1|a1|b2|h2|b3|s3|x1|";
+    let expected = "old|a|old|p|old|s|old+c|old+c+c|b1|a1|b2|h2|b3|s3|x1|non-escaping|shared|";
     preserve_stdout_mismatches(source, &assembly, std::slice::from_ref(&out), &[expected]);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, expected);

@@ -21,6 +21,7 @@ mod array_ops;
 mod cell_ops;
 mod conversions;
 mod lifecycle_ops;
+mod reference_owners;
 mod numeric_ops;
 mod object_ops;
 mod runtime_ops;
@@ -113,7 +114,7 @@ pub(super) struct FakeOps {
     pub(super) fail_invoker_marker_call: Option<usize>,
     pub(super) invoker_marker_calls: usize,
     pub(super) retains: Vec<RuntimeCellHandle>,
-    /// Explicit cell owners only; fake containers do not model native heap payload refcounts.
+    /// Explicit owners; reference-sharing queries also count edges from live fake containers.
     pub(super) cell_owners: HashMap<usize, usize>,
     pub(super) warnings: Vec<String>,
     pub(super) pending_runtime_throwable: Option<RuntimeCellHandle>,
