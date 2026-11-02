@@ -260,7 +260,7 @@ fn scan_constructor_callbacks(usage: &mut Usage, receiver: &crate::parser::ast::
             let opaque_order = args.iter().any(|arg| matches!(arg.kind,
                 ExprKind::NamedArg { .. } | ExprKind::Spread(_)));
             for index in indices {
-                if opaque_order || !args.get(index).is_some_and(|arg| record_literal_callable(usage, arg)) {
+                if opaque_order || !args.get(index).is_some_and(|arg| record_callback_slot(usage, arg, false)) {
                     usage.callable_names.unknown_call();
                 }
             }
@@ -282,8 +282,6 @@ fn scan_constructor_callbacks(usage: &mut Usage, receiver: &crate::parser::ast::
 /// by its SHAPE calls both analysable; judging it by what could be read separates them.
 fn record_literal_callable(usage: &mut Usage, expr: &Expr) -> bool {
     match &expr.kind {
-        // The ordinary expression scan still visits the closure body and its symbol uses.
-        ExprKind::Closure { .. } => true,
         ExprKind::StringLiteral(text) => {
             let Some(text) = crate::names::literal_symbol_name(text) else { return false; };
             if callable_gateway(&text) { usage.callable_names.unknown_call(); }
@@ -324,6 +322,36 @@ fn record_literal_callable(usage: &mut Usage, expr: &Expr) -> bool {
         },
         _ => false,
     }
+}
+
+/// Recognizes a value only after its position is known to carry a callback.
+/// The ordinary expression scan still visits closure bodies and their symbol uses.
+fn record_callback_slot(usage: &mut Usage, arg: &Expr, nullable: bool) -> bool {
+    matches!(arg.kind, ExprKind::Closure { .. })
+        || (nullable && matches!(arg.kind, ExprKind::Null))
+        || record_literal_callable(usage, arg)
+}
+
+/// Requires every catalogued callback slot to be known, preserving opaque siblings.
+/// Named/spread order remains conservative before the shared call planner runs.
+fn record_builtin_callbacks(usage: &mut Usage, name: &str, args: &[Expr]) -> bool {
+    if let Some(definition) = crate::builtins::registry::lookup(name) {
+        let xml = matches!(definition.spec.semantics.argument_lowering,
+            crate::builtins::semantics::BuiltinArgumentLowering::XmlHandlerSetter);
+        let indices = if xml { (1..definition.params.len()).collect() }
+            else { crate::builtins::registry::callback_parameter_indices(definition) };
+        if !indices.is_empty() {
+            if args.iter().any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_))) {
+                return false;
+            }
+            return indices.into_iter().fold(true, |known, index| {
+                let read = args.get(index).is_some_and(|arg| record_callback_slot(usage, arg, xml));
+                read && known
+            });
+        }
+    }
+    // Prelude-only boundaries retain their existing symbol scan without accepting closure data.
+    args.iter().fold(false, |seen, arg| record_literal_callable(usage, arg) || seen)
 }
 
 /// Collects direct and literal-indirect function references from a program.
@@ -979,13 +1007,8 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
                     }
                 }
             } else if callable_taking_builtin(&name) {
-                // A literal callable is a plain reference; only one this walk cannot READ is a
-                // hazard. Every argument is examined because the position varies — `usort($a,
-                // 'cmp')` names its callable second — and `fold` rather than `any` so that
-                // examining does not stop early: recording the names is the point, not the flag.
-                let read = args.iter().fold(false, |seen, arg| {
-                    record_literal_callable(usage, arg) || seen
-                });
+                // Callback positions come from the catalog, including every XML handler slot.
+                let read = record_builtin_callbacks(usage, &name, args);
                 // An argumentless `ob_start()` installs no callback and is not a hazard; one whose
                 // arguments exist but say nothing — `usort($a, $cmp)`, `call_user_func($x)` — is.
                 if !read && !args.is_empty() {
@@ -1170,7 +1193,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             }
             // An alias may hide the Closure class before name resolution.
             if method.eq_ignore_ascii_case("fromCallable") && !args.is_empty()
-                && !args.iter().any(|arg| record_literal_callable(usage, arg))
+                && !args.first().is_some_and(|arg| record_callback_slot(usage, arg, false))
             {
                 usage.callable_names.unknown_call();
             }
@@ -1357,6 +1380,47 @@ mod tests {
         let opaque = parse("<?php xml_set_character_data_handler($parser, $callback);");
         assert!(crate::tokenizer_prelude::program_uses_surface(&opaque));
         assert!(crate::web_prelude::program_observes_environment(&opaque));
+    }
+
+    /// A known callback cannot hide an opaque callback slot or a dynamic method target.
+    #[test]
+    fn literal_callback_slots_preserve_opaque_siblings() {
+        for source in [
+            "<?php xml_set_element_handler($parser, function () {}, $callback);",
+            "<?php xml_set_element_handler($parser, $callback, function () {});",
+            "<?php xml_set_element_handler($parser, 'start_handler', $callback);",
+            "<?php xml_set_element_handler($parser, function () {}, ...$handlers);",
+            "<?php xml_set_element_handler(parser: $parser, start_handler: function () {}, end_handler: $callback);",
+            "<?php xml_set_character_data_handler($parser, function () use ($callback) { $callback(); });",
+            "<?php call_user_func($callback, function () { return 1; });",
+            "<?php $object->$method(function () { return 1; });",
+            "<?php $object?->$method(function () { return 1; });",
+        ] {
+            let program = parse(source);
+            assert!(collect(&program).dynamic_function_call, "{source}");
+            assert!(crate::tokenizer_prelude::program_uses_surface(&program), "{source}");
+        }
+        let usage = collect(&parse("<?php eval('call_user_func($callback, function () {});');"));
+        assert!(usage.introspects);
+    }
+
+    /// Disabled XML handlers and known callback slots retain precise symbol references.
+    #[test]
+    fn literal_callback_slots_keep_disabled_xml_handlers_precise() {
+        for source in [
+            "<?php xml_set_element_handler($parser, function () {}, null);",
+            "<?php xml_set_element_handler($parser, null, function () {});",
+            "<?php xml_set_character_data_handler($parser, null);",
+            "<?php call_user_func(function ($value) {}, $unknownData);",
+            "<?php usort($array, function ($a, $b) { return 0; });",
+        ] {
+            let program = parse(source);
+            assert!(!collect(&program).dynamic_function_call, "{source}");
+            assert!(!crate::tokenizer_prelude::program_uses_surface(&program), "{source}");
+        }
+        let usage = collect(&parse("<?php xml_set_element_handler($parser, 'start_handler', 'end_handler');"));
+        assert!(usage.references("start_handler"));
+        assert!(usage.references("end_handler"));
     }
 
     /// A literal eval contributes the names and literals of its source and is not introspection.
