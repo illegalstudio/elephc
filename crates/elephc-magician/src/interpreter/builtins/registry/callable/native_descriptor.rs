@@ -102,11 +102,12 @@ fn stage_native_descriptor_args(
             None => argument.value,
         };
         let coerced_is_temporary = coerced != argument.value;
-        let (marker, mut slot) = match stage_native_function_ref_arg(
+        let (marker, mut slot) = match stage_native_function_shared_ref_arg(
             parameter_type.as_ref(),
             false,
             coerced,
             target,
+            &mut staged,
             values,
         ) {
             Ok(staged_ref) => staged_ref,
@@ -117,12 +118,12 @@ fn stage_native_descriptor_args(
                 return abort_native_descriptor_staging(status, staged, pending, context, values);
             }
         };
-        mark_descriptor_coercion_writeback(&mut slot, coerced_is_temporary);
+        if let Some(slot) = &mut slot { mark_descriptor_coercion_writeback(slot, coerced_is_temporary); }
         if coerced_is_temporary {
             if let Err(status) = release_expr_result(coerced, context, values) {
                 let partial = BoundNativeFunctionArgs {
                     values: vec![marker],
-                    ref_slots: vec![slot],
+                    ref_slots: slot.into_iter().collect(),
                     named_keys: vec![None],
                 };
                 let _ = cleanup_native_function_ref_args(&partial, values);
@@ -133,7 +134,7 @@ fn stage_native_descriptor_args(
         let argument = pending.pop_front().expect("the staged argument is still pending");
         staged.named_keys.push(argument.name);
         staged.values.push(marker);
-        staged.ref_slots.push(slot);
+        if let Some(slot) = slot { staged.ref_slots.push(slot); }
         if let Err(status) = release_expr_result(argument.value, context, values) {
             return abort_native_descriptor_staging(status, staged, pending, context, values);
         }

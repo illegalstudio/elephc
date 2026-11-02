@@ -704,12 +704,14 @@ fn test_eval_generics_review_native_reference_writeback() {
     let eval = dynamic_eval(r#"
 array<int> $a = [1]; $b =& $a;
 try { native_replace($b); } catch (TypeError $e) { echo 'native|'; }
-echo $a[0], '|', $b[0];
+echo $a[0], '|', $b[0], '|';
+native_shared($a, $b); echo $a[0], '|', $b[0], '|';
+$callback = native_shared(...); $callback(second: $b, first: $a); echo $a[0], '|', $b[0];
 "#);
-    let source = eval.replacen("<?php", "<?php\nfunction native_replace(array &$value): void { $value = ['bad']; }", 1);
+    let source = eval.replacen("<?php", "<?php\nfunction native_replace(array &$value): void { $value = ['bad']; }\nfunction native_shared(array &$first, array &$second): void { $first = [2]; echo $second[0], '|'; $second = [3]; echo $first[0], '|'; }", 1);
     let output = compile_and_run_with_heap_debug(&source);
     assert!(output.success, "stdout: {}\nstderr: {}", output.stdout, output.stderr);
-    assert_eq!(output.stdout, "native|1|1");
+    assert_eq!(output.stdout, "native|1|1|2|3|3|3|2|3|3|3");
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
 

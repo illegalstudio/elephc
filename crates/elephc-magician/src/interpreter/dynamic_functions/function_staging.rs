@@ -49,11 +49,12 @@ pub(in crate::interpreter) fn stage_native_function_invoker_args(
                 (None, EvalByRefBindingMode::WarnByValue { .. }) => None,
                 (None, EvalByRefBindingMode::RequireTarget) => return Err(EvalStatus::RuntimeFatal),
             };
-            let (marker, slot) = stage_native_function_ref_arg(
-                function.param_type(param_index), function.param_tagged_scalar_ref(param_index), original, target, values,
+            let (marker, slot) = stage_native_function_shared_ref_arg(
+                function.param_type(param_index), function.param_tagged_scalar_ref(param_index), original,
+                target, &mut staged, values,
             )?;
             staged.values.push(marker);
-            staged.ref_slots.push(slot);
+            if let Some(slot) = slot { staged.ref_slots.push(slot); }
             bound.value = original.borrowed();
             release_expr_result(original, context, values)?;
         }
@@ -67,6 +68,30 @@ pub(in crate::interpreter) fn stage_native_function_invoker_args(
         return Err(status);
     }
     Ok(staged)
+}
+
+/// Reuses one staging owner when several boxed parameters name the same persistent reference.
+pub(in crate::interpreter) fn stage_native_function_shared_ref_arg(
+    param_type: Option<&EvalParameterType>,
+    tagged_scalar: bool,
+    original: RuntimeCellHandle,
+    target: Option<EvalReferenceTarget>,
+    staged: &mut BoundNativeFunctionArgs,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, Option<BoundNativeFunctionRefSlot>), EvalStatus> {
+    if target.is_some() && !tagged_scalar && native_function_raw_ref_kind(param_type).is_none()
+        && values.is_reference(original)?
+    {
+        for existing in &mut staged.ref_slots {
+            if let BoundNativeFunctionRefSlot::Mixed { original: first, slot, target: Some(_) } = existing {
+                if first.as_ptr() == original.as_ptr() {
+                    return values.invoker_ref_cell(slot.as_mut()).map(|marker| (marker, None));
+                }
+            }
+        }
+    }
+    stage_native_function_ref_arg(param_type, tagged_scalar, original, target, values)
+        .map(|(marker, slot)| (marker, Some(slot)))
 }
 
 /// Creates one reference marker and retires an acquired payload if marker allocation fails.

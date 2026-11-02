@@ -26,7 +26,7 @@ pub(in crate::interpreter) use argument_modes::*;
 pub(in crate::interpreter) use closure_execution::*;
 pub(in crate::interpreter) use function_binding::*;
 pub(in crate::interpreter) use function_staging::{
-    stage_native_function_invoker_args, stage_native_function_ref_arg,
+    stage_native_function_invoker_args, stage_native_function_shared_ref_arg,
 };
 pub(in crate::interpreter) use method_binding::*;
 pub(in crate::interpreter) use native_execution::*;

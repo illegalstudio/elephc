@@ -575,3 +575,44 @@ fn native_reference_staging_preserves_typed_alias_on_rejection() {
     eval_release_value(&mut context, &mut values, error).unwrap();
     for marker in bound.values { values.release(marker).unwrap(); }
 }
+
+/// Aliases passed to two native boxed reference parameters share one writeback owner.
+#[test]
+fn native_reference_staging_keeps_duplicate_persistent_aliases_shared() {
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let declaration = parse_fragment(b"array<int> $a = [1]; $b =& $a;").unwrap();
+    let result = execute_program_with_context(&mut context, &declaration, &mut scope, &mut values).unwrap();
+    values.release(result).unwrap();
+    let original = scope.visible_cell("a").unwrap();
+    let mut function = NativeFunction::new(std::ptr::null_mut(), fake_native_return_descriptor, 2);
+    for index in 0..2 {
+        function.set_param_type(index, EvalParameterType::new(vec![EvalParameterTypeVariant::Array], false));
+        function.set_param_by_ref(index, true);
+    }
+    let mut arguments = Vec::new();
+    for name in ["a", "b"] {
+        arguments.push(EvaluatedCallArg { name: None, value: original.borrowed(),
+            ref_target: Some(EvalReferenceTarget::Variable { scope: &mut scope, name: name.into() }) });
+    }
+    let mut bound = bind_evaluated_native_function_args(&function, arguments, &mut context, &mut values).unwrap();
+    assert_eq!(bound.ref_slots.len(), 1, "one owner and one writeback for the shared binding");
+    assert_eq!(values.raw_value_word(bound.values[0]).unwrap(), values.raw_value_word(bound.values[1]).unwrap());
+    let BoundNativeFunctionRefSlot::Mixed { slot, .. } = &mut bound.ref_slots[0] else {
+        panic!("array reference must use boxed staging");
+    };
+    let staged = RuntimeCellHandle::from_raw(**slot);
+    let item = values.int(2).unwrap();
+    let replacement = values.alloc(FakeValue::Array(vec![item]));
+    **slot = replacement.as_ptr();
+    values.release(staged).unwrap();
+    let peer = eval_invoker_slot_ref_target_value(values.raw_value_word(bound.values[1]).unwrap() as usize,
+        EVAL_TAG_MIXED, &mut values).unwrap();
+    assert_eq!(values.get(peer), FakeValue::Array(vec![item]));
+    values.release(peer).unwrap();
+    write_back_native_function_ref_args(&bound, &mut context, &mut values).unwrap();
+    assert_eq!(values.get(scope.visible_cell("a").unwrap()), FakeValue::Array(vec![item]));
+    assert_eq!(scope.visible_cell("a"), scope.visible_cell("b"));
+    for marker in bound.values { values.release(marker).unwrap(); }
+}
