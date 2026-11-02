@@ -51,11 +51,13 @@ class RuntimeSetterDerived extends RuntimeSetterBase {
         set { echo 'set|'; $this->stored = $value; }
     }
 }
+class RuntimeSetterPlain extends RuntimeSetterBase { public string $data = ''; }
 function runtimeSetterBaseWrite(RuntimeSetterBase $object): void { $object->data = 'written'; }
-$object = new RuntimeSetterDerived(); runtimeSetterBaseWrite($object); echo $object->stored;
+$object = new RuntimeSetterDerived(); runtimeSetterBaseWrite($object); echo $object->stored, '|';
+$plain = new RuntimeSetterPlain(); runtimeSetterBaseWrite($plain); echo $plain->data;
 "#);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "set|written");
+    assert_eq!(out.stdout, "set|written|written");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
