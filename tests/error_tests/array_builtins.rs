@@ -1190,12 +1190,14 @@ array_walk($w, function ($v) { echo strlen($v); });
     );
 }
 
-/// Verifies contextual callback typing does not silence real errors: an integer element type
-/// still rejects a string-only builtin applied to the inherited parameter.
+/// Verifies contextual callback typing does not silence real errors: in a strict file an
+/// integer element type still rejects a string-only builtin applied to the inherited parameter
+/// (a weak file converts the integer, as php-src does).
 #[test]
 fn test_array_callback_contextual_typing_still_rejects_wrong_element_use() {
     expect_error(
         r#"<?php
+declare(strict_types=1);
 $w = [3, 1, 2];
 usort($w, fn($a, $b) => strlen($a) <=> strlen($b));
 "#,
