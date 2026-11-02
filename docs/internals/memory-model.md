@@ -591,6 +591,9 @@ the original managed cell before testing its visible owners; an interior wrapper
 child address must never be used as a cell header. Shared canonical scalars then
 retain the wrapper, while singleton wrappers copy their PHP value. Raw scalar
 projection never creates a wrapper through this path.
+A separated canonical cell contains a new persistent wrapper. Its descriptor
+remains `7`, so flattening the wrapper into a scalar value box would violate the
+physical shape required by scalar readers.
 
 The native type-source metadata ABI identifies each physical property binding
 with a distinct generation token. Clone bindings remain separate even when they
@@ -606,9 +609,9 @@ cells may name one wrapper, and each physical property still contributes its own
 source token. Native hooks bind a property before reporting its authenticated
 wrapper shape. An unknown cell retains no address association, and removing its
 last binding clears that association before allocator reuse. Shape changes update
-the metadata epoch. A fresh query after PHP starts again so an older source that
-just joined the target wrapper is visited. A cursor from an earlier physical state
-does not describe the current source set.
+the metadata epoch. A subsequent assignment queries from the start so an older
+source that joined the target wrapper after the previous snapshot is visited.
+A cursor from an earlier physical state does not describe the current source set.
 An unchanged metadata epoch does not prove that a native cell stayed raw across
 PHP re-entry; callers must recheck physical shape and previously unmatched cells.
 
@@ -630,11 +633,28 @@ keeps the original RHS and reference alive throughout validation. The generated
 publishers, protected callbacks, invisible keepalive pins and binding lifecycle
 still need integration before typed canonical references can be enabled.
 
+Native validation roots use caller-owned 32-byte records containing previous and
+next links, a boxed value, and padding. Each record retains one physical value
+owner, which clone, projection, array-copy and eval sharing checks subtract when
+deciding whether a PHP reference has another visible owner. The checks scan only
+active validation records and do not call PHP or acquire another owner. Records
+can retire in any order, allowing interleaved suspended activations. A record is
+unlinked before protected release can run a destructor. Web request reset clears
+the registry before cleanup can inspect a retired request stack. Generated
+publishers still need to enter and leave these roots on every path; cancellation
+must retire a record before releasing its activation's stack.
+
 Native function parameter flags carry physical boxed-reference storage separately
 from declared PHP types and tagged nullable integers. Normal function object
 references use the normalized Mixed ABI. A closure descriptor can instead expose
 a raw object or container payload and receives detached concrete-box adaptation.
 Only a physical Mixed pointer slot can share the live staging wrapper.
+Constructor, instance-method and static-method bridges likewise preserve an
+existing Mixed PHP wrapper instead of copying its child into detached staging.
+Native stores update that wrapper's child, and return cleanup releases the
+activation lease without legacy payload copyback. Call-local exact-Mixed
+reference defaults acquire a persistent wrapper before a constructor can retain
+them. Raw typed bridge slots keep their concrete-value writeback path.
 
 Resolved reference-returning callees produce two distinct things at the `return`,
 and keeping them apart is what makes the boundary correct. `AcquireRefCell`
@@ -1586,6 +1606,7 @@ read the same uniform heap header, including on the iOS targets.
 | Runtime diagnostics | `_rt_diag_suppression`, `_rt_diag_pending_ptr`, `_rt_diag_pending_len`, `_php_diagnostic_file`, `_php_diagnostic_file_len`, `_php_diagnostic_line` = 8 bytes each | Warning suppression plus deferred diagnostic message and source-location state |
 | Resource inventory | `_resource_inventory_head`, `_resource_inventory_tail` = 16 bytes total | Heap-backed history used by `get_resources()`, including closed incarnations after descriptor reuse |
 | Unmanaged reference-borrow state | `_rt_unmanaged_ref_borrow_top` = 8 bytes | Active boxed array-walk borrow chain used to reject escaping unmanaged element references |
+| Reference validation roots | `_rt_reference_validation_pins_top` = 8 bytes | Active caller-owned root records excluded from PHP-visible reference-sharing counts |
 | JSON state | `_json_last_error`, `_json_active_flags`, `_json_active_depth`, `_json_indent_depth`, `_json_depth_limit`, `_json_validate_idx`, `_json_validate_ptr`, `_json_validate_len`, `_json_decode_assoc`, `_json_error_source_ptr`, `_json_error_source_len`, `_json_error_candidate_ptr`, `_json_error_location_active`, `_json_error_line`, `_json_error_column`, `_json_error_scan_count`, `_json_error_scan_bytes` = 136 bytes total | Fixed-size bookkeeping for JSON calls and decode error locations. The candidate pointer is recorded in constant time; line and column are scanned from the original source only when an error is recorded. |
 | Serialize/unserialize state | `_ser_value_counter`, `_ser_obj_count`, `_ser_legacy_active`, `_unser_count`, `_unser_legacy_active` = 8 bytes each; `_ser_obj_ptrs`, `_ser_obj_idxs`, `_unser_values` = 512KB each; `_unser_depth`, `_unser_allowed_mode`, `_unser_allowed_list`, `_unser_allowed_list_mixed`, `_unser_active`, `_unser_context` = 8 bytes each | `serialize()` object-dedup counters/maps and `unserialize()` reference registry, plus the decode depth limit, `allowed_classes` policy/list, active flag, and reentrancy snapshot; overflow degrades gracefully (serialize stops deduping, unserialize fails the ref) and reentrant decodes restore the outer context while legacy Serializable callbacks share references |
 | Date/time state | `_strtotime_clock`, `_php_default_tz_len` = 8 bytes each; `_strtotime_iso_buf` = 64 bytes; `_php_tz_env`, `_php_tz_save` = 264 bytes each | `strtotime()` clock override, the scratch copy a one-digit-month/day ISO date is zero-padded into, plus default-timezone (`date_default_timezone_*`) env/save buffers and stored identifier length |
