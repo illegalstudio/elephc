@@ -9,6 +9,40 @@
 
 use super::*;
 
+/// Nullable boxing alone cannot admit object iteration by reference through the production CLI.
+#[test]
+fn test_nullable_fallback_flow_r55_nullable_iterable_cli_refusal() {
+    /// Owns this diagnostic fixture and every compiler artifact on assertion failure too.
+    struct FixtureDirectory(std::path::PathBuf);
+    impl Drop for FixtureDirectory {
+        /// Removes only this test's source and compiler outputs.
+        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+    }
+    let directory = FixtureDirectory(make_cli_test_dir("elephc_nullable_iterable_refusal"));
+    let path = directory.0.join("main.php");
+    std::fs::write(&path, r#"<?php
+class R55Items implements Iterator {
+    public function rewind(): void {}
+    public function valid(): bool { return false; }
+    public function current(): mixed { return null; }
+    public function key(): mixed { return null; }
+    public function next(): void {}
+}
+function run(?iterable $items): void {
+    if ($items === null) { return; }
+    foreach ($items as &$value) { $value = 1; }
+}
+run(new R55Items());"#).unwrap();
+    for mode in ["on", "off"] {
+        let output = elephc_cli_command(&directory.0).arg(format!("--ir-opt={mode}"))
+            .arg(&path).output().unwrap();
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "nullable Iterator reference iteration was accepted");
+        assert!(error.contains("by-reference foreach") && error.contains("not supported"), "{error}");
+        assert!(!path.with_extension("").exists(), "rejected source produced an executable");
+    }
+}
+
 /// Iterator callbacks precede publication and fetched owners survive a throwing key callback.
 #[test]
 fn test_nullable_fallback_flow_r53_foreach_protocol_runtime() {

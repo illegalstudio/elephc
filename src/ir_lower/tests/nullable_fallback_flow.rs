@@ -12,12 +12,28 @@ use crate::ir::{Immediate, IrHeapKind, IrType, Op};
 /// Every target handles reference backedges and catch storage reused after unset.
 #[test]
 fn test_nullable_fallback_flow_ci_binding_storage_all_targets() {
+    let rejected = crate::parser::parse(&crate::lexer::tokenize(r#"<?php
+class R55Items implements Iterator {
+    public function rewind(): void {}
+    public function valid(): bool { return false; }
+    public function current(): mixed { return null; }
+    public function key(): mixed { return null; }
+    public function next(): void {}
+}
+function run(?iterable $items): void {
+    if ($items === null) { return; }
+    foreach ($items as &$value) { $value = 1; }
+}
+run(new R55Items());"#).unwrap()).unwrap();
     let source = "<?php function run(): void { $items = [1, 2, 3]; foreach ($items as &$value) { $value *= 2; } unset($value); foreach ($items as $key => &$value) { $value += $key; } unset($value); for ($i = 0; $i < 2; $i++) { try { throw new Exception('one'); } catch (Exception $e) { echo $e->getMessage(); unset($e); } try { throw new Exception('two'); } catch (Exception $e) { echo $e->getMessage(); unset($e); } } } run();";
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let target = crate::codegen::platform::Target::parse(name).unwrap();
         let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
             std::path::Path::new("."), target);
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let error = crate::types::check_with_target(&rejected, target).err()
+            .expect("ordinary nullable Iterable reference iteration must be rejected");
+        assert!(error.to_string().contains("by-reference foreach"), "{name}: {error}");
     }
 }
 

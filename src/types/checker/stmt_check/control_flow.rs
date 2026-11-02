@@ -356,9 +356,7 @@ impl Checker {
                 // A refined Iterable view can still occupy a boxed reference-local, which
                 // already uses runtime dispatch for by-reference indexed and hash payloads.
                 let boxed_iterable_source = arr_ty == PhpType::Iterable
-                    && (self.guarded_local_storage_type(array, env)
-                        .is_some_and(|storage| storage.codegen_repr() == PhpType::Mixed)
-                        || (source_had_reference && self.boxed_reference_layout_precedes(array)));
+                    && source_had_reference && self.boxed_reference_layout_precedes(array);
                 self.record_foreach_entry_exception_flow(stmt, &arr_ty, env);
                 if *value_by_ref {
                     widen_by_ref_foreach_source_storage(self, array, env)?;

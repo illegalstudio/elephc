@@ -806,6 +806,8 @@ Retirement pins read the physical frame occupant after an `unset`, rather than l
 
 Object guards preserve a known subclass when probing its parent class or an implemented interface. The completed-store proof also recognizes the typed `ArrayValues` runtime operation: its broad catalog return describes argument-dependent element types, while successful execution always returns an array. Exception summaries are initialized only after successful declaration-schema validation, before callable bodies; malformed inheritance retains conservative exception flow and its normal diagnostics.
 
+Nullable boxing alone does not establish a prior reference binding. A null-guarded `?iterable` parameter without an earlier boxed-reference promotion retains the by-reference foreach diagnostic, including an Iterator whose first `valid()` result is false.
+
 #### Lazy initialization (the singleton shape)
 
 A completed `$this->p = <non-null>` or `self::$p = <non-null>` write re-establishes the fact for that place, recorded as the property's *declared* type minus `null` (never the assigned expression's type — a declared property coerces what it stores). When a single guarded clause both falls through and wrote its guarded place, the type after the `if` is the union of the then-branch exit fact and the guard complement instead of the pre-`if` type. Together those make PHP's lazy-initialization idiom check:

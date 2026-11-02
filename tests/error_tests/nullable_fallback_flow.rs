@@ -18,6 +18,19 @@ fn test_nullable_fallback_flow_ci_boxed_iterable_foreach_admission() {
         expect_error(&source.replace("foreach ($items", &format!("{replacement} foreach ($items")), "by-reference foreach");
     }
     expect_error("<?php function run(iterable $items): void { foreach ($items as &$value) {} }", "by-reference foreach");
+    expect_error(r#"<?php
+class R55Items implements Iterator {
+    public function rewind(): void {}
+    public function valid(): bool { return false; }
+    public function current(): mixed { return null; }
+    public function key(): mixed { return null; }
+    public function next(): void {}
+}
+function run(?iterable $items): void {
+    if ($items === null) { return; }
+    foreach ($items as &$value) { $value = 1; }
+}
+run(new R55Items());"#, "by-reference foreach");
 }
 
 /// A parent-class or interface probe preserves the receiver's concrete subclass contract.
