@@ -78,7 +78,11 @@ lateNameWrite(false);
         .expect("computed names must be evaluated once").result.unwrap();
     let mut names = std::collections::HashSet::from([computed]);
     let mut slots = std::collections::HashSet::new();
-    for inst in &function.instructions[..rhs] {
+    let (store_index, store) = function.instructions.iter().enumerate()
+        .find(|(_, inst)| inst.op == Op::DynamicPropSet).expect("the runtime name must stay dynamic");
+    // The RHS pin lends the SSA owner. The final store moves that same owner into
+    // another rooted slot, so follow its storage transfers through the whole window.
+    for inst in &function.instructions[..store_index] {
         let related = inst.operands.iter().any(|value| names.contains(value))
             || matches!(inst.immediate, Some(Immediate::LocalSlot(slot))
                 if inst.op == Op::LoadLocal && slots.contains(&slot));
@@ -92,8 +96,6 @@ lateNameWrite(false);
     assert!(function.instructions[..rhs].iter().any(|inst| inst.op == Op::PushCallOperandOwner
         && matches!(inst.immediate, Some(Immediate::LocalSlot(slot)) if slots.contains(&slot))),
         "{target}: the computed name must survive a throwing RHS before the store exists");
-    let (store_index, store) = function.instructions.iter().enumerate()
-        .find(|(_, inst)| inst.op == Op::DynamicPropSet).expect("the runtime name must stay dynamic");
     assert_eq!(function.instructions.iter().filter(|inst| inst.op == Op::Call
         && matches!(inst.immediate, Some(Immediate::Data(id))
             if module.data.function_names[id.as_raw() as usize] == "lateComputedName")).count(), 1,

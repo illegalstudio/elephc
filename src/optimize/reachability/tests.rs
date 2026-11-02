@@ -54,7 +54,9 @@ class UnrelatedArrayBox {{ public static function other(): int {{ return 4; }} }
         assert!(!usage.hazards.dynamic_class, "{call}");
         let (program, _) = prune(&source);
         assert!(has_method(&program, "LiteralArrayBox", "ping"), "{call}");
-        assert!(!has_method(&program, "LiteralArrayBox", "other"), "{call}");
+        // Literal eval keeps a named class's complete interpreter metadata, while
+        // an ordinary native callable needs only the exact method edge.
+        assert_eq!(has_method(&program, "LiteralArrayBox", "other"), call.starts_with("eval("), "{call}");
         assert!(!has_function(&program, "unusedArrayTarget"), "{call}");
         assert!(!has_class(&program, "UnrelatedArrayBox"), "{call}");
     }
